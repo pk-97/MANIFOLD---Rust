@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), section 16 TL-A (translucency), quality wave A1–A3 (oracle, per-term cost, split dispatch) landed. Section 15 (many-light) and 16 TL-B/TL-C approved, not built. OWED: Peter's looks — multi-bounce, R2 constants, fast-camera denoiser, ED-A on a hero scene; `trace_ms` 2-vs-1 from a heavier scene; A3 split-mode matrix remeasure (racy numbers void). P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-03 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 RS-A (caster cap 8), 16 TL-A (translucency), quality wave A1–A3 landed. 15 RS-B/RS-C and 16 TL-B/TL-C approved, not built. OWED: Peter's looks — multi-bounce, R2 constants, fast-camera denoiser, ED-A on a hero scene; `trace_ms` 2-vs-1 from a heavier scene; A3 split-mode matrix remeasure (racy numbers void). P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-03 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1204,7 +1204,7 @@ where it carried zero — same bandwidth class, no new texture. And the metal-fi
 deviation above is a real look change on existing RT scenes: darker, correct, and
 Peter signs it off on a fixture before it lands.
 
-## 15. Many-light direct lighting — caster cap + emissive RIS (Tier 3 item 6; APPROVED 2026-08-02, K3 lead on k3-restir-design's draft; not started)
+## 15. Many-light direct lighting — caster cap + emissive RIS (Tier 3 item 6; APPROVED 2026-08-02, K3 lead on k3-restir-design's draft; **RS-A LANDED 2026-08-03 on main — MAX_RT_CASTERS 8, second sv texture through trace→upsample→atrous→SV-ACCUM→binding 44, 6-caster value test, gpu-proofs 143/143, trace_ms 4-vs-8 delta −0.06ms**; RS-B/RS-C not started)
 
 ### 15.0 What changed since the scoping note
 

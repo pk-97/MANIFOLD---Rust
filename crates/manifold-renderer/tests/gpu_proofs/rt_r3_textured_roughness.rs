@@ -206,6 +206,14 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         label: "rt-r3-out_sv-stub",
         mip_levels: 1,
     });
+    let out_sv2 = device.create_texture(&GpuTextureDesc {
+        width: 2, height: 1, depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE,
+        label: "rt-r3-out_sv2-stub",
+        mip_levels: 1,
+    });
     let out_irr = device.create_texture(&GpuTextureDesc {
         width: 2,
         height: 1,
@@ -287,6 +295,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         &material_textures,
         &depth_tex,
         &out_sv,
+        &out_sv2,
         &out_irr,
         &out_n,
         &out_refl,

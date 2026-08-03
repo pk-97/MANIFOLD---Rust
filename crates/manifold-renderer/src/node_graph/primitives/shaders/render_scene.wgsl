@@ -389,6 +389,10 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // a 1x1 dummy when RT reflections are off this frame), exactly like
 // rt_irradiance_mask above. Consumed in exactly ONE place (I-R3).
 @group(0) @binding(43) var rt_reflection: texture_2d<f32>;
+// RS-A (caster cap 4 -> 8): second shadow-visibility quad — caster slots
+// 4-7 (rgba respectively). Same format and ABI-stub discipline as
+// rt_shadow_mask. Always bound; a 1x1 dummy when RT isn't active.
+@group(0) @binding(44) var rt_shadow_mask2: texture_2d<f32>;
 
 // RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
@@ -645,13 +649,20 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     // scenes never touch the shadow-map path below (it isn't even
     // rendered for them, render_scene.rs's `!rt_enabled` gate). Native-
     // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
-    // indexes `rt_shadow_mask` directly — it's already full-res and
-    // depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
-    // one visibility channel per caster slot, so this light's own slot
-    // picks the channel instead of always reading `.r`.
+    // indexes the shadow-mask textures directly — they're already full-res
+    // and depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
+    // one visibility channel per caster slot. RS-A (caster cap 4 -> 8):
+    // two Rgba16Float textures — slots 0-3 in `rt_shadow_mask`, slots 4-7
+    // in `rt_shadow_mask2`; `slot_f >= 4.0` selects the second texture with
+    // the slot index reduced by 4.
     if u.scene_params.w > 0.5 {
         let texel = textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0);
-        return texel[clamp(i32(slot_f + 0.5), 0, 3)];
+        let texel2 = textureLoad(rt_shadow_mask2, vec2<i32>(frag_xy), 0);
+        let ch = i32(slot_f + 0.5);
+        if ch < 4 {
+            return texel[ch];
+        }
+        return texel2[ch - 4];
     }
     let slot = i32(slot_f + 0.5);
     let base = u32(slot) * CASTER_STRIDE;
