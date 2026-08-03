@@ -129,6 +129,11 @@ pub struct RtAccel {
     /// this flag exists so the caller can choose to wait for the FRESH
     /// ones instead of racing the read against the in-flight refit).
     pub ready: Arc<AtomicBool>,
+    /// RS-B: emissive-triangle light table built alongside the accel from the
+    /// same `objects` slice — `None` when the scene has no emissive geometry.
+    /// GPU buffers for the kernel's alias-draw + point-sample step (RS-C);
+    /// CPU-side local-space vertices for refit alongside the TLAS.
+    pub emissive_table: Option<EmissiveLightTable>,
 }
 
 // Safety: matches every other manifold-gpu resource wrapper (`GpuTexture`,
@@ -361,7 +366,7 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
 /// per-frame content-thread cycle commits+waits before the next frame's
 /// evaluate() ever runs) — never racing this frame's own still-encoding,
 /// uncommitted mesh-gen work).
-pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> RtAccel {
+pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> RtAccel {
     let cb = device
         .raw_queue()
         .commandBuffer()
@@ -419,6 +424,10 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
         }
     }
 
+    // RS-B: build the emissive light table from the same objects + material
+    // arrays. None when no object has non-black emissive (zero triangles).
+    let emissive_table = build_emissive_table(device, objects, gi_materials);
+
     RtAccel {
         structure,
         descriptor,
@@ -427,6 +436,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
         instance_buffer,
         geometry_buffers,
         ready,
+        emissive_table,
     }
 }
 
@@ -564,6 +574,27 @@ struct RtCasterParams {
 // already uses for `MAX_RT_MATERIAL_TEXTURES`).
 constant uint MAX_RT_CASTERS = 8;
 
+// RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
+// cap — power-rank truncated. Matches manifold-gpu's Rust
+// `MAX_RT_EMISSIVE_TRIANGLES` (no compiler-enforced link, same manual-sync
+// discipline as `MAX_RT_CASTERS` above).
+constant uint MAX_RT_EMISSIVE_TRIANGLES = 4096;
+
+// RS-B: one entry in the emissive-triangle light table (world-space positions).
+// Packed-float3 discipline per P0 section 5.1 kernel lesson.
+struct EmissiveTriangle {
+    packed_float3 v0; float _pad0;
+    packed_float3 v1; float _pad1;
+    packed_float3 v2; float _pad2;
+};
+
+// RS-B: alias-table entry — `prob` (probability of selecting self) and
+// `alias` (index of the alternate entry when the self-probability test fails).
+struct EmissiveAliasEntry {
+    float prob;
+    uint  alias;
+};
+
 // RT instance mask bits — matches manifold-gpu's Rust `RT_MASK_VISIBLE` /
 // `RT_MASK_SHADOW_CASTER` (same manual-sync discipline as `MAX_RT_CASTERS`
 // above). Shadow rays (direct-light visibility + the GI/reflection
@@ -605,7 +636,12 @@ struct ShadowRayParams {
     uint   refl_spp;
     float  refl_max_roughness;
     float  refl_rough_band;
-    uint   _pad_refl;
+    // RS-B (RAYTRACING_DESIGN.md section 15.2 RS8): per-sample firefly cap
+    // anchor — the emissive table's mean power (CPU-computed at build, refit
+    // on accel rebuild). Multiplied by `RT_EMISSIVE_FIREFLY_GAIN` kernel-side
+    // (RS-C) to cap each direct-emissive sample's luminance.
+    float  emissive_table_mean_power;
+    uint   _pad_refl[3];
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -2937,17 +2973,21 @@ pub struct ShadowRayParams {
     /// = reflection rays/pixel (1 in v1; 0 disables the branch — inert in
     /// T3, the kernel reads these in T5). `refl_max_roughness` =
     /// RT_REFLECTION_MAX_ROUGHNESS (0.6 starting, RD7 BRDF-domain split);
-    /// `refl_rough_band` = the blend-band width. `_pad_refl` is 16 bytes:
-    /// MSL lays out `uint _pad_refl` (4) plus the 12 bytes of implicit
-    /// 16-byte alignment `float4x4 inv_view_proj` demands — the removed
-    /// `ambient_color` field (ED2) previously supplied the first 12 of
-    /// those; without the explicit pad Rust's align-4 `[[f32;4];4]` would
-    /// put `inv_view_proj` at 196 and shift every matrix element. Asserted
-    /// below.
+    /// `refl_rough_band` = the blend-band width. `_pad_refl` is 12 bytes:
+    /// MSL lays out `uint _pad_refl[3]` (12 bytes) plus the 4 bytes of
+    /// `emissive_table_mean_power` below = the 16-byte alignment
+    /// `float4x4 inv_view_proj` demands.
     pub refl_spp: u32,
     pub refl_max_roughness: f32,
     pub refl_rough_band: f32,
-    _pad_refl: [u8; 16],
+    _pad_refl: [u8; 12],
+    /// RS-B (RAYTRACING_DESIGN.md section 15.2 RS8): per-sample firefly cap
+    /// anchor — the emissive table's CPU-computed mean power (area ×
+    /// build-time emissive luma, averaged across all table entries). 0.0
+    /// when the table is empty/no-emissive scene. Consumed by the RS-C
+    /// kernel as `RT_EMISSIVE_FIREFLY_GAIN × this` to cap each
+    /// direct-emissive sample's luminance.
+    pub emissive_table_mean_power: f32,
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
@@ -2978,6 +3018,7 @@ impl ShadowRayParams {
         refl_spp: u32,
         refl_max_roughness: f32,
         refl_rough_band: f32,
+        emissive_table_mean_power: f32,
     ) -> Self {
         let caster_count = casters.len().min(MAX_RT_CASTERS) as u32;
         let mut caster_arr = [RtCasterParams::ZERO; MAX_RT_CASTERS];
@@ -2998,7 +3039,8 @@ impl ShadowRayParams {
             refl_spp,
             refl_max_roughness,
             refl_rough_band,
-            _pad_refl: [0; 16],
+            _pad_refl: [0; 12],
+            emissive_table_mean_power,
             inv_view_proj,
         }
     }
@@ -3033,6 +3075,384 @@ impl GiMaterial {
             metallic_roughness,
         }
     }
+}
+
+// RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
+// cap — power-rank truncated. Mirrors the embedded MSL `MAX_RT_EMISSIVE_TRIANGLES`
+// at the MSL source above (same manual-sync discipline as `MAX_RT_CASTERS`).
+pub const MAX_RT_EMISSIVE_TRIANGLES: u32 = 4096;
+
+/// RS-B: GPU-side emissive triangle entry — world-space positions of the
+/// three vertices, consumed by the kernel's alias-draw + point-sample step
+/// (RS-C). `packed_float3` discipline: `[f32; 3]` + explicit pad (P0
+/// section 5.1 kernel lesson).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EmissiveTriangleGpu {
+    pub v0: [f32; 3],
+    _pad0: f32,
+    pub v1: [f32; 3],
+    _pad1: f32,
+    pub v2: [f32; 3],
+    _pad2: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 48);
+
+/// RS-B: GPU-side alias-table entry — `prob` is the probability of selecting
+/// the entry's own triangle; when the draw fails the self-probability, `alias`
+/// names the alternative entry index.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EmissiveAliasEntry {
+    pub prob: f32,
+    pub alias: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<EmissiveAliasEntry>() == 8);
+
+/// RS-B: CPU-side per-triangle storage for refit — local-space vertex
+/// positions survive across transforms so `refit_emissive_table` can
+/// recompute world-space positions from the new object transform.
+#[derive(Clone, Debug)]
+struct EmissiveTriangleCpu {
+    v0_local: [f32; 3],
+    v1_local: [f32; 3],
+    v2_local: [f32; 3],
+    /// Index into the `objects` slice this triangle came from (for refit).
+    object_index: u32,
+}
+
+/// RS-B (section 15.3): the resident emissive-geometry light table — GPU
+/// buffers for the kernel's sampling step (RS-C) and CPU-side local-space
+/// data for refit alongside the TLAS. Built once at accel-registration time
+/// (D17 async discipline applies — table lands with the accel-ready flag);
+/// refit re-transforms positions when object transforms change.
+pub struct EmissiveLightTable {
+    /// GPU buffer of [`EmissiveTriangleGpu`] entries (world-space positions).
+    pub triangles: GpuBuffer,
+    /// GPU buffer of [`EmissiveAliasEntry`] entries.
+    pub aliases: GpuBuffer,
+    /// Valid entry count (0..=[`MAX_RT_EMISSIVE_TRIANGLES`]).
+    pub entry_count: u32,
+    /// Arithmetic mean of per-entry power (area × build-time emissive luma)
+    /// — the firefly cap anchor in [`ShadowRayParams::emissive_table_mean_power`].
+    pub mean_power: f32,
+    /// CPU-side local-space vertices for refit (one per entry, same order).
+    local_triangles: Vec<EmissiveTriangleCpu>,
+}
+
+/// RS-B: build the emissive-triangle light table from `objects` (SAME slice
+/// the accel was built from) and the parallel `gi_materials` array. Returns
+/// `None` when no object has non-black emissive (zero triangles).
+///
+/// Algorithm: for each object whose `gi_materials[i].emissive` luma > 0,
+/// iterate its indexed/non-indexed triangles via the CPU-mapped vertex
+/// buffer; compute local-space area and power (area × emissive luma); build
+/// an alias table from the power distribution; keep the top [`MAX_RT_EMISSIVE_TRIANGLES`]
+/// entries by power rank.
+///
+/// The caller owns the returned table (pass to `refit_emissive_table` on
+/// transform change; keep alive as long as the accel lives).
+pub fn build_emissive_table(
+    device: &GpuDevice,
+    objects: &[RtObjectGeometry],
+    gi_materials: &[GiMaterial],
+) -> Option<EmissiveLightTable> {
+    // Phase 1: collect per-triangle (local-space vertices, object index, power).
+    struct Candidate {
+        v0: [f32; 3],
+        v1: [f32; 3],
+        v2: [f32; 3],
+        obj_index: u32,
+        power: f32,
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+
+    for (oi, obj) in objects.iter().enumerate() {
+        if oi >= gi_materials.len() {
+            break;
+        }
+        let emissive_luma = luma(gi_materials[oi].emissive);
+        if emissive_luma <= 0.0 {
+            continue;
+        }
+        let Some(ptr) = obj.vertex_buffer.mapped_ptr() else {
+            log::warn!(
+                "RT emissive table: object {} vertex buffer is not CPU-mapped — \
+                 its emissive triangles are absent from the light table",
+                oi
+            );
+            continue;
+        };
+        let stride = obj.vertex_stride as usize;
+        let offset = obj.vertex_offset as usize;
+        let tri_count = obj.triangle_count as usize;
+
+        // Read position from vertex i (offset 0 = position for MeshVertex convention).
+        let pos_at = |vi: usize| -> [f32; 3] {
+            let byte_offset = offset + vi * stride;
+            unsafe {
+                let p: *const [f32; 3] = ptr.add(byte_offset) as *const [f32; 3];
+                *p
+            }
+        };
+
+        // Compute per-triangle local-space area and power.
+        let index_at = |vi: usize| -> u32 {
+            if let Some(ib) = obj.index_buffer {
+                if let Some(ib_ptr) = ib.mapped_ptr() {
+                    unsafe { *(ib_ptr.add(vi * 4) as *const u32) }
+                } else {
+                    vi as u32
+                }
+            } else {
+                vi as u32
+            }
+        };
+
+        for ti in 0..tri_count {
+            let i0 = index_at(ti * 3) as usize;
+            let i1 = index_at(ti * 3 + 1) as usize;
+            let i2 = index_at(ti * 3 + 2) as usize;
+            let v0 = pos_at(i0);
+            let v1 = pos_at(i1);
+            let v2 = pos_at(i2);
+
+            let area = triangle_area(v0, v1, v2);
+            if area <= 0.0 {
+                continue;
+            }
+            let power = area * emissive_luma;
+            candidates.push(Candidate {
+                v0,
+                v1,
+                v2,
+                obj_index: oi as u32,
+                power,
+            });
+        }
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Phase 2: power-rank truncate to MAX_RT_EMISSIVE_TRIANGLES.
+    if candidates.len() > MAX_RT_EMISSIVE_TRIANGLES as usize {
+        candidates.select_nth_unstable_by(
+            MAX_RT_EMISSIVE_TRIANGLES as usize,
+            |a, b| b.power.partial_cmp(&a.power).unwrap_or(std::cmp::Ordering::Equal),
+        );
+        candidates.truncate(MAX_RT_EMISSIVE_TRIANGLES as usize);
+    }
+
+    let entry_count = candidates.len() as u32;
+    let total_power: f32 = candidates.iter().map(|c| c.power).sum();
+    let mean_power = total_power / entry_count as f32;
+
+    // Phase 3: build alias table from the power distribution.
+    let weights: Vec<f32> = candidates.iter().map(|c| c.power).collect();
+    let (probs, aliases) = build_alias_table(&weights);
+
+    // Phase 4: upload to GPU buffers.
+    let triangles_bytes = (entry_count as usize * std::mem::size_of::<EmissiveTriangleGpu>()) as u64;
+    let aliases_bytes = (entry_count as usize * std::mem::size_of::<EmissiveAliasEntry>()) as u64;
+    let tri_buf = device.create_buffer_shared(triangles_bytes.max(1));
+    let alias_buf = device.create_buffer_shared(aliases_bytes.max(1));
+
+    {
+        let tri_ptr = tri_buf
+            .mapped_ptr()
+            .expect("emissive triangle buffer must be shared");
+        let alias_ptr = alias_buf
+            .mapped_ptr()
+            .expect("emissive alias buffer must be shared");
+        let mut local_triangles: Vec<EmissiveTriangleCpu> =
+            Vec::with_capacity(entry_count as usize);
+        let model = |oi: u32| -> [[f32; 4]; 4] {
+            objects.get(oi as usize).map(|o| o.transform).unwrap_or([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ])
+        };
+
+        for (i, c) in candidates.iter().enumerate() {
+            // Transform local-space vertices to world space for the GPU entry.
+            let m = model(c.obj_index);
+            let w0 = transform_point(&m, c.v0);
+            let w1 = transform_point(&m, c.v1);
+            let w2 = transform_point(&m, c.v2);
+
+            unsafe {
+                let tri_dst = tri_ptr.add(i * std::mem::size_of::<EmissiveTriangleGpu>())
+                    as *mut EmissiveTriangleGpu;
+                std::ptr::write_unaligned(
+                    tri_dst,
+                    EmissiveTriangleGpu {
+                        v0: w0,
+                        _pad0: 0.0,
+                        v1: w1,
+                        _pad1: 0.0,
+                        v2: w2,
+                        _pad2: 0.0,
+                    },
+                );
+
+                let alias_dst = alias_ptr.add(i * std::mem::size_of::<EmissiveAliasEntry>())
+                    as *mut EmissiveAliasEntry;
+                std::ptr::write_unaligned(
+                    alias_dst,
+                    EmissiveAliasEntry {
+                        prob: probs[i],
+                        alias: aliases[i],
+                    },
+                );
+            }
+
+            local_triangles.push(EmissiveTriangleCpu {
+                v0_local: c.v0,
+                v1_local: c.v1,
+                v2_local: c.v2,
+                object_index: c.obj_index,
+            });
+        }
+
+        Some(EmissiveLightTable {
+            triangles: tri_buf,
+            aliases: alias_buf,
+            entry_count,
+            mean_power,
+            local_triangles,
+        })
+    }
+}
+
+/// RS-B: refit the emissive table's world-space positions from the stored
+/// local-space vertices and the objects' current transforms. Same call-site
+/// discipline as [`refit_accel`] — called when topology is stable and
+/// transforms changed.
+pub fn refit_emissive_table(table: &EmissiveLightTable, objects: &[RtObjectGeometry]) {
+    let Some(ptr) = table.triangles.mapped_ptr() else {
+        return;
+    };
+    for (i, local) in table.local_triangles.iter().enumerate() {
+        let m = objects
+            .get(local.object_index as usize)
+            .map(|o| o.transform)
+            .unwrap_or([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]);
+        let w0 = transform_point(&m, local.v0_local);
+        let w1 = transform_point(&m, local.v1_local);
+        let w2 = transform_point(&m, local.v2_local);
+        unsafe {
+            let dst = ptr.add(i * std::mem::size_of::<EmissiveTriangleGpu>())
+                as *mut EmissiveTriangleGpu;
+            (*dst).v0 = w0;
+            (*dst).v1 = w1;
+            (*dst).v2 = w2;
+        }
+    }
+}
+
+/// Luminance of a linear-HDR RGB triple (Rec.709 weights, same convention
+/// the kernel's `luma()` MSL helper uses).
+fn luma(rgb: [f32; 3]) -> f32 {
+    0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+}
+
+/// Area of a triangle from its three vertices (half the cross-product
+/// magnitude of two edge vectors).
+fn triangle_area(v0: [f32; 3], v1: [f32; 3], v2: [f32; 3]) -> f32 {
+    let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+    let cross = [
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    let mag2 = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+    if mag2 <= 0.0 {
+        return 0.0;
+    }
+    0.5 * mag2.sqrt()
+}
+
+/// Transform a point by a column-major 4×4 matrix (position only — w=1,
+/// no projective divide). Same convention as `render_scene.wgsl`'s
+/// `(M * vec4(p, 1.0)).xyz`.
+fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
+        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
+        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
+    ]
+}
+
+/// Build a discrete alias table from a slice of non-negative weights (the
+/// "alias method" — Walker 1974 / Vose 1991, O(n)). Returns `(probs, aliases)`
+/// where `probs[i]` is the self-selection probability and `aliases[i]` is the
+/// alternate index.
+///
+/// At sample time: draw `u ~ U(0,1)`, `j = floor(u * n)`, `u' = u * n - j`;
+/// if `u' < probs[j]` pick `j`, else pick `aliases[j]`. `probs[j]` is stored
+/// as `prob * n` (the scaled probability) so the comparison is direct.
+fn build_alias_table(weights: &[f32]) -> (Vec<f32>, Vec<u32>) {
+    let n = weights.len();
+    if n == 0 {
+        return (vec![], vec![]);
+    }
+    let total: f32 = weights.iter().sum();
+    if total <= 0.0 {
+        // Degenerate: all zero weights — uniform probabilities, alias to self.
+        return (vec![1.0; n], (0..n as u32).collect());
+    }
+    let inv_total = 1.0 / total;
+    let n_f = n as f32;
+    let avg = 1.0 / n_f;
+
+    let mut probs: Vec<f32> = weights.iter().map(|w| w * inv_total).collect();
+    let mut aliases: Vec<u32> = (0..n as u32).collect();
+
+    let mut small: Vec<usize> = Vec::new();
+    let mut large: Vec<usize> = Vec::new();
+
+    for (i, &p) in probs.iter().enumerate() {
+        if p < avg {
+            small.push(i);
+        } else {
+            large.push(i);
+        }
+    }
+
+    while let (Some(&s), Some(&l)) = (small.last(), large.last()) {
+        probs[s] *= n_f; // scaled probability: p * n
+        aliases[s] = l as u32;
+        probs[l] = (probs[l] + probs[s] / n_f) - avg; // remaining excess
+        small.pop();
+        if probs[l] < avg {
+            large.pop();
+            small.push(l);
+        }
+    }
+
+    // Remaining entries (rounding) — set prob=1 (always self).
+    for &s in &small {
+        probs[s] = 1.0;
+        aliases[s] = s as u32;
+    }
+    for &l in &large {
+        probs[l] = 1.0;
+        aliases[l] = l as u32;
+    }
+
+    (probs, aliases)
 }
 
 // RT-D3/RT-P2 alignment gotcha (see `ShadowRayParams::refl_spp` block's doc
@@ -3540,7 +3960,9 @@ pub trait ShadowRayTracer {
     /// Build the resident two-level RT scene (one BLAS per object,
     /// instanced into one TLAS — see the module doc). Call once at scene
     /// load / topology change for an RT-enabled scene; never mid-frame.
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry]) -> Self::Accel;
+    /// RS-B: `gi_materials` is the per-object material table (SAME order
+    /// as `objects`) — consumed to build the emissive-triangle light table.
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel;
 
     /// Refit `accel`'s instance transforms in place from `objects` — cheap
     /// (TLAS-only update), used when objects move but the object SET and
@@ -3548,6 +3970,8 @@ pub trait ShadowRayTracer {
     /// vertex/index buffer identity against what `accel` was built from —
     /// caller's dirty-check, e.g. render_scene.rs's shadow-map cache-key
     /// idiom). A topology change calls `build_accel` again instead.
+    /// RS-B: also refits the emissive light table's world-space positions
+    /// when the accel carries one.
     fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]);
 
     /// Dispatch the half-res shadow/AO-ray pass (RT-D3; RT-P2 widens this
@@ -4066,12 +4490,16 @@ impl MetalShadowRayTracer {
 impl ShadowRayTracer for MetalShadowRayTracer {
     type Accel = RtAccel;
 
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry]) -> Self::Accel {
-        build_accel(device, objects)
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel {
+        build_accel(device, objects, gi_materials)
     }
 
     fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) {
         refit_accel(device, accel, objects);
+        // RS-B: refit the emissive light table's world-space positions.
+        if let Some(ref table) = accel.emissive_table {
+            refit_emissive_table(table, objects);
+        }
     }
 
     fn dispatch_shadow_rays(

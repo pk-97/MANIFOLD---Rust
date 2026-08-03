@@ -4458,6 +4458,33 @@ impl EffectNode for RenderScene {
                 })
                 .collect();
 
+            // RS-B: build gi_materials alongside objects (SAME order) for
+            // the emissive light table at accel-build time. Reused below
+            // for the GPU upload at dispatch time.
+            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
+                .iter()
+                .map(|d| {
+                    manifold_gpu::raytrace::GiMaterial::new(
+                        [
+                            d.uniforms.base_color[0],
+                            d.uniforms.base_color[1],
+                            d.uniforms.base_color[2],
+                        ],
+                        [
+                            d.uniforms.emission[0],
+                            d.uniforms.emission[1],
+                            d.uniforms.emission[2],
+                        ],
+                        [
+                            d.uniforms.pbr_metallic_roughness[0],
+                            d.uniforms.pbr_metallic_roughness[1],
+                            0.0,
+                            0.0,
+                        ],
+                    )
+                })
+                .collect();
+
             // Dirty-check keys, three tiers (in priority order):
             //
             // TOPO key (identity + count + epoch, no generation) — drives
@@ -4618,7 +4645,7 @@ impl EffectNode for RenderScene {
                         eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
                     }
                 }
-                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects, &gi_materials_data));
                 self.rt_accel_topo_key = Some(topo_key);
                 // BUG-oqta: only a content-settle-triggered build records
                 // the content key (why: the trigger block above).
@@ -4666,6 +4693,16 @@ impl EffectNode for RenderScene {
             // handler runs on a separate Metal-owned thread, never
             // synchronously inside evaluate()).
             if rt_ready {
+                // RS-B: thread the emissive table's mean power (firefly-cap
+                // anchor) through the params — 0.0 when the scene has no
+                // emissive geometry.
+                let emissive_table_mean_power = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.mean_power)
+                    .unwrap_or(0.0);
+
                 // Multi-caster shadow fix: previously only `casters[0]`
                 // (the first shadow-casting light) was traced — every
                 // other shadow-casting light rendered as fully lit. Build
@@ -4742,6 +4779,7 @@ impl EffectNode for RenderScene {
                     0,      // refl_spp
                     0.6,    // refl_max_roughness (unused)
                     0.1,    // refl_rough_band (unused)
+                    emissive_table_mean_power,
                 );
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
@@ -4771,41 +4809,10 @@ impl EffectNode for RenderScene {
                     if rt_reflections { REFL_SAMPLES_PER_PIXEL } else { 0 },
                     0.6,
                     0.1,
+                    emissive_table_mean_power,
                 );
-                // RAYTRACING_DESIGN.md section 5.2 P3: rebuild the per-object
-                // material table from the SAME `opaque_draws` order
-                // the accel's `objects` slice used above — `d.uniforms.
-                // base_color`/`d.uniforms.emission` are the resolved
-                // per-object factors `render_scene.wgsl`'s `resolve_albedo`/
-                // `resolve_emissive` already use for the raster combine, so
-                // the GI gather's emissive-hit/sun-bounce terms read the
-                // SAME material values the surface shading does.
-                let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
-                    .iter()
-                    .map(|d| {
-                        manifold_gpu::raytrace::GiMaterial::new(
-                            [
-                                d.uniforms.base_color[0],
-                                d.uniforms.base_color[1],
-                                d.uniforms.base_color[2],
-                            ],
-                            [
-                                d.uniforms.emission[0],
-                                d.uniforms.emission[1],
-                                d.uniforms.emission[2],
-                            ],
-                            // RT-R1: the SAME resolved metallic/roughness
-                            // fs_pbr shades with (render_scene.rs:332); z/w
-                            // reserved (ior/specular stay on the raster side).
-                            [
-                                d.uniforms.pbr_metallic_roughness[0],
-                                d.uniforms.pbr_metallic_roughness[1],
-                                0.0,
-                                0.0,
-                            ],
-                        )
-                    })
-                    .collect();
+                // RS-B: gi_materials_data already built above (same order as
+                // `objects` + `accel`), reused for the GPU upload here.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
                 {
                     // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
