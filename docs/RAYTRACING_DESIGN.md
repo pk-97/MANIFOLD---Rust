@@ -1588,7 +1588,7 @@ I-RS5 and the forbidden-move lists. Deferred with triggers below.
 - **Clustered analytic-light sampling.** Trigger: a scene class past
   `LIGHT_SLIDER_MAX` — the slider itself moves first.
 
-## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-02 on wave/rt-quality — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; TL-B/TL-C not started)
+## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-03 on main (wave/rt-quality) — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; TL-B/TL-C not started)
 
 Tier 3 item 9 names two features. **(A) thin-surface transmission** — sunlight
 through a flower petal: the petal glows when backlit, and the light that passes
