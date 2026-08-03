@@ -137,7 +137,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
     }];
-    let accel = tracer.build_accel(device, &objects);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     // ─── Depth fixture: 2x1, both texels valid (depth=0.3, < 1.0 clear) ──
     let depth_px: [f32; 2] = [0.3, 0.3];
@@ -238,6 +238,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0,           // refl_spp — 0, reflections skipped in this fixture
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
         0.1,         // refl_rough_band — blend band width
+        0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -385,7 +386,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             cast_shadows: true,
         },
     ];
-    let accel = tracer.build_accel(device, &objects);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     // ─── Depth fixture: identical to the single-BLAS proof ──
     let depth_px: [f32; 2] = [0.3, 0.3];
@@ -474,6 +475,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0,           // refl_spp — 0, reflections skipped in this fixture
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
         0.1,         // refl_rough_band — blend band width
+        0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub

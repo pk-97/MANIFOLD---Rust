@@ -141,7 +141,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
@@ -223,6 +223,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         0,           // refl_spp — 0, reflections skipped in this fixture
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
         0.1,         // refl_rough_band — blend band width
+        0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);

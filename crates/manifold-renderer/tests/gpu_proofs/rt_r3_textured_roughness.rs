@@ -183,7 +183,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     ];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
@@ -271,6 +271,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         1,   // refl_spp
         0.6, // refl_max_roughness
         0.1, // refl_rough_band
+        0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
