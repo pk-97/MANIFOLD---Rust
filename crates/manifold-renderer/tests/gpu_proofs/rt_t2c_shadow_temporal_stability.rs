@@ -1,13 +1,15 @@
-//! A still scene must produce a bit-identical RT shadow visibility mask
-//! every frame.
+//! `ShadowSoftness::Hard` must make the RT sun shadow mask a deterministic
+//! function of the geometry: cone half-angle exactly 0.0, `cone_sample`
+//! short-circuits, every pixel resolves to exactly 0.0 or 1.0 and is
+//! bit-identical across frame indices — no jitter for the light the user
+//! asked to be hard.
 //!
-//! The mask is the one RT channel with no temporal history —
-//! `accumulate_irradiance` averages irradiance and reflections, then
-//! `rt_mask_full` goes straight to the shader. So a shadow ray whose cone
-//! jitter is reseeded per frame writes a different answer per frame for
-//! every pixel in a penumbra, and that reaches the screen raw as flicker.
-//! `raytrace.rs`'s `RT_SHADOW_JITTER_SEED` is what keeps it still; this is
-//! the proof.
+//! (A fixed jitter seed for SOFT cones was tried here too and dropped:
+//! the shadow mask gained real temporal accumulation on main — SV-ACCUM,
+//! RAYTRACING_DESIGN.md section 15 (many-light) — which needs the
+//! per-frame reseed to average, and a frozen seed broke the BUG-322
+//! moving-object gate. Soft-cone temporal stability is SV-ACCUM's job,
+//! enforced by `scripts/rt_noise_gate.py`.)
 //!
 //! Fixture — a deliberately worst-case model of the real symptom (blossom
 //! petals under a canopy of other petals):
@@ -27,19 +29,17 @@
 //!   is exactly the coupling that made petals hatch and crawl.
 //!
 //! `shadow_spp = 1` (the production value): one sample decides each pixel,
-//! so there is no averaging to hide a reseed.
+//! so there is no averaging to hide a stray jitter.
 //!
-//! Assert: the 64 visibility values for `frame_index = 0` are EXACTLY
-//! equal to those for `frame_index = 7`. Exact, not tolerant — the fix is
-//! determinism, and any per-frame reseed shows up as a hard 0.0-vs-1.0
-//! disagreement on the pixels whose jitter straddles a cutout boundary.
+//! Assert: with `cone = 0.0` the 64 visibility values for `frame_index = 0`
+//! are EXACTLY equal to those for `frame_index = 7`, every pixel exactly
+//! 0.0 or 1.0. Exact, not tolerant — Hard means deterministic.
 //!
-//! Guard against a vacuous pass: the same fixture with `cone = 0.0`
-//! (`ShadowSoftness::Hard`) must still resolve a real mix of lit and
-//! shadowed pixels, and the soft run must produce at least one pixel that
-//! disagrees with the hard run. Otherwise "identical across frames" could
-//! be satisfied by a mask that is uniform, or by a cone the jitter never
-//! actually exercises.
+//! Guard against a vacuous pass: the hard mask must hold a real mix of lit
+//! and shadowed pixels, and the soft (0.02 rad) run must produce at least
+//! one pixel that disagrees with the hard run — proof the fixture sits in
+//! jitter-sensitive penumbra, so an accidentally nonzero Hard cone would
+//! be caught.
 
 use std::ffi::c_void;
 use std::slice;
@@ -304,9 +304,9 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
 }
 
 #[test]
-fn soft_sun_shadow_mask_is_identical_across_frames() {
-    let f0 = run_fixture(SOFT_CONE_RADIANS, 0);
-    let f7 = run_fixture(SOFT_CONE_RADIANS, 7);
+fn hard_sun_shadow_mask_is_identical_across_frames() {
+    let f0 = run_fixture(0.0, 0);
+    let f7 = run_fixture(0.0, 7);
 
     let disagreements: Vec<(usize, f32, f32)> = f0
         .iter()
@@ -317,10 +317,10 @@ fn soft_sun_shadow_mask_is_identical_across_frames() {
         .collect();
     assert!(
         disagreements.is_empty(),
-        "the shadow visibility mask must be a pure function of the scene — nothing moved between \
-         frame_index 0 and 7, so every one of the {} pixels must read back EXACTLY the same. {} \
-         disagree (pixel, frame0, frame7): {:?}. A shadow ray reseeded per frame writes visible \
-         flicker straight to the screen: the mask has no temporal history.",
+        "a Hard (cone 0.0) sun shadow mask must be a deterministic function of the scene — \
+         nothing moved between frame_index 0 and 7, so every one of the {} pixels must read back \
+         EXACTLY the same. {} disagree (pixel, frame0, frame7): {:?}. Hard shadows carry no \
+         jitter to reseed.",
         WIDTH,
         disagreements.len(),
         &disagreements[..disagreements.len().min(8)]

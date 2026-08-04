@@ -194,11 +194,9 @@ const SUN_CONE_VERY_SOFT_RADIANS: f32 = 0.06;
 /// `Hard` MUST be exactly 0.0: `cone_sample` short-circuits at
 /// `half_angle <= 0.0` and returns the caster direction unjittered, so the
 /// visibility mask becomes a deterministic function of the geometry. Any
-/// cone > 0 is a stochastic estimate, and the mask is never temporally
-/// accumulated (`accumulate_irradiance` covers irradiance and reflections
-/// only) — the only thing keeping it stable frame to frame is that the
-/// shadow ray's jitter seed does not include the frame index (see
-/// `raytrace.rs`'s `RT_SHADOW_JITTER_SEED`).
+/// cone > 0 is a stochastic per-frame estimate whose stability is SV-ACCUM's
+/// job (RAYTRACING_DESIGN.md section 15 (many-light), gated by
+/// `scripts/rt_noise_gate.py`) — the jitter reseeds every frame to feed it.
 ///
 /// This used to be one hard-coded 0.02 for every sun regardless of the
 /// light's setting, which meant "Hard" could not turn the jitter off. On
