@@ -41,9 +41,13 @@ CORRECTED_FORM = (
     f"'{MARKER}', e.g. CronCreate(cron='7-59/10 * * * *', durable=true, "
     f"prompt='{MARKER}: per lane — is a build/test process running; has the worktree "
     "moved (files, commits)? two consecutive idle checks with no report = stalled: "
-    "message once, then stop the lane and escalate per the seat ladder'), then respawn "
-    "the Agent call. Session-only (durable=false) jobs are invisible to this hook; "
-    "cancel the job when no lanes run."
+    "message once, then stop the lane and escalate per the seat ladder. No lane "
+    "processes AND no live lane to escalate = the fleet is down: CronDelete this job "
+    "(re-arming is hook-enforced on the next spawn)'), then respawn "
+    "the Agent call. Session-only (durable=false) jobs are invisible to this hook. "
+    "The self-cancel clause is mandatory: a durable job outlives the session that "
+    "armed it, and an orphaned check burns a lead wakeup every 10 minutes "
+    "(2026-08-04, fired all morning against an empty fleet)."
 )
 
 

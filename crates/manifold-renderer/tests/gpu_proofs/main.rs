@@ -67,6 +67,7 @@ mod rt_r2_clamp;
 mod rt_r3_heldout_gltf;
 mod rt_r3_textured_roughness;
 mod rt_t2b_temporal_wiring;
+mod rt_t2c_shadow_temporal_stability;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
