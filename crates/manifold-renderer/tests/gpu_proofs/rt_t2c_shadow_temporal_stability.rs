@@ -261,7 +261,10 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         0.6,
         0.1,
         0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
+        0,   // RS-C: emissive_table_count — no emissive in fixture
+        0.0, // RS-C: emissive_table_total_area — no emissive in fixture
     );
+    let dummy_emissive = device.create_buffer_shared(1);
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -282,6 +285,8 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_emissive,
+        &dummy_emissive,
         "trace_shadow_rays-t2c-proof",
     );
     encoder.commit_and_wait_completed();

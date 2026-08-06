@@ -580,12 +580,19 @@ constant uint MAX_RT_CASTERS = 8;
 // discipline as `MAX_RT_CASTERS` above).
 constant uint MAX_RT_EMISSIVE_TRIANGLES = 4096;
 
-// RS-B: one entry in the emissive-triangle light table (world-space positions).
-// Packed-float3 discipline per P0 section 5.1 kernel lesson.
+// RS-B: one entry in the emissive-triangle light table (world-space positions,
+// per-vertex UVs for emissive-map sampling, and the owning object's index for
+// gi_materials/normal_sources lookups — RS-C). Packed-float3 discipline per
+// P0 section 5.1 kernel lesson.
 struct EmissiveTriangle {
     packed_float3 v0; float _pad0;
     packed_float3 v1; float _pad1;
     packed_float3 v2; float _pad2;
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
+    uint   object_index;
+    uint   _pad_obj;
 };
 
 // RS-B: alias-table entry — `prob` (probability of selecting self) and
@@ -641,7 +648,14 @@ struct ShadowRayParams {
     // on accel rebuild). Multiplied by `RT_EMISSIVE_FIREFLY_GAIN` kernel-side
     // (RS-C) to cap each direct-emissive sample's luminance.
     float  emissive_table_mean_power;
-    uint   _pad_refl[3];
+    // RS-C: number of valid entries in `emissive_table`/`emissive_aliases`
+    // buffers. 0 = no emissive geometry in the scene — the sampler is skipped.
+    uint   emissive_table_count;
+    // RS-C: total world-space area of all emissive triangles in the table.
+    // The RIS estimator corrects for uniform area sampling — the geometry
+    // weight factor is total_area, not entry_count.
+    float  emissive_table_total_area;
+    uint   _pad_refl;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -1206,6 +1220,11 @@ kernel void trace_shadow_rays(
     constant ShadowRayParams&        p              [[buffer(1)]],
     device GiMaterial*             gi_materials   [[buffer(2)]],
     device RtNormalSource*         normal_sources [[buffer(3)]],
+    // RS-C: emissive-triangle light table (world-space positions) +
+    // alias table, built CPU-side at accel registration. Binding 4/5
+    // are free buffer slots (buffers 0-3 are accel/params/gi/normal).
+    device const EmissiveTriangle* emissive_table  [[buffer(4)]],
+    device const EmissiveAliasEntry* emissive_aliases [[buffer(5)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
@@ -1307,9 +1326,12 @@ kernel void trace_shadow_rays(
     uint primary_pid = 0u;
     float2 primary_bary = float2(0.0);
     // RT-R1: the primary ray is also the reflection block's source of `n`
-    // and `obj_id` (RD3 — vertex normal, not shading normal), so it must
-    // cast whenever reflections are on too.
-    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+    // RS-C: the emissive-geometry direct-light sampler also needs the
+    // primary ray's origin/normal — widen the cast condition. The sampler
+    // itself only runs inside the gi_spp block below, so gi_spp==0 (the
+    // RT-A3a mask dispatch) must not pay for a primary cast it never uses.
+    bool sampler_active = (p.emissive_table_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr) && (p.gi_spp > 0u);
+    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u || sampler_active) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
         if (dist > 1e-6) {
@@ -1531,6 +1553,10 @@ kernel void trace_shadow_rays(
     //  is calmer (1.04) but dims the sun to barely half its energy; 16 (the
     //  pre-ED-B value) dims it to a third.
     const float RT_GI_ENV_FIREFLY_GAIN = 32.0;
+    // RS-C: emissive-geometry direct-light RIS sampler — runs inside the
+    // GI gather block (below), where `sec_origin` and `shading_n` from
+    // the primary ray cast are valid.
+    const float RT_EMISSIVE_FIREFLY_GAIN = 32.0; // committed range 8–32, RS8; tuned by RS-C fixture
     if (p.gi_spp > 0) {
         // ED5: one anchor per pixel. Inert for a scene with no env chain
         // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
@@ -1572,7 +1598,13 @@ kernel void trace_shadow_rays(
                     accel, normal_sources, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid,
                     400u + s * MAX_RT_CASTERS);
-                gi += throughput * (hit_emissive + bounce_term);
+                // RS7: the bounce-0 direct-emissive term is owned by the
+                // emissive direct-light sampler when active (substitution,
+                // never addition — the 818a06b0 double-count trap).
+                // Bounce >= 1 emissive is indirect and stays in the gather.
+                float3 bounce_emissive = (sampler_active && bounce == 0u)
+                    ? float3(0.0) : hit_emissive;
+                gi += throughput * (bounce_emissive + bounce_term);
                 if (bounce + 1u < RT_GI_MAX_BOUNCES) {
                     // ED4: the throughput multiplier is the hit albedo alone
                     // — the cosine-weighted estimator's 1/pi cancels (the
@@ -1588,6 +1620,92 @@ kernel void trace_shadow_rays(
                 }
             }
         }
+        // RS-C (RAYTRACING_DESIGN.md section 15.3): emissive-geometry RIS
+        // sampler — alias draw one triangle, area-uniform point sample,
+        // one visibility ray, solid-angle weight, RS8 firefly clamp.
+        // Owns its own normalization: multiplied by gi_spp here so the
+        // `/ gi_spp` below cancels — a single RIS sample, not averaged.
+        float3 emissive_direct = float3(0.0);
+        if (sampler_active) {
+            float2 u1 = rand2(tid, p.frame_index, 700u);
+            uint n = p.emissive_table_count;
+            uint i = uint(u1.x * float(n));
+            i = min(i, n - 1u);
+            float u_prime = u1.x * float(n) - float(i);
+            if (u_prime >= emissive_aliases[i].prob) i = emissive_aliases[i].alias;
+            i = min(i, n - 1u);
+            float2 u2 = rand2(tid, p.frame_index, 702u);
+            float su = sqrt(u2.x);
+            float a = 1.0f - su;
+            float b = u2.y * su;
+            float3 q = float3(emissive_table[i].v0) * a
+                     + float3(emissive_table[i].v1) * b
+                     + float3(emissive_table[i].v2) * (1.0f - a - b);
+            float3 l = q - sec_origin;
+            float l_len = length(l);
+            float3 l_hat = l / max(l_len, bias_eps);
+            float cos_theta = max(dot(shading_n, l_hat), 0.0f);
+            // BUG-ny4v: a pixel ON the emissive surface can draw a sample
+            // point on the same triangle, so `l_len` shrinks toward 0.
+            // `l_len > bias_eps` alone still admits intervals
+            // [bias_eps, l_len - bias_eps] with max < min — an inverted
+            // ray interval is undefined for the intersector and hung the
+            // GPU at I-RS3. Require a non-empty interval; reject
+            // non-finite rays outright (NaN rays are the same UB class;
+            // rt_finite — fast math can compile away isfinite).
+            if (cos_theta > 0.0f && rt_finite(l_len) && l_len > 2.0f * bias_eps) {
+                float3 e1 = float3(emissive_table[i].v1) - float3(emissive_table[i].v0);
+                float3 e2 = float3(emissive_table[i].v2) - float3(emissive_table[i].v0);
+                float3 n_t = cross(e1, e2);
+                float n_len2 = length_squared(n_t);
+                if (n_len2 > 1e-12f) {
+                    n_t *= rsqrt(n_len2);
+                    // Emission is DOUBLE-SIDED here, matching the rest of
+                    // the engine: the gather's hit_emissive and the raster's
+                    // resolve_emissive both read emissive regardless of
+                    // which face is struck. A one-sided gate silently kills
+                    // every sample from fixtures whose emitter faces away
+                    // (rt_p3_emissive_texture: ground under an up-facing
+                    // quad read 0.06% vs main's 1.60%).
+                    float cos_emit = abs(dot(n_t, -l_hat));
+                    if (cos_emit > 0.0f) {
+                        ray em_r;
+                        em_r.origin = sec_origin;
+                        em_r.min_distance = bias_eps;
+                        em_r.max_distance = l_len - bias_eps;
+                        em_r.direction = l_hat;
+                        intersection_query<triangle_data, instancing> em_q;
+                        em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
+                        bool blocked = walk_with_alpha_test(em_q, normal_sources, material_textures, true);
+                        if (!blocked) {
+                            float3 em_factor = float3(gi_materials[emissive_table[i].object_index].emissive);
+                            float2 uv0 = emissive_table[i].uv0;
+                            float2 uv1 = emissive_table[i].uv1;
+                            float2 uv2 = emissive_table[i].uv2;
+                            float2 uv = uv0 * a + uv1 * b + uv2 * (1.0f - a - b);
+                            float3 em_tex = float3(1.0);
+                            uint em_oi = emissive_table[i].object_index;
+                            device RtNormalSource& em_src = normal_sources[em_oi];
+                            if (em_src.emissive_tex_index < MAX_RT_MATERIAL_TEXTURES) {
+                                uv = float2(em_src.emissive_uv_m[0] * uv.x + em_src.emissive_uv_m[1] * uv.y + em_src.emissive_uv_t[0],
+                                            em_src.emissive_uv_m[2] * uv.x + em_src.emissive_uv_m[3] * uv.y + em_src.emissive_uv_t[1]);
+                                constexpr sampler em_sampler_direct(coord::normalized, address::repeat, filter::linear);
+                                em_tex = material_textures[em_src.emissive_tex_index].sample(em_sampler_direct, uv).rgb;
+                            }
+                            float3 em_contrib = em_factor * em_tex;
+                            float geom_weight = cos_theta * cos_emit * max(p.emissive_table_total_area, 1e-12f) / (l_len * l_len);
+                            emissive_direct = em_contrib * geom_weight;
+                            float em_l = luma(emissive_direct);
+                            float em_cap = RT_EMISSIVE_FIREFLY_GAIN * p.emissive_table_mean_power;
+                            if (em_l > em_cap && em_cap > 0.0f) {
+                                emissive_direct *= em_cap / em_l;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        gi += emissive_direct * float(p.gi_spp);
         gi /= float(p.gi_spp);
     }
 
@@ -2973,21 +3091,25 @@ pub struct ShadowRayParams {
     /// = reflection rays/pixel (1 in v1; 0 disables the branch — inert in
     /// T3, the kernel reads these in T5). `refl_max_roughness` =
     /// RT_REFLECTION_MAX_ROUGHNESS (0.6 starting, RD7 BRDF-domain split);
-    /// `refl_rough_band` = the blend-band width. `_pad_refl` is 12 bytes:
-    /// MSL lays out `uint _pad_refl[3]` (12 bytes) plus the 4 bytes of
-    /// `emissive_table_mean_power` below = the 16-byte alignment
-    /// `float4x4 inv_view_proj` demands.
+    /// `refl_rough_band` = the blend-band width. `_pad_refl` is 8 bytes:
+    /// MSL lays out `uint _pad_refl[2]` (8 bytes) plus the 4 bytes of
+    /// `emissive_table_mean_power` + 4 bytes of `emissive_table_count` = 16
+    /// bytes total, the alignment `float4x4 inv_view_proj` demands.
     pub refl_spp: u32,
     pub refl_max_roughness: f32,
     pub refl_rough_band: f32,
-    _pad_refl: [u8; 12],
     /// RS-B (RAYTRACING_DESIGN.md section 15.2 RS8): per-sample firefly cap
-    /// anchor — the emissive table's CPU-computed mean power (area ×
-    /// build-time emissive luma, averaged across all table entries). 0.0
-    /// when the table is empty/no-emissive scene. Consumed by the RS-C
-    /// kernel as `RT_EMISSIVE_FIREFLY_GAIN × this` to cap each
-    /// direct-emissive sample's luminance.
+    /// anchor — the emissive table's CPU-computed mean power. Must precede
+    /// `_pad_refl` to match MSL field order (emissive fields BEFORE padding).
     pub emissive_table_mean_power: f32,
+    /// RS-C: number of valid entries in the emissive table/alias buffers.
+    /// 0 = no emissive geometry — the sampler kernel block is skipped.
+    pub emissive_table_count: u32,
+    /// RS-C: total world-space area (in world units²) of all emissive
+    /// triangles in the table. The RIS estimator's geometry weight uses
+    /// this as the PDF correction factor for uniform area sampling.
+    pub emissive_table_total_area: f32,
+    _pad_refl: [u8; 4],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
@@ -3019,6 +3141,8 @@ impl ShadowRayParams {
         refl_max_roughness: f32,
         refl_rough_band: f32,
         emissive_table_mean_power: f32,
+        emissive_table_count: u32,
+        emissive_table_total_area: f32,
     ) -> Self {
         let caster_count = casters.len().min(MAX_RT_CASTERS) as u32;
         let mut caster_arr = [RtCasterParams::ZERO; MAX_RT_CASTERS];
@@ -3039,8 +3163,10 @@ impl ShadowRayParams {
             refl_spp,
             refl_max_roughness,
             refl_rough_band,
-            _pad_refl: [0; 12],
             emissive_table_mean_power,
+            emissive_table_count,
+            emissive_table_total_area,
+            _pad_refl: [0; 4],
             inv_view_proj,
         }
     }
@@ -3083,9 +3209,9 @@ impl GiMaterial {
 pub const MAX_RT_EMISSIVE_TRIANGLES: u32 = 4096;
 
 /// RS-B: GPU-side emissive triangle entry — world-space positions of the
-/// three vertices, consumed by the kernel's alias-draw + point-sample step
-/// (RS-C). `packed_float3` discipline: `[f32; 3]` + explicit pad (P0
-/// section 5.1 kernel lesson).
+/// three vertices plus per-vertex UVs and the owning object index for
+/// gi_materials/normal_sources lookups (RS-C). `packed_float3` discipline:
+/// `[f32; 3]` + explicit pad (P0 section 5.1 kernel lesson).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct EmissiveTriangleGpu {
@@ -3095,9 +3221,14 @@ pub struct EmissiveTriangleGpu {
     _pad1: f32,
     pub v2: [f32; 3],
     _pad2: f32,
+    pub uv0: [f32; 2],
+    pub uv1: [f32; 2],
+    pub uv2: [f32; 2],
+    pub object_index: u32,
+    _pad_obj: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 48);
+const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 80);
 
 /// RS-B: GPU-side alias-table entry — `prob` is the probability of selecting
 /// the entry's own triangle; when the draw fails the self-probability, `alias`
@@ -3114,11 +3245,17 @@ const _: () = assert!(std::mem::size_of::<EmissiveAliasEntry>() == 8);
 /// RS-B: CPU-side per-triangle storage for refit — local-space vertex
 /// positions survive across transforms so `refit_emissive_table` can
 /// recompute world-space positions from the new object transform.
+/// consumed by `build_emissive_table`/`refit_emissive_table` via
+/// `EmissiveLightTable.local_triangles`.
+#[allow(dead_code, reason = "stored in EmissiveLightTable.local_triangles, consumed by build_/refit_emissive_table")]
 #[derive(Clone, Debug)]
 struct EmissiveTriangleCpu {
     v0_local: [f32; 3],
     v1_local: [f32; 3],
     v2_local: [f32; 3],
+    uv0: [f32; 2],
+    uv1: [f32; 2],
+    uv2: [f32; 2],
     /// Index into the `objects` slice this triangle came from (for refit).
     object_index: u32,
 }
@@ -3138,6 +3275,10 @@ pub struct EmissiveLightTable {
     /// Arithmetic mean of per-entry power (area × build-time emissive luma)
     /// — the firefly cap anchor in [`ShadowRayParams::emissive_table_mean_power`].
     pub mean_power: f32,
+    /// RS-C: total world-space area (in world units²) of all table entries.
+    /// The kernel uses this as the RIS geometry-weight factor for unbiased
+    /// area-light sampling.
+    pub total_area: f32,
     /// CPU-side local-space vertices for refit (one per entry, same order).
     local_triangles: Vec<EmissiveTriangleCpu>,
 }
@@ -3164,6 +3305,9 @@ pub fn build_emissive_table(
         v0: [f32; 3],
         v1: [f32; 3],
         v2: [f32; 3],
+        uv0: [f32; 2],
+        uv1: [f32; 2],
+        uv2: [f32; 2],
         obj_index: u32,
         power: f32,
     }
@@ -3224,10 +3368,22 @@ pub fn build_emissive_table(
                 continue;
             }
             let power = area * emissive_luma;
+            // RS-C: also capture per-vertex UVs for emissive-map sampling.
+            let uv_offset = obj.uv_offset as usize;
+            let uv_at = |vi: usize| -> [f32; 2] {
+                let byte_offset = offset + vi * stride + uv_offset;
+                unsafe { *(ptr.add(byte_offset) as *const [f32; 2]) }
+            };
+            let uv0 = uv_at(i0);
+            let uv1 = uv_at(i1);
+            let uv2 = uv_at(i2);
             candidates.push(Candidate {
                 v0,
                 v1,
                 v2,
+                uv0,
+                uv1,
+                uv2,
                 obj_index: oi as u32,
                 power,
             });
@@ -3250,6 +3406,8 @@ pub fn build_emissive_table(
     let entry_count = candidates.len() as u32;
     let total_power: f32 = candidates.iter().map(|c| c.power).sum();
     let mean_power = total_power / entry_count as f32;
+    // RS-C: total world-space area computed below during upload.
+    let mut total_area: f32 = 0.0;
 
     // Phase 3: build alias table from the power distribution.
     let weights: Vec<f32> = candidates.iter().map(|c| c.power).collect();
@@ -3285,6 +3443,7 @@ pub fn build_emissive_table(
             let w0 = transform_point(&m, c.v0);
             let w1 = transform_point(&m, c.v1);
             let w2 = transform_point(&m, c.v2);
+            total_area += triangle_area(w0, w1, w2);
 
             unsafe {
                 let tri_dst = tri_ptr.add(i * std::mem::size_of::<EmissiveTriangleGpu>())
@@ -3298,6 +3457,11 @@ pub fn build_emissive_table(
                         _pad1: 0.0,
                         v2: w2,
                         _pad2: 0.0,
+                        uv0: c.uv0,
+                        uv1: c.uv1,
+                        uv2: c.uv2,
+                        object_index: c.obj_index,
+                        _pad_obj: 0,
                     },
                 );
 
@@ -3316,6 +3480,9 @@ pub fn build_emissive_table(
                 v0_local: c.v0,
                 v1_local: c.v1,
                 v2_local: c.v2,
+                uv0: c.uv0,
+                uv1: c.uv1,
+                uv2: c.uv2,
                 object_index: c.obj_index,
             });
         }
@@ -3325,6 +3492,7 @@ pub fn build_emissive_table(
             aliases: alias_buf,
             entry_count,
             mean_power,
+            total_area,
             local_triangles,
         })
     }
@@ -4014,6 +4182,12 @@ pub trait ShadowRayTracer {
         // reflection ray's miss radiance. Always bound (dummy when the
         // scene has no env chain).
         prefiltered_env: &GpuTexture,
+        // RS-C: emissive-triangle light table + alias table buffers, built
+        // CPU-side at accel registration. Dummy 1-byte buffers when the
+        // scene has no emissive geometry (entry_count=0 skips the kernel
+        // block).
+        emissive_triangles: &GpuBuffer,
+        emissive_aliases: &GpuBuffer,
         label: &str,
     );
 
@@ -4210,6 +4384,8 @@ impl MetalShadowRayTracer {
             (1, SlotKind::Buffer),
             (2, SlotKind::Buffer), // RT-P3: gi_materials, MSL [[buffer(2)]]
             (3, SlotKind::Buffer), // RT-T1-B: normal_sources, MSL [[buffer(3)]]
+            (4, SlotKind::Buffer), // RS-C: emissive_triangles, MSL [[buffer(4)]]
+            (5, SlotKind::Buffer), // RS-C: emissive_aliases, MSL [[buffer(5)]]
             (0, SlotKind::Texture),
             (1, SlotKind::Texture),
             (2, SlotKind::Texture),
@@ -4518,6 +4694,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         out_n: &GpuTexture,
         out_refl: &GpuTexture,
         prefiltered_env: &GpuTexture,
+        emissive_triangles: &GpuBuffer,
+        emissive_aliases: &GpuBuffer,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -4536,6 +4714,16 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: normal_sources,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: emissive_triangles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: emissive_aliases,
                 offset: 0,
             },
             GpuBinding::Texture {

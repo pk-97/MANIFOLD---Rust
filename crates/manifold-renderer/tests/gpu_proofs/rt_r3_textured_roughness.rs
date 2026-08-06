@@ -272,6 +272,8 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         0.6, // refl_max_roughness
         0.1, // refl_rough_band
         0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
+        0,   // RS-C: emissive_table_count — no emissive in fixture
+        0.0, // RS-C: emissive_table_total_area — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
@@ -283,6 +285,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, floor_roughness, 0.0, 0.0]),
         GiMaterial::new([0.5, 0.5, 0.5], EMITTER_EMISSIVE, [0.0, 0.5, 0.0, 0.0]),
     ];
+    let dummy_emissive = device.create_buffer_shared(1);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
 
     let mut encoder = device.create_encoder("rt-r3-textured-roughness-proof");
@@ -301,6 +304,8 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_emissive,
+        &dummy_emissive,
         "trace_shadow_rays-r3-proof",
     );
     encoder.commit_and_wait_completed();
