@@ -1660,7 +1660,14 @@ kernel void trace_shadow_rays(
                 float n_len2 = length_squared(n_t);
                 if (n_len2 > 1e-12f) {
                     n_t *= rsqrt(n_len2);
-                    float cos_emit = max(dot(n_t, -l_hat), 0.0f);
+                    // Emission is DOUBLE-SIDED here, matching the rest of
+                    // the engine: the gather's hit_emissive and the raster's
+                    // resolve_emissive both read emissive regardless of
+                    // which face is struck. A one-sided gate silently kills
+                    // every sample from fixtures whose emitter faces away
+                    // (rt_p3_emissive_texture: ground under an up-facing
+                    // quad read 0.06% vs main's 1.60%).
+                    float cos_emit = abs(dot(n_t, -l_hat));
                     if (cos_emit > 0.0f) {
                         ray em_r;
                         em_r.origin = sec_origin;
