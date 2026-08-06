@@ -1327,8 +1327,10 @@ kernel void trace_shadow_rays(
     float2 primary_bary = float2(0.0);
     // RT-R1: the primary ray is also the reflection block's source of `n`
     // RS-C: the emissive-geometry direct-light sampler also needs the
-    // primary ray's origin/normal — widen the cast condition.
-    bool sampler_active = (p.emissive_table_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr);
+    // primary ray's origin/normal — widen the cast condition. The sampler
+    // itself only runs inside the gi_spp block below, so gi_spp==0 (the
+    // RT-A3a mask dispatch) must not pay for a primary cast it never uses.
+    bool sampler_active = (p.emissive_table_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr) && (p.gi_spp > 0u);
     if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u || sampler_active) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
@@ -1643,7 +1645,15 @@ kernel void trace_shadow_rays(
             float l_len = length(l);
             float3 l_hat = l / max(l_len, bias_eps);
             float cos_theta = max(dot(shading_n, l_hat), 0.0f);
-            if (cos_theta > 0.0f && l_len > bias_eps) {
+            // BUG-ny4v: a pixel ON the emissive surface can draw a sample
+            // point on the same triangle, so `l_len` shrinks toward 0.
+            // `l_len > bias_eps` alone still admits intervals
+            // [bias_eps, l_len - bias_eps] with max < min — an inverted
+            // ray interval is undefined for the intersector and hung the
+            // GPU at I-RS3. Require a non-empty interval; reject
+            // non-finite rays outright (NaN rays are the same UB class;
+            // rt_finite — fast math can compile away isfinite).
+            if (cos_theta > 0.0f && rt_finite(l_len) && l_len > 2.0f * bias_eps) {
                 float3 e1 = float3(emissive_table[i].v1) - float3(emissive_table[i].v0);
                 float3 e2 = float3(emissive_table[i].v2) - float3(emissive_table[i].v0);
                 float3 n_t = cross(e1, e2);
