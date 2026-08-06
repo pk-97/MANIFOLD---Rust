@@ -189,3 +189,30 @@ pub(crate) fn set_window_level(window: &winit::window::Window, level: i64) {
         let _: () = msg_send![ns_window, setLevel: level];
     }
 }
+
+/// Enable/disable the NSWindow shadow. macOS 26 (Tahoe) draws a 1px border
+/// around any window that has a shadow — including borderless presentation
+/// windows — so presentation mode must drop the shadow to stay flush with
+/// the display edges. Same fix as SDL #15005 / ghostty #11325.
+#[cfg(target_os = "macos")]
+pub(crate) fn set_window_shadow(window: &winit::window::Window, shadow: bool) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+
+    unsafe {
+        let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
+        let ns_window: *mut AnyObject = msg_send![ns_view, window];
+        if ns_window.is_null() {
+            return;
+        }
+        let _: () = msg_send![ns_window, setHasShadow: shadow];
+    }
+}
