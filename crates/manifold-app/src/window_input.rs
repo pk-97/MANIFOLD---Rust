@@ -637,9 +637,15 @@ impl Application {
                         // display only — no global setPresentationOptions.
                         #[cfg(target_os = "macos")]
                         crate::edr_surface::set_window_level(&ws.window, 25);
+                        // Tahoe draws a 1px border around shadowed windows
+                        // even when borderless — drop it for presentation.
+                        #[cfg(target_os = "macos")]
+                        crate::edr_surface::set_window_shadow(&ws.window, false);
                     } else {
                         // → Windowed: restore saved frame + menu bar
                         ws.window.set_decorations(true);
+                        #[cfg(target_os = "macos")]
+                        crate::edr_surface::set_window_shadow(&ws.window, true);
                         if let Some(frame) = self.output_saved_frame.take() {
                             ws.window.set_outer_position(winit::dpi::PhysicalPosition::new(
                                 frame[0], frame[1],

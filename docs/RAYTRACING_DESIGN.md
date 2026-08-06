@@ -1204,7 +1204,7 @@ where it carried zero — same bandwidth class, no new texture. And the metal-fi
 deviation above is a real look change on existing RT scenes: darker, correct, and
 Peter signs it off on a fixture before it lands.
 
-## 15. Many-light direct lighting — caster cap + emissive RIS (Tier 3 item 6; APPROVED 2026-08-02, K3 lead on k3-restir-design's draft; **RS-A LANDED 2026-08-03 on main — MAX_RT_CASTERS 8, second sv texture through trace→upsample→atrous→SV-ACCUM→binding 44, 6-caster value test, gpu-proofs 143/143, trace_ms 4-vs-8 delta −0.06ms; RS-B (emissive light table: per-triangle power-ranked build + alias table + refit, 4096 cap, CPU-oracle value tests) LANDED 2026-08-03 on main; RS-C (kernel sampling + substitution) not started**)
+## 15. Many-light direct lighting — caster cap + emissive RIS (Tier 3 item 6; APPROVED 2026-08-02, K3 lead on k3-restir-design's draft; **RS-A LANDED 2026-08-03 on main — MAX_RT_CASTERS 8, second sv texture through trace→upsample→atrous→SV-ACCUM→binding 44, 6-caster value test, gpu-proofs 143/143, trace_ms 4-vs-8 delta −0.06ms; RS-B (emissive light table: per-triangle power-ranked build + alias table + refit, 4096 cap, CPU-oracle value tests) LANDED 2026-08-03 on main; RS-C (kernel sampling + substitution) built on wave/rt-manylight-c, landing BLOCKED — its I-RS3 gate hangs the GPU, BUG-ny4v (RS-C I-RS3 gate hangs the GPU)**)
 
 ### 15.0 What changed since the scoping note
 
