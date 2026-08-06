@@ -1222,6 +1222,13 @@ impl Application {
         // size is visually identical — the menu bar only appears on the
         // display the cursor is on, not on a dedicated output TV.
 
+        // Tahoe draws a 1px border around shadowed windows even when
+        // borderless — presentation windows stay flush without it.
+        #[cfg(target_os = "macos")]
+        if presentation {
+            crate::edr_surface::set_window_shadow(&window, false);
+        }
+
         let id = window.id();
 
         // Query headroom for the new output window immediately — don't wait
