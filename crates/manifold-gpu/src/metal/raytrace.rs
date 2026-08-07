@@ -2612,6 +2612,12 @@ kernel void accumulate_irradiance(
     // `AccumulateParams::with_lighting_changed` for why the flag rides here
     // instead of a new field.
     bool cpu_lighting_changed = (p.reset & 2u) != 0u;
+    // Section 10 addendum (gesture rule): bits 2-4 carry the CPU-detected
+    // gesture and geometry-change flags — rode on `reset`'s spare bits
+    // (same discipline as bit 1) so the struct stays 176 bytes.
+    bool cpu_gesture       = (p.reset & 4u) != 0u;
+    bool cpu_geo_changed   = (p.reset & 8u) != 0u;
+    bool cpu_geo_gesture   = (p.reset & 16u) != 0u;
     if ((p.reset & 1u) != 0u) {
         // `.a` = accumulated frame count (BUG-boil): a cold texel has
         // exactly one sample, so its next blend takes the current frame at
@@ -2880,8 +2886,16 @@ kernel void accumulate_irradiance(
                     float change_gate = max(RT_ACCUM_CHANGE_SIGMAS * hist_sd,
                                             RT_ACCUM_CHANGE_REL * hist_luma);
                     float dluma = fabs(cur_luma - hist_luma);
-                    bool lighting_changed = cpu_lighting_changed
-                        || (dluma > change_gate && dluma > RT_ACCUM_CHANGE_ABS);
+                    // Per-texel gate: the irr luma moved more than the
+                    // tracked spread can explain — a real change the CPU
+                    // didn't see (e.g. an emissive object animating inside
+                    // the graph). Hoisted so the svt decision can read it.
+                    bool texel_fired = dluma > change_gate && dluma > RT_ACCUM_CHANGE_ABS;
+                    // Section 10 addendum (gesture rule): a gesture holds
+                    // n=2 for its duration — the CPU says a continuous
+                    // lighting scrub is in progress, so don't re-converge
+                    // between the frames.
+                    bool lighting_changed = cpu_lighting_changed || cpu_gesture || texel_fired;
                     float n_full = nsum / wsum + 1.0;
                     // Snap to 2, not 1: alpha 0.5 is 75% of a step in two
                     // frames — a cue lands — while leaving one frame of
@@ -2890,9 +2904,20 @@ kernel void accumulate_irradiance(
                     float alpha = max(1.0 / n, p.alpha);
                     hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
                     blended = mix(hist, cur.xyz, alpha);
-                    // RT-TL-C (TL8): svt blends with the SAME irradiance
-                    // alpha — one convergence clock for the tint channel.
-                    svt_blended = mix(svtsum / wsum, cur_svt, alpha);
+                    // TL8 amendment (section 10 addendum): svt gets its OWN
+                    // decision. Tint is a geometry term — unchanged by
+                    // strobes/env-brightness — so it snaps on geometry cues
+                    // and on the per-texel gate only when the CPU is silent
+                    // (occluder motion, the CPU's blind spot). When the CPU
+                    // reports a non-geometry change, svt HOLDS its
+                    // convergence. Previously rode the irradiance alpha
+                    // blind, so a strobe snapped the tint channel for no
+                    // reason.
+                    bool svt_snap = cpu_geo_changed || cpu_geo_gesture
+                        || (texel_fired && !cpu_lighting_changed && !cpu_gesture);
+                    float svt_n = svt_snap ? 2.0 : n_full;
+                    float svt_alpha = max(1.0 / svt_n, p.alpha);
+                    svt_blended = mix(svtsum / wsum, cur_svt, svt_alpha);
                     // ED2: ao temporally accumulates with the SAME weight as
                     // the rgb (one value per pixel, the atrous anchor).
                     ao_blended = mix(asum / wsum, cur.a, alpha);
@@ -2936,7 +2961,14 @@ kernel void accumulate_irradiance(
                     // 2026-08-01 via the sv_hold capture: orbit mean hold
                     // ~0.01 vs static ~0.00001, 1000x). cam_motion = 0 on a
                     // held camera, so the static path is byte-identical.
-                    bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)) * motion_band);
+                    // Section 10 addendum: a geometry gesture (two consecutive
+                    // frames of caster-move/svt-slot-swap) forces the trip
+                    // past the sigma gate — the snap-hold machinery below
+                    // runs unchanged and the BUG-boil floored-moments update
+                    // stays self-sustaining. Single (non-gesture) geo changes
+                    // still go through the sigma gate.
+                    bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)) * motion_band)
+                        || cpu_geo_gesture;
                     // Snap-hold: the gate fires once, then the straddling
                     // moments inflate sigma and the gate goes dead — so a
                     // trip holds the n=2 snap for 4 more frames while the
@@ -2978,7 +3010,8 @@ kernel void accumulate_irradiance(
                     float4 sv2_d4 = abs(cur_sv2 - sv2_hist);
                     float4 sv2_gate = max(4.0 * sv2_hsd,
                                          0.15 * max(sv2_hist, cur_sv2));
-                    bool sv2_changed = any(sv2_d4 > max(sv2_gate, float4(0.05)) * motion_band);
+                    bool sv2_changed = any(sv2_d4 > max(sv2_gate, float4(0.05)) * motion_band)
+                        || cpu_geo_gesture;
                     float sv2_hold_hist = sv2hhsum / wsum;
                     sv2_hold_w = sv2_changed ? 4.0 : max(sv2_hold_hist - 1.0, 0.0);
                     bool sv2_snap = sv2_changed || sv2_hold_hist >= 1.0;
@@ -3118,6 +3151,7 @@ kernel void accumulate_irradiance(
                     float rdluma = fabs(luma(cur_refl.rgb) - rhist_luma);
                     bool refl_changed = refl_change_snap
                         || cpu_lighting_changed
+                        || cpu_gesture
                         || (rdluma > max(RT_REFL_CHANGE_SIGMAS * rsd,
                                          RT_REFL_CHANGE_REL * rhist_luma) * motion_band
                             && rdluma > RT_REFL_CHANGE_ABS);
@@ -4209,11 +4243,54 @@ impl AccumulateParams {
         }
         self
     }
+
+    /// Tell the accumulator a gesture is in progress (two consecutive frames
+    /// of lighting-key change). The irradiance and reflection channels hold
+    /// n=2 for the gesture's duration so the output stays soft-and-current
+    /// instead of trailing. RAYTRACING_DESIGN.md section 10 addendum.
+    pub fn with_gesture(mut self, gesture: bool) -> Self {
+        if gesture {
+            self.reset |= ACCUM_FLAG_GESTURE;
+        }
+        self
+    }
+
+    /// Tell the accumulator the geometry-only sub-key changed this frame
+    /// (caster positions/directions/cone/kind moved, or the designated svt
+    /// slot changed). Drives svt's own snap decision. Section 10 addendum.
+    pub fn with_geo_changed(mut self, changed: bool) -> Self {
+        if changed {
+            self.reset |= ACCUM_FLAG_GEO_CHANGED;
+        }
+        self
+    }
+
+    /// Two consecutive frames of geometry-sub-key change — a geometry
+    /// gesture. Folded into the sv/sv2 trip condition so shadow channels
+    /// take the cue directly. Section 10 addendum.
+    pub fn with_geo_gesture(mut self, gesture: bool) -> Self {
+        if gesture {
+            self.reset |= ACCUM_FLAG_GEO_GESTURE;
+        }
+        self
+    }
 }
 
 /// `AccumulateParams::reset` bit 1 — see `with_lighting_changed`. Bit 0 is the
 /// original full-reset meaning, so a plain `reset: true` is still `1`.
 pub const ACCUM_FLAG_LIGHTING_CHANGED: u32 = 2;
+/// Bit 2 — two consecutive frames of lighting-key change (a gesture in
+/// progress). The irradiance and reflection channels hold n=2 for the
+/// gesture's duration so the output stays soft-and-current instead of
+/// trailing. Rides `reset`'s spare bits per the section 10 addendum.
+pub const ACCUM_FLAG_GESTURE: u32 = 4;
+/// Bit 3 — the geometry-only sub-key changed this frame (caster position/
+/// direction/cone/kind moved, or the designated svt slot changed). Drives
+/// svt's own decision: tint snaps on geometry cues.
+pub const ACCUM_FLAG_GEO_CHANGED: u32 = 8;
+/// Bit 4 — two consecutive frames of geometry-sub-key change. Folded into
+/// the sv/sv2 trip condition so shadow channels take the cue directly.
+pub const ACCUM_FLAG_GEO_GESTURE: u32 = 16;
 
 /// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
 /// (RT-T1-D, BUG-312). Plain POD, all `u32`, no alignment surprises.

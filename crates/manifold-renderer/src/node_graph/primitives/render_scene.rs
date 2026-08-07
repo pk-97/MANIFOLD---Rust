@@ -1069,6 +1069,22 @@ pub struct RenderScene {
     /// told outright instead of inferring it from pixels. `None` before the
     /// first RT-ready frame — nothing to compare against, so no snap.
     rt_lighting_key: Option<u64>,
+    /// RAYTRACING_DESIGN.md section 10 addendum (gesture rule): geometry-only
+    /// sub-key — hashes caster position/direction, cone/size, kind, and the
+    /// designated svt slot. Strobes and env-brightness scrubs do NOT flip it
+    /// (they flip only the full key). `None` before the first RT-ready frame.
+    rt_lighting_geo_key: Option<u64>,
+    /// Gesture hold counter for the full lighting key: armed to 2 when two
+    /// consecutive frames flip the key, decremented each frame, gesture active
+    /// while > 0 (one-frame hangover for mid-scrub throttled updates).
+    rt_lighting_gesture: u32,
+    /// Was the full lighting key different last frame? Used by
+    /// `gesture_detect` — two consecutive `true`s arm the gesture counter.
+    rt_lighting_prev_changed: bool,
+    /// Geometry sub-key gesture hold counter.
+    rt_lighting_geo_gesture: u32,
+    /// Was the geometry sub-key different last frame?
+    rt_lighting_geo_prev_changed: bool,
     /// RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2: the SHARED node-local
     /// reset-detection path (`crate::node_graph::temporal_reset`) — the
     /// ONLY call site that decides "discard temporal history this frame"
@@ -1142,6 +1158,106 @@ fn rt_svt_slot(casters: &[crate::node_graph::light::Light]) -> Option<u32> {
         .position(|l| matches!(l.mode, crate::node_graph::light::LightMode::Sun))
         .filter(|&i| i < manifold_gpu::raytrace::MAX_RT_CASTERS)
         .map(|i| i as u32)
+}
+
+/// RAYTRACING_DESIGN.md section 10 addendum (gesture rule): compute the full
+/// RT lighting key — every lighting-relevant input whose change alters the
+/// traced textures or RT shading substitutions and has no other reset path.
+/// Pure (no state), allocation-free, testable in cfg(test).
+fn compute_rt_lighting_key(
+    rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
+    ambient_tint: &[f32],
+    envmap_generation: Option<u64>,
+) -> u64 {
+    let mut k = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |bits: u32| {
+        k ^= u64::from(bits);
+        k = k.wrapping_mul(0x100_0000_01b3);
+    };
+    // `color` is premultiplied with intensity (see `node_graph::light`),
+    // so an intensity move shows up here with no extra plumbing. The
+    // Ambient knob is NOT hashed: ED2 moved it consumer-side, so it
+    // never changes the traced irradiance texture — snapping the
+    // accumulator on it would only waste history.
+    for c in rt_casters {
+        for f in c.dir_or_pos.iter().chain(c.color.iter()) {
+            mix(f.to_bits());
+        }
+        mix(c.cone_or_size.to_bits());
+        mix(c.kind);
+    }
+    for f in ambient_tint {
+        mix(f.to_bits());
+    }
+    // The environment map is a lighting input too: a rebake
+    // (intensity/rotation/emitter layout, from bake_equirect_envmap or
+    // hdri_source alike) bumps this slot's write generation. Without it
+    // here an env move only tripped the per-texel luma gate where env
+    // was >15% of a pixel's brightness — in a sun-lit scene the env
+    // share is under that, so the fade ran on the IRRADIANCE_ACCUM_ALPHA
+    // floor (~2.5s tail). Peter watched exactly that on the
+    // env-intensity fader. `None` (unwired) mixes as zero: an
+    // unwired-to-wired transition still flips the key.
+    let g = envmap_generation.unwrap_or(0);
+    mix(g as u32);
+    mix((g >> 32) as u32);
+    k
+}
+
+/// RAYTRACING_DESIGN.md section 10 addendum (gesture rule): geometry-only
+/// sub-key — hashes caster position/direction, cone/size, kind, and the
+/// designated svt slot. Does NOT hash color, ambient_tint, or envmap
+/// generation: a strobe or env-brightness scrub leaves this key unchanged
+/// (visibility and transmission tint are geometry terms).
+fn compute_rt_lighting_geo_key(
+    rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
+    svt_slot: u32,
+) -> u64 {
+    let mut k = 0x8a5f_3c1e_2b94_0d76u64;
+    let mut mix = |bits: u32| {
+        k ^= u64::from(bits);
+        k = k.wrapping_mul(0x100_0000_01b3);
+    };
+    for c in rt_casters {
+        for f in &c.dir_or_pos {
+            mix(f.to_bits());
+        }
+        mix(c.cone_or_size.to_bits());
+        mix(c.kind);
+    }
+    mix(svt_slot);
+    k
+}
+
+/// Gesture state machine per the section 10 addendum: two consecutive frames
+/// of key change arm a hold counter to 2, which decrements each frame.
+/// Gesture is active while the counter > 0 (one-frame hangover for
+/// mid-scrub throttled updates). Pure — all state flows through arguments
+/// and return values, so cfg(test) unit tests can exhaustively cover the
+/// state machine.
+///
+/// Returns (changed, gesture_active, new_prev_changed, new_gesture_counter).
+fn gesture_detect(
+    prev_key: Option<u64>,
+    cur_key: u64,
+    prev_changed: bool,
+    mut gesture_counter: u32,
+) -> (bool, bool, bool, u32) {
+    let changed = prev_key.is_some_and(|prev| prev != cur_key);
+    if changed {
+        if prev_changed || gesture_counter > 0 {
+            // Consecutive changes arm the gesture hold; a change
+            // during an existing hold re-arms (mid-scrub
+            // continuation after a throttled-frame gap).
+            gesture_counter = 2;
+        }
+        // else: first change in a potential pair — counter stays 0,
+        // gesture not yet active.
+    } else {
+        gesture_counter = gesture_counter.saturating_sub(1);
+    }
+    let gesture_active = gesture_counter > 0;
+    (changed, gesture_active, changed, gesture_counter)
 }
 
 fn ensure_rt_gi_materials(
@@ -1324,6 +1440,11 @@ impl RenderScene {
             rt_native_reflection: false,
             rt_atrous_params_buffer: None,
             rt_lighting_key: None,
+            rt_lighting_geo_key: None,
+            rt_lighting_gesture: 0,
+            rt_lighting_prev_changed: false,
+            rt_lighting_geo_gesture: 0,
+            rt_lighting_geo_prev_changed: false,
             rt_irr_width: 0,
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
@@ -5201,50 +5322,36 @@ impl EffectNode for RenderScene {
                 // when the changed term is a big enough share of its channel,
                 // so a sun-intensity move (a small slice of a buffer dominated
                 // by the ambient term) faded while an env move snapped. Peter
-                // found exactly that split. Hash the lighting inputs, compare
-                // with last frame, and say so. Cheap: a handful of floats.
-                let lighting_key = {
-                    let mut k = 0xcbf2_9ce4_8422_2325u64;
-                    let mut mix = |bits: u32| {
-                        k ^= u64::from(bits);
-                        k = k.wrapping_mul(0x100_0000_01b3);
-                    };
-                    // `color` is premultiplied with intensity (see
-                    // `node_graph::light`), so an intensity move shows up here
-                    // with no extra plumbing. The Ambient knob is NOT hashed:
-                    // ED2 moved it consumer-side, so it never changes the
-                    // traced irradiance texture — snapping the accumulator on
-                    // it would only waste history.
-                    for c in &rt_casters {
-                        for f in c.dir_or_pos.iter().chain(c.color.iter()) {
-                            mix(f.to_bits());
-                        }
-                        mix(c.cone_or_size.to_bits());
-                        mix(c.kind);
-                    }
-                    for f in atmosphere.ambient_tint {
-                        mix(f.to_bits());
-                    }
-                    // The environment map is a lighting input too: a rebake
-                    // (intensity/rotation/emitter layout, from
-                    // bake_equirect_envmap or hdri_source alike) bumps this
-                    // slot's write generation. Without it here an env move
-                    // only tripped the per-texel luma gate where env was
-                    // >15% of a pixel's brightness — in a sun-lit scene the
-                    // env share is under that, so the fade ran on the
-                    // IRRADIANCE_ACCUM_ALPHA floor (~2.5s tail). Peter
-                    // watched exactly that on the env-intensity fader.
-                    // `None` (unwired) mixes as zero: an unwired→wired
-                    // transition still flips the key.
-                    let g = envmap_generation.unwrap_or(0);
-                    mix(g as u32);
-                    mix((g >> 32) as u32);
-                    k
-                };
-                let lighting_changed = self
-                    .rt_lighting_key
-                    .replace(lighting_key)
-                    .is_some_and(|prev| prev != lighting_key);
+                // RAYTRACING_DESIGN.md section 10 addendum (gesture rule):
+                // compute both the full lighting key (every input that
+                // alters the traced textures) and the geometry-only sub-key
+                // (caster position/direction/cone/kind + svt slot). Gesture
+                // detection: two consecutive changes arm a hold counter.
+                let lighting_key =
+                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_generation);
+                let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
+                    gesture_detect(
+                        self.rt_lighting_key,
+                        lighting_key,
+                        self.rt_lighting_prev_changed,
+                        self.rt_lighting_gesture,
+                    );
+                self.rt_lighting_key = Some(lighting_key);
+                self.rt_lighting_prev_changed = lighting_changed;
+                self.rt_lighting_gesture = new_gesture;
+
+                let geo_key = compute_rt_lighting_geo_key(&rt_casters, svt_slot);
+                let (geo_changed, geo_gesture, _geo_prev, new_geo_gesture) =
+                    gesture_detect(
+                        self.rt_lighting_geo_key,
+                        geo_key,
+                        self.rt_lighting_geo_prev_changed,
+                        self.rt_lighting_geo_gesture,
+                    );
+                self.rt_lighting_geo_key = Some(geo_key);
+                self.rt_lighting_geo_prev_changed = geo_changed;
+                self.rt_lighting_geo_gesture = new_geo_gesture;
+
                 let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
@@ -5255,7 +5362,10 @@ impl EffectNode for RenderScene {
                     inv_view_proj,
                     prev_view_proj,
                 )
-                .with_lighting_changed(lighting_changed);
+                .with_lighting_changed(lighting_changed)
+                .with_gesture(lighting_gesture)
+                .with_geo_changed(geo_changed)
+                .with_geo_gesture(geo_gesture);
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
                 // RT-T1-C: ping-pong — read last frame's write slot (same
@@ -6846,6 +6956,113 @@ mod tests {
             plan.resource_format(depth_res.unwrap()),
             Some(manifold_gpu::GpuTextureFormat::R32Float),
             "depth's resource_format must be R32Float at compile time"
+        );
+    }
+
+    /// RAYTRACING_DESIGN.md section 10 addendum — gesture detection state
+    /// machine. Two consecutive frames of key change arm a hold counter to 2;
+    /// counter decrements each frame; gesture active while > 0.
+    #[test]
+    fn gesture_single_change_is_no_gesture() {
+        // One frame change — not consecutive, no gesture.
+        let (changed, gesture, _, counter) = gesture_detect(Some(0x100), 0x200, false, 0);
+        assert!(changed, "key differs from stored");
+        assert!(!gesture, "single change is not a gesture");
+        assert_eq!(counter, 0, "counter stays 0 on first change");
+    }
+
+    #[test]
+    fn gesture_two_consecutive_arms() {
+        // Frame 1: changed, prev_changed=false.
+        let (c1, g1, pc1, ct1) = gesture_detect(Some(0x100), 0x200, false, 0);
+        assert!(c1, "frame 1 changed");
+        assert!(!g1, "frame 1 is not a gesture yet");
+        assert!(pc1, "prev_changed set true");
+        assert_eq!(ct1, 0);
+        // Frame 2: changed AND prev_changed=true → arm to 2.
+        let (c2, g2, pc2, ct2) = gesture_detect(Some(0x200), 0x300, pc1, ct1);
+        assert!(c2, "frame 2 changed");
+        assert!(g2, "two consecutive changes = gesture");
+        assert_eq!(ct2, 2, "counter armed to 2");
+        assert!(pc2, "prev_changed still true");
+    }
+
+    #[test]
+    fn gesture_hangover_survives_one_frame_gap() {
+        // Simulate a mid-scrub throttled update: 2 changes, 1 frame pending
+        // (key same for 1 frame), then changes resume.
+        let (_, _, pc1, ct1) = gesture_detect(Some(0x100), 0x200, true, 2);
+        assert_eq!(ct1, 2, "counter at 2 from prior gesture");
+        // One frame gap (no change, counter decrements).
+        let (c2, g2, pc2, ct2) = gesture_detect(Some(0x200), 0x200, pc1, ct1);
+        assert!(!c2, "no change this frame");
+        assert!(g2, "gesture still active with counter=1");
+        assert_eq!(ct2, 1, "counter decremented from 2 to 1");
+        assert!(!pc2);
+        // Next frame: key changes again, gesture re-arms.
+        let (c3, g3, pc3, ct3) = gesture_detect(Some(0x200), 0x300, pc2, ct2);
+        assert!(c3);
+        assert!(g3);
+        assert_eq!(ct3, 2, "re-armed on next change");
+    }
+
+    #[test]
+    fn gesture_counter_ticks_down_to_zero() {
+        // Armed to 2, then no further changes.
+        let (c1, g1, pc1, ct1) = gesture_detect(Some(0x100), 0x200, true, 2);
+        assert!(c1 && g1 && ct1 == 2);
+        let (c2, g2, pc2, ct2) = gesture_detect(Some(0x200), 0x200, pc1, ct1);
+        assert!(!c2 && g2 && ct2 == 1);
+        let (c3, g3, pc3, ct3) = gesture_detect(Some(0x200), 0x200, pc2, ct2);
+        assert!(!c3 && !g3 && ct3 == 0);
+        assert_eq!((pc3, ct3), (false, 0));
+    }
+
+    #[test]
+    fn gesture_static_never_arms() {
+        for _ in 0..5 {
+            let (c, g, _, ct) = gesture_detect(Some(0x100), 0x100, false, 0);
+            assert!(!c && !g && ct == 0);
+        }
+    }
+
+    #[test]
+    fn gesture_first_frame_no_stored_key_never_changed() {
+        // Before the first RT-ready frame, rt_lighting_key is None.
+        let (changed, gesture, _, counter) = gesture_detect(None, 0x100, false, 0);
+        assert!(!changed, "no previous key to compare against");
+        assert!(!gesture);
+        assert_eq!(counter, 0);
+    }
+
+    // ---- geo key (compute_rt_lighting_geo_key) ----
+
+    #[test]
+    fn geo_key_hashes_geometry_and_svt_slot() {
+        let k1 = compute_rt_lighting_geo_key(&[], 0);
+        let k2 = compute_rt_lighting_geo_key(&[], 1);
+        assert_ne!(k1, k2, "svt slot swap must flip the geo key");
+    }
+
+    #[test]
+    fn geo_key_ignores_color() {
+        let c1 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
+        let c2 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
+        assert_eq!(
+            compute_rt_lighting_geo_key(&[c1], 0),
+            compute_rt_lighting_geo_key(&[c2], 0),
+            "color change must NOT flip the geo key"
+        );
+    }
+
+    #[test]
+    fn geo_key_flips_on_position_change() {
+        let c1 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c2 = manifold_gpu::raytrace::RtCasterParams::new([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        assert_ne!(
+            compute_rt_lighting_geo_key(&[c1], 0),
+            compute_rt_lighting_geo_key(&[c2], 0),
+            "position change must flip the geo key"
         );
     }
 }
