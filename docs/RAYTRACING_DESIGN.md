@@ -1588,7 +1588,7 @@ I-RS5 and the forbidden-move lists. Deferred with triggers below.
 - **Clustered analytic-light sampling.** Trigger: a scene class past
   `LIGHT_SLIDER_MAX` — the slider itself moves first.
 
-## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-03 on main (wave/rt-quality) — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; TL-B/TL-C not started)
+## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-03 on main (wave/rt-quality) — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; **TL-B LANDED 2026-08-07 (wave/rt-translucency-b) — transmitting walk + BLAS opacity + luma sv; 5 value proofs + full gpu-proofs green, trace_ms delta ≈ 0 (−0.23 ms) on the 4K apricot; TL-C PENDS Peter's re-judge — the fixture frame measures 40.6 ms, above section 16.4's 32 ms line, on BOTH legs (pre-TL-B baseline; section 13's 26 ms predates RS-A/RS-C)**)
 
 Tier 3 item 9 names two features. **(A) thin-surface transmission** — sunlight
 through a flower petal: the petal glows when backlit, and the light that passes
@@ -1783,7 +1783,7 @@ casters + 4 AO + 2×2 GI + 8 refl + GI sun-bounce casts).
 | Feature | New rays | Other cost | Estimate |
 |---|---|---|---|
 | TL-A forward term | **0** | ~4 ALU × lights in `fs_pbr`; one uniform vec4 | unmeasurable; gate is the byte-identity + a standard trace run |
-| TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **measured, not estimated** — TL-B's gate reports `trace_ms` delta on the apricot fixture (the MB-B owed measurement's fixture) |
+| TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **MEASURED 2026-08-07: delta −0.23 ms (noise) at 3840×2160 on the apricot, translucency 0.5 asset-baked on all 4 materials; both legs ~40.6 ms median — above the 32 ms line on the pre-TL-B baseline already (RS-A 8-caster + RS-C sampler era, not section 13's 26 ms world)** |
 | TL-C colored tint | **0** | +1 `Rgba16Float` trace-res texture through upsample/à-trous/accumulate (+~25% chain bandwidth: 4 textures → 5); one `textureLoad` per sun light in `fs_pbr` | small; gate reports the delta |
 | B (deferred) | sun-only every-4th-step: +8 rays/march-px ≈ **+37% of the whole trace class**; all-lights every step: 128 rays/px ≈ 6× the trace class — rejected outright | plus a new march-kernel binding and validation path | see section 16.6 |
 
@@ -1880,7 +1880,9 @@ number or exit code; PNGs are Peter's morning look only.
   Held-out render: `DiffuseTransmissionPlant.glb` (the conformance asset this
   partially un-defers) in the landing report.
 
-#### TL-B — transmitting shadow walk (grey in sv, rgb inside)
+#### TL-B — transmitting shadow walk (grey in sv, rgb inside) — **LANDED 2026-08-07 (wave/rt-translucency-b)**
+
+Landing notes: the walk's terminal committed-type check is load-bearing (an opaque-BLAS object auto-commits in hardware with no candidate delivered — the first revision dropped it and read opaque-blocked rays as fully lit; the factor-0 control leg caught it). The 0→0.5 live flip is verification debt (the fixture's serialized store predates TL-A and never materialized the param — BUG-079 (preset-template-unresolved placeholder reconcile)); measurement used asset-baked translucency (KHR extension on a glb copy), and the D17 transition was exercised via the RT-toggle proxy (bounded, +5 ms over two frames at 4K, no hang). One-off GPU hang sighting in the gesture run logged as BUG-09ut (generators-CB hang sighting).
 
 - *Entry:* TL-A landed; re-verify `raytrace.rs:871-898` (walk), `:1304-1346`
   (sv loop), `:989-1019` (sun-bounce), `GiMaterial` still 48 B.

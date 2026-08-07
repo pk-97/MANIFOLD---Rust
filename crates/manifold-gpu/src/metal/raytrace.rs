@@ -190,6 +190,14 @@ pub struct RtObjectGeometry<'a> {
     /// this object short-circuits at the hardware level, same cost as
     /// before this feature.
     pub alpha_mask: bool,
+    /// RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): this object's material
+    /// carries a nonzero `translucency` factor — it must ALSO leave the
+    /// hardware opaque fast path, or the kernel's `walk_with_transmission`
+    /// never sees solid-but-thin surfaces as candidates. Read fresh at every
+    /// BLAS build and folded into the topo dirty key (render_scene.rs), so a
+    /// live 0→nonzero card flip triggers a bounded async rebuild — the same
+    /// D17 gesture as toggling RT itself.
+    pub translucent: bool,
     /// RT-T2-A: cutout threshold in `[0, 1]` — mirrors `Material::
     /// alpha_cutoff`. Unused when `alpha_mask` is `false`.
     pub alpha_cutoff: f32,
@@ -247,6 +255,14 @@ pub struct RtObjectGeometry<'a> {
 pub const RT_MASK_VISIBLE: u32 = 0x01;
 pub const RT_MASK_SHADOW_CASTER: u32 = 0x02;
 
+/// RT-T2-A / RT-TL-B (I-TL6): the BLAS hardware-opacity decision, one place.
+/// Opaque (hardware early-out) only when the object is neither alpha-masked
+/// nor translucent — both flags mean the kernel's candidate walks must see
+/// this object's triangles to reject/attenuate them manually.
+fn blas_geometry_opaque(alpha_mask: bool, translucent: bool) -> bool {
+    !(alpha_mask || translucent)
+}
+
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
 /// structure encoder (BUG-308/RT-D4 — see `build_accel`'s doc comment for
 /// why this is no longer its own command buffer). Returns the built
@@ -280,7 +296,9 @@ fn encode_blas_build(
     // `walk_with_alpha_test` a chance to reject a below-cutoff texel.
     // Non-alpha-masked objects stay `setOpaque(true)`, preserving the exact
     // fast-path cost they had before this feature.
-    tri_desc.setOpaque(!obj.alpha_mask);
+    // RT-TL-B (section 16 TL6): translucent objects leave the fast path too —
+    // `walk_with_transmission` needs them delivered as candidates.
+    tri_desc.setOpaque(blas_geometry_opaque(obj.alpha_mask, obj.translucent));
     let geom: Retained<MTLAccelerationStructureGeometryDescriptor> = tri_desc.into_super();
     let array = NSArray::from_retained_slice(&[geom]);
     let descriptor = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
@@ -676,6 +694,13 @@ struct GiMaterial {
     packed_float3 albedo;   float _p0;
     packed_float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
     float4 metallic_roughness;   // RT-R1: x=metallic, y=roughness (z/w reserved)
+    // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4/TL7): x = thin-surface
+    // diffuse-transmission factor (the material card's `translucency`,
+    // populated from the SAME `diffuse_transmission_params` uniform the
+    // raster forward term reads — one source of truth). 0 = opaque to
+    // shadow-class rays (pre-feature behavior, bit-exact). yzw reserved.
+    // Read ONLY by `walk_with_transmission` (I-TL4's two call sites).
+    float4 translucency;
 };
 
 // RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
@@ -927,6 +952,12 @@ static float sample_candidate_alpha(
     return material_textures[src.alpha_tex_index].sample(alpha_sampler, uv).a;
 }
 
+// Shared luminance weighting (Rec.709) — the transmission early-out, the
+// sv luma fold, the reflection firefly clamp, the upsample gather, and
+// `atrous_filter`'s edge-stopping function all use it. Declared before the
+// candidate walks (MSL requires declaration before use).
+static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
 // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 D21): shared candidate walk for ALL of
 // this kernel's ray casts (primary visibility, shadow, AO, GI + its
 // sun-bounce) — ONE alpha-test mechanism, not a per-ray-class copy (the
@@ -968,6 +999,82 @@ static bool walk_with_alpha_test(
         }
     }
     return q.get_committed_intersection_type() != intersection_type::none;
+}
+
+// RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4): visibility rays transmit,
+// geometry rays block. The SAME candidate walk as `walk_with_alpha_test`
+// with a third outcome per accepted hit:
+//   below-cutoff texel          → pass through (unchanged);
+//   accepted, translucency > 0  → `tint *= factor * albedo_at_hit`, walk
+//                                 CONTINUES — no commit: committing would
+//                                 cap traversal at the petal and hide every
+//                                 deeper occluder (the below-cutoff
+//                                 pass-through already proves a declined
+//                                 candidate is not re-delivered);
+//   accepted otherwise          → block (unchanged) — the ray is dead,
+//                                 tint collapses to black.
+// Albedo at the hit reuses the base-color texture slot the alpha test
+// already samples for Mask foliage (same texture, same UV — cache-hot);
+// the flat `GiMaterial.albedo` is the no-texture fallback. Bounded:
+// RT_TRANSMISSION_MAX_HITS accepted translucent hits per ray (a hit past
+// the cap blocks — conservative-dark, reached only in dense stacked
+// canopy) plus a luma early-out at 1/256. Side-agnostic like the binary
+// walk it extends: the intersector reports both facings as candidates and
+// transmission attenuates either way, matching the gather/raster paths'
+// two-sided convention (the RS-C one-sided-emission lesson). No new ray
+// is constructed and no interval is touched — the BUG-ny4v
+// (degenerate-ray GPU hang) guard class does not apply here.
+// Returns the rgb tint: float3(1) fully lit, float3(0) blocked, partial
+// tints between. Called from EXACTLY TWO sites (I-TL4, machine-checked):
+// the sv caster loop and `sun_bounce_at_hit`. AO/GI/reflection/primary
+// rays keep the binary walk.
+#define RT_TRANSMISSION_MAX_HITS 8u
+#define RT_TRANSMISSION_LUMA_FLOOR 0.00390625
+
+static float3 walk_with_transmission(
+    thread intersection_query<triangle_data, instancing>& q,
+    device RtNormalSource* normal_sources,
+    device GiMaterial* gi_materials,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures)
+{
+    float3 tint = float3(1.0);
+    uint transmitted = 0u;
+    while (q.next()) {
+        if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
+        uint iid = q.get_candidate_instance_id();
+        device RtNormalSource& src = normal_sources[iid];
+        bool pass = true;
+        if (src.alpha_mask != 0u) {
+            float alpha = sample_candidate_alpha(
+                src, normal_sources, material_textures,
+                iid, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
+            pass = alpha >= src.alpha_cutoff;
+        }
+        if (!pass) continue;
+        float tl = gi_materials[iid].translucency.x;
+        if (tl > 0.0 && transmitted < RT_TRANSMISSION_MAX_HITS) {
+            float3 alb = float3(gi_materials[iid].albedo);
+            if (src.base_color_tex_index < MAX_RT_MATERIAL_TEXTURES) {
+                float2 uv = fetch_interpolated_uv(
+                    normal_sources, iid,
+                    q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
+                constexpr sampler bc_sampler(coord::normalized, address::repeat, filter::nearest);
+                alb = material_textures[src.base_color_tex_index].sample(bc_sampler, uv).rgb;
+            }
+            tint *= tl * alb;
+            transmitted += 1u;
+            if (luma(tint) < RT_TRANSMISSION_LUMA_FLOOR) return tint;
+            continue;
+        }
+        q.commit_triangle_intersection();
+        return float3(0.0);
+    }
+    // Terminal check is load-bearing (same as `walk_with_alpha_test`): an
+    // OPAQUE-BLAS object auto-commits in hardware without ever delivering a
+    // candidate, so a ray that ended on plain opaque geometry falls out of
+    // the loop with a committed hit and no visible candidate — without this
+    // check it read as fully LIT (the factor-0 control leg caught it).
+    return (q.get_committed_intersection_type() != intersection_type::none) ? float3(0.0) : tint;
 }
 
 // RT-P2/D3 (extended RT-T1-C, BUG-311): mirrors the Rust `AccumulateParams`
@@ -1012,9 +1119,6 @@ static float2 rand2(uint2 p, uint frame, uint ray) {
 static float3 ortho_basis_x(float3 n) {
     return normalize(fabs(n.x) > 0.9 ? cross(n, float3(0, 1, 0)) : cross(n, float3(1, 0, 0)));
 }
-// Shared luminance weighting (Rec.709) — the reflection firefly clamp, the
-// upsample gather, and `atrous_filter`'s edge-stopping function all use it.
-static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 // In-register cap on reflection samples per pixel — bounds the fixed-size
 // sample array the firefly clamp's median needs. `REFL_SAMPLES_PER_PIXEL`'s
@@ -1062,6 +1166,7 @@ constant float SUN_BOUNCE_INTENSITY_SCALE = 0.31830988618379067154;
 static float3 sun_bounce_at_hit(
     instance_acceleration_structure accel,
     device RtNormalSource* normal_sources,
+    device GiMaterial* gi_materials,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
     constant ShadowRayParams& p,
     uint n_casters,
@@ -1084,9 +1189,13 @@ static float3 sun_bounce_at_hit(
         sun_r.max_distance = INFINITY;
         intersection_query<triangle_data, instancing> sun_q;
         sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
-        float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+        // RT-TL-B (TL4): sun-bounce shadow rays transmit — a petal between
+        // the bounce vertex and the sun attenuates (tinted) instead of
+        // killing the term outright. Binary-identical when every factor
+        // is 0: tint is then exactly float3(0) or float3(1).
+        float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures);
         float hit_ndotl = max(dot(hit_n, sdir), 0.0);
-        term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+        term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
     }
     return term;
 }
@@ -1454,14 +1563,22 @@ kernel void trace_shadow_rays(
         r.min_distance = bias_eps * 0.5;
         r.max_distance = max_dist;
         float vis = 0.0;
+        // RT-TL-B (TL4/TL5): shadow rays transmit through thin surfaces —
+        // each sample returns an rgb tint (float3(0)/float3(1) exactly when
+        // every factor is 0, so all-zero scenes keep the old binary values).
+        // The rgb accumulation is the TL-C substrate; sv carries luma(tint)
+        // per TL5's channel arithmetic. Averaging tints then folding luma
+        // matches the old `vis/spp` for binary scenes up to the Rec.709
+        // weights' float rounding (verified exact in f32 — the weights sum
+        // to exactly 1.0, so binary scenes are byte-identical).
+        float3 vis_rgb = float3(0.0);
         for (uint s = 0; s < spp; s++) {
             r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
             intersection_query<triangle_data, instancing> shadow_q;
             shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
-            bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
-            if (!blocked) vis += 1.0;
+            vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
         }
-        vis /= float(spp);
+        vis = luma(vis_rgb) / float(spp);
         if (c < 4u) { sv_lo[c] = vis; } else { sv_hi[c - 4u] = vis; }
     }
     } // shadow_spp > 0
@@ -1595,7 +1712,7 @@ kernel void trace_shadow_rays(
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
                 float3 hit_n = fetch_interpolated_normal(normal_sources, oi, gi_pid, gi_bary);
                 float3 bounce_term = sun_bounce_at_hit(
-                    accel, normal_sources, material_textures, p, n_casters,
+                    accel, normal_sources, gi_materials, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid,
                     400u + s * MAX_RT_CASTERS);
                 // RS7: the bounce-0 direct-emissive term is owned by the
@@ -1831,7 +1948,7 @@ kernel void trace_shadow_rays(
                 // Sun-bounce term — multi-caster fix: sums every sun caster
                 // (kind==0), same discipline as the GI gather's bounce above.
                 float3 sun_bounce_term = sun_bounce_at_hit(
-                    accel, normal_sources, material_textures, p, n_casters,
+                    accel, normal_sources, gi_materials, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid, 500u);
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
                 traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
@@ -3187,18 +3304,29 @@ pub struct GiMaterial {
     /// `d.uniforms.pbr_metallic_roughness` (render_scene.rs:332), the SAME
     /// resolved factors `fs_pbr` shades with. z/w reserved.
     pub metallic_roughness: [f32; 4],
+    /// RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4/TL7): x = thin-surface
+    /// diffuse-transmission factor, populated from the SAME
+    /// `diffuse_transmission_params` uniform the raster forward term reads.
+    /// 0 = opaque to shadow-class rays (pre-feature behavior). yzw reserved.
+    pub translucency: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GiMaterial>() == 48);
+const _: () = assert!(std::mem::size_of::<GiMaterial>() == 64);
 
 impl GiMaterial {
-    pub fn new(albedo: [f32; 3], emissive: [f32; 3], metallic_roughness: [f32; 4]) -> Self {
+    pub fn new(
+        albedo: [f32; 3],
+        emissive: [f32; 3],
+        metallic_roughness: [f32; 4],
+        translucency: [f32; 4],
+    ) -> Self {
         Self {
             albedo,
             _pad0: 0.0,
             emissive,
             _pad1: 0.0,
             metallic_roughness,
+            translucency,
         }
     }
 }
@@ -5214,5 +5342,21 @@ impl UploadBytes for GpuBuffer {
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blas_geometry_opaque;
+
+    /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks
+    /// translucency — the hardware fast path is kept only for objects the
+    /// kernel's candidate walks never need to see.
+    #[test]
+    fn blas_opacity_tracks_alpha_mask_and_translucency() {
+        assert!(blas_geometry_opaque(false, false));
+        assert!(!blas_geometry_opaque(true, false));
+        assert!(!blas_geometry_opaque(false, true));
+        assert!(!blas_geometry_opaque(true, true));
     }
 }

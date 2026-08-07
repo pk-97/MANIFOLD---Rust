@@ -178,6 +178,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         normal_offset: 0,
         uv_offset: std::mem::size_of::<[f32; 3]>() as u32,
         alpha_mask: true,
+        translucent: false,
         alpha_cutoff: 0.5,
         base_color_texture: Some(&base_color_tex),
         mr_texture: None,

@@ -4483,6 +4483,13 @@ impl EffectNode for RenderScene {
                     // 16 = 32).
                     uv_offset: 32,
                     alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                    // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): nonzero
+                    // translucency also leaves the BLAS opaque fast path.
+                    // Read from the SAME material uniform the raster forward
+                    // term and the GiMaterial factor below read — one source
+                    // of truth. Folded into the topo key so a live 0→nonzero
+                    // flip triggers the bounded async rebuild (D17).
+                    translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
                     alpha_cutoff: d.uniforms.alpha_params[1],
                     base_color_texture: d.base_color_map,
                     // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
@@ -4528,6 +4535,10 @@ impl EffectNode for RenderScene {
                             0.0,
                             0.0,
                         ],
+                        // RT-TL-B (section 16 TL4): the walk's attenuation
+                        // factor — the same `diffuse_transmission_params.x`
+                        // the raster forward term reads.
+                        d.uniforms.diffuse_transmission_params,
                     )
                 })
                 .collect();
@@ -4557,6 +4568,11 @@ impl EffectNode for RenderScene {
             for o in &objects {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
+                // RT-TL-B (TL6): BLAS opacity is baked at build time, so a
+                // translucency 0↔nonzero flip needs a full rebuild, not a
+                // refit — the flag rides the TOPO key (BUG-308's one-frame
+                // defer gives the bounded raster-presenting transition).
+                hasher.write_u8(o.translucent as u8);
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();

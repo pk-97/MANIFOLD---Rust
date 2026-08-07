@@ -29,7 +29,7 @@ struct PosVertex {
 }
 
 fn write_shared_buffer(device: &GpuDevice, data: &[PosVertex]) -> manifold_gpu::GpuBuffer {
-    let bytes = (data.len() * std::mem::size_of::<PosVertex>()) as u64;
+    let bytes = std::mem::size_of_val(data) as u64;
     let buf = device.create_buffer_shared(bytes.max(16));
     let ptr = buf
         .mapped_ptr()
@@ -85,6 +85,7 @@ fn rt_object_geom<'a>(
         normal_offset: 0, // unused — n/a for emissive table
         uv_offset: 0,
         alpha_mask: false,
+        translucent: false,
         alpha_cutoff: 0.5,
         base_color_texture: None,
         mr_texture: None,
@@ -161,10 +162,10 @@ fn emissive_table_contents_match_cpu_oracle() {
     ];
 
     let materials = [
-        GiMaterial::new([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0]), // emissive red
-        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0]), // black
-        GiMaterial::new([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.5, 0.0, 0.0]), // emissive green
-        GiMaterial::new([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.5, 0.0, 0.0]), // emissive blue
+        GiMaterial::new([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive red
+        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // black
+        GiMaterial::new([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive green
+        GiMaterial::new([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive blue
     ];
 
     let table = build_emissive_table(device, &objects, &materials)
@@ -282,6 +283,7 @@ fn emissive_table_none_when_all_zero_emissive() {
         [0.5, 0.5, 0.5],
         [0.0, 0.0, 0.0], // black emissive
         [0.0, 0.5, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
     )];
 
     let table = build_emissive_table(device, &objects, &materials);
@@ -338,6 +340,7 @@ fn emissive_table_truncates_at_cap() {
             normal_offset: 0,
             uv_offset: 0,
             alpha_mask: false,
+            translucent: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture: None,
@@ -355,6 +358,7 @@ fn emissive_table_truncates_at_cap() {
             [1.0, 1.0, 1.0],
             [1.0, 1.0, 1.0], // emissive white
             [0.0, 0.5, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
         ));
     }
 

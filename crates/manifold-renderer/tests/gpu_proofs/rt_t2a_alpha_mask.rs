@@ -130,6 +130,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         normal_offset: 0,
         uv_offset: std::mem::size_of::<[f32; 3]>() as u32, // 12: uv follows position
         alpha_mask,
+        translucent: false,
         alpha_cutoff: 0.5,
         base_color_texture: Some(&base_color_tex),
         mr_texture: None,

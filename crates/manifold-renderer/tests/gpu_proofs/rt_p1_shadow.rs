@@ -128,6 +128,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         // RT-T2-A: no UV data in this fixture, alpha_mask stays false.
         uv_offset: 0,
         alpha_mask: false,
+        translucent: false,
         alpha_cutoff: 0.5,
         base_color_texture: None,
         mr_texture: None,
@@ -362,6 +363,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             normal_offset: 0,
             uv_offset: 0,
             alpha_mask: false,
+            translucent: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture: None,
@@ -381,6 +383,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             normal_offset: 0,
             uv_offset: 0,
             alpha_mask: false,
+            translucent: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture: None,
