@@ -659,6 +659,59 @@ PASSED (RT engages after load, toggles live). OPEN from the same repro: converge
 RT reads identical to RT-off (traced shell reflections wash out between raw trace and
 accumulated output — R2 filter path, R3 scope); motion speckle/lag at 24 FPS (R3 tuning).
 
+**Addendum — the gesture rule: soft-and-current under fast lighting moves
+(2026-08-07, K3 + Peter).** Peter's symptom on main: shadows and RT lighting
+visibly trail fast gestures (whipping the sun, scrubbing light/env brightness);
+static convergence is excellent and stays exactly as clean. Approved direction:
+during a gesture the RT channels answer within ~2 frames and read spatially
+soft. Speckle-during-motion is vetoed; frame generation was considered and
+rejected (it interpolates already-lagged frames and adds latency). Zero new
+rays, zero new textures, no frame-time regression — detection-and-response
+only, on the accumulation path.
+
+- **The CPU lighting key covers every lighting input, not the convenient
+  subset.** Rule: any param whose change alters the traced textures (or the RT
+  shading substitutions) and has no other reset path belongs in
+  `lighting_key`. The audit this addendum shipped with is in the landing
+  commit; the gap that motivated it was an env-brightness scrub that moves no
+  hashed input.
+- **A gesture is two consecutive frames of lighting-key change**, detected on
+  the CPU from the key stream, with a one-frame hangover so a throttled
+  mid-scrub update (a rebake that lands every Nth frame) doesn't break it.
+  Carried to the accumulator in spare `reset`-word bits — no new fields, no
+  new textures, no new detectors (the I-TL5 (one temporal-reset path)
+  discipline stands).
+- **Geometry cues move shadows; strobes don't.** The key splits in two. The
+  full key (every lighting input) drives the irradiance/reflection response. A
+  geometry sub-key (caster position/direction/cone/kind + the designated
+  sun-tint slot) drives the shadow-tint response. A pure
+  intensity/color/env-brightness change flips only the full key, and the
+  sv/sv2/svt channels hold their convergence through it BY DESIGN: visibility
+  and transmission tint are geometry terms, so snapping them on a strobe just
+  re-noises an unchanged signal. This sharpens the sv gate's standing
+  "deliberately NOT OR'd with `lighting_changed`" discipline, and TL8 is
+  amended accordingly: svt no longer blindly rides the irradiance alpha — it
+  snaps on geometry cues, and on the per-texel gate when the CPU key is silent
+  (occluder motion, the CPU's blind spot), and HOLDS when the CPU reports a
+  non-geometry change. One reset path still; only the per-channel blend
+  decision sharpened.
+- **While a geometry gesture is active, the shadow channels take the cue
+  directly** — sv/sv2 snap to n=2 for the gesture's duration, folded into the
+  existing trip condition so the BUG-tr5o (sv straddling-moments snap-hold)
+  machinery and the BUG-boil (moments self-sustain on snap) floored-moments
+  update run unchanged. Between gestures nothing changes: a single nudge still
+  goes through the sigma gate plus snap-hold, and a static scene converges
+  byte-identically.
+- **The irradiance channel holds n=2 for the gesture's duration** instead of
+  re-converging between the frames of a continuous scrub. The frame the
+  gesture ends, normal convergence resumes — no crossfade; seed-don't-clear
+  untouched.
+- **Softness is the à-trous's job at 2-frame history.** If a gesture reads
+  speckly rather than soft, the à-trous luma sigma widens while the gesture
+  flag is up (a gesture-scaled sigma, the `cam_motion` band precedent) —
+  contingent on the look, gated by the sub-threshold scrub oracle and Peter's
+  eyes.
+
 ## 11. Multi-bounce GI — path-extended gather (Tier 3 item 8; APPROVED 2026-07-30)
 
 Graduates `RT_TIER3_SCOPING.md` section 3 (T3-8 — multi-bounce GI); that section is this
@@ -1732,7 +1785,10 @@ so the glow can breathe with the music like every other material param.
   boundaries (the binary in/out flicker at canopy edges becomes a smooth
   gradient), so the existing sv change-gate and history discipline (D-64 and
   its addendum) apply unchanged, bands untouched. `out_svt` accumulates with
-  the same weights and the same reset path as the irradiance texture. **No
+  the same weights and the same reset path as the irradiance texture
+  (**blend decision AMENDED by section 10 (RT output & transition contract)'s
+  gesture-rule addendum, 2026-08-07:** svt snaps on geometry cues and holds
+  through strobes; the reset path stays shared). **No
   tuning constants join the untuned set beyond TL1's wrap and TL4's hit cap**;
   Peter's look is the quality gate, per the standing D19/D20 lesson.
 - **TL9 — D9 (Vulkan seam) holds by construction.** The Metal RT trait grows
