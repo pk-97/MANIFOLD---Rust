@@ -1615,6 +1615,12 @@ kernel void trace_shadow_rays(
         float3 to_light;
         float cone_half_angle;
         float max_dist;
+        // BUG-84fv class guard (the BUG-ny4v arm for point casters): a
+        // texel within ~2 bias lengths of a point light gets
+        // max_dist < min_distance — an INVERTED ray interval, undefined
+        // for the intersector (the RS-C I-RS3 GPU hang). Such a texel is
+        // effectively ON the light: skip the trace, count unshadowed.
+        bool interval_ok = true;
         if (cst.kind == 0u) {
             // Sun: dir_or_pos is the normalized toward-sun direction.
             to_light = float3(cst.dir_or_pos);
@@ -1629,6 +1635,7 @@ kernel void trace_shadow_rays(
             to_light = dist > 1e-6 ? delta / dist : float3(0.0, 1.0, 0.0);
             cone_half_angle = cst.cone_or_size > 0.0 ? atan(0.5 * cst.cone_or_size / max(dist, 1e-6)) : 0.0;
             max_dist = max(dist - bias_eps, 0.0);
+            interval_ok = rt_finite(dist) && dist > 2.0f * bias_eps;
         }
         ray r;
         r.origin = wp + to_light * bias_eps;
@@ -1649,11 +1656,16 @@ kernel void trace_shadow_rays(
         // weights' float rounding (verified exact in f32 — the weights sum
         // to exactly 1.0, so binary scenes are byte-identical).
         float3 vis_rgb = float3(0.0);
-        for (uint s = 0; s < spp; s++) {
-            r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
-            intersection_query<triangle_data, instancing> shadow_q;
-            shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
-            vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+        if (interval_ok) {
+            for (uint s = 0; s < spp; s++) {
+                r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
+                intersection_query<triangle_data, instancing> shadow_q;
+                shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
+                vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+            }
+        } else {
+            // Light sits on the surface — see the interval_ok guard above.
+            vis_rgb = float3((float)spp);
         }
         vis = luma(vis_rgb) / float(spp);
         // RT-TL-C (TL5): capture the designated sun caster's rgb tint
