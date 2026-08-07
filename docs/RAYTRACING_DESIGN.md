@@ -1588,7 +1588,7 @@ I-RS5 and the forbidden-move lists. Deferred with triggers below.
 - **Clustered analytic-light sampling.** Trigger: a scene class past
   `LIGHT_SLIDER_MAX` — the slider itself moves first.
 
-## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-03 on main (wave/rt-quality) — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; **TL-B LANDED 2026-08-07 (wave/rt-translucency-b) — transmitting walk + BLAS opacity + luma sv; 5 value proofs + full gpu-proofs green, trace_ms delta ≈ 0 (−0.23 ms) on the 4K apricot; TL-C PENDS Peter's re-judge — the fixture frame measures 40.6 ms, above section 16.4's 32 ms line, on BOTH legs (pre-TL-B baseline; section 13's 26 ms predates RS-A/RS-C)**)
+## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-03 on main (wave/rt-quality) — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; **TL-B LANDED 2026-08-07 (wave/rt-translucency-b) — transmitting walk + BLAS opacity + luma sv; 5 value proofs + full gpu-proofs green, trace_ms delta ≈ 0 (−0.23 ms) on the 4K apricot**; **TL-C LANDED 2026-08-07 (wave/rt-translucency-c) — colored sun tint: out_svt through the chain + fs_pbr substitution for the designated sun slot; 4 value proofs + 2 cut-reset oracle legs + full gpu-proofs green + noise gate green; 4K apricot 44.2 ms median, of which TL-C's texture ≈ +1.1 ms and the BUG-p14x (RS-A sv2 slot-map omission) repair ≈ +3.2 ms against a 39.8 ms same-day control. Feature A complete; B stays deferred per section 16.6**)
 
 Tier 3 item 9 names two features. **(A) thin-surface transmission** — sunlight
 through a flower petal: the petal glows when backlit, and the light that passes
@@ -1784,7 +1784,7 @@ casters + 4 AO + 2×2 GI + 8 refl + GI sun-bounce casts).
 |---|---|---|---|
 | TL-A forward term | **0** | ~4 ALU × lights in `fs_pbr`; one uniform vec4 | unmeasurable; gate is the byte-identity + a standard trace run |
 | TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **MEASURED 2026-08-07: delta −0.23 ms (noise) at 3840×2160 on the apricot, translucency 0.5 asset-baked on all 4 materials; both legs ~40.6 ms median — above the 32 ms line on the pre-TL-B baseline already (RS-A 8-caster + RS-C sampler era, not section 13's 26 ms world)** |
-| TL-C colored tint | **0** | +1 `Rgba16Float` trace-res texture through upsample/à-trous/accumulate (+~25% chain bandwidth: 4 textures → 5); one `textureLoad` per sun light in `fs_pbr` | small; gate reports the delta |
+| TL-C colored tint | **0** | +1 `Rgba16Float` trace-res texture through upsample/à-trous/accumulate (+~25% chain bandwidth: 4 textures → 5); one `textureLoad` per sun light in `fs_pbr` | **MEASURED 2026-08-07: +1.1 ms at 3840×2160 on the apricot (43.1 → 44.2 ms median, paused 120-frame legs); the same landing's sv2 slot-map repair (BUG-p14x (RS-A sv2 slot-map omission)) accounts for the larger +3.2 ms step from the 39.8 ms control — RS-A's intended chain work finally running** |
 | B (deferred) | sun-only every-4th-step: +8 rays/march-px ≈ **+37% of the whole trace class**; all-lights every step: 128 rays/px ≈ 6× the trace class — rejected outright | plus a new march-kernel binding and validation path | see section 16.6 |
 
 The recommendation's shape: A+B+C together add zero rays and one texture; the
@@ -1912,7 +1912,9 @@ Landing notes: the walk's terminal committed-type check is load-bearing (an opaq
 - *Demo (Peter only):* canopy-shadow PNG pair (hard black vs soft grey
   dapple) on a real scan — L2.
 
-#### TL-C — colored sun tint through the chain
+#### TL-C — colored sun tint through the chain — **LANDED 2026-08-07 (wave/rt-translucency-c)**
+
+Landing notes: the lane-found slot-map repair is the wave's biggest catch — the four RT compute pipelines' slot maps were never extended for RS-A's sv2 bindings, and `GpuEncoder` silently skips any binding missing from the map, so caster slots 4-7 were inert under RT since RS-A (probe-proven: entries out → the TL-C value proofs fail 3/4 while rt_6caster_shadow stays green via the shadow-map fallback, i.e. it never exercised the RT sv2 chain). Logged as BUG-p14x (RS-A sv2 slot-map omission), fixed by the entries this wave added alongside svt's. Frame-time at 3840×2160 on the apricot (paused, 120-frame medians, same-day controls): pre-TL-C 39.8 ms → sv2-repair-only 43.1 ms → full TL-C 44.2 ms — TL-C's own out_svt cost ≈ +1.1 ms; the other +3.2 ms is RS-A's sv2 chain work finally running. Section 16.4's "small" holds for TL-C itself. The pink-pool demo pair is Peter's L2 look, pending.
 
 - *Entry:* TL-B landed, its `trace_ms` delta inside the section 16.4 line (or
   Peter's explicit go above it).

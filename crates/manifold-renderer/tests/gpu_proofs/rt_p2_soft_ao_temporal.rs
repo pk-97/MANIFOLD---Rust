@@ -237,6 +237,10 @@ struct HistorySet {
     /// n=2 snap for 4 frames (the straddling moments deaden the sigma
     /// gate right after a real crossing).
     sv_hold: [GpuTexture; 2],
+    /// RT-TL-C (section 16 TL8): sun-transmission tint history pair —
+    /// same lifecycle + same ping clock as every other channel. Blends
+    /// with the irr alpha (not the sv sigma-gate).
+    svt: [GpuTexture; 2],
     ping: usize,
 }
 
@@ -280,6 +284,10 @@ impl HistorySet {
             sv_hold: [
                 make_history(device, &format!("{label}-sv-hold-a")),
                 make_history(device, &format!("{label}-sv-hold-b")),
+            ],
+            svt: [
+                make_history(device, &format!("{label}-svt-a")),
+                make_history(device, &format!("{label}-svt-b")),
             ],
             ping: 0,
         }
@@ -342,6 +350,18 @@ impl HistorySet {
     }
     fn write_sv_hold(&self) -> &GpuTexture {
         &self.sv_hold[1 - self.ping]
+    }
+    // RT-TL-C (section 16 TL8): svt history — same ping clock, blended with
+    // the irr alpha (not the sv sigma-gate).
+    fn read_svt(&self) -> &GpuTexture {
+        &self.svt[self.ping]
+    }
+    fn write_svt(&self) -> &GpuTexture {
+        &self.svt[1 - self.ping]
+    }
+    /// The most recently written svt texture — call AFTER `advance()`.
+    fn current_svt(&self) -> &GpuTexture {
+        &self.svt[self.ping]
     }
     fn advance(&mut self) {
         self.ping = 1 - self.ping;
@@ -475,6 +495,7 @@ fn run_accumulate_with_sv(
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
+    let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
@@ -509,6 +530,90 @@ fn run_accumulate_with_sv(
             history.read_sv_hold(),
             history.write_sv_hold(),
             &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &svt_dummy, &svt_dummy, &svt_dummy,
+            label,
+        );
+    }
+    enc.commit_and_wait_completed();
+    history.advance();
+}
+
+/// Like `run_accumulate_with_sv` but also drives the svt history pair
+/// (hi_svt + svt history ping-pong) — used by the TL-C D2 cut-reset proofs.
+#[allow(clippy::too_many_arguments)]
+fn run_accumulate_with_svt(
+    device: &GpuDevice,
+    tracer: &MetalShadowRayTracer,
+    hi_irr: &GpuTexture,
+    depth_tex: &GpuTexture,
+    hi_normal: &GpuTexture,
+    history: &mut HistorySet,
+    alpha: f32,
+    reset: bool,
+    obj_count: u32,
+    obj_motion: [[f32; 4]; 4],
+    prev_view_proj: [[f32; 4]; 4],
+    hi_sv: &GpuTexture,
+    hi_svt: &GpuTexture,
+    label: &str,
+) {
+    let params_buffer =
+        device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params =
+        AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], 0.0, IDENTITY, prev_view_proj);
+    let obj_motion_buffer =
+        device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
+    {
+        let ptr = obj_motion_buffer
+            .mapped_ptr()
+            .expect("obj-motion buffer must be CPU-mapped (create_buffer_shared)");
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                obj_motion.as_ptr() as *const u8,
+                ptr,
+                std::mem::size_of::<[[f32; 4]; 4]>(),
+            );
+        }
+    }
+    let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
+    let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
+    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let mut enc = device.create_encoder(label);
+    {
+        let gpu = RendererGpuEncoder::new(&mut enc, device);
+        tracer.accumulate_irradiance(
+            gpu.native_enc,
+            &params,
+            &params_buffer,
+            &obj_motion_buffer,
+            hi_irr,
+            depth_tex,
+            hi_normal,
+            history.read_irr(),
+            history.write_irr(),
+            history.read_depth(),
+            history.write_depth(),
+            history.read_normal(),
+            history.write_normal(),
+            history.read_moments(),
+            history.write_moments(),
+            &hi_refl_dummy,
+            history.read_refl(),
+            history.write_refl(),
+            &gi_materials_buf,
+            hi_sv,
+            history.read_sv(),
+            history.write_sv(),
+            history.read_sv_m1(),
+            history.write_sv_m1(),
+            history.read_sv_m2(),
+            history.write_sv_m2(),
+            history.read_sv_hold(),
+            history.write_sv_hold(),
+            &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            hi_svt,
+            history.read_svt(),
+            history.write_svt(),
             label,
         );
     }
@@ -863,6 +968,7 @@ fn refl_channel_blends_history_and_current() {
     let sv_hold_out = make_history(device, "bisect-sv-hold-out");
     // RS-A (caster cap 4 -> 8): 1x1 dummies for the sv2 channel, unread by this proof.
     let sv2_dummy = make_history(device, "bisect-sv2-dummy");
+    let svt_dummy = make_history(device, "bisect-svt-dummy");
     let sv2_m1_dummy = make_history(device, "bisect-sv2-m1-dummy");
     let sv2_m2_dummy = make_history(device, "bisect-sv2-m2-dummy");
     let sv2_hold_dummy = make_history(device, "bisect-sv2-hold-dummy");
@@ -902,6 +1008,7 @@ fn refl_channel_blends_history_and_current() {
             &sv_hold_in,
             &sv_hold_out,
             &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &svt_dummy, &svt_dummy, &svt_dummy,
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -1027,6 +1134,7 @@ fn refl_channel_blends_history_and_current() {
             &sv_hold_in,
             &sv_hold_out,
             &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &svt_dummy, &svt_dummy, &svt_dummy,
             "bisect-reset",
         );
         enc.commit_and_wait_completed();
@@ -1519,4 +1627,156 @@ fn sv_channel_snaps_when_shadow_arrives() {
         "sv history did not snap when a shadow arrived (still {last} after 6 fully-shadowed \
          frames) — the sigma gate or its snap-hold is not engaging"
     );
+}
+
+// ─── TL-C D2: svt cut-reset — tint history proof ────────────────────
+// The svt history accumulates with the SAME irradiance alpha (TL8),
+// NOT the sv sigma-gate. These two tests prove:
+// 1. Reset wipes tint history (current frame written verbatim).
+// 2. Non-reset frame blends toward a changed tint by the expected
+//    running-mean amount.
+
+/// Pixel value at center of a 4×4 history texture.
+fn center_pixel_rgb_f32(texture: &GpuTexture) -> [f32; 3] {
+    let all = readback_rgba_f32(texture);
+    let cx = (H / 2) as usize;
+    let cy = (W / 2) as usize;
+    let idx = (cx * W as usize + cy) * 4;
+    [all[idx], all[idx + 1], all[idx + 2]]
+}
+
+/// Warm the svt history with tint A over several frames, then verify
+/// that a reset=true frame with tint B writes B exactly — no ghost of A.
+#[test]
+fn svt_history_reset_writes_current_tint_verbatim() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+    let depth_tex = make_constant_depth(&h.device, "p2-svt-reset-depth");
+    let hi_normal = make_constant_normal(&h.device, "p2-svt-reset-normal");
+
+    // hi_sv: fully lit — the sv channel's value is irrelevant to the svt
+    // accumulation (TL8: svt blends with irr alpha).
+    let hi_sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "p2-svt-reset-sv");
+
+    // Tint A: warm red-ish (0.8, 0.1, 0.1).
+    let hi_irr_a = upload_irr(&h.device, 0.5, 0.5, 0.5, "p2-svt-reset-irr-a");
+    let hi_svt_a = upload_irr(&h.device, 0.8, 0.1, 0.1, "p2-svt-reset-svt-a");
+
+    // Tint B: noticeably different (0.1, 0.1, 0.8) — blue-ish.
+    let hi_irr_b = upload_irr(&h.device, 0.5, 0.5, 0.5, "p2-svt-reset-irr-b");
+    let hi_svt_b = upload_irr(&h.device, 0.1, 0.1, 0.8, "p2-svt-reset-svt-b");
+
+    let mut history = HistorySet::new(&h.device, "p2-svt-reset-history");
+
+    // Leg 1: warm with tint A for 8 frames (reset=true on first frame).
+    run_accumulate_with_svt(
+        &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
+        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+        "p2-svt-reset-warm-0",
+    );
+    for i in 1..8 {
+        run_accumulate_with_svt(
+            &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
+            TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+            &format!("p2-svt-reset-warm-{i}"),
+        );
+    }
+    let warmed = center_pixel_rgb_f32(history.current_svt());
+    // After 8 blend frames, the history should be close to tint A.
+    let eps = 0.05;
+    assert!((warmed[0] - 0.8).abs() < eps, "warmed svt r: expected 0.8, got {}", warmed[0]);
+    assert!((warmed[1] - 0.1).abs() < eps, "warmed svt g: expected 0.1, got {}", warmed[1]);
+    assert!((warmed[2] - 0.1).abs() < eps, "warmed svt b: expected 0.1, got {}", warmed[2]);
+
+    // Leg 2: reset=true with tint B → history should read B exactly
+    // (no ghost of A).
+    run_accumulate_with_svt(
+        &h.device, &tracer, &hi_irr_b, &depth_tex, &hi_normal, &mut history,
+        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_b,
+        "p2-svt-reset-reset",
+    );
+    let after_reset = center_pixel_rgb_f32(history.current_svt());
+    assert!((after_reset[0] - 0.1).abs() < eps,
+        "post-reset svt r: expected 0.1 (tint B), got {} — ghost of A?", after_reset[0]);
+    assert!((after_reset[1] - 0.1).abs() < eps,
+        "post-reset svt g: expected 0.1, got {}", after_reset[1]);
+    assert!((after_reset[2] - 0.8).abs() < eps,
+        "post-reset svt b: expected 0.8, got {}", after_reset[2]);
+}
+
+/// Warm svt history on tint A, then run one reset=false frame with tint B
+/// and verify the blend moves by the expected running-mean amount toward B.
+#[test]
+fn svt_history_blends_toward_changed_tint_by_running_mean() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+    let depth_tex = make_constant_depth(&h.device, "p2-svt-blend-depth");
+    let hi_normal = make_constant_normal(&h.device, "p2-svt-blend-normal");
+    let hi_sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "p2-svt-blend-sv");
+
+    // Tint A: (0.9, 0.05, 0.05) — deep red.
+    let hi_irr_a = upload_irr(&h.device, 0.5, 0.5, 0.5, "p2-svt-blend-irr-a");
+    let hi_svt_a = upload_irr(&h.device, 0.9, 0.05, 0.05, "p2-svt-blend-svt-a");
+
+    // Tint B: (0.05, 0.9, 0.05) — deep green.
+    let hi_irr_b = upload_irr(&h.device, 0.5, 0.5, 0.5, "p2-svt-blend-irr-b");
+    let hi_svt_b = upload_irr(&h.device, 0.05, 0.9, 0.05, "p2-svt-blend-svt-b");
+
+    let mut history = HistorySet::new(&h.device, "p2-svt-blend-history");
+
+    // Leg 1: warm with tint A for 8 frames.
+    run_accumulate_with_svt(
+        &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
+        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+        "p2-svt-blend-warm-0",
+    );
+    for i in 1..8 {
+        run_accumulate_with_svt(
+            &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
+            TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+            &format!("p2-svt-blend-warm-{i}"),
+        );
+    }
+    let warmed = center_pixel_rgb_f32(history.current_svt());
+    let eps = 0.05;
+    assert!((warmed[0] - 0.9).abs() < eps, "warmed r: expected 0.9, got {}", warmed[0]);
+    assert!((warmed[1] - 0.05).abs() < eps, "warmed g: expected 0.05, got {}", warmed[1]);
+
+    // Leg 2: one reset=false frame with tint B.
+    run_accumulate_with_svt(
+        &h.device, &tracer, &hi_irr_b, &depth_tex, &hi_normal, &mut history,
+        TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_b,
+        "p2-svt-blend-frame",
+    );
+    let blended = center_pixel_rgb_f32(history.current_svt());
+
+    // Running-mean: after 8 warm frames + this one = true frame count 9.
+    // But reset=true on frame 0 collapsed the count to 2, so the effective
+    // count is 2 + 7 = 9 (well, close to 9). The blend weight alpha = max(1/n, TEST_ALPHA).
+    // For n≈9, alpha ≈ 0.111 (since 1/9 = 0.111 > TEST_ALPHA=0.05).
+    // Expected blend: mixed = hist * (1-alpha) + cur * alpha
+    //   = (0.9, 0.05, 0.05) * 0.889 + (0.05, 0.9, 0.05) * 0.111
+    //   ≈ (0.806, 0.144, 0.05)
+    let hist_weight = 1.0 - (1.0 / 9.0);
+    let alpha = 1.0 / 9.0;
+    let expected_r = 0.9 * hist_weight + 0.05 * alpha;
+    let expected_g = 0.05 * hist_weight + 0.9 * alpha;
+    let expected_b = 0.05 * hist_weight + 0.05 * alpha;
+
+    // Wide epsilon: the history count may not be exactly 9 (reset snap to 2
+    // + 7 warm frames), and the blend uses 1/n which isn't a fixed alpha.
+    // The salient assertion: the blend moved from A TOWARD B (r fell, g rose).
+    let blend_eps = 0.15;
+    assert!((blended[0] - expected_r).abs() < blend_eps,
+        "blended r: expected ≈{expected_r}, got {} — did not move toward tint B", blended[0]);
+    assert!((blended[1] - expected_g).abs() < blend_eps,
+        "blended g: expected ≈{expected_g}, got {} — did not move toward tint B", blended[1]);
+    assert!((blended[2] - expected_b).abs() < blend_eps,
+        "blended b: expected ≈{expected_b}, got {}", blended[2]);
+
+    // Qualitative check: r moved DOWN, g moved UP relative to warmed.
+    assert!(blended[0] < warmed[0] - 0.02,
+        "r should have fallen from {} toward tint B, got {}", warmed[0], blended[0]);
+    assert!(blended[1] > warmed[1] + 0.02,
+        "g should have risen from {} toward tint B, got {}", warmed[1], blended[1]);
 }

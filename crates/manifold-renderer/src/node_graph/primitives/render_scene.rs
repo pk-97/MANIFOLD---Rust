@@ -956,6 +956,20 @@ pub struct RenderScene {
     /// RT-R1 (section 9.3): full-res reflection scratch for à-trous ping-pong
     /// (mirrors `rt_irr_full_b`). Inert/bind-only until T5.
     rt_refl_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): half-res sun-transmission
+    /// tint output target (`out_svt`), the mirror of `rt_mask_half`. Written by
+    /// the mask dispatch; MASK-class.
+    rt_svt_half: Option<manifold_gpu::GpuTexture>,
+    /// RT-TL-C (section 16 TL5): full-res sun-transmission tint — the upsample
+    /// target for `rt_svt_half` (mirrors `rt_mask_full`).
+    rt_svt_full: Option<manifold_gpu::GpuTexture>,
+    /// RT-TL-C (section 16 TL5): full-res svt scratch for à-trous ping-pong
+    /// (mirrors `rt_mask_full_b`).
+    rt_svt_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RT-TL-C (section 16 TL8): sun-transmission tint history ping-pong pair —
+    /// same lifecycle + same ping clock as rt_irr_history (one reset path,
+    /// one flip clock). The fragment's binding-45 reads the just-written slot.
+    rt_svt_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-C (RAYTRACING_DESIGN.md section 8 Tier-1 item 1, BUG-311): the
     /// temporally-accumulated demodulated irradiance, its per-pixel depth,
     /// and its per-pixel normal history, each a PING-PONG PAIR —
@@ -1118,6 +1132,18 @@ fn shaft_step_count(quality: u32) -> u32 {
 /// `identity_stub` already holds an immutable borrow of a DIFFERENT `self`
 /// field — a `&mut self` method call there would conflict (whole-struct
 /// borrow), while borrowing exactly these two fields by reference doesn't.
+/// RAYTRACING_DESIGN.md section 16 TL5: the ONE caster slot whose rgb
+/// transmission tint fills `out_svt` — the first Sun-mode caster under
+/// the RT caster cap (0 = none: `rt_flags.z` gets 0 and fs_pbr keeps the
+/// luma channel). A second sun falls back to luma (named honest cost).
+fn rt_svt_slot(casters: &[crate::node_graph::light::Light]) -> Option<u32> {
+    casters
+        .iter()
+        .position(|l| matches!(l.mode, crate::node_graph::light::LightMode::Sun))
+        .filter(|&i| i < manifold_gpu::raytrace::MAX_RT_CASTERS)
+        .map(|i| i as u32)
+}
+
 fn ensure_rt_gi_materials(
     slot: &mut Option<manifold_gpu::GpuBuffer>,
     capacity: &mut usize,
@@ -1266,6 +1292,10 @@ impl RenderScene {
             rt_refl_half: None,
             rt_refl_full: None,
             rt_refl_full_b: None,
+            rt_svt_half: None,
+            rt_svt_full: None,
+            rt_svt_full_b: None,
+            rt_svt_history: [None, None],
             rt_irr_history: [None, None],
             rt_refl_history: [None, None],
             rt_sv_history: [None, None],
@@ -2046,6 +2076,13 @@ impl RenderScene {
         self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
         // RS-A: second sv quad à-trous ping-pong scratch.
         self.rt_mask_full2_b = Some(make(width, height, "node.render_scene rt_mask_full2_b (RS-A atrous)"));
+        // RT-TL-C (section 16 TL5): sun-transmission tint — MASK-class
+        // (written by the mask dispatch), same format and lifecycle as
+        // rt_mask_half/rt_mask_full.
+        self.rt_svt_half = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_svt_half (RT-TL-C)"));
+        self.rt_svt_full = Some(make(width, height, "node.render_scene rt_svt_full (RT-TL-C)"));
+        // RT-TL-C: à-trous ping-pong scratch — mirrors rt_mask_full_b.
+        self.rt_svt_full_b = Some(make(width, height, "node.render_scene rt_svt_full_b (RT-TL-C atrous)"));
         self.rt_mask_width = width;
         self.rt_mask_height = height;
     }
@@ -2159,6 +2196,14 @@ impl RenderScene {
         self.rt_sv2_hold_history = [
             make(width, height, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
             make(width, height, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
+        // same lifecycle, reset rule, and ping clock as rt_irr_history.
+        // Full res, Rgba16Float (same as every other history pair).
+        self.rt_svt_history = [
+            make(width, height, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
+            make(width, height, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
         ]
         .map(Some);
         self.rt_depth_history = [
@@ -3836,6 +3881,10 @@ impl EffectNode for RenderScene {
             // keeping the raster prefiltered fetch). No new scene param
             // (MB4).
             uniforms.rt_flags[1] = if will_rt_accumulate_this_frame { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
+            // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
+            // light substitutes rt_sun_tint for the luma vis channel.
+            uniforms.rt_flags[2] = if rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
             // clip varyings. Zero whenever temporal_upscale is off.
@@ -4843,6 +4892,11 @@ impl EffectNode for RenderScene {
                 // via its own `scene_params[1]` — knob at 0 stays true black
                 // on both paths.
 
+                // RT-TL-C (section 16 TL5): find the ONE sun caster whose
+                // rgb tint fills out_svt — SVT_SLOT_NONE when no sun exists.
+                let svt_slot = rt_svt_slot(&casters)
+                    .unwrap_or(manifold_gpu::raytrace::SVT_SLOT_NONE);
+
                 // RT-A3a: mask params — built for the split case when trace
                 // sizes differ. When sizes match, unused (shadow folded into
                 // lighting dispatch).
@@ -4865,6 +4919,7 @@ impl EffectNode for RenderScene {
                     emissive_table_mean_power,
                     emissive_table_entry_count,
                     emissive_table_total_area,
+                    svt_slot,
                 );
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
@@ -4897,6 +4952,7 @@ impl EffectNode for RenderScene {
                     emissive_table_mean_power,
                     emissive_table_entry_count,
                     emissive_table_total_area,
+                    svt_slot,
                 );
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
@@ -4963,6 +5019,8 @@ impl EffectNode for RenderScene {
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
                 let mask_half2 = self.rt_mask_half2.as_ref().expect("ensured above");
                 let mask_full2 = self.rt_mask_full2.as_ref().expect("ensured above");
+                let svt_half = self.rt_svt_half.as_ref().expect("ensured above");
+                let svt_full = self.rt_svt_full.as_ref().expect("ensured above");
                 let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
                 let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
@@ -4987,6 +5045,7 @@ impl EffectNode for RenderScene {
                         depth_tex,
                         mask_half,
                         mask_half2,
+                        svt_half,
                         irr_half,
                         normal_half,
                         refl_half,
@@ -5017,6 +5076,7 @@ impl EffectNode for RenderScene {
                     depth_tex,
                     mask_half,
                     mask_half2,
+                    svt_half,
                     irr_half,
                     normal_half,
                     refl_half,
@@ -5050,6 +5110,8 @@ impl EffectNode for RenderScene {
                     normal_full,
                     refl_half,
                     refl_full,
+                    svt_half,
+                    svt_full,
                     "node.render_scene RT-D3/RT-P2 upsample_shadow",
                 );
 
@@ -5074,6 +5136,7 @@ impl EffectNode for RenderScene {
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
                 let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
                 let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
+                let svt_full_b = self.rt_svt_full_b.as_ref().expect("ensured above");
                 let history_valid = self.rt_moments_valid;
                 for pass in 0..(ATROUS_ITERATIONS - 1) {
                     // T1-D: dilation starts at 2, not 1 — the AO/GI trace
@@ -5085,10 +5148,10 @@ impl EffectNode for RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl, src_sv2, dst_sv2) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full2, mask_full2_b)
+                    let (src_sv, src_irr, src_n, src_refl, src_svt, dst_sv, dst_irr, dst_n, dst_refl, dst_svt, src_sv2, dst_sv2) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, refl_full, svt_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full2, mask_full2_b)
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full, mask_full2_b, mask_full2)
+                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full, irr_full, normal_full, refl_full, svt_full, mask_full2_b, mask_full2)
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
                         [width, height], step, history_valid,
@@ -5111,6 +5174,8 @@ impl EffectNode for RenderScene {
                         dst_n,
                         src_refl,
                         dst_refl,
+                        src_svt,
+                        dst_svt,
                         "node.render_scene RT-T1-D atrous_pass",
                     );
                 }
@@ -5233,6 +5298,11 @@ impl EffectNode for RenderScene {
                 let sv2_m2_write = self.rt_sv2_m2_history[write_idx].as_ref().expect("ensured above");
                 let sv2_hold_read = self.rt_sv2_hold_history[read_idx].as_ref().expect("ensured above");
                 let sv2_hold_write = self.rt_sv2_hold_history[write_idx].as_ref().expect("ensured above");
+                // RT-TL-C (TL8): svt history gets the same read/write indices
+                // as the irradiance channel (svt blends with irr alpha, not sv
+                // sigma-gate).
+                let svt_history_read = self.rt_svt_history[read_idx].as_ref().expect("ensured above");
+                let svt_history_write = self.rt_svt_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -5271,6 +5341,9 @@ impl EffectNode for RenderScene {
                     sv2_m2_write,
                     sv2_hold_read,
                     sv2_hold_write,
+                    svt_full,
+                    svt_history_read,
+                    svt_history_write,
                     "node.render_scene RT-P2/RT-T1-C/RT-T1-D/RT-R2 accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;
@@ -5491,7 +5564,10 @@ impl EffectNode for RenderScene {
         // write from `accumulate_irradiance` (RT-R2: swapped every frame
         // by the same ping-pong clock as `rt_irr_history`).
         let rt_refl_tex = self.rt_refl_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        let binding_sets: Vec<[GpuBinding; 45]> = draws
+        // RT-TL-C (section 16 TL5): accumulated svt history — the just-written
+        // slot after the ping flip, same ABI-stub discipline as rt_refl_tex.
+        let rt_svt_tex = self.rt_svt_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let binding_sets: Vec<[GpuBinding; 46]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -5730,6 +5806,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 44,
                         texture: rt_mask_tex2,
+                    },
+                    GpuBinding::Texture {
+                        binding: 45,
+                        texture: rt_svt_tex,
                     },
                 ]
             })
@@ -6109,6 +6189,49 @@ mod tests {
             scene.shaft_inscatter.is_none(),
             "off -> no ensure_ call -> the shaft slot stays None"
         );
+    }
+
+    /// RAYTRACING_DESIGN.md section 16 TL5: the designated-sun slot pick —
+    /// first Sun-mode caster under the RT caster cap, None otherwise.
+    /// Tested against the production fn (never a duplicated copy — a copy
+    /// drifts silently).
+    fn svt_test_light(mode: crate::node_graph::light::LightMode) -> crate::node_graph::light::Light {
+        crate::node_graph::light::Light {
+            mode,
+            pos: [0.0, 0.0, 0.0],
+            aim: [0.0, 0.0, 1.0],
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            range: 30.0,
+            cast_shadows: true,
+            shadow_softness: crate::node_graph::light::ShadowSoftness::Soft,
+            shadow_bias: 0.005,
+            shadow_resolution: 1024,
+        }
+    }
+
+    #[test]
+    fn rt_svt_slot_sun_first_is_zero() {
+        use crate::node_graph::light::LightMode;
+        let casters = [svt_test_light(LightMode::Sun), svt_test_light(LightMode::Point)];
+        assert_eq!(rt_svt_slot(&casters), Some(0));
+    }
+
+    #[test]
+    fn rt_svt_slot_point_only_is_none() {
+        use crate::node_graph::light::LightMode;
+        let casters = [svt_test_light(LightMode::Point), svt_test_light(LightMode::Point)];
+        assert_eq!(rt_svt_slot(&casters), None);
+    }
+
+    #[test]
+    fn rt_svt_slot_sun_past_cap_is_none() {
+        use crate::node_graph::light::LightMode;
+        let mut casters: Vec<_> = (0..manifold_gpu::raytrace::MAX_RT_CASTERS)
+            .map(|_| svt_test_light(LightMode::Point))
+            .collect();
+        casters.push(svt_test_light(LightMode::Sun));
+        assert_eq!(rt_svt_slot(&casters), None);
     }
 
     /// RAYTRACING_DESIGN.md RT-D3: `mat4_inverse` feeds the RT shadow-ray
