@@ -5322,11 +5322,13 @@ impl EffectNode for RenderScene {
                 // when the changed term is a big enough share of its channel,
                 // so a sun-intensity move (a small slice of a buffer dominated
                 // by the ambient term) faded while an env move snapped. Peter
-                // RAYTRACING_DESIGN.md section 10 addendum (gesture rule):
-                // compute both the full lighting key (every input that
-                // alters the traced textures) and the geometry-only sub-key
-                // (caster position/direction/cone/kind + svt slot). Gesture
-                // detection: two consecutive changes arm a hold counter.
+                // found exactly that split; the hashed keys below are how this
+                // side says so. RAYTRACING_DESIGN.md section 10 addendum
+                // (gesture rule): compute both the full lighting key (every
+                // input that alters the traced textures) and the
+                // geometry-only sub-key (caster position/direction/cone/kind
+                // + svt slot). Gesture detection: two consecutive changes arm
+                // a hold counter.
                 let lighting_key =
                     compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_generation);
                 let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
