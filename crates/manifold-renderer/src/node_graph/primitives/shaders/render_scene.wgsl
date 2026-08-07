@@ -393,6 +393,12 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // 4-7 (rgba respectively). Same format and ABI-stub discipline as
 // rt_shadow_mask. Always bound; a 1x1 dummy when RT isn't active.
 @group(0) @binding(44) var rt_shadow_mask2: texture_2d<f32>;
+// RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): full-res rgb
+// sun-transmission tint for the ONE designated sun caster (rt_flags.z =
+// slot+1, 0 = none). Always bound; 1x1 dummy when RT off or no designated
+// sun (the rt_reflection binding-43 discipline). Consumed in exactly ONE
+// textureLoad (I-TL3) in fs_pbr's light loop.
+@group(0) @binding(45) var rt_sun_tint: texture_2d<f32>;
 
 // RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
@@ -1573,8 +1579,16 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let diffuse = kd * albedo.rgb / PI;
 
         let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
-        direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis;
-        direct_diffuse = direct_diffuse + diffuse * l_col.rgb * n_dot_l * l_dir.w * vis;
+        // RAYTRACING_DESIGN.md section 16 TL5: the designated sun caster's
+        // visibility is its rgb transmission tint (out_svt), not the luma sv
+        // channel — a red petal between sun and floor pools red. Every other
+        // caster keeps the scalar luma vis. One textureLoad (I-TL3).
+        var vis3 = vec3<f32>(vis);
+        if u.rt_flags.z > 0.5 && i32(l_col.w + 0.5) == i32(u.rt_flags.z - 0.5) {
+            vis3 = textureLoad(rt_sun_tint, vec2<i32>(in.clip_pos.xy), 0).rgb;
+        }
+        direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis3;
+        direct_diffuse = direct_diffuse + diffuse * l_col.rgb * n_dot_l * l_dir.w * vis3;
 
         // Coat lobe: same D_GGX/G_Smith shape at clearcoat_roughness,
         // fixed F0 = 0.04, no diffuse term (a clear lacquer has none).
@@ -1591,7 +1605,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let G_coat = cc_g_v * g_l_coat;
         let F_coat = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
         let specular_coat = (D_coat * G_coat * F_coat) / (4.0 * cc_n_dot_v * cc_n_dot_l + 0.0001);
-        direct_coat = direct_coat + specular_coat * l_col.rgb * cc_n_dot_l * l_dir.w * vis;
+        direct_coat = direct_coat + specular_coat * l_col.rgb * cc_n_dot_l * l_dir.w * vis3;
 
         // E3: Charlie NDF × Ashikhmin visibility, tinted by sheenColor —
         // no Fresnel term (the spec's sheen lobe is grazing-independent),
@@ -1599,7 +1613,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let D_sheen = D_Charlie(sheen_roughness, n_dot_h);
         let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
         let specular_sheen = sheen_color * D_sheen * V_sheen;
-        direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis;
+        direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis3;
         // RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse translucency
         // around the backward normal — light arriving at the BACK of
         // the surface. factor 0 makes this exactly zero (byte-identical).
@@ -1608,7 +1622,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         // term uses (RT sv mask when RT is on, shadow map otherwise).
         let back_l = saturate((dot(-N, L) + RT_TRANSMISSION_WRAP) / (1.0 + RT_TRANSMISSION_WRAP));
         let factor = u.diffuse_transmission_params.x;
-        direct_translucent = direct_translucent + factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis;
+        direct_translucent = direct_translucent + factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis3;
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered

@@ -475,6 +475,7 @@ fn run_accumulate_with_sv(
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
+    let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
@@ -509,6 +510,7 @@ fn run_accumulate_with_sv(
             history.read_sv_hold(),
             history.write_sv_hold(),
             &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &svt_dummy, &svt_dummy, &svt_dummy,
             label,
         );
     }
@@ -863,6 +865,7 @@ fn refl_channel_blends_history_and_current() {
     let sv_hold_out = make_history(device, "bisect-sv-hold-out");
     // RS-A (caster cap 4 -> 8): 1x1 dummies for the sv2 channel, unread by this proof.
     let sv2_dummy = make_history(device, "bisect-sv2-dummy");
+    let svt_dummy = make_history(device, "bisect-svt-dummy");
     let sv2_m1_dummy = make_history(device, "bisect-sv2-m1-dummy");
     let sv2_m2_dummy = make_history(device, "bisect-sv2-m2-dummy");
     let sv2_hold_dummy = make_history(device, "bisect-sv2-hold-dummy");
@@ -902,6 +905,7 @@ fn refl_channel_blends_history_and_current() {
             &sv_hold_in,
             &sv_hold_out,
             &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &svt_dummy, &svt_dummy, &svt_dummy,
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -1027,6 +1031,7 @@ fn refl_channel_blends_history_and_current() {
             &sv_hold_in,
             &sv_hold_out,
             &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &svt_dummy, &svt_dummy, &svt_dummy,
             "bisect-reset",
         );
         enc.commit_and_wait_completed();

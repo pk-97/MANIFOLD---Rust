@@ -227,6 +227,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
         0,           // RS-C: emissive_table_count — no emissive in fixture
         0.0,         // RS-C: emissive_table_total_area — no emissive in fixture
+        manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = device.create_buffer_shared(1);
@@ -241,6 +242,16 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         label: "rt-t2a-out_sv2-dummy",
         mip_levels: 1,
     });
+    let out_svt = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "tl-c-out_svt",
+        mip_levels: 1,
+    });
     tracer.dispatch_shadow_rays(
         &mut encoder,
         &accel,
@@ -252,6 +263,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         &depth_tex,
         &out_sv,
         &out_sv2_dummy,
+        &out_svt,
         &out_irr,
         &out_n,
         &out_refl,

@@ -242,6 +242,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
         0,           // RS-C: emissive_table_count — no emissive in fixture
         0.0,         // RS-C: emissive_table_total_area — no emissive in fixture
+        manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -255,6 +256,16 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
+    let out_svt = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "tl-c-out_svt",
+        mip_levels: 1,
+    });
     tracer.dispatch_shadow_rays(
         &mut encoder,
         &accel,
@@ -266,6 +277,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &depth_tex,
         &out_sv,
         &out_sv2,
+        &out_svt,
         &out_irr,
         &out_n,
         &out_refl,
@@ -420,6 +432,16 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_sv2",
         mip_levels: 1,
     });
+    let out_svt = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "rt-p1-2blas-out_svt",
+        mip_levels: 1,
+    });
     // See the single-BLAS proof above for why this stub exists.
     let out_irr = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -486,6 +508,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
         0,           // RS-C: emissive_table_count — no emissive in fixture
         0.0,         // RS-C: emissive_table_total_area — no emissive in fixture
+        manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -510,6 +533,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &depth_tex,
         &out_sv,
         &out_sv2,
+        &out_svt,
         &out_irr,
         &out_n,
         &out_refl,

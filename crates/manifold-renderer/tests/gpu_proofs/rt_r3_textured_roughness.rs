@@ -276,6 +276,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
         0,   // RS-C: emissive_table_count — no emissive in fixture
         0.0, // RS-C: emissive_table_total_area — no emissive in fixture
+        manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
@@ -291,6 +292,16 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
 
     let mut encoder = device.create_encoder("rt-r3-textured-roughness-proof");
+    let out_svt = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "tl-c-out_svt",
+        mip_levels: 1,
+    });
     tracer.dispatch_shadow_rays(
         &mut encoder,
         &accel,
@@ -302,6 +313,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         &depth_tex,
         &out_sv,
         &out_sv2,
+        &out_svt,
         &out_irr,
         &out_n,
         &out_refl,
