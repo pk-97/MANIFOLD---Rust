@@ -7002,7 +7002,7 @@ mod tests {
         assert_eq!(ct2, 1, "counter decremented from 2 to 1");
         assert!(!pc2);
         // Next frame: key changes again, gesture re-arms.
-        let (c3, g3, pc3, ct3) = gesture_detect(Some(0x200), 0x300, pc2, ct2);
+        let (c3, g3, _pc3, ct3) = gesture_detect(Some(0x200), 0x300, pc2, ct2);
         assert!(c3);
         assert!(g3);
         assert_eq!(ct3, 2, "re-armed on next change");
