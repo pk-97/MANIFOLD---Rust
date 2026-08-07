@@ -1785,7 +1785,10 @@ so the glow can breathe with the music like every other material param.
   boundaries (the binary in/out flicker at canopy edges becomes a smooth
   gradient), so the existing sv change-gate and history discipline (D-64 and
   its addendum) apply unchanged, bands untouched. `out_svt` accumulates with
-  the same weights and the same reset path as the irradiance texture. **No
+  the same weights and the same reset path as the irradiance texture
+  (**blend decision AMENDED by section 10 (RT output & transition contract)'s
+  gesture-rule addendum, 2026-08-07:** svt snaps on geometry cues and holds
+  through strobes; the reset path stays shared). **No
   tuning constants join the untuned set beyond TL1's wrap and TL4's hit cap**;
   Peter's look is the quality gate, per the standing D19/D20 lesson.
 - **TL9 — D9 (Vulkan seam) holds by construction.** The Metal RT trait grows
