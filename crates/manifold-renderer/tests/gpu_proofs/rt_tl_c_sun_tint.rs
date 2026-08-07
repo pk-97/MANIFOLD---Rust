@@ -22,20 +22,26 @@
 //!   everywhere. out_sv carries the attenuated luma (luma discipline
 //!   unchanged — the point caster still occludes).
 //!
-//! Test 3 — rt_svt_slot CPU discriminator:
-//!   sun-first → Some(0); point-only → None; sun at index >= MAX_RT_CASTERS → None.
-//!
-//! Test 4 — factor_zero_occluder_svt_stays_white:
+//! Test 3 — factor_zero_occluder_svt_reads_zero:
 //!   Sun caster, factor 0 occluder → fully opaque → out_svt reads (0,0,0)
 //!   behind occluder (fully shadowed sun). Control: svt_slot=0 should NOT
 //!   force white through an opaque occluder.
+//!
+//! Test 4 — unoccluded_texels_read_white_in_svt:
+//!   Occluder behind the depth surface → out_svt reads (1,1,1), out_sv
+//!   fully lit.
+//!
+//! The `rt_svt_slot` CPU discriminator (sun-first → Some(0); point-only →
+//! None; sun at index >= MAX_RT_CASTERS → None) is tested against the
+//! production fn in render_scene.rs's cfg(test) mod — a duplicated copy
+//! here would drift silently.
 
 use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
     ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer, SVT_SLOT_NONE, MAX_RT_CASTERS,
+    ShadowRayParams, ShadowRayTracer, SVT_SLOT_NONE,
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
@@ -538,64 +544,4 @@ fn unoccluded_texels_read_white_in_svt() {
     for sv in [sv0, sv1] {
         assert!((sv - 1.0).abs() < eps, "unoccluded sv: expected 1, got {}", sv);
     }
-}
-
-// ─── Test 5-7: rt_svt_slot CPU unit tests ────────────────────────────
-
-/// Import the actual helper from render_scene.rs. It's a free function
-/// in that file's module, so we test it through the same path production
-/// uses.
-use manifold_renderer::node_graph::light::{Light, LightMode};
-
-// rt_svt_slot lives in render_scene.rs as a module-private free function.
-// We duplicate its logic inline for the unit test, since Rust's visibility
-// doesn't expose it to integration tests. This IS the spec.
-
-fn rt_svt_slot(casters: &[Light]) -> Option<u32> {
-    casters
-        .iter()
-        .position(|l| matches!(l.mode, LightMode::Sun))
-        .filter(|&i| i < MAX_RT_CASTERS)
-        .map(|i| i as u32)
-}
-
-fn make_light(mode: LightMode) -> Light {
-    Light {
-        mode,
-        pos: [0.0, 0.0, 0.0],
-        aim: [0.0, 0.0, 1.0],
-        dir: [0.0, 0.0, 1.0],
-        color: [1.0, 1.0, 1.0, 1.0],
-        range: 30.0,
-        cast_shadows: true,
-        shadow_softness: manifold_renderer::node_graph::light::ShadowSoftness::Soft,
-        shadow_bias: 0.005,
-        shadow_resolution: 1024,
-    }
-}
-
-#[test]
-fn rt_svt_slot_sun_first_is_zero() {
-    let casters = [
-        make_light(LightMode::Sun),
-        make_light(LightMode::Point),
-    ];
-    assert_eq!(rt_svt_slot(&casters), Some(0));
-}
-
-#[test]
-fn rt_svt_slot_point_only_is_none() {
-    let casters = [make_light(LightMode::Point), make_light(LightMode::Point)];
-    assert_eq!(rt_svt_slot(&casters), None);
-}
-
-#[test]
-fn rt_svt_slot_sun_past_cap_is_none() {
-    let mut casters = Vec::new();
-    // Fill with MAX_RT_CASTERS Point lights, then append a Sun at the cap.
-    for _ in 0..MAX_RT_CASTERS {
-        casters.push(make_light(LightMode::Point));
-    }
-    casters.push(make_light(LightMode::Sun));
-    assert_eq!(rt_svt_slot(&casters), None);
 }

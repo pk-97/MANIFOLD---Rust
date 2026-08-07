@@ -577,7 +577,6 @@ fn run_accumulate_with_svt(
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
-    let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
@@ -1631,12 +1630,11 @@ fn sv_channel_snaps_when_shadow_arrives() {
 }
 
 // ─── TL-C D2: svt cut-reset — tint history proof ────────────────────
-
-/// The svt history accumulates with the SAME irradiance alpha (TL8),
-/// NOT the sv sigma-gate. These two tests prove:
-/// 1. Reset wipes tint history (current frame written verbatim).
-/// 2. Non-reset frame blends toward a changed tint by the expected
-///    running-mean amount.
+// The svt history accumulates with the SAME irradiance alpha (TL8),
+// NOT the sv sigma-gate. These two tests prove:
+// 1. Reset wipes tint history (current frame written verbatim).
+// 2. Non-reset frame blends toward a changed tint by the expected
+//    running-mean amount.
 
 /// Pixel value at center of a 4×4 history texture.
 fn center_pixel_rgb_f32(texture: &GpuTexture) -> [f32; 3] {

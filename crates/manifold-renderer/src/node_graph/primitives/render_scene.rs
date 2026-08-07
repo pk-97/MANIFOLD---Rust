@@ -6191,6 +6191,49 @@ mod tests {
         );
     }
 
+    /// RAYTRACING_DESIGN.md section 16 TL5: the designated-sun slot pick —
+    /// first Sun-mode caster under the RT caster cap, None otherwise.
+    /// Tested against the production fn (never a duplicated copy — a copy
+    /// drifts silently).
+    fn svt_test_light(mode: crate::node_graph::light::LightMode) -> crate::node_graph::light::Light {
+        crate::node_graph::light::Light {
+            mode,
+            pos: [0.0, 0.0, 0.0],
+            aim: [0.0, 0.0, 1.0],
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            range: 30.0,
+            cast_shadows: true,
+            shadow_softness: crate::node_graph::light::ShadowSoftness::Soft,
+            shadow_bias: 0.005,
+            shadow_resolution: 1024,
+        }
+    }
+
+    #[test]
+    fn rt_svt_slot_sun_first_is_zero() {
+        use crate::node_graph::light::LightMode;
+        let casters = [svt_test_light(LightMode::Sun), svt_test_light(LightMode::Point)];
+        assert_eq!(rt_svt_slot(&casters), Some(0));
+    }
+
+    #[test]
+    fn rt_svt_slot_point_only_is_none() {
+        use crate::node_graph::light::LightMode;
+        let casters = [svt_test_light(LightMode::Point), svt_test_light(LightMode::Point)];
+        assert_eq!(rt_svt_slot(&casters), None);
+    }
+
+    #[test]
+    fn rt_svt_slot_sun_past_cap_is_none() {
+        use crate::node_graph::light::LightMode;
+        let mut casters: Vec<_> = (0..manifold_gpu::raytrace::MAX_RT_CASTERS)
+            .map(|_| svt_test_light(LightMode::Point))
+            .collect();
+        casters.push(svt_test_light(LightMode::Sun));
+        assert_eq!(rt_svt_slot(&casters), None);
+    }
+
     /// RAYTRACING_DESIGN.md RT-D3: `mat4_inverse` feeds the RT shadow-ray
     /// pass's world-position reconstruction — proven, not eyeballed
     /// (CLAUDE.md oracle discipline: "computable question -> write the
