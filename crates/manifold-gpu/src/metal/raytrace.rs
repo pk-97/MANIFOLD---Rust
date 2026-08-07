@@ -1069,7 +1069,12 @@ static float3 walk_with_transmission(
         q.commit_triangle_intersection();
         return float3(0.0);
     }
-    return tint;
+    // Terminal check is load-bearing (same as `walk_with_alpha_test`): an
+    // OPAQUE-BLAS object auto-commits in hardware without ever delivering a
+    // candidate, so a ray that ended on plain opaque geometry falls out of
+    // the loop with a committed hit and no visible candidate — without this
+    // check it read as fully LIT (the factor-0 control leg caught it).
+    return (q.get_committed_intersection_type() != intersection_type::none) ? float3(0.0) : tint;
 }
 
 // RT-P2/D3 (extended RT-T1-C, BUG-311): mirrors the Rust `AccumulateParams`
