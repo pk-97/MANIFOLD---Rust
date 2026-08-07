@@ -4631,6 +4631,10 @@ impl MetalShadowRayTracer {
         // RT-R1: prefiltered_env, MSL [[texture(69)]] — miss-branch
         // radiance source.
         trace_slots.push((5 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        // RS-A (caster cap 4 -> 8): out_sv2, MSL [[texture(70)]].
+        trace_slots.push((6 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        // RT-TL-C: out_svt, MSL [[texture(71)]].
+        trace_slots.push((7 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         let trace_pipeline = compile_pipeline(
             device,
             &library,
@@ -4654,6 +4658,12 @@ impl MetalShadowRayTracer {
                 // slot-map note (T3 missed these too).
                 (7, SlotKind::Texture),
                 (8, SlotKind::Texture),
+                // RS-A (caster cap 4 -> 8): lo_sv2/hi_sv2, MSL [[texture(9)]]/[[texture(10)]].
+                (9, SlotKind::Texture),
+                (10, SlotKind::Texture),
+                // RT-TL-C: lo_svt/hi_svt, MSL [[texture(11)]]/[[texture(12)]].
+                (11, SlotKind::Texture),
+                (12, SlotKind::Texture),
             ]),
         );
         let atrous_pipeline = compile_pipeline(
@@ -4674,6 +4684,12 @@ impl MetalShadowRayTracer {
                 // pipeline's slot-map note (T3 missed these too).
                 (8, SlotKind::Texture),
                 (9, SlotKind::Texture),
+                // RS-A (caster cap 4 -> 8): src_sv2/dst_sv2, MSL [[texture(11)]]/[[texture(12)]].
+                (11, SlotKind::Texture),
+                (12, SlotKind::Texture),
+                // RT-TL-C: src_svt/dst_svt, MSL [[texture(13)]]/[[texture(14)]].
+                (13, SlotKind::Texture),
+                (14, SlotKind::Texture),
                 // RT-R2: gi_materials — roughness source for the refl luma
                 // stop. Signatures and slot maps change together (R1 incident
                 // class).
@@ -4718,6 +4734,22 @@ impl MetalShadowRayTracer {
                 // SV-ACCUM snap-hold countdown pair.
                 (21, SlotKind::Texture),
                 (22, SlotKind::Texture),
+                // RS-A (caster cap 4 -> 8): sv2 channel — full SV-ACCUM
+                // pipeline at [[texture(23)]] through [[texture(31)]].
+                (23, SlotKind::Texture),
+                (24, SlotKind::Texture),
+                (25, SlotKind::Texture),
+                (26, SlotKind::Texture),
+                (27, SlotKind::Texture),
+                (28, SlotKind::Texture),
+                (29, SlotKind::Texture),
+                (30, SlotKind::Texture),
+                (31, SlotKind::Texture),
+                // RT-TL-C: hi_svt at [[texture(32)]] and svt history at
+                // [[texture(33)]]/[[texture(34)]].
+                (32, SlotKind::Texture),
+                (33, SlotKind::Texture),
+                (34, SlotKind::Texture),
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
