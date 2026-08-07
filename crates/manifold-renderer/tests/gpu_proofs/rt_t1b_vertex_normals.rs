@@ -101,6 +101,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         // uv_offset is never read.
         uv_offset: 0,
         alpha_mask: false,
+        translucent: false,
         alpha_cutoff: 0.5,
         base_color_texture: None,
         mr_texture: None,

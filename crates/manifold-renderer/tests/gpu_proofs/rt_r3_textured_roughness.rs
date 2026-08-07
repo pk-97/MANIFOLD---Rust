@@ -152,6 +152,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             normal_offset: 12,
             uv_offset: 24,
             alpha_mask: false,
+            translucent: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture,
@@ -171,6 +172,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             normal_offset: 12,
             uv_offset: 24,
             alpha_mask: false,
+            translucent: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture: None,
@@ -282,8 +284,8 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     // gi_materials[1] = emitter (only .emissive is read on the reflection
     // HIT path — env/specular terms multiply through the zero dummy).
     let gi_materials = [
-        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, floor_roughness, 0.0, 0.0]),
-        GiMaterial::new([0.5, 0.5, 0.5], EMITTER_EMISSIVE, [0.0, 0.5, 0.0, 0.0]),
+        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, floor_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
+        GiMaterial::new([0.5, 0.5, 0.5], EMITTER_EMISSIVE, [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
     ];
     let dummy_emissive = device.create_buffer_shared(1);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);

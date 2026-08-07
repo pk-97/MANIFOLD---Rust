@@ -169,12 +169,12 @@ fn ms(json:&str,label:&str,n:usize)->(f64,f64){
 #[repr(C)]#[derive(Clone,Copy)]struct Pv{pos:[f32;3]}
 fn wb(d:&GpuDevice,v:&[Pv])->GpuBuffer{let b=d.create_buffer_shared(((v.len()*12)as u64).max(16));unsafe{std::ptr::copy_nonoverlapping(v.as_ptr().cast::<u8>(),b.mapped_ptr().unwrap(),v.len()*12);}b}
 const I:[[f32;4];4]=[[1.,0.,0.,0.],[0.,1.,0.,0.],[0.,0.,1.,0.],[0.,0.,0.,1.]];
-fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{vertex_buffer:v,vertex_stride:12,vertex_offset:0,index_buffer:None,triangle_count:n,transform:I,normal_offset:0,uv_offset:0,alpha_mask:false,alpha_cutoff:0.5,base_color_texture:None,mr_texture:None,normal_texture:None,emissive_texture:None,emissive_uv_m:[1.,0.,0.,1.],emissive_uv_t:[0.,0.],cast_shadows:true}}
+fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{vertex_buffer:v,vertex_stride:12,vertex_offset:0,index_buffer:None,triangle_count:n,transform:I,normal_offset:0,uv_offset:0,alpha_mask:false,translucent:false,alpha_cutoff:0.5,base_color_texture:None,mr_texture:None,normal_texture:None,emissive_texture:None,emissive_uv_m:[1.,0.,0.,1.],emissive_uv_t:[0.,0.],cast_shadows:true}}
 #[test]fn sz(){assert_eq!(std::mem::size_of::<EmissiveTriangleGpu>(),80);assert_eq!(std::mem::size_of::<EmissiveAliasEntry>(),8);}
 #[test]fn at(){
     let h=harness::shared();let d=&h.device;
     let vs=[Pv{pos:[0.,0.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,1.,0.]}];
-    let b=wb(d,&vs);let o=[o(&b,2)];let m=[GiMaterial::new([0.5,0.5,0.5],[1.,0.,0.],[0.,0.5,0.,0.])];
+    let b=wb(d,&vs);let o=[o(&b,2)];let m=[GiMaterial::new([0.5,0.5,0.5],[1.,0.,0.],[0.,0.5,0.,0.],[0.,0.,0.,0.])];
     let t=build_emissive_table(d,&o,&m).expect("t");let ap=t.aliases.mapped_ptr().unwrap();
     let a:&[EmissiveAliasEntry]=unsafe{std::slice::from_raw_parts(ap as *const EmissiveAliasEntry,t.entry_count as usize)};
     for(i,a)in a.iter().enumerate(){assert!(a.prob>=0.&&a.prob<=1.01,"{i}:p {}",a.prob);assert!(a.alias<t.entry_count);}
