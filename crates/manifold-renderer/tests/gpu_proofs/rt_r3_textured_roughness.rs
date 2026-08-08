@@ -320,6 +320,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         &prefiltered_env,
         &dummy_emissive,
         &dummy_emissive,
+        false,
         "trace_shadow_rays-r3-proof",
     );
     encoder.commit_and_wait_completed();

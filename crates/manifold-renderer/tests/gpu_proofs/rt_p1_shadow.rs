@@ -284,6 +284,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &prefiltered_env,
         &dummy_emissive,
         &dummy_emissive,
+        false,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -540,6 +541,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &prefiltered_env,
         &dummy_emissive,
         &dummy_emissive,
+        false,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();

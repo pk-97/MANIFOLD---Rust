@@ -300,6 +300,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         &prefiltered_env,
         &dummy_emissive,
         &dummy_emissive,
+        false,
         "trace_shadow_rays-t2c-proof",
     );
     encoder.commit_and_wait_completed();
