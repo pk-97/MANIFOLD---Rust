@@ -262,6 +262,7 @@ fn run_tlc_fixture(
         &prefiltered_env,
         &dummy_emissive,
         &dummy_emissive,
+        true,
         "trace_shadow_rays-tlc-proof",
     );
     encoder.commit_and_wait_completed();

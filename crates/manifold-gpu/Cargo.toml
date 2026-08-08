@@ -73,6 +73,10 @@ objc2-metal = { version = "0.3", features = [
     "MTLAccelerationStructureCommandEncoder",
     "MTLAccelerationStructureTypes",
     "MTLAllocation",
+    # RT-TL-B cost recovery: function constants for HAS_TRANSLUCENCY
+    # pipeline permutation (RAYTRACING_DESIGN.md section 16.4).
+    "MTLFunctionConstantValues",
+    "MTLDataType",
     "block2",
 ] }
 objc2-metal-fx = { version = "0.3", features = [
