@@ -48,9 +48,11 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
 
 /// The curated `node.render_scene` auto-stamp subset (see the vocabulary
 /// entry above): the per-scene RT toggle (D14), the MetalFX temporal
-/// quality toggle (P4), and the per-scene reflection toggle (section 9 RD9).
-/// Everything else on the root node is deliberately NOT auto-stamped.
-const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &["rt_enabled", "temporal_upscale", "rt_reflections"];
+/// quality toggle (P4), the per-scene reflection toggle (section 9 RD9),
+/// and the per-scene ML-denoiser feed toggle (RAYTRACING_DESIGN.md section
+/// 17 DN4). Everything else on the root node is deliberately NOT auto-stamped.
+const RENDER_SCENE_STAMPED_PARAMS: &[&str] =
+    &["rt_enabled", "temporal_upscale", "rt_reflections", "rt_denoise_feed"];
 
 /// Return the full param manifest for `type_id` from the primitive registry,
 /// converting `ParamDef` metadata into the crate-neutral `SceneParamMetadata`
@@ -299,8 +301,8 @@ mod tests {
             .collect();
         assert_eq!(
             stamped,
-            vec!["rt_enabled", "temporal_upscale", "rt_reflections"],
-            "exactly the three RT toggles, nothing else from the root node"
+            vec!["rt_enabled", "temporal_upscale", "rt_reflections", "rt_denoise_feed"],
+            "exactly the four RT toggles, nothing else from the root node"
         );
         for spec in &meta.params {
             assert_eq!(spec.section.as_deref(), Some("Rendering"));
