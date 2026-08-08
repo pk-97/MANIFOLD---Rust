@@ -4087,6 +4087,25 @@ impl EffectNode for RenderScene {
         // output — extracted early so the hit-dist extraction dispatch in
         // the RT section below can reference it without borrowing ctx.
         let spec_hit_dist_out = ctx.outputs.texture_2d("specular_hit_distance");
+        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer
+        // resolve targets — read early (before the ensure block's mutable
+        // ctx borrow) so denoise_aux_ready is computed once and drives
+        // every downstream production decision.
+        let normals_resolve_target = ctx.outputs.texture_2d("normals");
+        let roughness_resolve_target = ctx.outputs.texture_2d("roughness");
+        let diffuse_albedo_resolve_target = ctx.outputs.texture_2d("diffuse_albedo");
+        let specular_albedo_resolve_target = ctx.outputs.texture_2d("specular_albedo");
+        // RAYTRACING_DESIGN.md section 17.5 DN-E/DN-G + BUG-qtkq: one engage
+        // decision per evaluate; on the live-flip frame the pre-flip plan has
+        // not allocated the feeds, so the whole denoise production path idles
+        // one frame byte-identical to flag-off and the rebuilt plan engages
+        // next frame (D17 transition shape).
+        let denoise_aux_ready = denoise_feed
+            && normals_resolve_target.is_some()
+            && roughness_resolve_target.is_some()
+            && diffuse_albedo_resolve_target.is_some()
+            && specular_albedo_resolve_target.is_some()
+            && spec_hit_dist_out.is_some();
         // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
         // whole light-shaft feature, checked once per frame like
         // `velocity_wired`. `depth_wired` decides whether the march reads
@@ -4531,7 +4550,7 @@ impl EffectNode for RenderScene {
 
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired, ao_mask_wired, denoise_feed, is_blend)
+                self.pipeline_for(gpu.device, material.kind, velocity_wired, ao_mask_wired, denoise_aux_ready, is_blend)
                     .clone()
             };
 
@@ -4676,14 +4695,17 @@ impl EffectNode for RenderScene {
             // When the denoiser is active but temporal_upscale is off (1:1
             // denoise), the forward pass renders into a native-res scratch
             // so the denoiser's input and output don't alias.
-            let denoise_wanted = rt_enabled && rt_ready && denoise_feed && denoiser_available();
+            let denoise_wanted = rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
             // Gate-block diagnostic (2026-08-08, Peter's "does nothing"
-            // report): the four conditions fail silently — name the blocker
+            // report): the conditions fail silently — name the blocker
             // once per transition instead of leaving the feature inert.
+            // aux_ready=false is expected for exactly the one live-flip
+            // frame (pre-flip plan, D17 transition — BUG-qtkq); a warn that
+            // persists past that names a real plan-staleness bug.
             if denoise_feed && !denoise_wanted && !self.denoise_gate_blocked_logged {
                 self.denoise_gate_blocked_logged = true;
                 log::warn!(
-                    "node.render_scene: rt_denoise_feed is on but the denoiser gate is blocked — rt_enabled={rt_enabled}, rt_ready={rt_ready}, denoiser_available={}",
+                    "node.render_scene: rt_denoise_feed is on but the denoiser gate is blocked — rt_enabled={rt_enabled}, rt_ready={rt_ready}, aux_ready={denoise_aux_ready}, denoiser_available={}",
                     denoiser_available()
                 );
             }
@@ -5706,14 +5728,11 @@ impl EffectNode for RenderScene {
                 // texture's .a channel into the graph output. Runs before
                 // atrous_pass (which ping-pongs refl_full and would
                 // overwrite the upsampled hit-distance).
-                // Live flip: force_consumed_outputs flags a host rebuild
-                // (BUG-18l) but THIS frame still runs the pre-flip plan, so
-                // the output is None — skip the extract and let the tail
-                // encode's tuple guard skip denoise for the frame (the
-                // pre-flip path serves the transition, D17's shape). An
-                // expect() here panicked on the first live flip (Peter,
-                // 2026-08-08).
-                if denoise_feed && let Some(hit_dist_target) = spec_hit_dist_out {
+                // Gated on denoise_aux_ready (BUG-qtkq): on the live-flip
+                // frame the pre-flip plan has no hit-dist target, so
+                // denoise_aux_ready is false and this block idles one frame.
+                if denoise_aux_ready {
+                    let hit_dist_target = spec_hit_dist_out.expect("denoise_aux_ready implies Some");
                     if self.hit_dist_extract_pipeline.is_none() {
                         self.hit_dist_extract_pipeline = Some(gpu.device.create_compute_pipeline(
                             include_str!("shaders/hit_dist_extract.wgsl"),
@@ -6095,12 +6114,8 @@ impl EffectNode for RenderScene {
         // RAYTRACING_DESIGN.md section 12 AM1: same lazy rule again.
         let ao_mask_resolve_target = ctx.outputs.texture_2d("ao_mask");
         // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer
-        // resolve targets. When `denoise_feed` is on, `force_consumed_outputs`
-        // ensures the execution plan allocates these — they are always Some.
-        let normals_resolve_target = ctx.outputs.texture_2d("normals");
-        let roughness_resolve_target = ctx.outputs.texture_2d("roughness");
-        let diffuse_albedo_resolve_target = ctx.outputs.texture_2d("diffuse_albedo");
-        let specular_albedo_resolve_target = ctx.outputs.texture_2d("specular_albedo");
+        // resolve targets were read early (before the ensure block) so
+        // denoise_aux_ready gates every downstream decision from one value.
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
@@ -6525,35 +6540,46 @@ impl EffectNode for RenderScene {
             clear: [1.0; 4],
         });
         // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer
-        // attachments — ordered AFTER velocity/ao_mask, matching the FsOut
-        // @location order in the DENOISE_* specializations.
-        let n_att = denoise_feed.then(|| {
-            manifold_gpu::AuxColorAttachment {
-                msaa: self.denoise_normals_msaa.as_ref().expect("denoise MSAA ensured above"),
-                resolve: normals_resolve_target.expect("denoise resolve texture allocated by plan"),
-                clear: [0.0; 4],
-            }
+        // attachments — all-four-or-none, gated by denoise_aux_ready
+        // (BUG-qtkq), mirroring the velocity/ao_mask pair pattern above.
+        // On the live-flip frame denoise_aux_ready is false so none fire;
+        // the MSAA self-fields were ensured under raw denoise_feed one
+        // frame early (harmless, preserves ensure-before-use).
+        let normals_pair = match (self.denoise_normals_msaa.as_ref(), normals_resolve_target) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            _ => None,
+        };
+        let roughness_pair = match (self.denoise_roughness_msaa.as_ref(), roughness_resolve_target) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            _ => None,
+        };
+        let diffuse_albedo_pair = match (self.denoise_diffuse_albedo_msaa.as_ref(), diffuse_albedo_resolve_target) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            _ => None,
+        };
+        let specular_albedo_pair = match (self.denoise_specular_albedo_msaa.as_ref(), specular_albedo_resolve_target) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            _ => None,
+        };
+        let n_att = normals_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [0.0; 4],
         });
-        let r_att = denoise_feed.then(|| {
-            manifold_gpu::AuxColorAttachment {
-                msaa: self.denoise_roughness_msaa.as_ref().expect("denoise MSAA ensured above"),
-                resolve: roughness_resolve_target.expect("denoise resolve texture allocated by plan"),
-                clear: [0.0; 4],
-            }
+        let r_att = roughness_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [0.0; 4],
         });
-        let da_att = denoise_feed.then(|| {
-            manifold_gpu::AuxColorAttachment {
-                msaa: self.denoise_diffuse_albedo_msaa.as_ref().expect("denoise MSAA ensured above"),
-                resolve: diffuse_albedo_resolve_target.expect("denoise resolve texture allocated by plan"),
-                clear: [0.0; 4],
-            }
+        let da_att = diffuse_albedo_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [0.0; 4],
         });
-        let sa_att = denoise_feed.then(|| {
-            manifold_gpu::AuxColorAttachment {
-                msaa: self.denoise_specular_albedo_msaa.as_ref().expect("denoise MSAA ensured above"),
-                resolve: specular_albedo_resolve_target.expect("denoise resolve texture allocated by plan"),
-                clear: [0.0; 4],
-            }
+        let sa_att = specular_albedo_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [0.0; 4],
         });
         let aux_storage_six: [manifold_gpu::AuxColorAttachment; 6];
         let aux_storage_five: [manifold_gpu::AuxColorAttachment; 5];
