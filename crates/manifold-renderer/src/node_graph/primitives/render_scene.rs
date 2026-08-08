@@ -4697,12 +4697,15 @@ impl EffectNode for RenderScene {
             // so the denoiser's input and output don't alias.
             let denoise_wanted = rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
             // Gate-block diagnostic (2026-08-08, Peter's "does nothing"
-            // report): the four conditions fail silently — name the blocker
+            // report): the conditions fail silently — name the blocker
             // once per transition instead of leaving the feature inert.
+            // aux_ready=false is expected for exactly the one live-flip
+            // frame (pre-flip plan, D17 transition — BUG-qtkq); a warn that
+            // persists past that names a real plan-staleness bug.
             if denoise_feed && !denoise_wanted && !self.denoise_gate_blocked_logged {
                 self.denoise_gate_blocked_logged = true;
                 log::warn!(
-                    "node.render_scene: rt_denoise_feed is on but the denoiser gate is blocked — rt_enabled={rt_enabled}, rt_ready={rt_ready}, denoiser_available={}",
+                    "node.render_scene: rt_denoise_feed is on but the denoiser gate is blocked — rt_enabled={rt_enabled}, rt_ready={rt_ready}, aux_ready={denoise_aux_ready}, denoiser_available={}",
                     denoiser_available()
                 );
             }
