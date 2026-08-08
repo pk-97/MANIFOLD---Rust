@@ -391,6 +391,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT accel build");
+    unsafe { cb.setLabel(Some(&NSString::from_str("RT accel build"))) };
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -582,6 +583,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT TLAS refit");
+    unsafe { cb.setLabel(Some(&NSString::from_str("RT TLAS refit"))) };
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -2996,12 +2998,14 @@ kernel void accumulate_irradiance(
                     // n=2 for its duration — the CPU says a continuous
                     // lighting scrub is in progress, so don't re-converge
                     // between the frames.
-                    bool lighting_changed = cpu_lighting_changed || cpu_gesture || texel_fired;
+                    bool texel_or_gesture = cpu_gesture || texel_fired;
                     float n_full = nsum / wsum + 1.0;
-                    // Snap to 2, not 1: alpha 0.5 is 75% of a step in two
-                    // frames — a cue lands — while leaving one frame of
-                    // history so a single wild sample cannot define the pixel.
-                    float n = lighting_changed ? 2.0 : n_full;
+                    // Snap rule: cpu_lighting_changed snaps to 1 (full reset) —
+                    // a CPU-vouched lighting change is the same epistemic class
+                    // as a cut, no wild-sample guard needed. Per-texel and
+                    // gesture gates snap to 2 — one frame of history so a
+                    // single wild sample cannot define the pixel.
+                    float n = cpu_lighting_changed ? 1.0 : (texel_or_gesture ? 2.0 : n_full);
                     float alpha = max(1.0 / n, p.alpha);
                     hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
                     blended = mix(hist, cur.xyz, alpha);
@@ -3024,8 +3028,8 @@ kernel void accumulate_irradiance(
                     ao_blended = mix(asum / wsum, cur.a, alpha);
                     // SV-ACCUM: the visibility channel runs on `n_full`,
                     // NOT the lighting-collapsed `n` — it has its own change
-                    // verdict below and deliberately ignores
-                    // `lighting_changed`.
+                    // verdict below and deliberately ignores the irradiance/AO
+                    // change gates (cpu_lighting_changed, gesture, texel).
                     // The verdict the irr gate CANNOT see: an occluder move.
                     // The receiving surface is unchanged, so its depth/normal
                     // validate and its irr luma can move less than the irr
@@ -3038,8 +3042,9 @@ kernel void accumulate_irradiance(
                     // boiling texel has sigma ~0.5 and stays inside the band;
                     // a converged texel's sigma is ~0 and any sustained delta
                     // is a real edge. Same trick as the irr gate's moments,
-                    // per caster channel. Deliberately NOT OR'd with
-                    // `lighting_changed`: visibility is a geometry term — a
+                    // per caster channel. Deliberately NOT OR'd with the
+                    // irradiance/AO change gates (cpu_lighting_changed, gesture,
+                    // texel): visibility is a geometry term — a
                     // caster intensity strobe doesn't change it, and snapping
                     // on the CPU key would discard convergence every strobe
                     // (D3). A caster MOVE shows up per-texel through this
@@ -3124,7 +3129,9 @@ kernel void accumulate_irradiance(
                     // The SURFACE's lighting changed, so its specular history
                     // is stale for the same reason — one decision, both
                     // channels (the reflection block below reads this).
-                    if (lighting_changed) { refl_change_snap = true; }
+                    // cpu_lighting_changed is excluded here: it drives rn=1.0
+                    // directly in the reflection block, not through the snap.
+                    if (texel_or_gesture) { refl_change_snap = true; }
                 }
             }
         }
@@ -3251,12 +3258,14 @@ kernel void accumulate_irradiance(
                     float rsd = refl_neighborhood_luma_sd(hi_refl, tid, p.size);
                     float rdluma = fabs(luma(cur_refl.rgb) - rhist_luma);
                     bool refl_changed = refl_change_snap
-                        || cpu_lighting_changed
                         || cpu_gesture
                         || (rdluma > max(RT_REFL_CHANGE_SIGMAS * rsd,
                                          RT_REFL_CHANGE_REL * rhist_luma) * motion_band
                             && rdluma > RT_REFL_CHANGE_ABS);
-                    float rn = refl_changed ? 2.0 : (nsum / wsum + 1.0);
+                    // Same split as irradiance: cpu_lighting_changed snaps to
+                    // 1 (full reset — CPU-vouched, same class as a cut);
+                    // everything else snaps to 2.
+                    float rn = cpu_lighting_changed ? 1.0 : (refl_changed ? 2.0 : (nsum / wsum + 1.0));
                     // Specular history is VIEW-DEPENDENT: under camera motion
                     // a validated texel's stored reflection no longer matches
                     // what the current view sees (the lobe moved, the
@@ -5080,6 +5089,7 @@ impl MetalShadowRayTracer {
             .raw_queue()
             .commandBuffer()
             .expect("Failed to acquire command buffer for RT-T1-B debug dispatch");
+        unsafe { cb.setLabel(Some(&NSString::from_str("RT-T1-B debug fetch normal"))) };
         let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
             .computeCommandEncoder()
             .expect("computeCommandEncoder failed");
@@ -5149,6 +5159,7 @@ impl MetalShadowRayTracer {
             .raw_queue()
             .commandBuffer()
             .expect("Failed to acquire command buffer for BUG-dx6w debug dispatch");
+        unsafe { cb.setLabel(Some(&NSString::from_str("BUG-dx6w debug clamp refl history"))) };
         let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
             .computeCommandEncoder()
             .expect("computeCommandEncoder failed");
