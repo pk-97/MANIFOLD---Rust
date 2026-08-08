@@ -243,6 +243,115 @@ mod tests {
         assert!(bundled_preset_json(&unknown).is_none());
     }
 
+    /// BUG-7k1z regression: `bundled_preset_def` must carry scene-vocabulary
+    /// bindings (rt_denoise_feed et al.) stamped by `migrate_scene_exposures`
+    /// at cache-build time. The runtime def resolution path in
+    /// generators/registry.rs must go through the migrated cache, never raw
+    /// catalog JSON, or the live flip of a load-time-stamped exposure is inert
+    /// (the binding list stays empty and `apply_bindings` falls back to the
+    /// binding default forever).
+    ///
+    /// The real-world case BUG-7k1z caught is a project-overlay preset — a
+    /// generator embedded in a `.manifold` save whose JSON predates the
+    /// scene-exposure stamp. The def cache includes overlay entries
+    /// (preset_loader merges them into the catalog at `apply_reload` time) and
+    /// invalidates on generation bump, so a project-overlay preset that lacks
+    /// `presetMetadata` in its raw JSON gets the same migration as any bundled
+    /// one when the def cache rebuilds.
+    ///
+    /// This test asserts the end-to-end path on a bundled scene generator
+    /// (SceneStarter, whose raw JSON already carries the stamped metadata from
+    /// authoring time — the migration is idempotent) and separately proves the
+    /// migration itself on a synthetic pre-stamp shape (a lone render_scene
+    /// node with no preset_metadata). Together they prove the cache path works
+    /// and the stamping logic is correct, which covers the project-overlay
+    /// case by construction: the overlay JSON is parsed through the same
+    /// `rebuild_def_cache` pipeline as stock JSON.
+    #[test]
+    fn bundled_preset_def_carries_migrated_scene_bindings() {
+        let id = PresetTypeId::new("SceneStarter");
+
+        // Migrated cache carries the stamped bindings.
+        let migrated = bundled_preset_def(&id).expect("SceneStarter must be a bundled generator");
+        let meta = migrated
+            .preset_metadata
+            .as_ref()
+            .expect("SceneStarter def cache entry must have preset_metadata");
+        let binding_names: Vec<&str> = meta
+            .bindings
+            .iter()
+            .filter_map(|b| match &b.target {
+                manifold_core::effect_graph_def::BindingTarget::Node { param, .. } => {
+                    Some(param.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            binding_names.contains(&"rt_denoise_feed"),
+            "bundled_preset_def(SceneStarter) must carry rt_denoise_feed binding; \
+             migrate_scene_exposures stamps it at cache-build time. \
+             Got: {binding_names:?}"
+        );
+        assert!(
+            binding_names.contains(&"rt_enabled"),
+            "bundled_preset_def(SceneStarter) must carry rt_enabled binding; \
+             Got: {binding_names:?}"
+        );
+
+        // Prove the migration itself stamps the bindings on a pre-stamp shape.
+        // This covers the project-overlay case where the embedded JSON predates
+        // the stamp — the same `migrate_scene_exposures` call in
+        // `rebuild_def_cache` processes both stock and overlay JSON identically.
+        use std::collections::BTreeMap;
+        use manifold_core::NodeId;
+        let pre_stamp = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
+                id: 1,
+                node_id: NodeId::new("render"),
+                type_id: "node.render_scene".to_string(),
+                handle: Some("Render".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: vec![],
+        };
+        let mut stamped = pre_stamp.clone();
+        assert!(
+            migrate_scene_exposures(&mut stamped),
+            "migration must stamp on a pre-stamp render_scene shape"
+        );
+        let stamped_meta = stamped
+            .preset_metadata
+            .as_ref()
+            .expect("migration must produce preset_metadata");
+        let stamped_bindings: Vec<&str> = stamped_meta
+            .bindings
+            .iter()
+            .filter_map(|b| match &b.target {
+                manifold_core::effect_graph_def::BindingTarget::Node { param, .. } => {
+                    Some(param.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            stamped_bindings.contains(&"rt_denoise_feed"),
+            "migrate_scene_exposures must stamp rt_denoise_feed on render_scene; \
+             Got: {stamped_bindings:?}"
+        );
+    }
+
     /// Splicing a bundled preset into a chain via
     /// `splice_def_into_chain` is the path the runtime takes when
     /// `PresetInstance.graph = Some(def)`. Verifies every shipping

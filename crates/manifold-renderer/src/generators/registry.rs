@@ -1,4 +1,4 @@
-use crate::node_graph::{bundled_preset_json, bundled_preset_type_ids};
+use crate::node_graph::{bundled_preset_def, bundled_preset_json, bundled_preset_type_ids};
 use crate::node_graph::primitives::{
     GltfTextureSource, RenderScene, ScatterOnMesh, SeedParticlesFromTexture,
 };
@@ -202,9 +202,12 @@ impl GeneratorRegistry {
             graft_preset_metadata_from_bundle(&mut grafted, gen_type);
             (Some(grafted), true)
         } else {
-            let parsed = bundled_preset_json(gen_type).and_then(|json| {
-                serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(&json).ok()
-            });
+            // Resolve through the migrated def cache, never raw catalog JSON.
+            // Raw JSON omits bindings stamped by migrate_scene_exposures
+            // (rt_denoise_feed et al.) — the runtime binding list would
+            // deserialize empty and every scene-vocabulary param would stick at
+            // its binding default forever (BUG-7k1z).
+            let parsed = bundled_preset_def(gen_type).cloned();
             (parsed, false)
         };
 
@@ -264,10 +267,11 @@ impl GeneratorRegistry {
             // black mid-show. (Not a migration stop-gap — a broken user graph is a
             // real, transient editing state.) The canonical itself is the
             // effective def in the non-override case, so this only runs for
-            // overrides.
-            if is_override && let Some(json) = bundled_preset_json(gen_type) {
-                match PresetRuntime::from_json_str_with_device(
-                    &json,
+            // overrides. Resolves through the migrated def cache, same invariant
+            // as the non-override path above (BUG-7k1z).
+            if is_override && let Some(def) = bundled_preset_def(gen_type) {
+                match PresetRuntime::from_def_with_device(
+                    def.clone(),
                     &registry,
                     device,
                     width,
@@ -387,10 +391,16 @@ fn prewarm_all_atom_codegen_pipelines(device: &std::sync::Arc<GpuDevice>) {
     );
 }
 
-/// If `def.preset_metadata` is `None`, parse the bundled JSON for
-/// `gen_type` and graft its `preset_metadata` onto `def` in-place.
-/// No-op if the override already carries metadata, or if no bundled
-/// preset matches the type id (legacy Rust-only generator).
+/// If `def.preset_metadata` is `None`, graft the bundled canonical's
+/// migrated `preset_metadata` onto `def` in-place. Resolves through the
+/// migrated def cache — never raw catalog JSON — so scene-vocabulary
+/// bindings (rt_denoise_feed et al.) stamped by migrate_scene_exposures
+/// are present (BUG-7k1z). No-op if the override already carries
+/// metadata, or if no bundled preset matches the type id.
+///
+/// Raw JSON is for freeze proofs / region analysis where bindings don't
+/// matter. Every runtime def resolution — create path, override graft,
+/// emergency fallback — must go through the migrated def cache.
 ///
 /// This is the single durable defense against the "edit command
 /// dropped the `preset_metadata` and bindings vanished" failure mode
@@ -407,14 +417,10 @@ pub fn graft_preset_metadata_from_bundle(
     if def.preset_metadata.is_some() {
         return;
     }
-    let Some(json) = bundled_preset_json(gen_type) else {
+    let Some(bundled) = bundled_preset_def(gen_type) else {
         return;
     };
-    let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(&json)
-    else {
-        return;
-    };
-    def.preset_metadata = base.preset_metadata;
+    def.preset_metadata = bundled.preset_metadata.clone();
 }
 
 /// BUG-146 — GPU-backed proof that [`prewarm_all_atom_codegen_pipelines`]
