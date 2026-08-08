@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 (many-light: RS-A caster cap 8, RS-C emissive RIS sampler), 16 (translucency TL-A/B/C) landed. 17 DN (ML denoiser, Tahoe floor) APPROVED 2026-08-08 — DN-A…DN-D dispatched. OWED: Peter's looks — multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pink-pool pair; `trace_ms` 2-vs-1 heavier scene. P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-08 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 (many-light: RS-A caster cap 8, RS-C emissive RIS sampler), 16 (translucency TL-A/B/C) landed. 17 DN (ML denoiser, Tahoe floor) BUILT 2026-08-08 — spine + sweep landed; operating point = fused upscale + default spp (28.8–33 ms vs 31.2 native, ML-denoised); 1:1 export-tier. OWED: Peter's looks — DN-I upscaled pair + frame-flip, multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pink-pool pair; noise-gate re-baseline at default-flip. P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-08 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -2033,7 +2033,7 @@ with triggers: section 16.8. B: section 16.6, not in a phase.
   class with real thickness data (scanning workflow change). The factor is
   the constant-thickness case until then.
 
-## 17. ML denoising — MetalFX Temporal Denoised Scaler (APPROVED 2026-08-08, Peter + K3; direction: "rays down + ML denoiser is the spine"; Tahoe floor accepted same day)
+## 17. ML denoising — MetalFX Temporal Denoised Scaler (APPROVED + BUILT 2026-08-08, Peter + K3; direction: "rays down + ML denoiser is the spine"; Tahoe floor accepted same day. DN-A…DN-I LANDED same day; DN6 answered by the sweep: fused upscale + default spp is the operating point — under ML denoise, MC spp stops being the stability bottleneck (edge reconstruction is; the flicker is the pre-existing T2-B class, not a denoiser regression — control leg proved it). 1:1 denoise is frozen but export-tier at 65 ms (BUG-iadf (1:1 cost anomaly): +30 ms unexplained). OWED: Peter's look (upscaled PNG pair + 148↔149 frame-flip), noise-gate re-baseline when the mode flips default, DN-J ceremony close-out)
 
 Peter's report: RT still shimmers on a STILL scene — chrome-like metals on
 the DamagedHelmet against an EXR sun, penumbra crawl on photoscan shadows —
