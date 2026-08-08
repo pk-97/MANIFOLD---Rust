@@ -3793,6 +3793,11 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
+        // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
+        let _probe_t0 = std::env::var_os("MANIFOLD_DENOISE_PROBE")
+            .is_some()
+            .then(std::time::Instant::now);
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
 
@@ -6842,6 +6847,8 @@ impl EffectNode for RenderScene {
                 1,
             );
         }
+        // PROBE: capture time just before denoiser encode.
+        let _probe_pre_denoise = _probe_t0.map(|t0| (std::time::Instant::now(), t0));
         // RAYTRACING_DESIGN.md section 17.5 DN-G (DN2/DN3): ML denoiser
         // path — replaces the plain temporal scaler on RT scenes when
         // enabled (DN2). Fused denoise+upscale from render res to native
@@ -6925,6 +6932,19 @@ impl EffectNode for RenderScene {
                 None, // reactive mask — no natural signal maps to it;
                       // the denoiser's uniform reactivity fallback is
                       // appropriate for our engine-driven reset model
+            );
+        }
+        // PROBE: capture time after denoiser encode and emit timing report.
+        if let Some((pre_instant, t0)) = _probe_pre_denoise {
+            let now = std::time::Instant::now();
+            let before_denoise_ms = pre_instant.duration_since(t0).as_secs_f64() * 1000.0;
+            let denoise_encode_ms = now.duration_since(pre_instant).as_secs_f64() * 1000.0;
+            let total_ms = now.duration_since(t0).as_secs_f64() * 1000.0;
+            let (input_w, input_h) = if temporal_upscale { (width, height) } else { (native_width, native_height) };
+            eprintln!(
+                "[DENOISE_PROBE] f={} input={}x{} output={}x{} total_ms={:.2} before_denoise_ms={:.2} denoise_encode_ms={:.2}",
+                self.jitter_frame_index, input_w, input_h, native_width, native_height,
+                total_ms, before_denoise_ms, denoise_encode_ms
             );
         }
         // ── RT capture: composited output snapshot ──
