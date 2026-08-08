@@ -3793,6 +3793,11 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
+        // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
+        let _probe_t0 = std::env::var_os("MANIFOLD_DENOISE_PROBE")
+            .is_some()
+            .then(std::time::Instant::now);
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
 
@@ -6842,6 +6847,8 @@ impl EffectNode for RenderScene {
                 1,
             );
         }
+        // PROBE: capture time just before denoiser encode.
+        let _probe_pre_denoise = _probe_t0.map(|t0| (std::time::Instant::now(), t0));
         // RAYTRACING_DESIGN.md section 17.5 DN-G (DN2/DN3): ML denoiser
         // path — replaces the plain temporal scaler on RT scenes when
         // enabled (DN2). Fused denoise+upscale from render res to native
@@ -6897,6 +6904,12 @@ impl EffectNode for RenderScene {
             // Set the denoiser's own jitter offset to match this frame's
             // camera jitter (0,0 when `temporal_upscale` is off).
             denoiser.set_jitter(jitter_px.0, jitter_px.1);
+            // PROBE: ablation gate — skip MetalFX encode, blit instead
+            // (MANIFOLD_DENOISE_SKIP=1). Aux MRT renders + resolves still run;
+            // only the final denoiser encode is replaced by a texture copy.
+            // The delta between full path and skipped path isolates the
+            // MetalFX denoiser's GPU cost.
+            let skip_denoise = std::env::var_os("MANIFOLD_DENOISE_SKIP").is_some();
             // Color source: `target` holds the forward-pass output at the
             // correct resolution (render res when temporal_upscale is on,
             // native res for 1:1 denoise). The denoiser writes its output
@@ -6910,21 +6923,62 @@ impl EffectNode for RenderScene {
                 target
             };
             let gpu = ctx.gpu_encoder();
-            denoiser.encode(
-                gpu,
-                color_src,
-                depth_src,
-                velocity_src,
-                normal_src,
-                roughness_src,
-                diffuse_src,
-                specular_src,
-                hit_dist_src,
-                native_color, // output directly to native res
-                reset,
-                None, // reactive mask — no natural signal maps to it;
-                      // the denoiser's uniform reactivity fallback is
-                      // appropriate for our engine-driven reset model
+            if skip_denoise {
+                // PROBE ablation: blit instead of MetalFX denoiser.
+                // For 1:1: copy target→native (same res).
+                // For upscaled: use T2-B temporal upscaler.
+                if temporal_upscale && let Some(ref upscaler) = self.rt_temporal_upscaler {
+                    // Rerun T2-B path: the forward pass rendered into the
+                    // render-res scratch; temporal scaler upscales it.
+                    let depth_src = depth_resolve_target.expect("ensured");
+                    let velocity_src = velocity_resolve_target.expect("ensured");
+                    upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, false);
+                    gpu.native_enc.copy_texture_to_texture(
+                        &upscaler.output.texture,
+                        native_color,
+                        native_width,
+                        native_height,
+                        1,
+                    );
+                } else {
+                    gpu.native_enc.copy_texture_to_texture(
+                        target,
+                        native_color,
+                        native_width,
+                        native_height,
+                        1,
+                    );
+                }
+            } else {
+                denoiser.encode(
+                    gpu,
+                    color_src,
+                    depth_src,
+                    velocity_src,
+                    normal_src,
+                    roughness_src,
+                    diffuse_src,
+                    specular_src,
+                    hit_dist_src,
+                    native_color, // output directly to native res
+                    reset,
+                    None, // reactive mask — no natural signal maps to it;
+                          // the denoiser's uniform reactivity fallback is
+                          // appropriate for our engine-driven reset model
+                );
+            }
+        }
+        // PROBE: capture time after denoiser encode and emit timing report.
+        if let Some((pre_instant, t0)) = _probe_pre_denoise {
+            let now = std::time::Instant::now();
+            let before_denoise_ms = pre_instant.duration_since(t0).as_secs_f64() * 1000.0;
+            let denoise_encode_ms = now.duration_since(pre_instant).as_secs_f64() * 1000.0;
+            let total_ms = now.duration_since(t0).as_secs_f64() * 1000.0;
+            let (input_w, input_h) = if temporal_upscale { (width, height) } else { (native_width, native_height) };
+            eprintln!(
+                "[DENOISE_PROBE] f={} input={}x{} output={}x{} total_ms={:.2} before_denoise_ms={:.2} denoise_encode_ms={:.2}",
+                self.jitter_frame_index, input_w, input_h, native_width, native_height,
+                total_ms, before_denoise_ms, denoise_encode_ms
             );
         }
         // ── RT capture: composited output snapshot ──
