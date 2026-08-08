@@ -39,9 +39,21 @@ Per-pixel |delta| heatmaps between consecutive paused-phase frames (148→149) f
 
 Heatmaps: `/tmp/heatmap_OFF_baseline.png`, `/tmp/heatmap_upscaled_low.png`.
 
-## Per-pass breakdown (cell 2, MANIFOLD_RENDER_TRACE=1)
+## Per-pass attribution (BUG-iadf — 1:1 denoise cost anomaly; ablation 2026-08-08 evening)
 
-Settled frames (140-149) show 100% of CPU time in `generators` (~64ms). All other sections read 0.0ms. The GPU_FRAME_MS delta over RENDER_TRACE total is ~1ms — the MetalFX denoiser GPU execution is sub-ms. The ~34ms incremental over OFF (31.2 -> 65.0) is CPU encode overhead for the DN4 G-buffer resolves (normals, roughness, diffuse+specular albedo, hit-distance aux-MRT targets), all inside the `render_scene` node's evaluate() path. This is consistent with Apple's API model — the denoiser itself costs near zero.
+The RENDER_TRACE reading in the first version of this section ("34ms CPU encode overhead for the DN4 G-buffer resolves, denoiser near-zero") was WRONG — RENDER_TRACE measures CPU wall-clock, which absorbs GPU backpressure at `gen_enc.commit()` when the GPU is the bottleneck. Ablation with `MANIFOLD_DENOISE_SKIP=1` (denoiser encode replaced by a texture copy / the T2-B scaler; all RT traces and aux-MRT still run) on the same fixtures, `--sync-gpu`, settled frames 140-149:
+
+| Cell | GPU_FRAME_MS | Denoiser ML inference (by subtraction) |
+|---|---|---|
+| OFF (RtApricot) | 30.8 | - |
+| 1:1 full | 65.1 | **33.4ms at 3840x2160** |
+| 1:1 SKIP | 31.7 | (RT traces + aux-MRT G-buffer: 0.9ms total) |
+| Upscaled full | 32.5 | **12.8ms at 2560x1440 input** |
+| Upscaled SKIP | 19.7 | (matches the T2-B control leg) |
+
+CPU encode of the whole evaluate() including the denoiser call is under 1ms (MANIFOLD_DENOISE_PROBE=1). The +34ms in the 1:1 cell is the MetalFX denoiser's ML inference itself at native 4K input; the network's internal resolution tracks input resolution (cost scales ~2.6x for 2.25x pixels from 1440p to 4K). The upscaled path is fast because the network runs at the lower input res, not because the op fusion is free. The aux-MRT G-buffer feed is ~1ms at 4K — it piggybacks on the forward pass's existing geometry work.
+
+Consequence: 1:1 ML denoise at 4K is hardware-bound, not a bug — 33ms of denoiser alone leaves no show headroom. The fused denoise+upscale path is the only viable ML-denoise operating point at show framerates; the input-res knob (render scale) is what buys the budget.
 
 ## Contamination post-mortem
 
@@ -57,7 +69,7 @@ The first sweep at 16:23 AEST produced OFF=61.92ms, 1:1=252ms, upscaled=163ms �
 
 ## Read on shipping constants
 
-The MetalFX denoiser performs as Apple's API promises: **near-zero GPU cost** with the fused denoise+upscale path. 1:1 denoise adds ~34ms (CPU-side G-buffer encode overhead, not the API call). Upscaled denoise adds ~2ms, and the upscaled-low cell (28.77ms) actually **beats OFF** (31.21ms) because the render runs at 2560x1440 instead of native 4K.
+The MetalFX denoiser's cost is resolution-bound ML inference, not free API fusion (corrected by the BUG-iadf — 1:1 denoise cost anomaly ablation above): ~12.8ms at 2560x1440 input, ~33.4ms at native 3840x2160. The aux-MRT G-buffer feed is ~1ms at 4K. 1:1 denoise at 65.0ms is export-tier only — hardware-bound, not a fixable overhead. Upscaled denoise adds ~2ms over OFF, and the upscaled-low cell (28.77ms) actually **beats OFF** (31.21ms) because the render runs at 2560x1440 instead of native 4K.
 
 The upscaled path's higher noise delta (~0.15) is **not a denoiser artifact** — the T2-B control leg (denoise OFF, temporal_upscale ON) reads nearly identically at |d| 0.109, p99.9 18.0. The flicker is T2-B's existing edge-jitter behavior on half-res MC input, concentrated on depth-discontinuity edges (the apricot's silhouette against void). Flat regions are frozen across all paths. This predates DN-G and is bounded by the T2-B path's own design envelope.
 
