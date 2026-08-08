@@ -5690,7 +5690,14 @@ impl EffectNode for RenderScene {
                 // texture's .a channel into the graph output. Runs before
                 // atrous_pass (which ping-pongs refl_full and would
                 // overwrite the upsampled hit-distance).
-                if denoise_feed {
+                // Live flip: force_consumed_outputs flags a host rebuild
+                // (BUG-18l) but THIS frame still runs the pre-flip plan, so
+                // the output is None — skip the extract and let the tail
+                // encode's tuple guard skip denoise for the frame (the
+                // pre-flip path serves the transition, D17's shape). An
+                // expect() here panicked on the first live flip (Peter,
+                // 2026-08-08).
+                if denoise_feed && let Some(hit_dist_target) = spec_hit_dist_out {
                     if self.hit_dist_extract_pipeline.is_none() {
                         self.hit_dist_extract_pipeline = Some(gpu.device.create_compute_pipeline(
                             include_str!("shaders/hit_dist_extract.wgsl"),
@@ -5699,8 +5706,6 @@ impl EffectNode for RenderScene {
                         ));
                     }
                     let hit_dist_pipeline = self.hit_dist_extract_pipeline.as_ref().unwrap();
-                    let hit_dist_target = spec_hit_dist_out
-                        .expect("denoise_feed forces consumed_outputs; plan allocated this");
                     gpu.native_enc.dispatch_compute(
                         hit_dist_pipeline,
                         &[
