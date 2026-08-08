@@ -68,6 +68,7 @@
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
 use manifold_gpu::raytrace::ShadowRayTracer;
+use manifold_gpu::denoiser::denoiser_available;
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::atmosphere::Atmosphere;
@@ -741,6 +742,16 @@ pub struct RenderScene {
     /// unavailable — that frame's `temporal_upscale` request degrades to a
     /// native direct render (logged once), never a silent black/garbage
     /// output.
+    /// RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: MetalFX Temporal
+    /// Denoised Scaler — fused temporal denoise + upscale, the ML denoiser
+    /// path. Created lazily on the first frame rt_enabled + rt_denoise_feed
+    /// are both true, resized on dimension change. `None` when unavailable
+    /// or not yet created; denoise-inactive frames degrade to the temporal
+    /// scaler or native path (DN1 fallback).
+    denoiser: Option<crate::denoiser::Denoiser>,
+    /// Once-logged flag for "denoiser is unavailable" degradation, same
+    /// pattern as `rt_temporal_unavailable_logged`.
+    denoiser_unavailable_logged: bool,
     rt_temporal_upscaler: Option<crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler>,
     /// Set once this node has already logged the "MetalFX Temporal
     /// unavailable" degradation, so a performer leaving `temporal_upscale`
@@ -1181,6 +1192,13 @@ pub struct RenderScene {
     /// second reset-decision path (it's a input to the SAME single
     /// decision, not an alternate one).
     rt_irr_needs_reset: bool,
+    /// RAYTRACING_DESIGN.md section 17.5 DN-G (DN3): `lighting_changed` signal
+    /// this frame, captured in the RT block and consumed at the denoiser tail
+    /// (needs to drive `reset` on the denoiser encode). Reset at evaluate top.
+    denoiser_lighting_changed: bool,
+    /// RAYTRACING_DESIGN.md section 17.5 DN-G (DN3): gesture-active signal
+    /// this frame, same capture pattern as `denoiser_lighting_changed`.
+    denoiser_gesture_active: bool,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): this object's port
     /// names, generated once in [`Self::rebuild`] instead of re-formatted
     /// every `evaluate()` call. section 1's CPU row measured ~22 `format!`
@@ -1439,6 +1457,8 @@ impl RenderScene {
             rt_temporal_color_scratch: None,
             rt_temporal_color_scratch_width: 0,
             rt_temporal_color_scratch_height: 0,
+            denoiser: None,
+            denoiser_unavailable_logged: false,
             rt_temporal_upscaler: None,
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
@@ -1547,6 +1567,8 @@ impl RenderScene {
             rt_accumulate_params_buffer: None,
             rt_reset_detector: TemporalResetDetector::new(),
             rt_irr_needs_reset: false,
+            denoiser_lighting_changed: false,
+            denoiser_gesture_active: false,
             prefiltered_specular: None,
             irradiance_map: None,
             brdf_lut: None,
@@ -2250,6 +2272,46 @@ impl RenderScene {
                         "node.render_scene: temporal_upscale is on but MetalFX Temporal is unavailable on this device — rendering natively this frame instead (logged once)"
                     );
                     self.rt_temporal_unavailable_logged = true;
+                }
+                false
+            }
+        }
+    }
+
+    /// RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: create or reuse the ML
+    /// denoiser when (render, native) dimension pair changes, or lazily on
+    /// first use. Returns `false` (leaves `denoiser` as `None` on first use)
+    /// when the denoiser is unavailable — logged once, not every frame — so
+    /// the caller degrades to the temporal scaler or native path (DN1).
+    fn ensure_denoiser(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        render_w: u32,
+        render_h: u32,
+        native_w: u32,
+        native_h: u32,
+    ) -> bool {
+        if let Some(d) = self.denoiser.as_ref()
+            && d.matches(render_w, render_h, native_w, native_h)
+        {
+            return true;
+        }
+        // Dimensions changed or first creation — replace.
+        self.denoiser = None;
+        match crate::denoiser::Denoiser::new(
+            device, render_w, render_h, native_w, native_h, false,
+        ) {
+            Some(d) => {
+                self.denoiser = Some(d);
+                self.denoiser_unavailable_logged = false;
+                true
+            }
+            None => {
+                if !self.denoiser_unavailable_logged {
+                    log::warn!(
+                        "node.render_scene: rt_denoise_feed is on but MetalFX Denoised Scaler is unavailable on this device — falling back to temporal scaler (logged once)"
+                    );
+                    self.denoiser_unavailable_logged = true;
                 }
                 false
             }
@@ -3619,7 +3681,18 @@ impl EffectNode for RenderScene {
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         let temporal_upscale = matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        if temporal_upscale && (port == "depth" || port == "velocity" || port == "ao_mask") {
+        let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
+        let is_denoise_feed_port = port == "normals"
+            || port == "roughness"
+            || port == "diffuse_albedo"
+            || port == "specular_albedo"
+            || port == "specular_hit_distance";
+        if temporal_upscale
+            && (port == "depth"
+                || port == "velocity"
+                || port == "ao_mask"
+                || (denoise_feed && is_denoise_feed_port))
+        {
             Some((RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN))
         } else {
             Some((1, 1))
@@ -3983,6 +4056,14 @@ impl EffectNode for RenderScene {
         // this fn's tail (after that block's mutable borrow of `ctx` ends)
         // can both read the final decision.
         let mut temporal_upscale_active = false;
+        // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: whether the ML
+        // denoiser is actually live this frame — rt_enabled && rt_ready &&
+        // denoise_feed && hardware availability, assigned in the ensure
+        // block below. Declared here so `target` and this fn's tail can
+        // both read the final decision (same pattern as its temporal
+        // counterpart). When true, suppresses `temporal_upscale_active`
+        // (DN2: the denoiser REPLACES the plain temporal scaler).
+        let mut denoise_active = false;
         // GBUFFER_DESIGN.md section 2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -4581,6 +4662,31 @@ impl EffectNode for RenderScene {
                 self.ensure_rt_temporal_color_scratch(gpu.device, width, height);
                 temporal_upscale_active =
                     self.ensure_rt_temporal_upscaler(gpu.device, width, height, native_width, native_height);
+            }
+            // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: denoiser takes
+            // priority over the plain temporal scaler on RT scenes (DN2).
+            // `denoise_active` is true when RT is producing output AND the
+            // denoiser is available; the denoiser's encode writes directly to
+            // `native_color` — no intermediate blit needed.
+            // When the denoiser is active but temporal_upscale is off (1:1
+            // denoise), the forward pass renders into a native-res scratch
+            // so the denoiser's input and output don't alias.
+            let denoise_wanted = rt_enabled && rt_ready && denoise_feed && denoiser_available();
+            if denoise_wanted {
+                if !temporal_upscale {
+                    // 1:1 denoise: need a scratch at native res so the
+                    // denoiser can read the forward-pass output and write
+                    // to native_color without aliasing.
+                    self.ensure_rt_temporal_color_scratch(gpu.device, native_width, native_height);
+                }
+                denoise_active =
+                    self.ensure_denoiser(gpu.device, width, height, native_width, native_height);
+                if denoise_active {
+                    // DN2: the denoiser REPLACES the plain temporal
+                    // scaler — fused denoise+upscale is the one path
+                    // to native_color.
+                    temporal_upscale_active = false;
+                }
             }
             self.ensure_sampler(gpu.device);
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure every distinct
@@ -5716,6 +5822,15 @@ impl EffectNode for RenderScene {
                 self.rt_lighting_geo_prev_changed = geo_changed;
                 self.rt_lighting_geo_gesture = new_geo_gesture;
 
+                // RAYTRACING_DESIGN.md section 17.5 DN-G (DN3): capture
+                // lighting-changed and gesture signals for the denoiser's
+                // reset path. `lighting_changed` OR `geo_changed` = a
+                // CPU-vouched lighting change that should reset denoiser
+                // history. `gesture_active` = either gesture hold counter
+                // is non-zero.
+                self.denoiser_lighting_changed = lighting_changed || geo_changed;
+                self.denoiser_gesture_active = lighting_gesture || geo_gesture;
+
                 let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
@@ -5917,6 +6032,12 @@ impl EffectNode for RenderScene {
         // real `native_color` texture is only touched again at this fn's
         // very end.
         let target: &manifold_gpu::GpuTexture = if temporal_upscale {
+            self.rt_temporal_color_scratch.as_ref().expect("ensured above")
+        } else if denoise_active {
+            // 1:1 denoise: render into the native-res scratch so the
+            // denoiser can read color from it and write to native_color
+            // without aliasing (the scratch was ensured at native dims
+            // in the ensure block above).
             self.rt_temporal_color_scratch.as_ref().expect("ensured above")
         } else {
             native_color
@@ -6664,6 +6785,91 @@ impl EffectNode for RenderScene {
                 native_width,
                 native_height,
                 1,
+            );
+        }
+        // RAYTRACING_DESIGN.md section 17.5 DN-G (DN2/DN3): ML denoiser
+        // path — replaces the plain temporal scaler on RT scenes when
+        // enabled (DN2). Fused denoise+upscale from render res to native
+        // res (or 1:1 native denoise when `temporal_upscale` is off),
+        // writing directly to `native_color`.
+        if denoise_active {
+            let denoiser = self
+                .denoiser
+                .as_ref()
+                .expect("ensured above: denoise_active implies Some");
+            // Belt-and-braces: `force_consumed_outputs` puts all seven
+            // denoiser feeds in the plan's consumed set whenever
+            // `denoise_feed` is on — same BUG-317 class guard as the
+            // temporal path.
+            let (Some(depth_src), Some(velocity_src), Some(normal_src),
+                 Some(roughness_src), Some(diffuse_src), Some(specular_src),
+                 Some(hit_dist_src)) = (
+                depth_resolve_target,
+                velocity_resolve_target,
+                normals_resolve_target,
+                roughness_resolve_target,
+                diffuse_albedo_resolve_target,
+                specular_albedo_resolve_target,
+                spec_hit_dist_out,
+            ) else {
+                if !self.denoiser_unavailable_logged {
+                    self.denoiser_unavailable_logged = true;
+                    log::error!(
+                        "node.render_scene: denoise is on but the execution plan is missing denoiser feeds (stale consumed_outputs — BUG-317 class); skipping denoise this frame"
+                    );
+                }
+                return;
+            };
+            // RAYTRACING_DESIGN.md section 17.5 DN-G (DN3): ONE reset
+            // path, extended not duplicated. Three signal sources drive
+            // `reset` on the denoiser:
+            //   1. TemporalResetDetector — cut/seek/rebuild → reset
+            //   2. cpu_lighting_changed — any lighting key change → reset
+            //   3. gesture flags — gesture hold active → reset
+            // Strobes do NOT reset (D3). `denoiser_lighting_changed` and
+            // `denoiser_gesture_active` were captured from the RT block's
+            // key computation above (when RT is on). When RT is off,
+            // `denoise_active` is false and this block is unreachable.
+            let reset = reset_decision.unwrap_or(false)
+                || self.denoiser_lighting_changed
+                || self.denoiser_gesture_active;
+            // D-64 motion-vector honesty check: the denoiser expects
+            // jitter-free motion vectors (its jitterOffset compensates the
+            // current frame). Our WGSL velocity fragment already subtracts
+            // the jitter delta via `velocity_jitter` — same subtraction the
+            // T2-B plain temporal scaler path uses. No difference from the
+            // T2-B path; both consume the same jitter-free velocity output.
+            // Set the denoiser's own jitter offset to match this frame's
+            // camera jitter (0,0 when `temporal_upscale` is off).
+            denoiser.set_jitter(jitter_px.0, jitter_px.1);
+            // Color source: `target` holds the forward-pass output at the
+            // correct resolution (render res when temporal_upscale is on,
+            // native res for 1:1 denoise). The denoiser writes its output
+            // directly to `native_color` — fused denoise+upscale.
+            let color_src: &manifold_gpu::GpuTexture = if temporal_upscale || !denoise_active {
+                target
+            } else {
+                // 1:1 denoise: target is the native-res scratch (ensured
+                // above). This codepath is only reached when
+                // `denoise_active` and `!temporal_upscale`.
+                target
+            };
+            let gpu = ctx.gpu_encoder();
+            denoiser.encode(
+                gpu,
+                color_src,
+                depth_src,
+                velocity_src,
+                normal_src,
+                roughness_src,
+                diffuse_src,
+                specular_src,
+                hit_dist_src,
+                native_color, // output directly to native res
+                reset,
+                None, // reactive mask — no natural signal maps to it;
+                      // the denoiser's uniform reactivity fallback is
+                      // appropriate for our engine-driven reset model
             );
         }
         // ── RT capture: composited output snapshot ──
