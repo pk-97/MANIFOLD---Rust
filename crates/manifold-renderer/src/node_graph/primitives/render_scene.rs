@@ -4925,7 +4925,18 @@ impl EffectNode for RenderScene {
             // accel's readiness can't change mid-call (the completion
             // handler runs on a separate Metal-owned thread, never
             // synchronously inside evaluate()).
-            if rt_ready {
+            // BUG-rmmv: during the BUG-308 one-frame defer window,
+            // `rt_accel_built` is still latched true while
+            // `ensure_normal_sources` (above) already rebuilt material
+            // arrays for the CURRENT frame's topology. If the topology
+            // shrunk (objects removed), tracing would bind the old accel
+            // (N_old instances) against the new arrays (N_new < N_old),
+            // overrunning `gi_materials`/`normal_sources` — OOB read
+            // past the buffer. Requiring the accel's topo key to match
+            // the current frame's topo key closes that hole: during the
+            // defer frame the keys don't match, tracing is blocked, and
+            // the raster shadow-map path serves the transition.
+            if rt_ready && self.rt_accel_topo_key == Some(topo_key) {
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
                 // emissive geometry.
