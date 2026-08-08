@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 RS-A (caster cap 8), 16 TL-A (translucency), quality wave A1–A3 landed. 15 RS-C (emissive RIS sampler + double-sided emission) landed; 16 TL-B/TL-C approved, not built. OWED: Peter's looks — multi-bounce, R2 constants, fast-camera denoiser, ED-A on a hero scene; `trace_ms` 2-vs-1 from a heavier scene; A3 split-mode matrix remeasure (racy numbers void). P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-03 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 (many-light: RS-A caster cap 8, RS-C emissive RIS sampler), 16 (translucency TL-A/B/C) landed. 17 DN (ML denoiser, Tahoe floor) APPROVED 2026-08-08 — DN-A…DN-D dispatched. OWED: Peter's looks — multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pink-pool pair; `trace_ms` 2-vs-1 heavier scene. P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-08 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -2018,3 +2018,169 @@ with triggers: section 16.8. B: section 16.6, not in a phase.
 - **Thickness-varying transmission (thickness maps)** — trigger: an asset
   class with real thickness data (scanning workflow change). The factor is
   the constant-thickness case until then.
+
+## 17. ML denoising — MetalFX Temporal Denoised Scaler (APPROVED 2026-08-08, Peter + K3; direction: "rays down + ML denoiser is the spine"; Tahoe floor accepted same day)
+
+Peter's report: RT still shimmers on a STILL scene — chrome-like metals on
+the DamagedHelmet against an EXR sun, penumbra crawl on photoscan shadows —
+plus the afterglow (section 17.1) and the frame at ~42 ms solo. The static
+noise gate passes (apricot composite 0.07 mean) because the apricot's
+material/lighting class makes the per-frame samples tame; the shimmer is
+the accumulator's PERMANENT NOISE FLOOR made visible by wild samples. The
+floor is structural: the running mean caps history (~40 frames) for
+responsiveness, so every channel carries ~2.5% of per-frame Monte Carlo
+noise forever. Raising the cap when quiet was considered and REJECTED by
+Peter: the snap from a long-converged clean image to raw noisy motion is a
+jarring cliff. The root problem is that our raw single frame is noisy —
+so the fix class that changes the trade itself is a denoiser that makes
+one frame presentable. That is also the cost answer: fewer rays + ML
+denoise beats more rays + filter, which is the architecture Apple built
+the API for ("cast fewer rays"), and it dissolves the
+convergence-vs-responsiveness management (gates, alpha floors, motion
+bands) instead of adding another layer of it.
+
+### 17.1 Afterglow root cause (separate fix, this wave)
+
+Reading the accumulate kernel found the afterglow mechanism without a
+probe: on `cpu_lighting_changed` the irradiance/AO and reflection paths
+snap n to 2 — 50% stale lighting on frame 0, 1/(k+2) decay, then a ~2
+%/frame exponential tail once the alpha floor binds. ~2 s of visible
+afterglow on every cued change, matching Peter's report exactly.
+Snap-to-2's stated guard ("one wild sample cannot define the pixel")
+applies only to the noisy per-texel gate verdict; a CPU-vouched change is
+the same epistemic class as a cut, and cuts reset fully. Fix: CPU-vouched
+lighting change → full snap (n=1) on irr/AO/refl; texel-fired and gesture
+paths keep n=2; sv/svt hold by design, unchanged. This stays load-bearing
+post-denoiser as the pre-Tahoe path and as the denoiser's input
+conditioner.
+
+### 17.2 API findings (verified 2026-08-08 on this rig, runtime probe — NOT doc-page claims)
+
+macOS 26.6; `objc_copyClassList` after dlopen of MetalFX. The Metal 4
+denoiser is **`MTLFXTemporalDenoisedScaler`** — fused temporal denoise +
+upscale, exactly "denoising integrated into the upscaling process".
+Bindings already exist in our locked `objc2-metal-fx` 0.3.2 — objc2
+weak-links and resolves by `AnyClass::get`, so **no Xcode 26 toolchain is
+needed** (installed Xcode is 16.4; headers irrelevant to us).
+
+- **Reset is first-class**: the effect exposes a per-frame `reset`
+  property AND caller-owned history (`initWithDevice:descriptor:history:`)
+  AND a per-pixel `reactiveMaskTexture`. Our cut/cue/gesture signals (the
+  engine-knows advantage) drive the denoiser directly — the advantage
+  survives the swap; no pixel-guessing.
+- **Inputs (ReLAX-class ray reconstruction)**: color, depth (reversed
+  flag), motion (+ dilated option, jitterOffset, motionVectorScale),
+  normal, roughness, diffuse albedo, specular albedo, specular
+  hit-distance, exposure/preExposure (+autoExposure toggle), reactive
+  mask, denoise-strength mask, transparency overlay, debug texture.
+- **Dynamic input resolution**: `inputContentMinScale/MaxScale` +
+  per-frame `inputContentWidth/Height` — 1:1 (native denoise, no upscale)
+  to be verified at integration; the scaler family allows 1.0.
+- `MPSSVGFDenoiser` also exists at runtime (older SVGF in MPS) —
+  comparison point only, not the plan; our accumulator already fills that
+  role pre-Tahoe.
+- Availability gate pattern: `AnyClass::get(c"MTLFXTemporalDenoisedScalerDescriptor")`,
+  same as `supports_spatial_scaling` in `metalfx.rs`.
+
+### 17.3 Decisions (DN-numbered)
+
+- **DN1 — Tahoe floor for the RT path (Peter, 2026-08-08).** The denoised
+  path targets macOS 26+ only; pre-Tahoe keeps the current accumulator
+  path AS-IS — a fallback, no longer the tuning target. This answers D8
+  (min-OS) for RT (frame interpolation's Tahoe gate is the same decision,
+  confirmed once).
+- **DN2 — fused denoise+upscale on the composited RT output.** Feed the
+  beauty (RT-applied scene color) at render res, denoise+upscale to
+  output res in one effect — REPLACES T2-B's plain temporal scaler on RT
+  scenes when enabled. If 1:1 is allowed, native-denoise-no-upscale is a
+  quality mode. Per-term denoising of lighting buffers is the fallback
+  study if the fused path disappoints (deferred, section 17.6).
+- **DN3 — one reset path, extended not duplicated.** The shared
+  `TemporalResetDetector` + lighting key + gesture flags (the section 13
+  (temporal denoiser rebuild) / section 10 (RT output & transition
+  contract) addendum signals) drive the scaler's `reset` property and the
+  reactive mask. Strobes still do NOT reset (D3) — demodulation is the
+  denoiser's problem now and it is trained for it.
+- **DN4 — new G-buffer outputs on RT scenes (D14 widened).** Normals,
+  roughness, diffuse+specular albedo become stored outputs when the
+  denoiser is on (the denoiser's albedo inputs are how it preserves
+  texture detail through denoise); specular hit-distance is a new texture
+  written by the reflection pass (the value already exists — the
+  virtual-image reprojection computes it). Non-denoiser RT scenes pay
+  nothing (D14's opt-in shape holds).
+- **DN5 — trait behind the existing upscaler seam, Vulkan-parity shaped.**
+  Interface = { color, depth, motion, normal, roughness, albedo×2,
+  specular hit-distance, reset, reactive mask } — no MetalFX-specific
+  knobs. Vulkan parity when the backend builds: NRD/ReLAX consumes the
+  same input set (ray queries + these G-buffers all port). The
+  architecture (few rays + ML denoise, engine-driven resets) is decided
+  once, here, and holds for both backends.
+- **DN6 — the operating point is a sweep, not a guess (Peter: "we can
+  feed it a pretty huge amount of ray data").** Phase DN-I runs the
+  spp × denoiser matrix per scene class — frame ms, noise-gate deltas,
+  PNG pairs — over refl 1–8 / GI 1–4 / AO 1–4 spp. Shipping constants
+  come from the matrix + Peter's look, not from this doc.
+- **DN7 — afterglow fix (section 17.1) ships regardless** — it fixes the
+  pre-Tahoe path Peter runs today and conditions the denoiser's input.
+
+### 17.4 Invariants & enforcement
+
+- **I-DN1 — pre-Tahoe path byte-identical.** Availability gate off →
+  zero diff in the accumulation/scaling path; `graph-tool render` cmp on
+  an RT fixture (I-TL1 precedent).
+- **I-DN2 — one reset path.** Negative `rg`: zero additional
+  `TemporalResetDetector` constructions; the scaler's `reset` is driven
+  from the existing signals only (I-TL5/I-R2 extended).
+- **I-DN3 — no Apple types above `manifold-gpu`.** Standing negative `rg`.
+- **I-DN4 — no stale history across a cut.** Scripted pixel-diff proof
+  (P2's oracle shape): cut+1 frame vs cold-start render of the target —
+  mean abs diff < stated epsilon, with the denoiser ENABLED.
+- **I-DN5 — the noise gate re-baselines, never loosens.** Ceilings
+  re-recorded (`--record`) against the denoised path at landing; a silent
+  channel still FAILS as inert.
+
+### 17.5 Phases (dispatched items named; spine briefs written per-phase as usual)
+
+- **DN-A — instruments (dispatched 2026-08-08).** BUG-drcb (capture garbage)
+  and BUG-665r (wedge culprit unlogged). Everything after is
+  measurement-driven; instruments first.
+- **DN-B — afterglow snap (dispatched 2026-08-08).** Section 17.1 (afterglow
+  root cause), one commit, byte-identity when the flag is clear; lead runs
+  gpu-proofs at review (device contention).
+- **DN-C — stale-accel OOB (dispatched 2026-08-08).** BUG-rmmv (stale accel)
+  — root-cause fix in the deferred-build/trace generation seam.
+- **DN-D — drift bisect (dispatched 2026-08-08).** BUG-2tb7 (frame drift)
+  — per-landing ms attribution 2026-08-02→07; feeds DN-I's matrix.
+- **DN-E — G-buffer widening (DN4).** Normals/roughness/albedo×2 outputs
+  on RT scenes + specular hit-distance texture from the reflection pass.
+  Gate: value tests per output against CPU-computed expected; byte-
+  identity with the denoiser off.
+- **DN-F — denoiser trait + Metal impl (DN5/DN2).** `manifold-gpu`
+  upscaler seam extended; availability gate; scaler constructed with
+  caller-owned history. Gate: denoiser runs end-to-end on a synthetic
+  noisy buffer and reduces error vs a CPU reference (value test, stated
+  threshold); I-DN1/I-DN3 negative checks.
+- **DN-G — feed wiring + reset path (DN3).** All DN4 textures bound;
+  cut/cue/gesture → `reset` + reactive mask. Gate: I-DN4 cut proof WITH
+  the denoiser on; strobe non-reset proof (P2's oracle, re-run on the new
+  path); motion-vector honesty check (D-64's jitter lesson applies —
+  verify what the denoiser expects for jittered vectors before wiring).
+- **DN-H — integration on hero scenes.** Apricot + DamagedHelmet +
+  puresky HDRI fixture; frame-ms table vs pre-denoiser path.
+- **DN-I — operating-point sweep (lead runs, Peter's look gate).** DN6's
+  matrix; output = shipping constants + quality mode defaults.
+- **DN-J — landing.** Gate, full gpu-proofs, noise-gate re-baseline
+  (I-DN5), supersession sweep, Peter's live look.
+
+### 17.6 Deferred (with revival triggers)
+
+- **Per-term denoising of lighting buffers** — trigger: the fused beauty
+  path measurably blurs lighting detail the per-term path would keep.
+- **MPSSVGFDenoiser comparison** — trigger: the ML path shows artifacts
+  on our content class (strobes, void backgrounds) that a classical SVGF
+  wouldn't; also the reference if Apple deprecates.
+- **NRD/ReLAX Vulkan integration** — trigger: the Vulkan backend builds
+  (DN5's input set is its integration contract).
+- **Frame interpolation pairing** — D6 (per-output frame interpolation)
+  unchanged; the Tahoe floor (DN1) removes its OS blocker, not its
+  show-need trigger.
