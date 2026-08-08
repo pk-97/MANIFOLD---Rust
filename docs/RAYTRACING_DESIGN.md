@@ -1839,9 +1839,23 @@ casters + 4 AO + 2×2 GI + 8 refl + GI sun-bounce casts).
 | Feature | New rays | Other cost | Estimate |
 |---|---|---|---|
 | TL-A forward term | **0** | ~4 ALU × lights in `fs_pbr`; one uniform vec4 | unmeasurable; gate is the byte-identity + a standard trace run |
-| TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **MEASURED 2026-08-07: delta −0.23 ms (noise) at 3840×2160 on the apricot, translucency 0.5 asset-baked on all 4 materials; both legs ~40.6 ms median — above the 32 ms line on the pre-TL-B baseline already (RS-A 8-caster + RS-C sampler era, not section 13's 26 ms world)** |
+| TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **MEASURED 2026-08-07: delta −0.23 ms (noise) at 3840×2160 on the apricot, translucency 0.5 asset-baked on all 4 materials; both legs ~40.6 ms median — above the 32 ms line on the pre-TL-B baseline already (RS-A 8-caster + RS-C sampler era, not section 13's 26 ms world) — VOID: that "baseline" was TL-B code at factor-0, see the correction below** |
 | TL-C colored tint | **0** | +1 `Rgba16Float` trace-res texture through upsample/à-trous/accumulate (+~25% chain bandwidth: 4 textures → 5); one `textureLoad` per sun light in `fs_pbr` | **MEASURED 2026-08-07: +1.1 ms at 3840×2160 on the apricot (43.1 → 44.2 ms median, paused 120-frame legs); the same landing's sv2 slot-map repair (BUG-p14x (RS-A sv2 slot-map omission)) accounts for the larger +3.2 ms step from the 39.8 ms control — RS-A's intended chain work finally running** |
 | B (deferred) | sun-only every-4th-step: +8 rays/march-px ≈ **+37% of the whole trace class**; all-lights every step: 128 rays/px ≈ 6× the trace class — rejected outright | plus a new march-kernel binding and validation path | see section 16.6 |
+
+**CORRECTED 2026-08-08 by the BUG-2tb7 (frame drift) bisect** (RtApricot,
+translucency off, A3a protocol, sun-only snaps): the RS-C-era tip measures
+27.8 ms, NOT ~40.6 — the 08-07 "pre-TL-B baseline" legs were the TL-B code
+at factor-0, misread as the baseline. True attribution: TL-B +11.4 ms,
+TL-C +4.3 ms (their sum IS the whole 27.5→43.9 drift; RS-A/RS-B/RS-C flat).
+TL-B's +11.4 is paid at translucency 0 — codegen/occupancy overhead
+(GiMaterial 48→64 B, a device `GiMaterial*` threaded through the hottest
+loop, a per-candidate translucency deref), NOT extra traversal; the
+transmitting walk behaves bit-identically on binary scenes. The TL-C
++4.3 vs the landing's +1.1 is a protocol difference (A3a sun-only snaps vs
+paused legs) — owed reconciliation at DN-I. **Recovery work item: binary
+scenes stop paying for the walk (separate sv kernel behind a
+scene-has-translucency flag, or GiMaterial shrink) — section 17.5 wave.**
 
 The recommendation's shape: A+B+C together add zero rays and one texture; the
 only real risk line is the walk extension, and it is capped, measured, and
