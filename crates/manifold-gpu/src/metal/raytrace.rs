@@ -39,6 +39,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::AnyThread;
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
@@ -52,7 +53,7 @@ use objc2_metal::{
     MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
     MTLDevice, MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion,
     MTLLibrary, MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
-    MTLSize,
+    MTLResourceUsage, MTLSize,
 };
 
 use super::device::GpuDevice;
@@ -393,6 +394,25 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
 
+    // BUG-84fv hardening: pin the geometry buffers up front. The BLAS
+    // builds below read them through descriptor raw addresses, so they
+    // need a usage declaration on this encoder (BUG-jddy reclamation
+    // class) AND a CPU-side keep-alive until this command buffer
+    // completes — a teardown dropping the RtAccel mid-build must not
+    // unpin what the GPU is still reading.
+    let mut geometry_buffers = Vec::with_capacity(objects.len() * 2);
+    for o in objects {
+        geometry_buffers.push(o.vertex_buffer.raw.clone());
+        if let Some(ib) = o.index_buffer {
+            geometry_buffers.push(ib.raw.clone());
+        }
+    }
+    unsafe {
+        for geo in &geometry_buffers {
+            let () = msg_send![&*enc, useResource: &**geo, usage: MTLResourceUsage::Read];
+        }
+    }
+
     let mut blas = Vec::with_capacity(objects.len());
     let mut blas_scratch = Vec::with_capacity(objects.len());
     for o in objects {
@@ -403,6 +423,11 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
         blas.iter().map(|b| b.structure.clone()).collect();
     let instance_buffer = build_instance_buffer(device, objects);
+    // The TLAS build reads the instance buffer through the descriptor —
+    // same raw-address class as the geometry buffers above.
+    unsafe {
+        let () = msg_send![&*enc, useResource: instance_buffer.raw(), usage: MTLResourceUsage::Read];
+    }
 
     let descriptor = MTLInstanceAccelerationStructureDescriptor::descriptor();
     descriptor.setInstanceCount(objects.len());
@@ -429,18 +454,19 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     enc.endEncoding();
 
     let ready = Arc::new(AtomicBool::new(false));
-    add_ready_completion_handler(&cb, "RT accel build", Arc::clone(&ready), (blas_scratch, build_scratch));
+    add_ready_completion_handler(
+        &cb,
+        "RT accel build",
+        Arc::clone(&ready),
+        CompletionPins((
+            blas_scratch,
+            build_scratch,
+            geometry_buffers.clone(),
+            blas_structures.clone(),
+            instance_buffer.raw.clone(),
+        )),
+    );
     cb.commit();
-
-    // Pin the geometry buffers the trace kernels reach via raw addresses
-    // (RtNormalSource.vertex_base_addr) — see the field's doc comment.
-    let mut geometry_buffers = Vec::with_capacity(objects.len() * 2);
-    for o in objects {
-        geometry_buffers.push(o.vertex_buffer.raw.clone());
-        if let Some(ib) = o.index_buffer {
-            geometry_buffers.push(ib.raw.clone());
-        }
-    }
 
     // RS-B: build the emissive light table from the same objects + material
     // arrays. None when no object has non-black emissive (zero triangles).
@@ -469,6 +495,13 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
 /// commit async with no other observer, so a fault here otherwise shows
 /// up only as "innocent victim" errors on the Compositor buffer while the
 /// culprit stays invisible.
+/// Resource pins handed to an async command buffer's completion handler:
+/// held until the GPU finishes, then dropped on a Metal-owned callback
+/// thread. Metal retain/release is thread-safe and nothing else touches
+/// the pinned objects from that thread, so the Send gap is nominal.
+struct CompletionPins<T>(T);
+unsafe impl<T> Send for CompletionPins<T> {}
+
 fn add_ready_completion_handler<T: Send + 'static>(
     cb: &ProtocolObject<dyn MTLCommandBuffer>,
     label: &'static str,
@@ -487,6 +520,12 @@ fn add_ready_completion_handler<T: Send + 'static>(
             };
             super::gpu_fault::record_fault(&desc);
             log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
+            // BUG-84fv: a failed build/refit must NOT flip ready — tracing
+            // a structure the GPU faulted while writing sends hardware
+            // traversal into garbage and can hang the device. Leaving
+            // ready false keeps the caller on the raster fallback; the
+            // error above is the loud signal.
+            return;
         }
         ready.store(true, Ordering::Release);
     });
@@ -545,6 +584,17 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
+    // BUG-84fv hardening: the refit reads the BLAS list + instance buffer
+    // through the descriptor (raw addresses) — declare usage on this
+    // encoder (BUG-jddy reclamation class) and pin them through completion
+    // so a teardown dropping the RtAccel mid-refit can't unpin them.
+    unsafe {
+        let () = msg_send![&*enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read | MTLResourceUsage::Write];
+        for b in &accel.blas {
+            let () = msg_send![&*enc, useResource: &*b.structure, usage: MTLResourceUsage::Read];
+        }
+        let () = msg_send![&*enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+    }
     unsafe {
         enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
             &accel.structure,
@@ -555,7 +605,18 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         );
     }
     enc.endEncoding();
-    add_ready_completion_handler(&cb, "RT TLAS refit", Arc::clone(&accel.ready), ());
+    let blas_keep: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
+        accel.blas.iter().map(|b| b.structure.clone()).collect();
+    add_ready_completion_handler(
+        &cb,
+        "RT TLAS refit",
+        Arc::clone(&accel.ready),
+        CompletionPins((
+            blas_keep,
+            accel.instance_buffer.raw.clone(),
+            accel.structure.clone(),
+        )),
+    );
     cb.commit();
 }
 
@@ -1554,6 +1615,12 @@ kernel void trace_shadow_rays(
         float3 to_light;
         float cone_half_angle;
         float max_dist;
+        // BUG-84fv class guard (the BUG-ny4v arm for point casters): a
+        // texel within ~2 bias lengths of a point light gets
+        // max_dist < min_distance — an INVERTED ray interval, undefined
+        // for the intersector (the RS-C I-RS3 GPU hang). Such a texel is
+        // effectively ON the light: skip the trace, count unshadowed.
+        bool interval_ok = true;
         if (cst.kind == 0u) {
             // Sun: dir_or_pos is the normalized toward-sun direction.
             to_light = float3(cst.dir_or_pos);
@@ -1568,6 +1635,7 @@ kernel void trace_shadow_rays(
             to_light = dist > 1e-6 ? delta / dist : float3(0.0, 1.0, 0.0);
             cone_half_angle = cst.cone_or_size > 0.0 ? atan(0.5 * cst.cone_or_size / max(dist, 1e-6)) : 0.0;
             max_dist = max(dist - bias_eps, 0.0);
+            interval_ok = rt_finite(dist) && dist > 2.0f * bias_eps;
         }
         ray r;
         r.origin = wp + to_light * bias_eps;
@@ -1588,11 +1656,16 @@ kernel void trace_shadow_rays(
         // weights' float rounding (verified exact in f32 — the weights sum
         // to exactly 1.0, so binary scenes are byte-identical).
         float3 vis_rgb = float3(0.0);
-        for (uint s = 0; s < spp; s++) {
-            r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
-            intersection_query<triangle_data, instancing> shadow_q;
-            shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
-            vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+        if (interval_ok) {
+            for (uint s = 0; s < spp; s++) {
+                r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
+                intersection_query<triangle_data, instancing> shadow_q;
+                shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
+                vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+            }
+        } else {
+            // Light sits on the surface — see the interval_ok guard above.
+            vis_rgb = float3((float)spp);
         }
         vis = luma(vis_rgb) / float(spp);
         // RT-TL-C (TL5): capture the designated sun caster's rgb tint
