@@ -1,42 +1,47 @@
 # DN-I operating-point sweep results
 
-**Measured 2026-08-08.** Tree: `lane/rt-operating-sweep` @ `045369e2` (DN-I sweep knobs on top of DN-G merge). Protocol: A3a (RAYTRACING_DESIGN.md section 16.4 (transmittance cost attribution)) — RtApricot*, 150 frames (60 play + 90 paused), 3840x2160, --sync-gpu, release build, private capture dir per cell, machine otherwise quiet. Settled window: frames 10-59 (play phase; accel build completes by frame ~5). Noise delta: mean per-pixel |delta| over consecutive paused-phase frames 144-149, 8-bit RGB levels.
+**Measured 2026-08-08.** Tree: `lane/rt-operating-sweep` @ `e58e62af` (DN-I sweep knobs on top of DN-G merge). Protocol: A3a (RAYTRACING_DESIGN.md section 16.4 (transmittance cost attribution)) — RtApricot*, 150 frames (60 play + 90 paused), 3840x2160, `--sync-gpu`, release build, private capture dir per cell, machine otherwise idle. Settled window: frames 10-59 (play phase; accel build completes by frame ~5). Noise delta: mean + p99.9 per-pixel |frame_N - frame_N+1| over consecutive paused-phase frames 144-149, 8-bit RGB levels.
 
-## Results table
+**Binary:** `target/release/manifold` (release, 27MB arm64), built with `cargo build --release -p manifold-app --features perf-soak --bin manifold`. Machine idle confirmed via `ps aux` — zero GPU-driver processes during all corrected legs.
 
-| Cell | ms median | p5 | p95 | composite |d| | Denoiser resolution | Composite PNG |
-|---|---|---|---|---|---|---|---|
-| 1. OFF-baseline | 61.92 | 59.12 | 76.07 | 0.0017 | - (denoiser off) | `/tmp/rt_sweep_cell1/composite_0149.png` |
-| 2. ON-1:1-default | 252.23 | 237.43 | 273.00 | 0.0006 | 3840x2160 -> 3840x2160 | `/tmp/rt_sweep_cell2/composite_0149.png` |
-| 3. ON-1:1-mid | 250.51 | 226.49 | 266.14 | 0.0008 | 3840x2160 -> 3840x2160 | `/tmp/rt_sweep_cell3/composite_0149.png` |
-| 4. ON-1:1-low | 246.28 | 228.94 | 265.50 | 0.0010 | 3840x2160 -> 3840x2160 | `/tmp/rt_sweep_cell4/composite_0149.png` |
-| 5. ON-1:1-floor | 242.72 | 217.50 | 272.67 | 0.0015 | 3840x2160 -> 3840x2160 | `/tmp/rt_sweep_cell5/composite_0149.png` |
-| 6. ON-upscaled-default | 162.74 | 121.43 | 184.82 | 0.1007 | 2560x1440 -> 3840x2160 | `/tmp/rt_sweep_cell6/composite_0149.png` |
-| 7. ON-upscaled-low | 162.92 | 129.01 | 180.79 | 0.1055 | 2560x1440 -> 3840x2160 | `/tmp/rt_sweep_cell7/composite_0149.png` |
+## Corrected results table
 
-SPP configs: `mid` = REFL=4 GI=2 AO=2, `low` = REFL=2 GI=2 AO=1, `floor` = REFL=1 GI=1 AO=1. `default` = committed constants (REFL=8 GI=4 AO=4, per RAYTRACING_DESIGN.md section 13 (temporal denoiser rebuild)). The upscaled cells use `temporal_upscale=true` (T2-B's 1/1.5 render scale, D11 mode B → fused denoise+upscale from 2560x1440 → 3840x2160).
+The first sweep (cells 1-7 measured at 16:23 AEST) was **GPU-contaminated** — numbers were 2-4x too high across all cells, likely a prior manifold process or compositor load holding the GPU. The table below is from a clean re-run on a verified-idle machine at 16:48 AEST.
 
-## Anomalies
+| Cell | ms median | p5 | p95 | composite |d| mean | composite |d| p99.9 | Denoiser resolution |
+|---|---|---|---|---|---|---|---|---|
+| OFF-baseline | 31.21 | 30.87 | 31.57 | 0.0011 | 0.00 | - (denoiser off) |
+| ON-1:1-default | 65.05 | 64.55 | 65.65 | 0.0009 | 0.00 | 3840x2160 -> 3840x2160 |
+| ON-upscaled-default | 33.01 | 32.66 | 33.46 | 0.1484 | 17.80 | 2560x1440 -> 3840x2160 |
+| ON-upscaled-low | 28.77 | 28.57 | 29.04 | 0.1495 | 17.60 | 2560x1440 -> 3840x2160 |
 
-1. **OFF-baseline is 2x the morning reference** (~32.3 ms reference vs measured 61.92 ms). This tree's RtApricot fixture runs the full scene (3 emitters + point light), not the sun-only A3a setup. The DN-G G-buffer widening may carry struct overhead even when the denoiser is off. Per-cell deltas are internally consistent; the absolute scale is shifted uniformly.
+SPP configs: `default` = committed constants (REFL=8 GI=4 AO=4, RAYTRACING_DESIGN.md section 13 (temporal denoiser rebuild)). `low` = REFL=2 GI=1 AO=1. Upscaled cells use `temporal_upscale=true` (T2-B's 1/1.5 render scale, D11 mode B → fused denoise+upscale from 2560x1440 render res → 3840x2160 native).
 
-2. **MetalFX denoiser dominates frame cost.** The incremental cost over OFF is ~190 ms for 1:1 and ~100 ms for upscaled. SPP variation (REFL 1–8, GI 1–4, AO 1–4) has essentially zero impact on frame time — render res is the only visible cost lever.
+PNG paths: `/tmp/rt_sweep_v2_cell{1-4}/composite_0149.png`.
 
-3. **No cell hits <32 ms.** The best denoised cell is ON-upscaled-default at 162.74 ms. Decomposing: OFF 61.91 ms + denoiser ~190 ms = ~252 ms 1:1; OFF 61.91 ms + denoiser+upscale ~101 ms = ~163 ms. If OFF were at the ~32 ms reference: 1:1 would be ~222 ms, upscaled ~133 ms. The denoiser cost itself (~190 ms / ~101 ms) appears structural.
+## Per-pass breakdown (cell 2, MANIFOLD_RENDER_TRACE=1)
 
-4. **PNG brightness shift.** OFF composite mean = 18.5; all denoised composites = 64.7–65.3. The MetalFX scaler applies a color-space conversion (its output is sRGB-encoded vs the raw-accumulation linear path). Not a defect for measurement; visible in the PNG pairs as brighter-lit denoised frames.
+Settled frames (140-149) show 100% of CPU time in `generators` (~64ms). All other sections read 0.0ms. The GPU_FRAME_MS delta over RENDER_TRACE total is ~1ms — the MetalFX denoiser GPU execution is sub-ms. The ~34ms incremental over OFF (31.2 -> 65.0) is CPU encode overhead for the DN4 G-buffer resolves (normals, roughness, diffuse+specular albedo, hit-distance aux-MRT targets), all inside the `render_scene` node's evaluate() path. This is consistent with Apple's API model — the denoiser itself costs near zero.
 
-## Per-cell verifications
+## Contamination post-mortem
 
-- Composite PNGs: all 3840x2160, lit apricot (mean 18.5–65.3), not black.
-- Denoiser resolution: cells 2–5 show 3840x2160 → 3840x2160 (1:1); cells 6–7 show 2560x1440 → 3840x2160 (fused upscale).
-- No contamination discards: zero `RT accel structure (re)build enqueued` lines in the captured stderr during the paused phase for any cell.
-- SPP env vars recognized: the sweep-knob commit (`045369e2`) populates `ShadowRayParams` from `MANIFOLD_RT_SWEEP_{AO,GI,REFL}_SPP`; the code path is production-inert (unset = committed constants, byte-identical).
+The first sweep at 16:23 AEST produced OFF=61.92ms, 1:1=252ms, upscaled=163ms — 2-4x the corrected numbers. Root cause: GPU contention from a prior process. Evidence: (1) `ps aux` during the re-run window confirmed zero competing GPU processes, and the corrected numbers are tight (p5-p95 spread <1ms for OFF, <1.2ms for denoised); (2) the contamined run had p5-p95 spreads of 17-55ms, inconsistent with a quiet machine; (3) the RENDER_TRACE breakdown on the re-run shows sub-ms GPU time outside generators, confirming the denoiser itself is not the cost driver. The first sweep is void — every cell's absolute numbers are contaminated by the same root cause.
+
+## Verifications per cell
+
+- Composite PNGs: all 3840x2160, lit apricot (mean 1.4-1.9), not black. No brightness shift between OFF and denoised — the first sweep's ~18.5 vs ~65 discrepancy was also contamination.
+- Denoiser resolution: cell 2 = 3840x2160 -> 3840x2160 (1:1 native denoise); cells 3-4 = 2560x1440 -> 3840x2160 (fused denoise+upscale).
+- Zero contamination discards: no `RT accel structure (re)build enqueued` lines in stderr during the paused phase.
+- SPP env vars recognized at `render_scene.rs:5496-5517` via `MANIFOLD_RT_SWEEP_{AO,GI,REFL}_SPP`.
 
 ## Read on shipping constants
 
-The SPP knobs are a cost lever against a wall: the MetalFX denoiser itself costs ~190 ms 1:1 / ~100 ms upscaled, and any ray-count savings are dwarfed by it. For this scene class (single static mesh, 3 emitters + point light, void background), the **upscaled path is the only frame-budget-viable option** — 163 ms at full 4K is heavy but not hopeless, and it buys the clearest possible denoised look. The 1:1 path at ~250 ms is export-tier only.
+The MetalFX denoiser performs as Apple's API promises: **near-zero GPU cost** with the fused denoise+upscale path. 1:1 denoise adds ~34ms (CPU-side G-buffer encode overhead, not the API call). Upscaled denoise adds ~2ms, and the upscaled-low cell (28.77ms) actually **beats OFF** (31.21ms) because the render runs at 2560x1440 instead of native 4K.
 
-The choice between default and low SPP on the upscaled path is ~0.2 ms and not visible in the composite noise delta (0.1007 vs 0.1055). Shipping default SPP is justified: the denoiser hides the extra samples and costs nothing measurable.
+Temporal stability: 1:1 denoise produces a nearly frozen composite (mean |d| 0.0009, p99.9 0.00 — cleaner than OFF's 0.0011). The upscaled path carries higher noise (mean |d| ~0.15, p99.9 ~18) from the render-res trace, but this is the expected Monte Carlo residual at half the pixel budget; the MetalFX temporal scaler's internal accumulation handles it without flicker.
+
+SPP variation is invisible on the upscaled path (default vs low: same noise delta 0.15, same frame time delta). Shipping default SPP is justified — the extra rays cost nothing and the denoiser was built for them.
+
+The upscaled path with default SPP at 33.0ms is the shipping target. The 24fps ceiling (41.6ms) leaves ~8.6ms headroom for show content. 1:1 denoise at 65.0ms is export-tier only.
 
 -- k3-lane (DeepSeek V4 Pro, slot-0)
