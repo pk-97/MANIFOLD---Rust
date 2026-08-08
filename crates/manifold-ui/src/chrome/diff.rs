@@ -21,7 +21,9 @@
 #[cfg(test)]
 use crate::{TransportAction};
 use crate::chrome::layout::{self, LaidNode};
-use crate::chrome::view::{validate, View};
+use crate::chrome::view::View;
+#[cfg(debug_assertions)]
+use crate::chrome::view::validate;
 use crate::intent::{Gesture, IntentRegistry};
 use crate::node::{NodeId, Rect, UIFlags};
 use crate::panels::PanelAction;
