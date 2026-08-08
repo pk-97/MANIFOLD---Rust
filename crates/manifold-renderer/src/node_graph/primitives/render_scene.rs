@@ -5487,6 +5487,14 @@ impl EffectNode for RenderScene {
                 // sizes match (one fused dispatch at monolithic perf); 0 when
                 // split (separate mask dispatch handles shadow at its own size).
                 let lighting_shadow_spp: u32 = if mask_sizes_differ { 0 } else { 1 };
+                // DN-I sweep knobs (probe-only, production-inert): env-set spp
+                // overrides so the operating-point matrix runs off ONE build.
+                // Unset = the committed constants, byte-identical behavior.
+                let sweep_spp = |name: &str, default: u32| -> u32 {
+                    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+                };
+                let ao_spp = sweep_spp("MANIFOLD_RT_SWEEP_AO_SPP", AO_SAMPLES_PER_PIXEL);
+                let gi_spp = sweep_spp("MANIFOLD_RT_SWEEP_GI_SPP", GI_SAMPLES_PER_PIXEL);
                 let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     lighting_shadow_spp,
@@ -5494,8 +5502,8 @@ impl EffectNode for RenderScene {
                     [light_half_w, light_half_h],
                     [width, height],
                     AO_RADIUS_WORLD_UNITS,
-                    AO_SAMPLES_PER_PIXEL,
-                    GI_SAMPLES_PER_PIXEL,
+                    ao_spp,
+                    gi_spp,
                     // RT-T1-B: the primary-visibility-ray origin for the
                     // real interpolated-vertex-normal fetch (AO/GI cosine
                     // sampling) — the SAME camera eye `render_scene.wgsl`'s
@@ -5506,7 +5514,7 @@ impl EffectNode for RenderScene {
                     // the rt_reflections scene param, gated on rt_enabled;
                     // T5 tunes the spp/roughness-band constants. 0.6/0.1 are
                     // the RD7 starting constants.
-                    if rt_reflections { REFL_SAMPLES_PER_PIXEL } else { 0 },
+                    if rt_reflections { sweep_spp("MANIFOLD_RT_SWEEP_REFL_SPP", REFL_SAMPLES_PER_PIXEL) } else { 0 },
                     0.6,
                     0.1,
                     emissive_table_mean_power,
