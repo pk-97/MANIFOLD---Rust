@@ -23756,6 +23756,13 @@
           "name": "RT Reflections"
         },
         {
+          "default": "0",
+          "id": "35_rt_denoise_feed",
+          "max": "1",
+          "min": "0",
+          "name": "RT Denoise Feed"
+        },
+        {
           "default": "1",
           "id": "86_visible",
           "max": "1",
@@ -27815,6 +27822,13 @@
           "max": "1",
           "min": "0",
           "name": "RT Reflections"
+        },
+        {
+          "default": "0",
+          "id": "30_rt_denoise_feed",
+          "max": "1",
+          "min": "0",
+          "name": "RT Denoise Feed"
         },
         {
           "default": "1",
