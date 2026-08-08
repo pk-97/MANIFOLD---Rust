@@ -10,6 +10,7 @@
 //! matching the SlotMap assignments. Metal compiles MSL at runtime.
 
 pub mod archive;
+pub mod denoiser;
 pub mod fft;
 pub mod metalfx;
 pub mod mps;
