@@ -15864,6 +15864,26 @@
         {
           "name": "ao_mask",
           "type": "Texture2D"
+        },
+        {
+          "name": "normals",
+          "type": "Texture2D"
+        },
+        {
+          "name": "roughness",
+          "type": "Texture2D"
+        },
+        {
+          "name": "diffuse_albedo",
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_albedo",
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_hit_distance",
+          "type": "Texture2D"
         }
       ],
       "params": [
@@ -15903,6 +15923,12 @@
           "default": "true",
           "label": "RT Reflections",
           "name": "rt_reflections",
+          "type": "bool"
+        },
+        {
+          "default": "false",
+          "label": "RT Denoise Feed",
+          "name": "rt_denoise_feed",
           "type": "bool"
         }
       ],
