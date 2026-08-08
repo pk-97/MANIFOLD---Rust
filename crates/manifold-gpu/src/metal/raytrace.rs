@@ -390,6 +390,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT accel build");
+    unsafe { cb.setLabel(Some(&NSString::from_str("RT accel build"))) };
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -581,6 +582,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT TLAS refit");
+    unsafe { cb.setLabel(Some(&NSString::from_str("RT TLAS refit"))) };
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -4977,6 +4979,7 @@ impl MetalShadowRayTracer {
             .raw_queue()
             .commandBuffer()
             .expect("Failed to acquire command buffer for RT-T1-B debug dispatch");
+        unsafe { cb.setLabel(Some(&NSString::from_str("RT-T1-B debug fetch normal"))) };
         let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
             .computeCommandEncoder()
             .expect("computeCommandEncoder failed");
@@ -5046,6 +5049,7 @@ impl MetalShadowRayTracer {
             .raw_queue()
             .commandBuffer()
             .expect("Failed to acquire command buffer for BUG-dx6w debug dispatch");
+        unsafe { cb.setLabel(Some(&NSString::from_str("BUG-dx6w debug clamp refl history"))) };
         let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
             .computeCommandEncoder()
             .expect("computeCommandEncoder failed");
