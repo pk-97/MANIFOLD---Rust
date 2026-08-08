@@ -1685,6 +1685,11 @@ kernel void trace_shadow_rays(
         } else {
             // Light sits on the surface — see the interval_ok guard above.
             vis_rgb = float3((float)spp);
+            // Both paths must produce vis = 1.0 here (the on-light texel
+            // counts UNshadowed per the ebab1ec5 guard). Translucent mode
+            // overwrites this via the luma fold below, so one line serves
+            // both PSO variants.
+            vis = float(spp);
         }
         if (HAS_TRANSLUCENCY) {
             vis = luma(vis_rgb) / float(spp);
