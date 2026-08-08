@@ -752,6 +752,10 @@ pub struct RenderScene {
     /// Once-logged flag for "denoiser is unavailable" degradation, same
     /// pattern as `rt_temporal_unavailable_logged`.
     denoiser_unavailable_logged: bool,
+    /// Once-per-transition flag for the gate-block diagnostic — names which
+    /// of rt_enabled/rt_ready/available blocks the denoiser when
+    /// rt_denoise_feed is on; clears when the gate opens.
+    denoise_gate_blocked_logged: bool,
     rt_temporal_upscaler: Option<crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler>,
     /// Set once this node has already logged the "MetalFX Temporal
     /// unavailable" degradation, so a performer leaving `temporal_upscale`
@@ -1459,6 +1463,7 @@ impl RenderScene {
             rt_temporal_color_scratch_height: 0,
             denoiser: None,
             denoiser_unavailable_logged: false,
+            denoise_gate_blocked_logged: false,
             rt_temporal_upscaler: None,
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
@@ -4672,7 +4677,18 @@ impl EffectNode for RenderScene {
             // denoise), the forward pass renders into a native-res scratch
             // so the denoiser's input and output don't alias.
             let denoise_wanted = rt_enabled && rt_ready && denoise_feed && denoiser_available();
+            // Gate-block diagnostic (2026-08-08, Peter's "does nothing"
+            // report): the four conditions fail silently — name the blocker
+            // once per transition instead of leaving the feature inert.
+            if denoise_feed && !denoise_wanted && !self.denoise_gate_blocked_logged {
+                self.denoise_gate_blocked_logged = true;
+                log::warn!(
+                    "node.render_scene: rt_denoise_feed is on but the denoiser gate is blocked — rt_enabled={rt_enabled}, rt_ready={rt_ready}, denoiser_available={}",
+                    denoiser_available()
+                );
+            }
             if denoise_wanted {
+                self.denoise_gate_blocked_logged = false;
                 if !temporal_upscale {
                     // 1:1 denoise: need a scratch at native res so the
                     // denoiser can read the forward-pass output and write
