@@ -51,7 +51,8 @@ use objc2_metal::{
     MTLAccelerationStructureUsage, MTLAttributeFormat, MTLBuffer, MTLCommandBuffer,
     MTLCommandEncoder,
     MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
-    MTLDevice, MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion,
+    MTLDataType, MTLDevice, MTLFunctionConstantValues,
+    MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion,
     MTLLibrary, MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
     MTLResourceUsage, MTLSize,
 };
@@ -652,6 +653,13 @@ struct RtCasterParams {
 // string constant and a Rust const — same manual-sync discipline this file
 // already uses for `MAX_RT_MATERIAL_TEXTURES`).
 constant uint MAX_RT_CASTERS = 8;
+
+// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): pipeline
+// permutation — false = binary scene (pre-TL-B codegen, walk_with_alpha_test
+// in sv caster loop + sun_bounce_at_hit), true = translucent scene
+// (walk_with_transmission). Baked into the PSO via MTLFunctionConstantValues
+// at index 100.
+constant bool HAS_TRANSLUCENCY [[function_constant(100)]];
 
 // RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
 // cap — power-rank truncated. Matches manifold-gpu's Rust
@@ -1257,9 +1265,16 @@ static float3 sun_bounce_at_hit(
         // the bounce vertex and the sun attenuates (tinted) instead of
         // killing the term outright. Binary-identical when every factor
         // is 0: tint is then exactly float3(0) or float3(1).
-        float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures);
+        // RT-TL-B cost recovery (section 16.4): pipeline permutation —
+        // binary scenes use walk_with_alpha_test (pre-TL-B codegen).
         float hit_ndotl = max(dot(hit_n, sdir), 0.0);
-        term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+        if (HAS_TRANSLUCENCY) {
+            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures);
+            term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+        } else {
+            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+            term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+        }
     }
     return term;
 }
@@ -1647,30 +1662,38 @@ kernel void trace_shadow_rays(
         r.min_distance = bias_eps * 0.5;
         r.max_distance = max_dist;
         float vis = 0.0;
-        // RT-TL-B (TL4/TL5): shadow rays transmit through thin surfaces —
-        // each sample returns an rgb tint (float3(0)/float3(1) exactly when
-        // every factor is 0, so all-zero scenes keep the old binary values).
-        // The rgb accumulation is the TL-C substrate; sv carries luma(tint)
-        // per TL5's channel arithmetic. Averaging tints then folding luma
-        // matches the old `vis/spp` for binary scenes up to the Rec.709
-        // weights' float rounding (verified exact in f32 — the weights sum
-        // to exactly 1.0, so binary scenes are byte-identical).
+        // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): pipeline
+        // permutation selects between pre-TL-B binary codegen (walk_with_alpha_test)
+        // and TL-B translucent codegen (walk_with_transmission). The function
+        // constant is baked into the PSO — no runtime branch.
         float3 vis_rgb = float3(0.0);
         if (interval_ok) {
             for (uint s = 0; s < spp; s++) {
                 r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
                 intersection_query<triangle_data, instancing> shadow_q;
                 shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
-                vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+                // RT-TL-B (TL4/TL5): shadow rays transmit through thin surfaces
+                // when HAS_TRANSLUCENCY is true. Binary scenes keep the pre-TL-B
+                // walk_with_alpha_test codegen byte-for-byte.
+                if (HAS_TRANSLUCENCY) {
+                    vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+                } else {
+                    bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
+                    if (!blocked) vis += 1.0;
+                }
             }
         } else {
             // Light sits on the surface — see the interval_ok guard above.
             vis_rgb = float3((float)spp);
         }
-        vis = luma(vis_rgb) / float(spp);
-        // RT-TL-C (TL5): capture the designated sun caster's rgb tint
-        // before folding to luma. Every other caster keeps svt = (1,1,1).
-        if (c == p.svt_slot) { svt = vis_rgb / float(spp); }
+        if (HAS_TRANSLUCENCY) {
+            vis = luma(vis_rgb) / float(spp);
+            // RT-TL-C (TL5): capture the designated sun caster's rgb tint
+            // before folding to luma. Every other caster keeps svt = (1,1,1).
+            if (c == p.svt_slot) { svt = vis_rgb / float(spp); }
+        } else {
+            vis /= float(spp);
+        }
         if (c < 4u) { sv_lo[c] = vis; } else { sv_hi[c - 4u] = vis; }
     }
     } // shadow_spp > 0
@@ -4445,10 +4468,33 @@ fn compile_pipeline(
     entry: &str,
     slot_map: SlotMap,
 ) -> GpuComputePipeline {
+    compile_pipeline_with_constants(device, library, entry, slot_map, None)
+}
+
+/// Compile a compute PSO with optional function constants.
+/// `constants` is `None` for the default (all false) path; when present,
+/// the values are baked into the PSO at compile time (dead-code elimination).
+fn compile_pipeline_with_constants(
+    device: &GpuDevice,
+    library: &ProtocolObject<dyn MTLLibrary>,
+    entry: &str,
+    slot_map: SlotMap,
+    constants: Option<&MTLFunctionConstantValues>,
+) -> GpuComputePipeline {
     let name = NSString::from_str(entry);
-    let func = library
-        .newFunctionWithName(&name)
-        .unwrap_or_else(|| panic!("RT kernel entry point '{entry}' not found"));
+    let func = match constants {
+        Some(cv) => library
+            .newFunctionWithName_constantValues_error(&name, cv)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "RT kernel entry point '{entry}' with constants: {}",
+                    e.localizedDescription()
+                )
+            }),
+        None => library
+            .newFunctionWithName(&name)
+            .unwrap_or_else(|| panic!("RT kernel entry point '{entry}' not found")),
+    };
     let state: Retained<ProtocolObject<dyn MTLComputePipelineState>> = device
         .raw_device()
         .newComputePipelineStateWithFunction_error(&func)
@@ -4554,6 +4600,10 @@ pub trait ShadowRayTracer {
         // block).
         emissive_triangles: &GpuBuffer,
         emissive_aliases: &GpuBuffer,
+        // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): selects
+        // between the binary pipeline (walk_with_alpha_test, pre-TL-B codegen)
+        // and the translucent pipeline (walk_with_transmission) at dispatch time.
+        has_translucency: bool,
         label: &str,
     );
 
@@ -4710,7 +4760,14 @@ pub trait ShadowRayTracer {
 /// `metal_raytracing`, compiled once and kept resident (mirrors the
 /// pipeline-cache pattern `GpuDevice` already uses for the WGSL path).
 pub struct MetalShadowRayTracer {
-    trace_pipeline: GpuComputePipeline,
+    /// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): trace pipeline
+    /// for translucent scenes — `HAS_TRANSLUCENCY` baked to true (walk_with_transmission
+    /// in sv caster loop + sun_bounce_at_hit).
+    trace_pipeline_translucent: GpuComputePipeline,
+    /// RT-TL-B cost recovery (section 16.4): trace pipeline for binary (no-translucency)
+    /// scenes — `HAS_TRANSLUCENCY` baked to false (walk_with_alpha_test, pre-TL-B
+    /// codegen byte-for-byte in the sv caster loop).
+    trace_pipeline_binary: GpuComputePipeline,
     upsample_pipeline: GpuComputePipeline,
     /// RT-T1-D (BUG-312): the dilated edge-aware à-trous filter pipeline.
     atrous_pipeline: GpuComputePipeline,
@@ -4785,11 +4842,51 @@ impl MetalShadowRayTracer {
         trace_slots.push((6 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         // RT-TL-C: out_svt, MSL [[texture(71)]].
         trace_slots.push((7 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
-        let trace_pipeline = compile_pipeline(
+        // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): two PSO
+        // variants of the same kernel, selected at dispatch time by
+        // ShadowRayParams.has_translucency. Binary scenes get the pre-TL-B
+        // codegen (walk_with_alpha_test in sv caster loop + sun_bounce_at_hit);
+        // translucent scenes get walk_with_transmission. The function constant
+        // is baked at PSO compile time — dead-code elimination means a binary
+        // scene never pays for translucency code.
+        let trace_slot_map = identity_slot_map(&trace_slots);
+        let binary_constants = {
+            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
+            let val: u8 = 0; // false
+            unsafe {
+                cv.setConstantValue_type_atIndex(
+                    core::ptr::NonNull::from(&val).cast(),
+                    MTLDataType::Bool,
+                    100,
+                )
+            };
+            cv
+        };
+        let translucent_constants = {
+            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
+            let val: u8 = 1; // true
+            unsafe {
+                cv.setConstantValue_type_atIndex(
+                    core::ptr::NonNull::from(&val).cast(),
+                    MTLDataType::Bool,
+                    100,
+                )
+            };
+            cv
+        };
+        let trace_pipeline_binary = compile_pipeline_with_constants(
             device,
             &library,
             "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
+            trace_slot_map.clone(),
+            Some(&binary_constants),
+        );
+        let trace_pipeline_translucent = compile_pipeline_with_constants(
+            device,
+            &library,
+            "trace_shadow_rays",
+            trace_slot_map,
+            Some(&translucent_constants),
         );
         let upsample_pipeline = compile_pipeline(
             device,
@@ -4927,7 +5024,8 @@ impl MetalShadowRayTracer {
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
 
         Self {
-            trace_pipeline,
+            trace_pipeline_translucent,
+            trace_pipeline_binary,
             upsample_pipeline,
             atrous_pipeline,
             accumulate_pipeline,
@@ -5108,6 +5206,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         prefiltered_env: &GpuTexture,
         emissive_triangles: &GpuBuffer,
         emissive_aliases: &GpuBuffer,
+        // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): selects
+        // between the binary pipeline (walk_with_alpha_test, pre-TL-B codegen)
+        // and the translucent pipeline (walk_with_transmission) at dispatch time.
+        has_translucency: bool,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -5191,7 +5293,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 7 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_svt,
         });
-        encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
+        encoder.dispatch_compute_with_accel(
+            if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
+            0,
+            accel,
+            &bindings,
+            groups,
+            label,
+        );
     }
 
     fn upsample_shadow(

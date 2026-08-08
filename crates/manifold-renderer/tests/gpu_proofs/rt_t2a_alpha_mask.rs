@@ -270,6 +270,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         &prefiltered_env,
         &dummy_emissive,
         &dummy_emissive,
+        false,
         "trace_shadow_rays-t2a-proof",
     );
     encoder.commit_and_wait_completed();

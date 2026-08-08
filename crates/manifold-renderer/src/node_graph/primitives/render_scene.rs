@@ -920,6 +920,11 @@ pub struct RenderScene {
     /// uses, so a GI ray hit's `instance_id` indexes this directly.
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
+    /// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): true when
+    /// any object in the scene has `diffuse_transmission_factor > 0` — selects
+    /// the translucent trace pipeline (walk_with_transmission) at dispatch time.
+    /// False = binary pipeline (walk_with_alpha_test, pre-TL-B codegen).
+    rt_has_translucency: bool,
     /// RT-T2-C (object motion): per-object world→prev-world delta
     /// matrices (`prev_model * inverse(model)`, both straight off the
     /// draw uniforms) for `accumulate_irradiance`'s object-aware
@@ -1399,6 +1404,7 @@ impl RenderScene {
             rt_mask_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
+            rt_has_translucency: false,
             rt_obj_motion: None,
             rt_obj_motion_capacity: 0,
             rt_normal_sources: None,
@@ -4712,6 +4718,9 @@ impl EffectNode for RenderScene {
                     )
                 })
                 .collect();
+            // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4):
+            // scene-level flag — true if any object's diffuse_transmission_factor > 0.
+            self.rt_has_translucency = gi_materials_data.iter().any(|m| m.translucency[0] > 0.0);
 
             // Dirty-check keys, three tiers (in priority order):
             //
@@ -5179,6 +5188,7 @@ impl EffectNode for RenderScene {
                         // gi_spp=0, so the sampler block is skipped).
                         self.dummy_emissive_buffer.as_ref().expect("ensured above"),
                         self.dummy_emissive_buffer.as_ref().expect("ensured above"),
+                        self.rt_has_translucency,
                         "node.render_scene RT-A3a mask dispatch (shadow visibility)",
                     );
                 }
@@ -5215,6 +5225,7 @@ impl EffectNode for RenderScene {
                     accel.emissive_table.as_ref()
                         .map(|t| &t.aliases)
                         .unwrap_or_else(|| self.dummy_emissive_buffer.as_ref().expect("ensured above")),
+                    self.rt_has_translucency,
                     "node.render_scene RT-A3a lighting dispatch (AO+GI+reflection+normal)",
                 );
                 tracer.upsample_shadow(
