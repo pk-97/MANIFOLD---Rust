@@ -13,6 +13,7 @@ pub mod archive;
 pub mod denoiser;
 pub mod fft;
 pub mod metalfx;
+pub mod metalfx_m4; // RAYTRACING_DESIGN.md section 17.7 DN-K
 pub mod mps;
 
 mod device;
