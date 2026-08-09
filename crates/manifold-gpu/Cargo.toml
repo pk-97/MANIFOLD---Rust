@@ -81,11 +81,25 @@ objc2-metal = { version = "0.3", features = [
     "MTLFunctionConstantValues",
     "MTLDataType",
     "block2",
+    # RAYTRACING_DESIGN.md section 17.7 DN-K (Metal 4 scaler migration):
+    # MTL4Compiler — needed for MTL4FX scaler factory.
+    # MTL4CommandAllocator + MTL4CommandQueue + MTL4CommandBuffer —
+    # additive features, do NOT change classic newCommandBuffer (our code
+    # uses MTLCommandQueue::commandBuffer() exclusively).
+    "MTL4Compiler",
+    "MTL4CommandAllocator",
+    "MTL4CommandQueue",
+    "MTL4CommandBuffer",
 ] }
 objc2-metal-fx = { version = "0.3", features = [
     "MTLFXSpatialScaler",
     "MTLFXTemporalScaler",
     "MTLFXTemporalDenoisedScaler",
+    # RAYTRACING_DESIGN.md section 17.7 DN-K (Metal 4 scaler migration):
+    # MTL4FX scaler protocols — add the Metal 4 generation scalers
+    # as preferred implementations behind the existing traits.
+    "MTL4FXTemporalScaler",
+    "MTL4FXTemporalDenoisedScaler",
 ] }
 objc2-metal-performance-shaders = { version = "0.3", features = [
     "MPSKernel",

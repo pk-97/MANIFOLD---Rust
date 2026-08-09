@@ -6950,7 +6950,7 @@ impl EffectNode for RenderScene {
                     );
                 }
             } else {
-                denoiser.encode(
+                let denoised = denoiser.encode(
                     gpu,
                     color_src,
                     depth_src,
@@ -6966,6 +6966,25 @@ impl EffectNode for RenderScene {
                           // the denoiser's uniform reactivity fallback is
                           // appropriate for our engine-driven reset model
                 );
+
+                if !denoised && !temporal_upscale {
+                    // MTL4 allocator ring saturated: the denoiser left
+                    // native_color untouched. For 1:1 denoise the forward
+                    // pass rendered into color_src (the native-res scratch),
+                    // so copy it to native_color as a safe un-denoised
+                    // fallback. With temporal_upscale on the denoiser
+                    // REPLACES the temporal scaler, so nothing else writes
+                    // native_color this frame — the skip leaves last frame's
+                    // output in place (one-frame freeze under extreme
+                    // backpressure, recovers when the ring drains).
+                    gpu.native_enc.copy_texture_to_texture(
+                        color_src,
+                        native_color,
+                        native_width,
+                        native_height,
+                        1,
+                    );
+                }
             }
         }
         // PROBE: capture time after denoiser encode and emit timing report.
