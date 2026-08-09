@@ -6972,9 +6972,11 @@ impl EffectNode for RenderScene {
                     // native_color untouched. For 1:1 denoise the forward
                     // pass rendered into color_src (the native-res scratch),
                     // so copy it to native_color as a safe un-denoised
-                    // fallback. When temporal_upscale is on, the temporal
-                    // upscaler already wrote native_color, so no fallback
-                    // copy is needed.
+                    // fallback. With temporal_upscale on the denoiser
+                    // REPLACES the temporal scaler, so nothing else writes
+                    // native_color this frame — the skip leaves last frame's
+                    // output in place (one-frame freeze under extreme
+                    // backpressure, recovers when the ring drains).
                     gpu.native_enc.copy_texture_to_texture(
                         color_src,
                         native_color,
