@@ -58,11 +58,11 @@ Two mechanisms, because a flaky gate gets ignored, which is worse than no gate.
 
 CEILINGS ARE DATA, NOT CODE
 scripts/rt_noise_baseline.json holds the ceilings plus the provenance of the
-run that produced them. Regenerate with `--record` after a legitimate RT
-improvement, and commit the JSON — that is the whole re-baseline procedure.
-While the baseline is marked unvalidated the gate SKIPS green and says so,
-so wiring it into a nightly sweep cannot produce bead noise before the
-ceilings mean anything.
+run that produced them, keyed per fixture under schema 2. Regenerate with
+`--record --project <fixture>.manifold` after a legitimate RT improvement, and
+commit the JSON — that is the whole re-baseline procedure. While the baseline
+entry is marked unvalidated the gate SKIPS green and says so, so wiring it into
+a nightly sweep cannot produce bead noise before the ceilings mean anything.
 
 WHERE IT RUNS
 Nightly on main via scripts/trunk_health.py, and on demand for anyone touching
@@ -373,9 +373,24 @@ def median_across(runs):
 # ── verdict ─────────────────────────────────────────────────────────────
 
 
-def compare(agg, baseline):
+def compare(agg, baseline, project):
     """Returns (failures, rows) — rows are printable regardless of verdict."""
-    ceilings = baseline["channels"]
+    # Schema 2: extract fixture-specific ceilings
+    schema = baseline.get("schema", 1)
+    if schema == 2:
+        fixture_stem = Path(project).stem
+        fixtures = baseline.get("fixtures", {})
+        if fixture_stem not in fixtures:
+            return [(fixture_stem, f"fixture {fixture_stem} not in baseline fixtures")], []
+        fixture_entry = fixtures[fixture_stem]
+        ceilings = fixture_entry.get("channels", {})
+        provenance = fixture_entry.get("provenance", {})
+    elif schema == 1:
+        ceilings = baseline["channels"]
+        provenance = baseline.get("provenance", {})
+    else:
+        return [("schema", f"unknown baseline schema {schema}")], []
+
     failures = []
     rows = []
     for ch in sorted(agg):
@@ -399,7 +414,7 @@ def compare(agg, baseline):
     missing = [ch for ch in ceilings if ch not in agg]
     for ch in missing:
         failures.append((ch, "channel absent from capture — harness changed?"))
-    return failures, rows
+    return failures, rows, provenance
 
 
 def print_table(rows):
@@ -581,24 +596,54 @@ def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, 
 
     if record:
         doc = baseline if baseline else {}
-        doc["motion"] = {
-            "validated": True,
-            "sv_hold_median": round(m["sv_hold_median"] * 3.0 + 0.002, 4),
-            "moments_center_min": round(m["moments_center_min"] * 0.7, 4),
-            "history_ratio_min": round(min(m["history_ratio_min"] * 0.5, 0.3), 4),
-            "measured": {k: round(v, 4) for k, v in m.items()},
-            "note": ("Motion-leg ceilings = measured x headroom (sv_hold median "
-                     "x3+0.002, moments floors x0.7, history ratio x0.5 capped 0.3). "
-                     "Regenerate with "
-                     "scripts/rt_noise_gate.py --motion --record after a legitimate "
-                     "RT change and commit this file. RED-validated against "
-                     "boil-era gate behavior (D-64/tr5o reverted) — see BUG-sz0u."),
-        }
+        # Schema 2: motion ceilings per fixture under fixtures[stem].motion
+        if doc.get("schema", 1) == 2:
+            fixture_stem = Path(project).stem
+            doc.setdefault("fixtures", {})
+            doc["fixtures"].setdefault(fixture_stem, {})
+            doc["fixtures"][fixture_stem]["motion"] = {
+                "validated": True,
+                "sv_hold_median": round(m["sv_hold_median"] * 3.0 + 0.002, 4),
+                "moments_center_min": round(m["moments_center_min"] * 0.7, 4),
+                "history_ratio_min": round(min(m["history_ratio_min"] * 0.5, 0.3), 4),
+                "measured": {k: round(v, 4) for k, v in m.items()},
+                "note": ("Motion-leg ceilings = measured x headroom (sv_hold median "
+                         "x3+0.002, moments floors x0.7, history ratio x0.5 capped 0.3). "
+                         "Regenerate with "
+                         "scripts/rt_noise_gate.py --motion --record --project <fixture> "
+                         "after a legitimate RT change and commit this file. "
+                         "RED-validated against boil-era gate behavior "
+                         "(D-64/tr5o reverted) — see BUG-sz0u."),
+            }
+        else:
+            doc["motion"] = {
+                "validated": True,
+                "sv_hold_median": round(m["sv_hold_median"] * 3.0 + 0.002, 4),
+                "moments_center_min": round(m["moments_center_min"] * 0.7, 4),
+                "history_ratio_min": round(min(m["history_ratio_min"] * 0.5, 0.3), 4),
+                "measured": {k: round(v, 4) for k, v in m.items()},
+                "note": ("Motion-leg ceilings = measured x headroom (sv_hold median "
+                         "x3+0.002, moments floors x0.7, history ratio x0.5 capped 0.3). "
+                         "Regenerate with "
+                         "scripts/rt_noise_gate.py --motion --record after a legitimate "
+                         "RT change and commit this file. RED-validated against "
+                         "boil-era gate behavior (D-64/tr5o reverted) — see BUG-sz0u."),
+            }
         baseline_path.write_text(json.dumps(doc, indent=2) + "\n")
         log(f"[rt-noise] wrote motion ceilings to {baseline_path}")
         return 0
 
-    motion_b = (baseline or {}).get("motion")
+    # Schema 2: motion ceilings per fixture; schema 1: single top-level motion
+    if baseline and baseline.get("schema", 1) == 2:
+        fixture_stem = Path(project).stem
+        fixtures = baseline.get("fixtures", {})
+        if fixture_stem not in fixtures:
+            log(f"[SKIP] fixture {fixture_stem} has no motion baseline entry — run "
+                f"`scripts/rt_noise_gate.py --motion --record --project {project}`")
+            return 0
+        motion_b = fixtures[fixture_stem].get("motion")
+    else:
+        motion_b = (baseline or {}).get("motion")
     if not motion_b or not motion_b.get("validated"):
         log("[SKIP] no validated motion ceilings in the baseline — run "
             "`scripts/rt_noise_gate.py --motion --record` after the red-side "
@@ -629,7 +674,7 @@ def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, 
 
 
 
-def write_baseline(path, agg, repo, project, frames, repeats):
+def write_baseline(path, agg, repo, project, frames, repeats, baseline):
     commit = run_cmd(["git", "rev-parse", "--short=12", "HEAD"], cwd=repo, timeout=30)[1].strip()
     dirty = run_cmd(["git", "status", "--porcelain"], cwd=repo, timeout=60)[1].strip() != ""
     channels = {}
@@ -644,13 +689,12 @@ def write_baseline(path, agg, repo, project, frames, repeats):
                          ("mean", "mean_min", "mean_max", "p999", "p999_min",
                           "p999_max", "max", "level")},
         }
-    doc = {
-        "schema": 1,
+    fixture_entry = {
         "ceilings_validated": True,
         "note": ("Ceilings = measured median x headroom (mean x2.0 or +0.05, "
                  "p99.9 x1.8 or +1.0). Regenerate with "
-                 "scripts/rt_noise_gate.py --record after a legitimate RT "
-                 "improvement and commit this file."),
+                 "scripts/rt_noise_gate.py --record --project <fixture> after a "
+                 "legitimate RT improvement and commit this file."),
         "provenance": {
             "recorded": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "commit": commit + ("-dirty" if dirty else ""),
@@ -661,6 +705,22 @@ def write_baseline(path, agg, repo, project, frames, repeats):
         },
         "channels": channels,
     }
+
+    if baseline and baseline.get("schema", 1) == 2:
+        # Preserve existing fixtures; overwrite only the current one
+        doc = baseline
+        fixture_stem = Path(project).stem
+        doc.setdefault("fixtures", {})[fixture_stem] = fixture_entry
+    else:
+        # Schema 1 / legacy / absent: create fresh schema 2 doc
+        doc = {
+            "schema": 2,
+            "note": ("Per-fixture RT noise ceilings. Schema 2: fixtures keyed by "
+                     "project stem. Regenerate individual fixture ceilings with "
+                     "scripts/rt_noise_gate.py --record --project <fixture>.manifold "
+                     "after a legitimate RT improvement and commit this file."),
+            "fixtures": {Path(project).stem: fixture_entry},
+        }
     path.write_text(json.dumps(doc, indent=2) + "\n")
     log(f"\n[rt-noise] wrote {path}")
 
@@ -710,18 +770,38 @@ def main():
         return 0
 
     baseline = None
-    if baseline_path.exists() and (not args.record or args.motion):
-        # Load even when recording the motion leg: --motion --record must
-        # PRESERVE the static ceilings, not wipe them with a motion-only doc.
+    if baseline_path.exists():
+        # Always load the existing baseline so --record preserves other fixtures'
+        # entries under schema 2. --motion --record preserves static ceilings by
+        # the same mechanism: write_baseline/motion_leg only touch the current
+        # fixture's entry.
         baseline = json.loads(baseline_path.read_text())
     if not args.record:
         if not baseline_path.exists():
             log(f"[SKIP] no ceilings at {baseline_path} — run --record first")
             return 0
-        if not baseline.get("ceilings_validated"):
-            log(f"[SKIP] {baseline_path} is marked unvalidated: "
-                f"{baseline.get('note', '')} — run --record against a working "
-                f"RT path, commit the JSON, and this gate starts guarding.")
+        # Schema 2: per-fixture baselines under fixtures["<fixture_stem>"]
+        schema = baseline.get("schema", 1)
+        if schema == 2:
+            fixtures = baseline.get("fixtures", {})
+            fixture_stem = Path(project).stem  # RtNoiseTesting.manifold -> RtNoiseTesting
+            if fixture_stem not in fixtures:
+                log(f"[SKIP] fixture {fixture_stem} has no baseline entry in {baseline_path} — "
+                    f"run `scripts/rt_noise_gate.py --project {project} --record` first")
+                return 0
+            fixture_baseline = fixtures[fixture_stem]
+            if not fixture_baseline.get("ceilings_validated"):
+                log(f"[SKIP] {fixture_stem} baseline is marked unvalidated — "
+                    f"run --record against a working RT path and commit the JSON.")
+                return 0
+        elif schema == 1:
+            if not baseline.get("ceilings_validated"):
+                log(f"[SKIP] {baseline_path} is marked unvalidated: "
+                    f"{baseline.get('note', '')} — run --record against a working "
+                    f"RT path, commit the JSON, and this gate starts guarding.")
+                return 0
+        else:
+            log(f"[SKIP] unknown baseline schema {schema} in {baseline_path}")
             return 0
 
     # ED7 correctness leg, FIRST: the furnace oracle is a seconds-cost debug
@@ -821,17 +901,17 @@ def main():
     if args.record:
         print_table([(ch, agg[ch], None, "recorded") for ch in sorted(agg)])
         print_spread(agg)
-        write_baseline(baseline_path, agg, repo, project, args.frames, args.repeats)
+        write_baseline(baseline_path, agg, repo, project, args.frames, args.repeats, baseline)
         return 0
 
-    failures, rows = compare(agg, baseline)
+    failures, rows, provenance = compare(agg, baseline, project)
     print_table(rows)
     print_spread(agg)
     if args.json:
         log("\n" + json.dumps(agg, indent=2))
     log(f"\nceilings from {baseline_path.name} "
-        f"(recorded {baseline['provenance']['recorded']} @ "
-        f"{baseline['provenance']['commit']})")
+        f"(recorded {provenance.get('recorded', 'unknown')} @ "
+        f"{provenance.get('commit', 'unknown')})")
     if failures:
         log("\nRT NOISE GATE: RED")
         for ch, why in failures:
