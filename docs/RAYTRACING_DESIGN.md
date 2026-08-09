@@ -2218,6 +2218,12 @@ probe — "they will be better than previous."
   uses classic `MTLCommandBuffer`. The lane establishes the minimal
   bridge (MTL4 encode for the scaler only, shared-event sync against
   the classic queue) — NOT a wholesale command-model migration.
+  Bridge performance is a review gate (Peter, 2026-08-09): no
+  CPU-side sync per frame (GPU-side shared events, pipelined by
+  value), no GPU bubble at the submission boundary, bridge tax
+  measured (GPU ms vs the MTLFX path, same fixture, using the
+  BUG-iadf — 1:1 denoise cost anomaly — probe instrumentation) —
+  a stall-y bridge is rejected, not tuned.
   Gate: byte-identity of the classic path when the MTL4 classes are
   unavailable; denoiser value test re-run on the MTL4 effect.
 - **DN-L — input conditioning.** When `rt_denoise_feed` engages, the
