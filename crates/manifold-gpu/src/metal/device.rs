@@ -2,6 +2,7 @@
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -114,6 +115,11 @@ pub struct GpuDevice {
     /// boundaries through begin/end calls, so it must be retained and
     /// driven per frame — see `capture_scope_begin`/`capture_scope_end`.
     capture_scope: std::sync::OnceLock<Retained<ProtocolObject<dyn objc2_metal::MTLCaptureScope>>>,
+    /// Lazily-created MTL4 command bridge for Metal 4 FX scaler work.
+    /// Shared by all MTL4FX scalers on this device (RAYTRACING_DESIGN.md
+    /// section 17.7 DN-K). `None` when MTL4 command infrastructure is not
+    /// available on this system.
+    mtl4_bridge: std::sync::OnceLock<Option<Arc<super::metalfx_m4::MTL4Bridge>>>,
 }
 
 // Safety: MTLDevice and MTLCommandQueue are thread-safe (Metal guarantee).
@@ -145,6 +151,7 @@ impl GpuDevice {
             clear_pipelines: std::sync::OnceLock::new(),
             linear_sampler: std::sync::OnceLock::new(),
             capture_scope: std::sync::OnceLock::new(),
+            mtl4_bridge: std::sync::OnceLock::new(),
         }
     }
 
@@ -204,6 +211,16 @@ impl GpuDevice {
         if let Some(scope) = self.capture_scope.get() {
             scope.endScope();
         }
+    }
+
+    /// Lazily-created, per-device MTL4 command bridge for Metal 4 FX scaler
+    /// work. Returns `None` if MTL4 command infrastructure is unavailable on
+    /// this system. Shared by all MTL4FX scalers on this device
+    /// (RAYTRACING_DESIGN.md section 17.7 DN-K).
+    pub fn mtl4_bridge(&self) -> Option<Arc<super::metalfx_m4::MTL4Bridge>> {
+        self.mtl4_bridge
+            .get_or_init(|| super::metalfx_m4::MTL4Bridge::new(&self.device).map(Arc::new))
+            .clone()
     }
 
     /// Raw Metal device reference (for advanced interop).
