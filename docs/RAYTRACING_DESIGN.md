@@ -2222,12 +2222,23 @@ probe — "they will be better than previous."
   `m4_denoise_reduces_error_vs_clean_ramp` drives the bridge on
   hardware; Metal 4 needs no explicit residency sets for
   classic-created textures (answered by that test).
-- **DN-L — input conditioning.** When `rt_denoise_feed` engages, the
-  RT accumulator's history cap drops to near-raw (target n ≤ 4 — the
-  network's history replaces ours) and the reactive mask is wired:
-  emissive surfaces + motion-classified movers marked reactive.
-  Gate: gpu-proofs on the accumulate kernel's new cap path; pixel
-  proof that an emissive strobe does not trail with the denoiser on.
+- **DN-L — input conditioning. LANDED 2026-08-10 on main** (lead-built,
+  lane/rt-mtl4-upscaler). When `rt_denoise_feed` engages
+  (`denoise_active`), `ACCUM_FLAG_DENOISE_NEAR_RAW` (reset bit 5) drops
+  every accumulator history cap to near-raw — alpha floor 0.25, n ≤ 4,
+  specular floor included; flag-off frames byte-identical. Reactive
+  mask wired: new `reactive_mask` output (R16Float, fifth denoise MRT
+  feed) = emissive (luma > 1e-3) OR object-moved (`prev_model !=
+  model`, camera motion excluded by construction); replaces the `None`
+  at the denoiser encode. Gate: gpu-proof
+  `denoise_near_raw_caps_history_at_four_frames` (control >12 vs
+  capped ≤ 4.5, converged value unchanged), full gpu-proofs PASS,
+  noise gate green. The emissive-strobe pixel proof folds into DN-N's
+  re-look on the RtEmissiveStrength fixture.
+  Also landed same branch: the MTL4 *temporal* upscaler is now wired
+  into `MetalFxTemporalUpscaler` (DN-K's gpu-side class was built but
+  unwired — `temporal_upscale` used classic MTLFX until this). Same
+  DN5 seam, same ring-saturation skip semantics as the denoiser.
 - **DN-M — emissive noise fixture. LANDED 2026-08-09 on main.**
   Peter saved `RtEmissiveStrength.manifold` (import preset over the
   Khronos `EmissiveStrengthTest.glb`, six stepped-emissive cubes);

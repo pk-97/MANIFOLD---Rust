@@ -374,7 +374,7 @@ const _: () = assert!(std::mem::size_of::<LutUniforms>() == 16);
 // `Owned` variant carries drop glue, so `&RENDER_SCENE_OUTPUTS` can no longer
 // be rvalue-static-promoted out of a `const`. A `static` gives the slice a
 // genuine `'static` address to borrow.
-static RENDER_SCENE_OUTPUTS: [NodeOutput; 9] = [
+static RENDER_SCENE_OUTPUTS: [NodeOutput; 10] = [
     NodePort {
         name: std::borrow::Cow::Borrowed("color"),
         ty: PortType::Texture2D,
@@ -451,6 +451,17 @@ static RENDER_SCENE_OUTPUTS: [NodeOutput; 9] = [
     // the denoiser's ray-remapping consumes it as a float.
     NodePort {
         name: std::borrow::Cow::Borrowed("specular_hit_distance"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    // RAYTRACING_DESIGN.md section 17.7 DN-L: reactive mask — 1.0 where the
+    // texel's own temporal history must not be trusted (emissive surfaces,
+    // object-moved draws), 0.0 elsewhere. Written by the forward pass as
+    // the fifth denoise MRT output; the denoiser blends toward the current
+    // frame there instead of its accumulated history. R16Float.
+    NodePort {
+        name: std::borrow::Cow::Borrowed("reactive_mask"),
         ty: PortType::Texture2D,
         kind: PortKind::Output,
         required: false,
@@ -715,6 +726,11 @@ pub struct RenderScene {
     denoise_specular_albedo_msaa: Option<manifold_gpu::GpuTexture>,
     denoise_specular_albedo_width: u32,
     denoise_specular_albedo_height: u32,
+    /// RAYTRACING_DESIGN.md section 17.7 DN-L: memoryless 4x-MSAA `R16Float`
+    /// reactive-mask aux-MRT target. Same D1 lazy rule as the other feeds.
+    denoise_reactive_msaa: Option<manifold_gpu::GpuTexture>,
+    denoise_reactive_width: u32,
+    denoise_reactive_height: u32,
     /// RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): hit-distance extraction
     /// compute pipeline — reads the upsampled reflection texture's .a
     /// channel into the specular_hit_distance graph output (R16Float).
@@ -1457,6 +1473,9 @@ impl RenderScene {
             denoise_specular_albedo_msaa: None,
             denoise_specular_albedo_width: 0,
             denoise_specular_albedo_height: 0,
+            denoise_reactive_msaa: None,
+            denoise_reactive_width: 0,
+            denoise_reactive_height: 0,
             hit_dist_extract_pipeline: None,
             rt_temporal_color_scratch: None,
             rt_temporal_color_scratch_width: 0,
@@ -1890,6 +1909,13 @@ impl RenderScene {
             MSAA_SAMPLES,
             "node.render_scene msaa denoise specular_albedo",
         ));
+        // DN-L (section 17.7): reactive mask — R16Float like roughness.
+        self.denoise_reactive_msaa = Some(device.create_texture_msaa_memoryless(
+            width, height,
+            manifold_gpu::GpuTextureFormat::R16Float,
+            MSAA_SAMPLES,
+            "node.render_scene msaa denoise reactive_mask",
+        ));
         self.denoise_normals_width = width;
         self.denoise_normals_height = height;
         self.denoise_roughness_width = width;
@@ -1898,6 +1924,8 @@ impl RenderScene {
         self.denoise_diffuse_albedo_height = height;
         self.denoise_specular_albedo_width = width;
         self.denoise_specular_albedo_height = height;
+        self.denoise_reactive_width = width;
+        self.denoise_reactive_height = height;
     }
 
     fn ensure_sampler(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -3013,12 +3041,12 @@ impl RenderScene {
     const DENOISE_ONLY_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
         (
             "// GBUFFER_FSOUT_VELOCITY_STRUCT",
-            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) normals: vec4<f32>,\n    @location(2) roughness: f32,\n    @location(3) diffuse_albedo: vec4<f32>,\n    @location(4) specular_albedo: vec4<f32>,\n};",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) normals: vec4<f32>,\n    @location(2) roughness: f32,\n    @location(3) diffuse_albedo: vec4<f32>,\n    @location(4) specular_albedo: vec4<f32>,\n    @location(5) reactive: f32,\n};",
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    return FsOut(vec4<f32>(rgb, albedo.a), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0));",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -3026,7 +3054,7 @@ impl RenderScene {
     const DENOISE_VELOCITY_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
         (
             "// GBUFFER_FSOUT_VELOCITY_STRUCT",
-            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n    @location(2) normals: vec4<f32>,\n    @location(3) roughness: f32,\n    @location(4) diffuse_albedo: vec4<f32>,\n    @location(5) specular_albedo: vec4<f32>,\n};",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n    @location(2) normals: vec4<f32>,\n    @location(3) roughness: f32,\n    @location(4) diffuse_albedo: vec4<f32>,\n    @location(5) specular_albedo: vec4<f32>,\n    @location(6) reactive: f32,\n};",
         ),
         (
             "// GBUFFER_VSOUT_VELOCITY_FIELDS",
@@ -3039,7 +3067,7 @@ impl RenderScene {
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0));",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -3047,12 +3075,12 @@ impl RenderScene {
     const DENOISE_AO_MASK_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
         (
             "// GBUFFER_FSOUT_VELOCITY_STRUCT",
-            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) ao_mask: f32,\n    @location(2) normals: vec4<f32>,\n    @location(3) roughness: f32,\n    @location(4) diffuse_albedo: vec4<f32>,\n    @location(5) specular_albedo: vec4<f32>,\n};",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) ao_mask: f32,\n    @location(2) normals: vec4<f32>,\n    @location(3) roughness: f32,\n    @location(4) diffuse_albedo: vec4<f32>,\n    @location(5) specular_albedo: vec4<f32>,\n    @location(6) reactive: f32,\n};",
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    return FsOut(vec4<f32>(rgb, albedo.a), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0));",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -3061,7 +3089,7 @@ impl RenderScene {
     const DENOISE_VELOCITY_AO_MASK_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
         (
             "// GBUFFER_FSOUT_VELOCITY_STRUCT",
-            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n    @location(2) ao_mask: f32,\n    @location(3) normals: vec4<f32>,\n    @location(4) roughness: f32,\n    @location(5) diffuse_albedo: vec4<f32>,\n    @location(6) specular_albedo: vec4<f32>,\n};",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n    @location(2) ao_mask: f32,\n    @location(3) normals: vec4<f32>,\n    @location(4) roughness: f32,\n    @location(5) diffuse_albedo: vec4<f32>,\n    @location(6) specular_albedo: vec4<f32>,\n    @location(7) reactive: f32,\n};",
         ),
         (
             "// GBUFFER_VSOUT_VELOCITY_FIELDS",
@@ -3074,7 +3102,7 @@ impl RenderScene {
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0));",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -3110,28 +3138,31 @@ impl RenderScene {
                 &[Rg16Float, R8Unorm],
                 "node.render_scene.velocity.ao_mask",
             )),
-            // Denoise-only: 4 aux attachments after color.
+            // Denoise-only: 5 aux attachments after color (DN-L added the
+            // reactive mask, R16Float).
             (false, false, true) => Some((
                 Self::DENOISE_ONLY_SPECIALIZATIONS,
-                &[Rgba16Float, R16Float, Rgba16Float, Rgba16Float],
+                &[Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
                 "node.render_scene.denoise",
             )),
             // Denoise + velocity.
             (true, false, true) => Some((
                 Self::DENOISE_VELOCITY_SPECIALIZATIONS,
-                &[Rg16Float, Rgba16Float, R16Float, Rgba16Float, Rgba16Float],
+                &[Rg16Float, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
                 "node.render_scene.velocity.denoise",
             )),
             // Denoise + ao_mask.
             (false, true, true) => Some((
                 Self::DENOISE_AO_MASK_SPECIALIZATIONS,
-                &[R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float],
+                &[R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
                 "node.render_scene.ao_mask.denoise",
             )),
-            // Denoise + velocity + ao_mask.
+            // Denoise + velocity + ao_mask. 7 aux + color = 8 attachments,
+            // exactly Metal's guaranteed limit — do not add another aux
+            // output to this variant without dropping one.
             (true, true, true) => Some((
                 Self::DENOISE_VELOCITY_AO_MASK_SPECIALIZATIONS,
-                &[Rg16Float, R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float],
+                &[Rg16Float, R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
                 "node.render_scene.velocity.ao_mask.denoise",
             )),
         }
@@ -3691,7 +3722,8 @@ impl EffectNode for RenderScene {
             || port == "roughness"
             || port == "diffuse_albedo"
             || port == "specular_albedo"
-            || port == "specular_hit_distance";
+            || port == "specular_hit_distance"
+            || port == "reactive_mask";
         if temporal_upscale
             && (port == "depth"
                 || port == "velocity"
@@ -3743,6 +3775,9 @@ impl EffectNode for RenderScene {
                 "diffuse_albedo",
                 "specular_albedo",
                 "specular_hit_distance",
+                // DN-L (section 17.7): reactive mask rides the same
+                // all-or-none gate as the other denoise feeds.
+                "reactive_mask",
             ]
         } else if rt_enabled || temporal_upscale {
             &["depth", "velocity"]
@@ -3768,6 +3803,9 @@ impl EffectNode for RenderScene {
             "diffuse_albedo" => Some(manifold_gpu::GpuTextureFormat::Rgba16Float),
             "specular_albedo" => Some(manifold_gpu::GpuTextureFormat::Rgba16Float),
             "specular_hit_distance" => Some(manifold_gpu::GpuTextureFormat::R16Float),
+            // DN-L (section 17.7): reactive mask — single-channel float,
+            // matches the descriptor's declared reactiveMaskTextureFormat.
+            "reactive_mask" => Some(manifold_gpu::GpuTextureFormat::R16Float),
             _ => None,
         }
     }
@@ -4100,6 +4138,8 @@ impl EffectNode for RenderScene {
         let roughness_resolve_target = ctx.outputs.texture_2d("roughness");
         let diffuse_albedo_resolve_target = ctx.outputs.texture_2d("diffuse_albedo");
         let specular_albedo_resolve_target = ctx.outputs.texture_2d("specular_albedo");
+        // DN-L (section 17.7): reactive mask — same all-or-none gate.
+        let reactive_resolve_target = ctx.outputs.texture_2d("reactive_mask");
         // RAYTRACING_DESIGN.md section 17.5 DN-E/DN-G + BUG-qtkq: one engage
         // decision per evaluate; on the live-flip frame the pre-flip plan has
         // not allocated the feeds, so the whole denoise production path idles
@@ -4110,6 +4150,7 @@ impl EffectNode for RenderScene {
             && roughness_resolve_target.is_some()
             && diffuse_albedo_resolve_target.is_some()
             && specular_albedo_resolve_target.is_some()
+            && reactive_resolve_target.is_some()
             && spec_hit_dist_out.is_some();
         // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
         // whole light-shaft feature, checked once per frame like
@@ -5897,7 +5938,11 @@ impl EffectNode for RenderScene {
                 .with_lighting_changed(lighting_changed)
                 .with_gesture(lighting_gesture)
                 .with_geo_changed(geo_changed)
-                .with_geo_gesture(geo_gesture);
+                .with_geo_gesture(geo_gesture)
+                // DN-L (section 17.7): when the denoiser consumes this
+                // frame's beauty, our temporal history caps drop to
+                // near-raw — the network's history replaces ours.
+                .with_denoise_near_raw(denoise_active);
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
                 // RT-T1-C: ping-pong — read last frame's write slot (same
@@ -6566,6 +6611,12 @@ impl EffectNode for RenderScene {
             (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
             _ => None,
         };
+        // DN-L (section 17.7): reactive mask — same all-or-none gate as the
+        // other four feeds.
+        let reactive_pair = match (self.denoise_reactive_msaa.as_ref(), reactive_resolve_target) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            _ => None,
+        };
         let n_att = normals_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
             msaa,
             resolve,
@@ -6586,39 +6637,46 @@ impl EffectNode for RenderScene {
             resolve,
             clear: [0.0; 4],
         });
+        let rm_att = reactive_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [0.0; 4],
+        });
+        let aux_storage_seven: [manifold_gpu::AuxColorAttachment; 7];
         let aux_storage_six: [manifold_gpu::AuxColorAttachment; 6];
         let aux_storage_five: [manifold_gpu::AuxColorAttachment; 5];
-        let aux_storage_four: [manifold_gpu::AuxColorAttachment; 4];
         let aux_storage_two: [manifold_gpu::AuxColorAttachment; 2];
         let aux_storage_one: [manifold_gpu::AuxColorAttachment; 1];
-        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (velocity_att, ao_mask_att, n_att, r_att, da_att, sa_att) {
-            (Some(v), Some(a), Some(n), Some(r), Some(da), Some(sa)) => {
-                aux_storage_six = [v, a, n, r, da, sa];
+        // DN-L: the reactive attachment (`rm`) joins the denoise four's
+        // all-or-none group — every arm that carries n/r/da/sa carries rm.
+        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (velocity_att, ao_mask_att, n_att, r_att, da_att, sa_att, rm_att) {
+            (Some(v), Some(a), Some(n), Some(r), Some(da), Some(sa), Some(rm)) => {
+                aux_storage_seven = [v, a, n, r, da, sa, rm];
+                &aux_storage_seven
+            }
+            (Some(v), None, Some(n), Some(r), Some(da), Some(sa), Some(rm)) => {
+                aux_storage_six = [v, n, r, da, sa, rm];
                 &aux_storage_six
             }
-            (Some(v), None, Some(n), Some(r), Some(da), Some(sa)) => {
-                aux_storage_five = [v, n, r, da, sa];
-                &aux_storage_five
+            (None, Some(a), Some(n), Some(r), Some(da), Some(sa), Some(rm)) => {
+                aux_storage_six = [a, n, r, da, sa, rm];
+                &aux_storage_six
             }
-            (None, Some(a), Some(n), Some(r), Some(da), Some(sa)) => {
-                aux_storage_five = [a, n, r, da, sa];
-                &aux_storage_five
-            }
-            (Some(v), Some(a), None, None, None, None) => {
+            (Some(v), Some(a), None, None, None, None, None) => {
                 aux_storage_two = [v, a];
                 &aux_storage_two
             }
-            (Some(v), None, None, None, None, None) => {
+            (Some(v), None, None, None, None, None, None) => {
                 aux_storage_one = [v];
                 &aux_storage_one
             }
-            (None, Some(a), None, None, None, None) => {
+            (None, Some(a), None, None, None, None, None) => {
                 aux_storage_one = [a];
                 &aux_storage_one
             }
-            (None, None, Some(n), Some(r), Some(da), Some(sa)) => {
-                aux_storage_four = [n, r, da, sa];
-                &aux_storage_four
+            (None, None, Some(n), Some(r), Some(da), Some(sa), Some(rm)) => {
+                aux_storage_five = [n, r, da, sa, rm];
+                &aux_storage_five
             }
             _ => &[],
         };
@@ -6838,6 +6896,10 @@ impl EffectNode for RenderScene {
             // `Some` there.
             let reset = reset_decision.unwrap_or(false);
             let gpu = ctx.gpu_encoder();
+            // MTL4 skip: on ring saturation `upscale` returns false and
+            // leaves `output` holding last frame's upscale — the copy below
+            // then presents that stale frame (one-frame freeze), the same
+            // degradation the denoiser's MTL4 skip path documents.
             upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, reset);
             gpu.native_enc.copy_texture_to_texture(
                 &upscaler.output.texture,
@@ -6859,13 +6921,13 @@ impl EffectNode for RenderScene {
                 .denoiser
                 .as_ref()
                 .expect("ensured above: denoise_active implies Some");
-            // Belt-and-braces: `force_consumed_outputs` puts all seven
+            // Belt-and-braces: `force_consumed_outputs` puts all eight
             // denoiser feeds in the plan's consumed set whenever
             // `denoise_feed` is on — same BUG-317 class guard as the
             // temporal path.
             let (Some(depth_src), Some(velocity_src), Some(normal_src),
                  Some(roughness_src), Some(diffuse_src), Some(specular_src),
-                 Some(hit_dist_src)) = (
+                 Some(hit_dist_src), Some(reactive_src)) = (
                 depth_resolve_target,
                 velocity_resolve_target,
                 normals_resolve_target,
@@ -6873,6 +6935,7 @@ impl EffectNode for RenderScene {
                 diffuse_albedo_resolve_target,
                 specular_albedo_resolve_target,
                 spec_hit_dist_out,
+                reactive_resolve_target,
             ) else {
                 if !self.denoiser_unavailable_logged {
                     self.denoiser_unavailable_logged = true;
@@ -6932,6 +6995,9 @@ impl EffectNode for RenderScene {
                     // render-res scratch; temporal scaler upscales it.
                     let depth_src = depth_resolve_target.expect("ensured");
                     let velocity_src = velocity_resolve_target.expect("ensured");
+                    // Same MTL4 skip semantics as the main T2-B path:
+                    // false leaves `output` stale and the copy below
+                    // presents last frame's upscale.
                     upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, false);
                     gpu.native_enc.copy_texture_to_texture(
                         &upscaler.output.texture,
@@ -6962,9 +7028,12 @@ impl EffectNode for RenderScene {
                     hit_dist_src,
                     native_color, // output directly to native res
                     reset,
-                    None, // reactive mask — no natural signal maps to it;
-                          // the denoiser's uniform reactivity fallback is
-                          // appropriate for our engine-driven reset model
+                    // DN-L (section 17.7): reactive mask — emissive
+                    // surfaces and object-moved draws marked by the
+                    // forward pass, so the denoiser trusts the current
+                    // frame over its history there (emissive strobes
+                    // and movers no longer trail).
+                    Some(reactive_src),
                 );
 
                 if !denoised && !temporal_upscale {
@@ -8615,7 +8684,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             "rt_enabled must force depth/velocity only, not denoise feeds");
     }
 
-    /// DN-E: `rt_denoise_feed=true` forces the seven G-buffer outputs.
+    /// DN-E: `rt_denoise_feed=true` forces the eight G-buffer outputs
+    /// (DN-L added `reactive_mask`).
     #[test]
     fn rt_denoise_feed_on_forces_all_feeds() {
         let s = RenderScene::new();
@@ -8625,9 +8695,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let expected: &[&str] = &[
             "depth", "velocity", "normals", "roughness",
             "diffuse_albedo", "specular_albedo", "specular_hit_distance",
+            "reactive_mask",
         ];
         assert_eq!(forced, expected,
-            "rt_denoise_feed=true must force all 7 denoiser G-buffer outputs");
+            "rt_denoise_feed=true must force all 8 denoiser G-buffer outputs");
     }
 
     /// DN-E: output_format maps all 5 new ports to their correct formats.
@@ -8639,6 +8710,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(s.output_format("diffuse_albedo"), Some(manifold_gpu::GpuTextureFormat::Rgba16Float));
         assert_eq!(s.output_format("specular_albedo"), Some(manifold_gpu::GpuTextureFormat::Rgba16Float));
         assert_eq!(s.output_format("specular_hit_distance"), Some(manifold_gpu::GpuTextureFormat::R16Float));
+        assert_eq!(s.output_format("reactive_mask"), Some(manifold_gpu::GpuTextureFormat::R16Float));
     }
 
     /// DN-E: the `rt_denoise_feed` param exists, defaults to false, and is a Bool.

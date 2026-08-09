@@ -2721,6 +2721,13 @@ kernel void accumulate_irradiance(
     bool cpu_gesture       = (p.reset & 4u) != 0u;
     bool cpu_geo_changed   = (p.reset & 8u) != 0u;
     bool cpu_geo_gesture   = (p.reset & 16u) != 0u;
+    // DN-L (section 17.7): the MetalFX denoiser consumes this frame's
+    // beauty — drop every temporal history cap to near-raw (n ≤ 4) so the
+    // network's own history replaces ours. Feeding it pre-smoothed frames
+    // is double temporal filtering (the fused-path look rejection's
+    // confound 1). `alpha_floor` replaces `p.alpha` at every blend below.
+    bool denoise_near_raw  = (p.reset & 32u) != 0u;
+    float alpha_floor = denoise_near_raw ? max(p.alpha, 0.25) : p.alpha;
     if ((p.reset & 1u) != 0u) {
         // `.a` = accumulated frame count (BUG-boil): a cold texel has
         // exactly one sample, so its next blend takes the current frame at
@@ -3006,8 +3013,8 @@ kernel void accumulate_irradiance(
                     // gesture gates snap to 2 — one frame of history so a
                     // single wild sample cannot define the pixel.
                     float n = cpu_lighting_changed ? 1.0 : (texel_or_gesture ? 2.0 : n_full);
-                    float alpha = max(1.0 / n, p.alpha);
-                    hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
+                    float alpha = max(1.0 / n, alpha_floor);
+                    hist_len = min(n, 1.0 / max(alpha_floor, 1e-6));
                     blended = mix(hist, cur.xyz, alpha);
                     // TL8 amendment (section 10 addendum): svt gets its OWN
                     // decision. Tint is a geometry term — unchanged by
@@ -3021,7 +3028,7 @@ kernel void accumulate_irradiance(
                     bool svt_snap = cpu_geo_changed || cpu_geo_gesture
                         || (texel_fired && !cpu_lighting_changed && !cpu_gesture);
                     float svt_n = svt_snap ? 2.0 : n_full;
-                    float svt_alpha = max(1.0 / svt_n, p.alpha);
+                    float svt_alpha = max(1.0 / svt_n, alpha_floor);
                     svt_blended = mix(svtsum / wsum, cur_svt, svt_alpha);
                     // ED2: ao temporally accumulates with the SAME weight as
                     // the rgb (one value per pixel, the atrous anchor).
@@ -3083,7 +3090,7 @@ kernel void accumulate_irradiance(
                     sv_hold_w = sv_changed ? 4.0 : max(sv_hold_hist - 1.0, 0.0);
                     bool sv_snap = sv_changed || sv_hold_hist >= 1.0;
                     float sv_n = sv_snap ? 2.0 : n_full;
-                    float sv_alpha = max(1.0 / sv_n, p.alpha);
+                    float sv_alpha = max(1.0 / sv_n, alpha_floor);
                     sv_blended = mix(sv_hist, cur_sv, sv_alpha);
                     valid = true;
                     // The moments update on a FLOORED window (>= 4 samples)
@@ -3092,7 +3099,7 @@ kernel void accumulate_irradiance(
                     // destroy the statistic that decides the next snap and the
                     // reset would self-sustain — measured at 3x the static
                     // noise when that happened.
-                    float m_alpha = max(1.0 / max(n, 4.0), p.alpha);
+                    float m_alpha = max(1.0 / max(n, 4.0), alpha_floor);
                     moment1 = mix(hm1, cur_luma, m_alpha);
                     moment2 = mix(hm2, cur_luma * cur_luma, m_alpha);
                     // SV-ACCUM: visibility moments on the SAME floored
@@ -3122,7 +3129,7 @@ kernel void accumulate_irradiance(
                     sv2_hold_w = sv2_changed ? 4.0 : max(sv2_hold_hist - 1.0, 0.0);
                     bool sv2_snap = sv2_changed || sv2_hold_hist >= 1.0;
                     float sv2_n = sv2_snap ? 2.0 : n_full;
-                    float sv2_alpha = max(1.0 / sv2_n, p.alpha);
+                    float sv2_alpha = max(1.0 / sv2_n, alpha_floor);
                     sv2_blended = mix(sv2_hist, cur_sv2, sv2_alpha);
                     sv2_m1w = mix(sv2_hm1, cur_sv2, m_alpha);
                     sv2_m2w = mix(sv2_hm2, cur_sv2 * cur_sv2, m_alpha);
@@ -3278,6 +3285,12 @@ kernel void accumulate_irradiance(
                     // n≈10; a held camera gets the 40-frame static cap).
                     float motion_refl_floor = max(RT_REFL_ACCUM_ALPHA_MIN,
                                                   min(p.cam_motion * 5.0, 0.9));
+                    // DN-L: the denoiser consumes this frame — cap specular
+                    // history at n ≤ 4 too, same near-raw rule as the
+                    // diffuse/sv/svt channels' `alpha_floor` (0.01 when the
+                    // flag is off — below RT_REFL_ACCUM_ALPHA_MIN, so a
+                    // flag-off frame is byte-identical).
+                    motion_refl_floor = max(motion_refl_floor, alpha_floor);
                     float ralpha = max(1.0 / rn, motion_refl_floor);
                     refl_hist_len = min(rn, 1.0 / motion_refl_floor);
                     refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, ralpha);
@@ -4384,6 +4397,17 @@ impl AccumulateParams {
         }
         self
     }
+
+    /// Tell the accumulator the MetalFX denoiser consumes this frame's
+    /// beauty (RAYTRACING_DESIGN.md section 17.7 DN-L): the kernel drops
+    /// every temporal history cap to near-raw (n ≤ 4) so the network's
+    /// own history replaces ours.
+    pub fn with_denoise_near_raw(mut self, active: bool) -> Self {
+        if active {
+            self.reset |= ACCUM_FLAG_DENOISE_NEAR_RAW;
+        }
+        self
+    }
 }
 
 /// `AccumulateParams::reset` bit 1 — see `with_lighting_changed`. Bit 0 is the
@@ -4401,6 +4425,12 @@ pub const ACCUM_FLAG_GEO_CHANGED: u32 = 8;
 /// Bit 4 — two consecutive frames of geometry-sub-key change. Folded into
 /// the sv/sv2 trip condition so shadow channels take the cue directly.
 pub const ACCUM_FLAG_GEO_GESTURE: u32 = 16;
+/// Bit 5 — the MetalFX denoiser consumes this frame's beauty
+/// (RAYTRACING_DESIGN.md section 17.7 DN-L): drop every temporal history
+/// cap to near-raw (n ≤ 4, alpha floor 0.25) so the network's own history
+/// replaces ours — feeding it pre-smoothed frames is double temporal
+/// filtering (Peter's fused-path look rejection, confound 1).
+pub const ACCUM_FLAG_DENOISE_NEAR_RAW: u32 = 32;
 
 /// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
 /// (RT-T1-D, BUG-312). Plain POD, all `u32`, no alignment surprises.
