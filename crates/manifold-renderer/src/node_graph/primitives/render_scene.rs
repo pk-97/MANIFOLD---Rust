@@ -6838,6 +6838,10 @@ impl EffectNode for RenderScene {
             // `Some` there.
             let reset = reset_decision.unwrap_or(false);
             let gpu = ctx.gpu_encoder();
+            // MTL4 skip: on ring saturation `upscale` returns false and
+            // leaves `output` holding last frame's upscale — the copy below
+            // then presents that stale frame (one-frame freeze), the same
+            // degradation the denoiser's MTL4 skip path documents.
             upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, reset);
             gpu.native_enc.copy_texture_to_texture(
                 &upscaler.output.texture,
@@ -6932,6 +6936,9 @@ impl EffectNode for RenderScene {
                     // render-res scratch; temporal scaler upscales it.
                     let depth_src = depth_resolve_target.expect("ensured");
                     let velocity_src = velocity_resolve_target.expect("ensured");
+                    // Same MTL4 skip semantics as the main T2-B path:
+                    // false leaves `output` stale and the copy below
+                    // presents last frame's upscale.
                     upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, false);
                     gpu.native_enc.copy_texture_to_texture(
                         &upscaler.output.texture,
