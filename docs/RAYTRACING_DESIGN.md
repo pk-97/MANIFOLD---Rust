@@ -2210,31 +2210,31 @@ frames); (2) the reactive mask is unwired (`render_scene.rs` passes
 upgrade to the Metal 4 (`MTL4FX*`) scaler generation, no quality
 probe — "they will be better than previous."
 
-- **DN-K — Metal 4 scaler migration.** `MTL4FXTemporalDenoisedScaler`
-  (and `MTL4FXTemporalScaler` for the plain path) replace the `MTLFX*`
-  generation behind the DN5 seam, availability-gated with `MTLFX*`
-  fallback (bindings verified present in objc2-metal-fx 0.3.2).
-  Constraint: `MTL4FX*` encodes into `MTL4CommandBuffer`; manifold-gpu
-  uses classic `MTLCommandBuffer`. The lane establishes the minimal
-  bridge (MTL4 encode for the scaler only, shared-event sync against
-  the classic queue) — NOT a wholesale command-model migration.
-  Bridge performance is a review gate (Peter, 2026-08-09): no
-  CPU-side sync per frame (GPU-side shared events, pipelined by
-  value), no GPU bubble at the submission boundary, bridge tax
-  measured (GPU ms vs the MTLFX path, same fixture, using the
-  BUG-iadf — 1:1 denoise cost anomaly — probe instrumentation) —
-  a stall-y bridge is rejected, not tuned.
-  Gate: byte-identity of the classic path when the MTL4 classes are
-  unavailable; denoiser value test re-run on the MTL4 effect.
+- **DN-K — Metal 4 scaler migration. LANDED 2026-08-09 on main.**
+  `MTL4FXTemporalDenoisedScaler` (and `MTL4FXTemporalScaler` for the
+  plain path) are the preferred implementations behind the DN5 seam,
+  availability-gated with silent `MTLFX*` fallback. Typed objc2-metal
+  0.3.2 MTL4 API (additive features; the classic command timeline is
+  untouched). Per-device `MTL4Bridge`: one MTL4 queue + 3-allocator
+  ring + shared event; GPU-side sync only, no CPU stalls; ring
+  saturation skips the scaler for one frame (stale output) rather than
+  resetting a live allocator. Value proof
+  `m4_denoise_reduces_error_vs_clean_ramp` drives the bridge on
+  hardware; Metal 4 needs no explicit residency sets for
+  classic-created textures (answered by that test).
 - **DN-L — input conditioning.** When `rt_denoise_feed` engages, the
   RT accumulator's history cap drops to near-raw (target n ≤ 4 — the
   network's history replaces ours) and the reactive mask is wired:
   emissive surfaces + motion-classified movers marked reactive.
   Gate: gpu-proofs on the accumulate kernel's new cap path; pixel
   proof that an emissive strobe does not trail with the denoiser on.
-- **DN-M — emissive noise fixture.** Khronos `EmissiveStrengthTest.glb`
-  (tests/fixtures/gltf/khronos) added to `scripts/rt_noise_gate.py`
-  fixtures — still-scene emissive shimmer becomes measurable.
+- **DN-M — emissive noise fixture. LANDED 2026-08-09 on main.**
+  Peter saved `RtEmissiveStrength.manifold` (import preset over the
+  Khronos `EmissiveStrengthTest.glb`, six stepped-emissive cubes);
+  `scripts/rt_noise_gate.py` baselines are now per-fixture (schema 2).
+  First measurement: still-scene emissive flicker is firefly-class —
+  irr_full mean |delta| 3.083, p99.9 126.8 (8-bit levels) vs the
+  apricot fixture's frozen flats.
 - **DN-N — re-look gate (Peter).** Fused path, conditioned, Metal 4
   networks. PASS → default-flip + effect-card button + noise-gate
   re-baseline land (default-on denoise implies temporal_upscale —
