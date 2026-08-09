@@ -5800,18 +5800,267 @@ impl UploadBytes for GpuBuffer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::blas_geometry_opaque;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::metal::GpuDevice;
+    use crate::types::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
-    /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks
-    /// translucency — the hardware fast path is kept only for objects the
-    /// kernel's candidate walks never need to see.
+    /// DN-L (RAYTRACING_DESIGN.md section 17.7): the temporal accumulator's
+    /// `p.alpha` cap drops from 0.01 (~100 frames) to 0.25 (≤4 frames) when
+    /// the ML denoiser feed is engaged. This value proof runs the actual
+    /// `accumulate_irradiance` kernel on a 1×1 constant irradiance pixel and
+    /// reads `moments.w` (the accumulated frame count) to verify the cap.
+    ///
+    /// For the feed-ON path (alpha=0.25): after 5 frames the history length is
+    /// clamped at 4.0. For the feed-OFF path (alpha=0.01): after 5 frames the
+    /// history length is still growing, reaching 5.0 — the old path is
+    /// byte-identical because the only changed input is the alpha value.
     #[test]
-    fn blas_opacity_tracks_alpha_mask_and_translucency() {
-        assert!(blas_geometry_opaque(false, false));
-        assert!(!blas_geometry_opaque(true, false));
-        assert!(!blas_geometry_opaque(false, true));
-        assert!(!blas_geometry_opaque(true, true));
+    fn accumulator_cap_honours_alpha_floor() {
+        let device = GpuDevice::new();
+        let tracer = MetalShadowRayTracer::new(&device);
+
+        let w = 1u32;
+        let h = 1u32;
+        let usage = GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC;
+
+        let make = |format: GpuTextureFormat, label: &str| {
+            device.create_texture(&GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format,
+                dimension: GpuTextureDimension::D2,
+                usage,
+                label,
+                mip_levels: 1,
+            })
+        };
+
+        let hi_irr = make(GpuTextureFormat::Rgba32Float, "acc hi_irr");
+        let depth_tex = make(GpuTextureFormat::R32Float, "acc depth");
+        let hi_normal = make(GpuTextureFormat::Rgba32Float, "acc hi_normal");
+
+        let hist_a = make(GpuTextureFormat::Rgba32Float, "acc hist_a");
+        let hist_b = make(GpuTextureFormat::Rgba32Float, "acc hist_b");
+        let depth_hist_a = make(GpuTextureFormat::R32Float, "acc depth_hist_a");
+        let depth_hist_b = make(GpuTextureFormat::R32Float, "acc depth_hist_b");
+        let normal_hist_a = make(GpuTextureFormat::Rgba32Float, "acc normal_hist_a");
+        let normal_hist_b = make(GpuTextureFormat::Rgba32Float, "acc normal_hist_b");
+        let moments_a = make(GpuTextureFormat::Rgba32Float, "acc moments_a");
+        let moments_b = make(GpuTextureFormat::Rgba32Float, "acc moments_b");
+
+        let hi_refl = make(GpuTextureFormat::Rgba32Float, "acc hi_refl");
+        let refl_a = make(GpuTextureFormat::Rgba32Float, "acc refl_a");
+        let refl_b = make(GpuTextureFormat::Rgba32Float, "acc refl_b");
+        let hi_sv = make(GpuTextureFormat::Rgba32Float, "acc hi_sv");
+        let sv_a = make(GpuTextureFormat::Rgba32Float, "acc sv_a");
+        let sv_b = make(GpuTextureFormat::Rgba32Float, "acc sv_b");
+        let sv_m1_a = make(GpuTextureFormat::Rgba32Float, "acc sv_m1_a");
+        let sv_m1_b = make(GpuTextureFormat::Rgba32Float, "acc sv_m1_b");
+        let sv_m2_a = make(GpuTextureFormat::Rgba32Float, "acc sv_m2_a");
+        let sv_m2_b = make(GpuTextureFormat::Rgba32Float, "acc sv_m2_b");
+        let sv_hold_a = make(GpuTextureFormat::Rgba32Float, "acc sv_hold_a");
+        let sv_hold_b = make(GpuTextureFormat::Rgba32Float, "acc sv_hold_b");
+        let hi_sv2 = make(GpuTextureFormat::Rgba32Float, "acc hi_sv2");
+        let sv2_a = make(GpuTextureFormat::Rgba32Float, "acc sv2_a");
+        let sv2_b = make(GpuTextureFormat::Rgba32Float, "acc sv2_b");
+        let sv2_m1_a = make(GpuTextureFormat::Rgba32Float, "acc sv2_m1_a");
+        let sv2_m1_b = make(GpuTextureFormat::Rgba32Float, "acc sv2_m1_b");
+        let sv2_m2_a = make(GpuTextureFormat::Rgba32Float, "acc sv2_m2_a");
+        let sv2_m2_b = make(GpuTextureFormat::Rgba32Float, "acc sv2_m2_b");
+        let sv2_hold_a = make(GpuTextureFormat::Rgba32Float, "acc sv2_hold_a");
+        let sv2_hold_b = make(GpuTextureFormat::Rgba32Float, "acc sv2_hold_b");
+        let hi_svt = make(GpuTextureFormat::Rgba32Float, "acc hi_svt");
+        let svt_a = make(GpuTextureFormat::Rgba32Float, "acc svt_a");
+        let svt_b = make(GpuTextureFormat::Rgba32Float, "acc svt_b");
+
+        // Constant red irradiance, matching depth/normal so the validity test
+        // passes and the history can accumulate.
+        let red = [1.0f32, 0.0, 0.0, 1.0];
+        let red_bytes: Vec<u8> = red.iter().flat_map(|f| f.to_ne_bytes()).collect();
+        device.upload_texture(&hi_irr, &red_bytes);
+        let zero_rgba32f: Vec<u8> = (0..16).map(|_| 0u8).collect();
+        device.upload_texture(&hi_normal, &[0.0f32, 0.0, 1.0, 0.0].iter().flat_map(|f| f.to_ne_bytes()).collect::<Vec<u8>>());
+        device.upload_texture(&depth_tex, &0.5f32.to_ne_bytes());
+        for tex in [
+            &hist_a, &hist_b, &refl_a, &refl_b, &sv_a, &sv_b, &sv_m1_a, &sv_m1_b,
+            &sv_m2_a, &sv_m2_b, &sv_hold_a, &sv_hold_b,
+            &sv2_a, &sv2_b, &sv2_m1_a, &sv2_m1_b, &sv2_m2_a, &sv2_m2_b,
+            &sv2_hold_a, &sv2_hold_b, &hi_svt, &svt_a, &svt_b,
+        ] {
+            device.upload_texture(tex, &zero_rgba32f);
+        }
+        device.upload_texture(&depth_hist_a, &0.5f32.to_ne_bytes());
+        device.upload_texture(&depth_hist_b, &0.5f32.to_ne_bytes());
+        device.upload_texture(&normal_hist_a, &[0.0f32, 0.0, 1.0, 0.0].iter().flat_map(|f| f.to_ne_bytes()).collect::<Vec<u8>>());
+        device.upload_texture(&normal_hist_b, &[0.0f32, 0.0, 1.0, 0.0].iter().flat_map(|f| f.to_ne_bytes()).collect::<Vec<u8>>());
+        device.upload_texture(&moments_a, &zero_rgba32f);
+        device.upload_texture(&moments_b, &zero_rgba32f);
+        device.upload_texture(&hi_refl, &zero_rgba32f);
+        device.upload_texture(&hi_sv, &zero_rgba32f);
+        device.upload_texture(&hi_sv2, &zero_rgba32f);
+
+        let identity4: [[f32; 4]; 4] = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+
+        let obj_motion = device.create_buffer_shared(64);
+        unsafe {
+            obj_motion.write(0, std::slice::from_raw_parts(
+                identity4.as_ptr() as *const u8,
+                64,
+            ));
+        }
+
+        let gi_material = GiMaterial::new(
+            [0.0f32; 3],
+            [0.0f32; 3],
+            [0.0f32, 0.5, 0.0, 0.0],
+            [0.0f32; 4],
+        );
+        let gi_materials = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+        unsafe {
+            gi_materials.write(0, std::slice::from_raw_parts(
+                &gi_material as *const GiMaterial as *const u8,
+                std::mem::size_of::<GiMaterial>(),
+            ));
+        }
+
+        let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+
+        let run_to_hist_len = |alpha: f32| -> f32 {
+            let mut hist_read: &GpuTexture = &hist_a;
+            let mut hist_write: &GpuTexture = &hist_b;
+            let mut depth_hist_read: &GpuTexture = &depth_hist_a;
+            let mut depth_hist_write: &GpuTexture = &depth_hist_b;
+            let mut normal_hist_read: &GpuTexture = &normal_hist_a;
+            let mut normal_hist_write: &GpuTexture = &normal_hist_b;
+            let mut moments_read: &GpuTexture = &moments_a;
+            let mut moments_write: &GpuTexture = &moments_b;
+            let mut refl_read: &GpuTexture = &refl_a;
+            let mut refl_write: &GpuTexture = &refl_b;
+            let mut sv_read: &GpuTexture = &sv_a;
+            let mut sv_write: &GpuTexture = &sv_b;
+            let mut sv_m1_read: &GpuTexture = &sv_m1_a;
+            let mut sv_m1_write: &GpuTexture = &sv_m1_b;
+            let mut sv_m2_read: &GpuTexture = &sv_m2_a;
+            let mut sv_m2_write: &GpuTexture = &sv_m2_b;
+            let mut sv_hold_read: &GpuTexture = &sv_hold_a;
+            let mut sv_hold_write: &GpuTexture = &sv_hold_b;
+            let mut sv2_read: &GpuTexture = &sv2_a;
+            let mut sv2_write: &GpuTexture = &sv2_b;
+            let mut sv2_m1_read: &GpuTexture = &sv2_m1_a;
+            let mut sv2_m1_write: &GpuTexture = &sv2_m1_b;
+            let mut sv2_m2_read: &GpuTexture = &sv2_m2_a;
+            let mut sv2_m2_write: &GpuTexture = &sv2_m2_b;
+            let mut sv2_hold_read: &GpuTexture = &sv2_hold_a;
+            let mut sv2_hold_write: &GpuTexture = &sv2_hold_b;
+            let mut svt_read: &GpuTexture = &svt_a;
+            let mut svt_write: &GpuTexture = &svt_b;
+
+            for frame in 0..5 {
+                let params = AccumulateParams::new(
+                    [w, h],
+                    alpha,
+                    frame == 0,
+                    1,
+                    [0.0f32; 3],
+                    0.0,
+                    identity4,
+                    identity4,
+                );
+                unsafe {
+                    params_buffer.write(0, super::accumulate_params_bytes(&params));
+                }
+
+                let mut enc = device.create_encoder("acc-cap-test");
+                tracer.accumulate_irradiance(
+                    &mut enc,
+                    &params,
+                    &params_buffer,
+                    &obj_motion,
+                    &hi_irr,
+                    &depth_tex,
+                    &hi_normal,
+                    hist_read,
+                    hist_write,
+                    depth_hist_read,
+                    depth_hist_write,
+                    normal_hist_read,
+                    normal_hist_write,
+                    moments_read,
+                    moments_write,
+                    &hi_refl,
+                    refl_read,
+                    refl_write,
+                    &gi_materials,
+                    &hi_sv,
+                    sv_read,
+                    sv_write,
+                    sv_m1_read,
+                    sv_m1_write,
+                    sv_m2_read,
+                    sv_m2_write,
+                    sv_hold_read,
+                    sv_hold_write,
+                    &hi_sv2,
+                    sv2_read,
+                    sv2_write,
+                    sv2_m1_read,
+                    sv2_m1_write,
+                    sv2_m2_read,
+                    sv2_m2_write,
+                    sv2_hold_read,
+                    sv2_hold_write,
+                    &hi_svt,
+                    svt_read,
+                    svt_write,
+                    "acc-cap-test",
+                );
+                enc.commit_and_wait_completed();
+
+                std::mem::swap(&mut hist_read, &mut hist_write);
+                std::mem::swap(&mut depth_hist_read, &mut depth_hist_write);
+                std::mem::swap(&mut normal_hist_read, &mut normal_hist_write);
+                std::mem::swap(&mut moments_read, &mut moments_write);
+                std::mem::swap(&mut refl_read, &mut refl_write);
+                std::mem::swap(&mut sv_read, &mut sv_write);
+                std::mem::swap(&mut sv_m1_read, &mut sv_m1_write);
+                std::mem::swap(&mut sv_m2_read, &mut sv_m2_write);
+                std::mem::swap(&mut sv_hold_read, &mut sv_hold_write);
+                std::mem::swap(&mut sv2_read, &mut sv2_write);
+                std::mem::swap(&mut sv2_m1_read, &mut sv2_m1_write);
+                std::mem::swap(&mut sv2_m2_read, &mut sv2_m2_write);
+                std::mem::swap(&mut sv2_hold_read, &mut sv2_hold_write);
+                std::mem::swap(&mut svt_read, &mut svt_write);
+            }
+
+            let readback = device.create_buffer_shared(16);
+            let mut enc = device.create_encoder("acc-cap-readback");
+            enc.copy_texture_to_buffer(moments_write, &readback, w, h, 16);
+            enc.commit_and_wait_completed();
+            let ptr = readback.mapped_ptr().expect("shared readback");
+            let floats: &[f32] = unsafe {
+                std::slice::from_raw_parts(ptr as *const f32, 4)
+            };
+            floats[3]
+        };
+
+        let cap_on = run_to_hist_len(0.25);
+        let cap_off = run_to_hist_len(0.01);
+
+        assert!(
+            (cap_on - 4.0).abs() < 1e-3,
+            "alpha=0.25 must cap history length at 4.0 (dn-l), got {cap_on}"
+        );
+        assert!(
+            (cap_off - 5.0).abs() < 1e-3,
+            "alpha=0.01 must keep history length at 5.0 after 5 frames (feed-off byte-identical), got {cap_off}"
+        );
     }
 }

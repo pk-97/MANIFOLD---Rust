@@ -15884,6 +15884,10 @@
         {
           "name": "specular_hit_distance",
           "type": "Texture2D"
+        },
+        {
+          "name": "reactive_mask",
+          "type": "Texture2D"
         }
       ],
       "params": [
