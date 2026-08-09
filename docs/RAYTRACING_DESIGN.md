@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 (many-light: RS-A caster cap 8, RS-C emissive RIS sampler), 16 (translucency TL-A/B/C) landed. 17 DN (ML denoiser, Tahoe floor) BUILT 2026-08-08 — spine + sweep landed; engage path unified (one `denoise_aux_ready` gate per evaluate; card toggle rebuilds on the spot — BUG-qtkq (denoise flip unify) / BUG-7k1z (card toggle live flip) closed); operating point = fused upscale + default spp (28.8–33 ms vs 31.2 native, ML-denoised); 1:1 export-tier, cost answered (BUG-iadf — 1:1 cost anomaly: the MetalFX ML inference is input-resolution-bound — 33.4 ms at 4K, 12.8 ms at 1440p — hardware-bound, not overhead). OWED: Peter's looks — DN-I upscaled pair + live flip on brokenHelmetRotationsRT, multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pink-pool pair; noise-gate re-baseline at default-flip (default-flip is now a product call: 1:1 is unaffordable, so a default-on denoise only makes sense paired with temporal_upscale). P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-08 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), 15 (many-light: RS-A caster cap 8, RS-C emissive RIS sampler), 16 (translucency TL-A/B/C) landed. 17 DN (ML denoiser, Tahoe floor) BUILT 2026-08-08 — spine + sweep landed; engage path unified (one `denoise_aux_ready` gate per evaluate; card toggle rebuilds on the spot — BUG-qtkq (denoise flip unify) / BUG-7k1z (card toggle live flip) closed); operating point = fused upscale + default spp (28.8–33 ms vs 31.2 native, ML-denoised); 1:1 export-tier, cost answered (BUG-iadf — 1:1 cost anomaly: the MetalFX ML inference is input-resolution-bound — 33.4 ms at 4K, 12.8 ms at 1440p — hardware-bound, not overhead). Peter's fused-path look 2026-08-09: REJECTED as-fed (smeared, detail loss) — confounded by un-landed input conditioning; section 17.7 wave runs Metal 4 scaler migration + conditioning, then re-look. OWED: Peter's looks — section 17.7 re-look (fused, conditioned), DN-I upscaled pair, multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pink-pool pair; noise-gate re-baseline at default-flip (gated on the re-look; default-on denoise only makes sense paired with temporal_upscale). P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-09 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -2198,3 +2198,41 @@ needed** (installed Xcode is 16.4; headers irrelevant to us).
 - **Frame interpolation pairing** — D6 (per-output frame interpolation)
   unchanged; the Tahoe floor (DN1) removes its OS blocker, not its
   show-need trigger.
+
+### 17.7 Metal 4 scaler migration + input conditioning (2026-08-09, Peter + K3)
+
+Peter's live look at the fused path (DN2) as-fed: REJECTED — smeared,
+detail loss. Two confounds mean the verdict isn't final: (1) the
+denoiser's input is pre-smoothed by our own temporal accumulator
+(double temporal filtering — the network is trained on raw noisy
+frames); (2) the reactive mask is unwired (`render_scene.rs` passes
+`None`), so emissives and movers trail. Peter's direction: straight
+upgrade to the Metal 4 (`MTL4FX*`) scaler generation, no quality
+probe — "they will be better than previous."
+
+- **DN-K — Metal 4 scaler migration.** `MTL4FXTemporalDenoisedScaler`
+  (and `MTL4FXTemporalScaler` for the plain path) replace the `MTLFX*`
+  generation behind the DN5 seam, availability-gated with `MTLFX*`
+  fallback (bindings verified present in objc2-metal-fx 0.3.2).
+  Constraint: `MTL4FX*` encodes into `MTL4CommandBuffer`; manifold-gpu
+  uses classic `MTLCommandBuffer`. The lane establishes the minimal
+  bridge (MTL4 encode for the scaler only, shared-event sync against
+  the classic queue) — NOT a wholesale command-model migration.
+  Gate: byte-identity of the classic path when the MTL4 classes are
+  unavailable; denoiser value test re-run on the MTL4 effect.
+- **DN-L — input conditioning.** When `rt_denoise_feed` engages, the
+  RT accumulator's history cap drops to near-raw (target n ≤ 4 — the
+  network's history replaces ours) and the reactive mask is wired:
+  emissive surfaces + motion-classified movers marked reactive.
+  Gate: gpu-proofs on the accumulate kernel's new cap path; pixel
+  proof that an emissive strobe does not trail with the denoiser on.
+- **DN-M — emissive noise fixture.** Khronos `EmissiveStrengthTest.glb`
+  (tests/fixtures/gltf/khronos) added to `scripts/rt_noise_gate.py`
+  fixtures — still-scene emissive shimmer becomes measurable.
+- **DN-N — re-look gate (Peter).** Fused path, conditioned, Metal 4
+  networks. PASS → default-flip + effect-card button + noise-gate
+  re-baseline land (default-on denoise implies temporal_upscale —
+  the engage logic must never select 1:1 by default). FAIL → ML
+  beauty denoise is dead for live; section 18 = lighting-only
+  architecture (native 4K scene, RT lighting traced + denoised at
+  reduced res, per section 17.6 per-term trigger, now fired).
