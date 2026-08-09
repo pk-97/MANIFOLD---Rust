@@ -647,3 +647,91 @@ fn svt_tint_holds_through_strobe() {
         );
     }
 }
+
+/// Read the moments texture's `.w` (accumulated history length) at the
+/// center texel. Rgba32Float = 16 bytes/px.
+fn read_moments_w_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
+    let bytes_per_row = W * 16;
+    let total_bytes = u64::from(H * bytes_per_row);
+    let buf = device.create_buffer_shared(total_bytes);
+    let mut enc = device.create_encoder("gr-readback-moments");
+    enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("shared readback buffer");
+    let f32s: &[f32] = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), (W * H * 4) as usize) };
+    f32s[3]
+}
+
+/// RAYTRACING_DESIGN.md section 17.7 DN-L gate: with the denoiser's
+/// near-raw flag set, the accumulator's history cap drops to n ≤ 4
+/// (alpha floor 0.25) — the network's temporal history replaces ours.
+/// Control: without the flag the same warmup converges to the 1/alpha
+/// cap (20 at TEST_ALPHA 0.05).
+#[test]
+fn denoise_near_raw_caps_history_at_four_frames() {
+    let h = shared();
+    let device = &h.device;
+    let tracer = MetalShadowRayTracer::new(device);
+    let depth = make_depth_at(device, 0.5);
+    let normal = make_pass_through(device, 0.0, 1.0, 0.0, "dnl-normal");
+    let sv = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-sv");
+    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-sv2");
+    let svt = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-svt");
+    let refl = make_pass_through(device, 0.0, 0.0, 0.0, "dnl-refl");
+    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let obj_motion_buf = make_identity_obj_motion(device);
+    let irr = upload_irr(device, 0.3, 0.3, 0.3);
+    const NEAR_RAW: u32 = manifold_gpu::raytrace::ACCUM_FLAG_DENOISE_NEAR_RAW;
+
+    // Control: 30 frames, no flag — history length approaches 1/alpha = 20.
+    let mut history = FullHistorySet::new(device);
+    run_accumulate_frame(
+        device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "dnl-c-0",
+    );
+    for i in 1..30 {
+        run_accumulate_frame(
+            device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            &format!("dnl-c-{i}"),
+        );
+    }
+    let control_len = read_moments_w_center(device, history.read_moments());
+    assert!(
+        control_len > 12.0,
+        "control: 30 unflagged frames must build long history (got {control_len:.2}, cap 20)"
+    );
+
+    // Near-raw: same warmup, then 10 flagged frames — the cap must
+    // collapse to ≤ 4 (0.25 floor) and hold there.
+    let mut history = FullHistorySet::new(device);
+    run_accumulate_frame(
+        device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "dnl-n-0",
+    );
+    for i in 1..30 {
+        run_accumulate_frame(
+            device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            &format!("dnl-n-{i}"),
+        );
+    }
+    for i in 0..10 {
+        run_accumulate_frame(
+            device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, NEAR_RAW,
+            &format!("dnl-nr-{i}"),
+        );
+    }
+    let near_raw_len = read_moments_w_center(device, history.read_moments());
+    assert!(
+        near_raw_len <= 4.5,
+        "near-raw: flagged frames must cap history at n ≤ 4 (got {near_raw_len:.2})"
+    );
+
+    // Value check: constant input means the blend weight change must not
+    // move the irradiance value — the cap alters responsiveness, not the
+    // converged answer.
+    let r = read_r_center(device, history.read_irr());
+    assert!((r - 0.3).abs() < 0.02, "converged value drifted: r={r:.4}");
+}
