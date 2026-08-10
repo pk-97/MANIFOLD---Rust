@@ -31,14 +31,33 @@ use crate::{GpuEvent, GpuTextureFormat};
 
 /// Check if MTL4FX Temporal Denoised Scaler is available on this system.
 pub fn metalfx_m4_denoiser_available() -> bool {
-    use objc2::runtime::AnyClass;
-    AnyClass::get(c"MTL4FXTemporalDenoisedScaler").is_some()
+    mtl4fx_creation_supported(
+        c"MTLFXTemporalDenoisedScalerDescriptor",
+        objc2::sel!(newTemporalDenoisedScalerWithDevice:compiler:),
+    )
 }
 
 /// Check if MTL4FX Temporal Scaler is available on this system.
 pub fn metalfx_m4_temporal_available() -> bool {
+    mtl4fx_creation_supported(
+        c"MTLFXTemporalScalerDescriptor",
+        objc2::sel!(newTemporalScalerWithDevice:compiler:),
+    )
+}
+
+/// MTL4FX scaler names are protocols, not classes — a class lookup on them
+/// always fails. The real gate: the public descriptor must answer the MTL4
+/// compiler-based creation selector.
+fn mtl4fx_creation_supported(
+    descriptor_class: &'static std::ffi::CStr,
+    creation_sel: objc2::runtime::Sel,
+) -> bool {
+    use objc2::msg_send;
     use objc2::runtime::AnyClass;
-    AnyClass::get(c"MTL4FXTemporalScaler").is_some()
+    let Some(cls) = AnyClass::get(descriptor_class) else {
+        return false;
+    };
+    unsafe { msg_send![cls, instancesRespondToSelector: creation_sel] }
 }
 
 /// Check if the MTL4FX Temporal Denoised Scaler is supported for the
