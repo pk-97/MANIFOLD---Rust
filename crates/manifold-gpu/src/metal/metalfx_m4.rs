@@ -12,8 +12,9 @@
 use objc2::{AnyThread, Message, rc::Retained};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTLCommandBuffer, MTLDevice,
-    MTLEvent, MTLPixelFormat, MTLSharedEvent, MTLTexture,
+    MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTLAllocation, MTLCommandBuffer,
+    MTLDevice, MTLEvent, MTLPixelFormat, MTLResidencySet, MTLResidencySetDescriptor,
+    MTLSharedEvent, MTLStages, MTLTexture,
 };
 use objc2_metal_fx::{
     MTL4FXTemporalDenoisedScaler, MTL4FXTemporalScaler, MTLFXTemporalDenoisedScalerBase,
@@ -30,15 +31,47 @@ use crate::{GpuEvent, GpuTextureFormat};
 // ─── Availability ─────────────────────────────────────────────────────
 
 /// Check if MTL4FX Temporal Denoised Scaler is available on this system.
+///
+/// STOPGAP (BUG-woji): hard-off. On macOS 26.6.1 the MTL4 denoiser creation
+/// aborts the process (uncatchable SIGABRT) inside MetalFX's own graph
+/// specialization (`_M4FXTemporalDenoisingScalingEffect` → `mlKernelMetal4`
+/// → MPSGraphExecutable "Incompatible shape for parameter at index 0").
+/// Native-repro proven: the MTL4Compiler works (MTL4 temporal scaler
+/// creates fine) and the denoiser works via the legacy no-compiler path —
+/// only the combination aborts, and no descriptor property controls it.
+/// Apple framework bug; `supportsMetal4FX:` answers YES regardless.
+/// Set MANIFOLD_MTL4FX_DENOISER=1 to re-test after a macOS update.
 pub fn metalfx_m4_denoiser_available() -> bool {
-    use objc2::runtime::AnyClass;
-    AnyClass::get(c"MTL4FXTemporalDenoisedScaler").is_some()
+    if std::env::var_os("MANIFOLD_MTL4FX_DENOISER").is_none() {
+        return false;
+    }
+    mtl4fx_creation_supported(
+        c"MTLFXTemporalDenoisedScalerDescriptor",
+        objc2::sel!(newTemporalDenoisedScalerWithDevice:compiler:),
+    )
 }
 
 /// Check if MTL4FX Temporal Scaler is available on this system.
 pub fn metalfx_m4_temporal_available() -> bool {
+    mtl4fx_creation_supported(
+        c"MTLFXTemporalScalerDescriptor",
+        objc2::sel!(newTemporalScalerWithDevice:compiler:),
+    )
+}
+
+/// MTL4FX scaler names are protocols, not classes — a class lookup on them
+/// always fails. The real gate: the public descriptor must answer the MTL4
+/// compiler-based creation selector.
+fn mtl4fx_creation_supported(
+    descriptor_class: &'static std::ffi::CStr,
+    creation_sel: objc2::runtime::Sel,
+) -> bool {
+    use objc2::msg_send;
     use objc2::runtime::AnyClass;
-    AnyClass::get(c"MTL4FXTemporalScaler").is_some()
+    let Some(cls) = AnyClass::get(descriptor_class) else {
+        return false;
+    };
+    unsafe { msg_send![cls, instancesRespondToSelector: creation_sel] }
 }
 
 /// Check if the MTL4FX Temporal Denoised Scaler is supported for the
@@ -56,6 +89,39 @@ pub fn supports_m4_temporal(device: &ProtocolObject<dyn MTLDevice>) -> bool {
         return false;
     }
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
+}
+
+/// Cast a texture to its MTLAllocation conformance. MTLTexture conforms to
+/// MTLAllocation at the ObjC level; the objc2-metal bindings don't express
+/// it in the trait hierarchy, so this goes through the raw pointer. Same
+/// object, same lifetime — the cast is layout-transparent.
+fn as_allocation(tex: &ProtocolObject<dyn MTLTexture>) -> &ProtocolObject<dyn MTLAllocation> {
+    unsafe {
+        &*(tex as *const ProtocolObject<dyn MTLTexture> as *const ProtocolObject<dyn MTLAllocation>)
+    }
+}
+
+/// Metal 4 requires declaring which pipeline stages border the effect's
+/// textures: Metal validation asserts "_outputTextureBarrierStages not set"
+/// and WITHOUT validation the encode silently writes nothing (probed on
+/// Tahoe 26.6.1). The color input defaults to MTLStageDispatch; the output
+/// defaults to unset. There is no public setter for the output stages —
+/// KVC writes the ivar directly. Tripwire: the gpu-proofs smoke tests in
+/// this module (an Apple rename turns this into a KVC exception there).
+unsafe fn set_mtl4fx_barrier_stages<T: ?Sized>(scaler: &ProtocolObject<T>) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+    let all: Option<Retained<AnyObject>> =
+        msg_send![class!(NSNumber), numberWithUnsignedLongLong: MTLStages::All.0 as u64];
+    let Some(all) = all else {
+        log::error!("[MetalFX MTL4] NSNumber creation failed — barrier stages unset, MTL4FX encode may produce black output");
+        return;
+    };
+    for key in ["colorTextureBarrierStages", "outputTextureBarrierStages"] {
+        let key = NSString::from_str(key);
+        let _: () = msg_send![scaler, setValue: &*all, forKey: &*key];
+    }
 }
 
 // ─── Format mapping ───────────────────────────────────────────────────
@@ -92,6 +158,7 @@ pub struct MTL4Bridge {
     event: GpuEvent,
     event_value: AtomicU64,
     saturated_logged: std::sync::atomic::AtomicBool,
+    residency_set: Retained<ProtocolObject<dyn MTLResidencySet>>,
 }
 
 struct MTL4AllocatorSlot {
@@ -132,7 +199,21 @@ impl MTL4Bridge {
             }
         });
 
-        log::info!("[MetalFX MTL4] Bridge created — typed MTL4 queue + 3 allocator ring + shared event");
+        // Metal 4 residency is explicit: classic-created textures are
+        // invisible to MTL4-committed work unless registered in a residency
+        // set attached to the MTL4 queue — without it the MTL4FX kernels
+        // silently read/write nothing (probe-proven, 2026-08-11). One set
+        // per bridge, attached once; ensure_resident() maintains contents.
+        let residency_set = {
+            let desc = MTLResidencySetDescriptor::new();
+            let set = device
+                .newResidencySetWithDescriptor_error(&desc)
+                .expect("[MetalFX MTL4] Failed to create residency set");
+            queue.addResidencySet(&set);
+            set
+        };
+
+        log::info!("[MetalFX MTL4] Bridge created — typed MTL4 queue + 3 allocator ring + shared event + residency set");
 
         Some(Self {
             queue,
@@ -140,6 +221,7 @@ impl MTL4Bridge {
             event,
             event_value: AtomicU64::new(0),
             saturated_logged: std::sync::atomic::AtomicBool::new(false),
+            residency_set,
         })
     }
 
@@ -171,6 +253,43 @@ impl MTL4Bridge {
         None
     }
 
+    /// Register this frame's textures in the queue-attached residency set.
+    /// Add-if-missing, commit only on change. Prunes only when the set
+    /// exceeds the cap AND no MTL4 work is in flight — removing a texture
+    /// an in-flight frame still reads is a page fault (BUG-84fv class).
+    fn ensure_resident(&self, textures: &[&ProtocolObject<dyn MTLTexture>]) {
+        const PRUNE_CAP: usize = 64;
+
+        let mut changed = false;
+        for tex in textures {
+            let allocation = as_allocation(tex);
+            if !self.residency_set.containsAllocation(allocation) {
+                self.residency_set.addAllocation(allocation);
+                changed = true;
+            }
+        }
+
+        if self.residency_set.allocationCount() > PRUNE_CAP {
+            let signaled = unsafe { self.event.raw().signaledValue() };
+            let all_idle = self
+                .allocators
+                .iter()
+                .all(|s| s.last_signal.load(Ordering::Relaxed) <= signaled);
+            if all_idle {
+                self.residency_set.removeAllAllocations();
+                for tex in textures {
+                    self.residency_set.addAllocation(as_allocation(tex));
+                }
+                changed = true;
+                log::info!("[MetalFX MTL4] Residency set pruned (exceeded {PRUNE_CAP} allocations)");
+            }
+        }
+
+        if changed {
+            self.residency_set.commit();
+        }
+    }
+
     /// Encode MTL4FX scaler work with GPU-side synchronization only.
     ///
     /// Timeline per encode (returns true), or returns false when the allocator
@@ -190,6 +309,7 @@ impl MTL4Bridge {
         &self,
         classic_cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         device: &ProtocolObject<dyn MTLDevice>,
+        textures: &[&ProtocolObject<dyn MTLTexture>],
         encode_fn: F,
     ) -> bool
     where
@@ -203,6 +323,8 @@ impl MTL4Bridge {
             }
             return false;
         };
+
+        self.ensure_resident(textures);
 
         let wait_val = self.next_event_value();
         let signal_val = self.next_event_value();
@@ -388,6 +510,7 @@ impl Metal4FxDenoisedScaler {
             base.setMotionVectorScaleX(input_width as f32 * 0.5);
             base.setMotionVectorScaleY(input_height as f32 * 0.5);
             base.setDepthReversed(depth_reversed);
+            set_mtl4fx_barrier_stages(&scaler);
         }
 
         log::info!(
@@ -463,7 +586,24 @@ impl Metal4FxDenoisedScaler {
         let scaler: &ProtocolObject<dyn MTL4FXTemporalDenoisedScaler> = &self.scaler;
         let device: &ProtocolObject<dyn MTLDevice> = &self.device;
 
-        self.bridge.encode_gpu_only(classic_cmd_buf, device, |mtl4_cmd_buf| {
+        let mut textures: [&ProtocolObject<dyn MTLTexture>; 11] = [
+            &color.raw, &depth.raw, &motion.raw, &normal.raw, &roughness.raw,
+            &diffuse_albedo.raw, &specular_albedo.raw, &specular_hit_distance.raw,
+            &output.raw,
+            &color.raw, // placeholder for exposure (index 9)
+            &color.raw, // placeholder for reactive_mask (index 10)
+        ];
+        let mut texture_count = 9;
+        if let Some(e) = exposure {
+            textures[9] = &e.raw;
+            texture_count += 1;
+        }
+        if let Some(rm) = reactive_mask {
+            textures[10] = &rm.raw;
+            texture_count += 1;
+        }
+
+        self.bridge.encode_gpu_only(classic_cmd_buf, device, &textures[..texture_count], |mtl4_cmd_buf| {
             unsafe {
                 let base: &ProtocolObject<dyn MTLFXTemporalDenoisedScalerBase> =
                     ProtocolObject::from_ref(scaler);
@@ -587,6 +727,7 @@ impl Metal4FxTemporalScaler {
             base.setInputContentHeight(input_height as usize);
             base.setMotionVectorScaleX(input_width as f32 * 0.5);
             base.setMotionVectorScaleY(input_height as f32 * 0.5);
+            set_mtl4fx_barrier_stages(&scaler);
         }
 
         log::info!(
@@ -636,7 +777,10 @@ impl Metal4FxTemporalScaler {
         let scaler: &ProtocolObject<dyn MTL4FXTemporalScaler> = &self.scaler;
         let device: &ProtocolObject<dyn MTLDevice> = &self.device;
 
-        self.bridge.encode_gpu_only(classic_cmd_buf, device, |mtl4_cmd_buf| {
+        let textures: [&ProtocolObject<dyn MTLTexture>; 4] =
+            [&color.raw, &depth.raw, &motion.raw, &dst.raw];
+
+        self.bridge.encode_gpu_only(classic_cmd_buf, device, &textures, |mtl4_cmd_buf| {
             unsafe {
                 let base: &ProtocolObject<dyn MTLFXTemporalScalerBase> =
                     ProtocolObject::from_ref(scaler);
@@ -952,6 +1096,101 @@ mod tests {
             "MTL4 denoised MAE ({:.6}) not below 50% of noisy MAE ({:.6}) -- denoiser reduction too weak",
             result_mae,
             noisy_mae,
+        );
+    }
+
+    /// Smoke proof for the MTL4 temporal scaler: on a rig reporting
+    /// available, creation must succeed, one encode must complete without
+    /// GPU error, and the output must carry content (any nonzero byte).
+    /// This is the tripwire for the barrier-stages requirement documented
+    /// on `set_mtl4fx_barrier_stages`.
+    #[test]
+    fn m4_temporal_scaler_encodes_one_frame() {
+        let device = GpuDevice::new();
+
+        if !metalfx_m4_temporal_available() {
+            eprintln!("[metalfx_m4 test] MTL4FXTemporalScaler not available -- skipping");
+            return;
+        }
+
+        const IN_W: u32 = 64;
+        const IN_H: u32 = 64;
+        const OUT_W: u32 = 128;
+        const OUT_H: u32 = 128;
+
+        let bridge = device
+            .mtl4_bridge()
+            .expect("MTL4 bridge must be available when MTL4FX temporal is available");
+        let scaler = Metal4FxTemporalScaler::new(
+            device.raw_device(),
+            bridge,
+            IN_W,
+            IN_H,
+            OUT_W,
+            OUT_H,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("Metal4FxTemporalScaler::new returned None on a rig reporting available");
+
+        let npixels = (IN_W * IN_H) as usize;
+        let mut color_data = vec![0.0f32; npixels * 4];
+        for y in 0..IN_H {
+            for x in 0..IN_W {
+                let idx = ((y * IN_W + x) * 4) as usize;
+                color_data[idx] = (x + y) as f32 / (IN_W + IN_H - 2) as f32;
+                color_data[idx + 3] = 1.0;
+            }
+        }
+        let color = upload_texture(
+            &device, IN_W, IN_H, GpuTextureFormat::Rgba16Float, &color_data, "m4t_color",
+        );
+        let depth = upload_texture(
+            &device, IN_W, IN_H, GpuTextureFormat::R32Float, &vec![0.5f32; npixels], "m4t_depth",
+        );
+        let motion = upload_texture(
+            &device, IN_W, IN_H, GpuTextureFormat::Rg16Float, &vec![0.0f32; npixels * 2], "m4t_motion",
+        );
+        let output = device.create_texture(&GpuTextureDesc {
+            width: OUT_W,
+            height: OUT_H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "m4t_output",
+            mip_levels: 1,
+        });
+
+        let mut enc = device.create_encoder("m4-temporal-smoke");
+        let encoded = scaler.encode(
+            enc.raw_cmd_buf(),
+            &color,
+            &depth,
+            &motion,
+            &output,
+            0.0,
+            0.0,
+            true, // reset
+        );
+        assert!(
+            encoded,
+            "MTL4 temporal encode skipped on a single-frame test (allocator ring should not be saturated)"
+        );
+        enc.commit_and_wait_completed();
+
+        let bpp = output.format.bytes_per_pixel();
+        let row_bytes = bpp * output.width;
+        let total = (row_bytes * output.height) as u64;
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("readback");
+        enc.copy_texture_to_buffer(&output, &readback, output.width, output.height, row_bytes);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared buffer mapped pointer");
+        let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, total as usize) };
+        let nonzero = bytes.iter().filter(|&&b| b != 0).count();
+        assert!(
+            nonzero > 0,
+            "MTL4 temporal scaler output is all zeros — encode completed but wrote nothing"
         );
     }
 }
