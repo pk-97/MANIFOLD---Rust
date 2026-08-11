@@ -4870,7 +4870,7 @@ impl EffectNode for RenderScene {
             // in a scene with no casters. The shadow *pipeline* + per-caster
             // maps are created only when a caster exists (unwired = zero cost).
             self.ensure_shadow_binding_stubs(gpu.device);
-            if has_casters && !(rt_enabled && rt_ready) {
+            if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
                 self.ensure_shadow_pass(gpu.device);
                 for (slot, l) in casters.iter().enumerate() {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
@@ -5009,14 +5009,18 @@ impl EffectNode for RenderScene {
                  phong/cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
             );
         }
-        // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING for
-        // RT-enabled scenes — the RT shadow-ray pass below replaces this
-        // entire depth-only-per-caster loop, not runs alongside it (the
-        // ensure block above never allocates `shadow_maps` when
-        // `rt_enabled`, so this loop's `None` short-circuit would already
-        // no-op each caster; the explicit gate makes that invariant load-
-        // bearing instead of incidental).
-        if has_casters && !(rt_enabled && rt_ready) {
+        // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING when
+        // RT shadows own the visibility — the RT shadow-ray pass below
+        // replaces this entire depth-only-per-caster loop (the ensure
+        // block above never allocates `shadow_maps` when that path is
+        // the sole consumer, so this loop's `None` short-circuit would
+        // no-op each caster; the explicit gate is load-bearing).
+        // RT toggles: when rt_shadows is off, maps MUST render so the
+        // WGSL raster fallthrough path has real data to sample — the sv
+        // textures are unwritten (shadow_spp=0) and the WGSL rt_flags.w
+        // gate directs shadow_factor to the raster path below (the sv
+        // read branch is never entered).
+        if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
             // Per-object shadow toggle: this raster depth-only pass is the
             // ONLY place `cast_shadows == false` removes an object from —
             // it stays in `opaque_draws` (and therefore the prepass/accel

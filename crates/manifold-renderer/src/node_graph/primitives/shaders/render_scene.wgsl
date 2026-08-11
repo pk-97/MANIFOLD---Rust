@@ -652,9 +652,10 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     if slot_f < 0.0 {
         return 1.0;
     }
-    // RAYTRACING_DESIGN.md RT-D3: single uniform-gated bool branch — RT
-    // scenes never touch the shadow-map path below (it isn't even
-    // rendered for them, render_scene.rs's `!rt_enabled` gate). Native-
+    // RAYTRACING_DESIGN.md RT-D3: single uniform-gated bool branch —
+    // RT shadow masks replace shadow maps when rt_enabled AND rt_shadows
+    // toggle are both active (rt_flags.w > 0.5). When rt_shadows is off,
+    // maps are rendered and the raster PCSS/PCF path below runs. Native-
     // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
     // indexes the shadow-mask textures directly — they're already full-res
     // and depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
