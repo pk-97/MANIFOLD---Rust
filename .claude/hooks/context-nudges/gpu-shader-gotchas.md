@@ -51,6 +51,7 @@ BUG-jddy (RT static-death) cost ~3 days because every agent (Fable review lane, 
 2. CPU-written shared buffers with no per-frame GPU command touching them.
 3. `constant` address space on anything the CPU rewrites (hygiene, not proven harmful — but `device` is the honest space for per-frame CPU writes).
 4. Resources referenced only by command buffers that have already completed.
+5. Metal 4 work: classic-created textures are invisible to MTL4-committed command buffers without an explicit `MTLResidencySet` attached to the `MTL4CommandQueue` — silent zero output, no validation error (proven 2026-08-11, MTL4FX temporal scaler). And MTL4FX effects require `outputTextureBarrierStages` set (KVC — no public setter) or they encode to black; only `MTL_VALIDATION=1 MTL_DEBUG_LAYER=1` surfaces the assertion. As-built: `metalfx_m4.rs` (`ensure_resident`, `set_mtl4fx_barrier_stages`).
 
 **Reusable diagnostic signature:** shadow/AO survived, GI/reflections died — the split case told us traversal was fine and instance-data-following reads were broken. Always enumerate what the survivors share that the dead lack ([[the-split-case-is-the-diagnosis]]).
 
