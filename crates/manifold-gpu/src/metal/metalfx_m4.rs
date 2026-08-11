@@ -32,15 +32,32 @@ use crate::{GpuEvent, GpuTextureFormat};
 
 /// Check if MTL4FX Temporal Denoised Scaler is available on this system.
 ///
-/// STOPGAP (BUG-woji): hard-off. On macOS 26.6.1 the MTL4 denoiser creation
-/// aborts the process (uncatchable SIGABRT) inside MetalFX's own graph
-/// specialization (`_M4FXTemporalDenoisingScalingEffect` → `mlKernelMetal4`
-/// → MPSGraphExecutable "Incompatible shape for parameter at index 0").
-/// Native-repro proven: the MTL4Compiler works (MTL4 temporal scaler
-/// creates fine) and the denoiser works via the legacy no-compiler path —
-/// only the combination aborts, and no descriptor property controls it.
-/// Apple framework bug; `supportsMetal4FX:` answers YES regardless.
-/// Set MANIFOLD_MTL4FX_DENOISER=1 to re-test after a macOS update.
+/// STOPGAP (BUG-woji): hard-off. On macOS 26.6.1 (25G76, T6041) the MTL4
+/// denoiser creation aborts the process (uncatchable SIGABRT) inside Apple's
+/// own metal framework:
+///
+///   MPSGraphExecutable.mm:3467 — "Incompatible shape for parameter at index 0"
+///   call chain: _M4FXTemporalDenoisingScalingEffect → mlKernelMetal4
+///             → MPSGraphExecutable
+///
+/// Bisected 2026-08-11 on Peter's Tahoe M4 machine (same rig that authored
+/// the original hard-off):
+///
+///   - MTL4Compiler + MTLFXTemporalScaler: CREATES AND ENCODES FINE
+///     (m4_temporal_scaler_encodes_one_frame green; barrier stages + residency
+///     proven working).
+///   - MTL4Compiler + MTLFXTemporalDenoisedScaler: UNCONDITIONALLY CRASHES
+///     at creation, independent of: reactive mask (on/off), G-buffer aux
+///     format settings, input/output dimensions (64x64, varied), color format
+///     (Rgba32Float).
+///   - MTLFXTemporalDenoisedScaler WITHOUT compiler (legacy creation path):
+///     CREATES FINE.
+///   - supportsMetal4FX: answers YES on this device throughout.
+///
+/// The crash is at framework graph-compile time, not our encode time — no
+/// descriptor property or caller-side change can avoid it. Re-test with
+/// MANIFOLD_MTL4FX_DENOISER=1 after each macOS update. The temporal scaler
+/// (non-denoised) remains live and is not gated by this flag.
 pub fn metalfx_m4_denoiser_available() -> bool {
     if std::env::var_os("MANIFOLD_MTL4FX_DENOISER").is_none() {
         return false;
