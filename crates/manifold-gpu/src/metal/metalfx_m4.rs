@@ -32,12 +32,12 @@ use crate::{GpuEvent, GpuTextureFormat};
 
 /// Check if MTL4FX Temporal Denoised Scaler is available on this system.
 ///
-/// STOPGAP (BUG-woji): hard-off. On macOS 26.6.1 (25G76, T6041) the MTL4
+/// STOPGAP (BUG-woji): hard-off. On macOS 26.6.1 (25G76), MetalFX 31.8, the MTL4
 /// denoiser creation aborts the process (uncatchable SIGABRT) inside Apple's
-/// own metal framework:
+/// own MPSGraph framework:
 ///
 ///   MPSGraphExecutable.mm:3467 — "Incompatible shape for parameter at index 0"
-///   call chain: _M4FXTemporalDenoisingScalingEffect → mlKernelMetal4
+///   call chain: _M4FXTemporalDenoisingScalingEffect -> mlKernelMetal4
 ///             → MPSGraphExecutable
 ///
 /// Bisected 2026-08-11 on Peter's Tahoe M4 machine (same rig that authored
@@ -46,9 +46,9 @@ use crate::{GpuEvent, GpuTextureFormat};
 ///   - MTL4Compiler + MTLFXTemporalScaler: CREATES AND ENCODES FINE
 ///     (m4_temporal_scaler_encodes_one_frame green; barrier stages + residency
 ///     proven working).
-///   - MTL4Compiler + MTLFXTemporalDenoisedScaler: UNCONDITIONALLY CRASHES
+///   - MTL4Compiler + MTLFXTemporalDenoisedScaler: CRASHES for EVERY
 ///     at creation, independent of: reactive mask (on/off), G-buffer aux
-///     format settings, input/output dimensions (64x64, varied), color format
+///     format settings, input/output dimensions (each format valid/invalid x each enable on/off), sync init on/off, varied dims, both color formats
 ///     (Rgba32Float).
 ///   - MTLFXTemporalDenoisedScaler WITHOUT compiler (legacy creation path):
 ///     CREATES FINE.
@@ -489,6 +489,55 @@ impl Metal4FxDenoisedScaler {
             desc.setReactiveMaskTextureFormat(MTLPixelFormat::R16Float);
 
             desc.setAutoExposureEnabled(false);
+
+            // KVC: Xcode 26.0+ properties not in objc2-metal-fx 0.3.2.
+            // Un-suppressed when the bindings catch up (crate update or
+            // upstream patch that generates these typed setters).
+            {
+                use objc2::msg_send;
+                use objc2_foundation::NSString;
+
+                let true_ns: &objc2::runtime::AnyObject =
+                    msg_send![objc2::class!(NSNumber), numberWithBool: true];
+
+                let k_spec_hit = NSString::from_str(
+                    "specularHitDistanceTextureEnabled",
+                );
+                let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_spec_hit];
+
+                let k_dns_str = NSString::from_str(
+                    "denoiseStrengthMaskTextureEnabled",
+                );
+                let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_dns_str];
+
+                let k_transp = NSString::from_str(
+                    "transparencyOverlayTextureEnabled",
+                );
+                let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_transp];
+
+                let denoise_fmt: &objc2::runtime::AnyObject = msg_send![
+                    objc2::class!(NSNumber),
+                    numberWithUnsignedInteger: MTLPixelFormat::R16Float.0
+                ];
+                let k_dns_fmt = NSString::from_str(
+                    "denoiseStrengthMaskTextureFormat",
+                );
+                let _: () = msg_send![&desc, setValue: denoise_fmt, forKey: &*k_dns_fmt];
+
+                let transp_fmt: &objc2::runtime::AnyObject = msg_send![
+                    objc2::class!(NSNumber),
+                    numberWithUnsignedInteger: MTLPixelFormat::RGBA16Float.0
+                ];
+                let k_transp_fmt = NSString::from_str(
+                    "transparencyOverlayTextureFormat",
+                );
+                let _: () = msg_send![&desc, setValue: transp_fmt, forKey: &*k_transp_fmt];
+
+                let k_sync = NSString::from_str(
+                    "requiresSynchronousInitialization",
+                );
+                let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_sync];
+            }
 
             desc
         };
