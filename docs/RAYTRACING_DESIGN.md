@@ -2220,8 +2220,10 @@ probe — "they will be better than previous."
   saturation skips the scaler for one frame (stale output) rather than
   resetting a live allocator. Value proof
   `m4_denoise_reduces_error_vs_clean_ramp` drives the bridge on
-  hardware; Metal 4 needs no explicit residency sets for
-  classic-created textures (answered by that test).
+  hardware. **CORRECTION (DN-O, 2026-08-11): that proof silently
+  skipped — the availability probe was broken, see DN-O. The "no
+  explicit residency sets" claim here was wrong: Metal 4 requires
+  them.**
 - **DN-L — input conditioning. LANDED 2026-08-10 on main** (lead-built,
   lane/rt-mtl4-upscaler). When `rt_denoise_feed` engages
   (`denoise_active`), `ACCUM_FLAG_DENOISE_NEAR_RAW` (reset bit 5) drops
@@ -2246,6 +2248,29 @@ probe — "they will be better than previous."
   First measurement: still-scene emissive flicker is firefly-class —
   irr_full mean |delta| 3.083, p99.9 126.8 (8-bit levels) vs the
   apricot fixture's frozen flats.
+- **DN-O — MTL4 activation fixes. LANDED 2026-08-11** (lead +
+  probe lanes, lane/mtl4-probe-fix). The MTL4 path had never executed
+  on-rig: the availability probe looked up `MTL4FX*` protocol names as
+  classes (always nil → silent classic fallback); every "MTL4" run
+  before this, including DN-K/DN-L's, was classic MTLFX. Fixed probe:
+  `instancesRespondToSelector` for the MTL4 creation selector on the
+  public descriptor. Three further Metal 4 requirements surfaced, each
+  oracle-proven on Tahoe 26.6.1: (1) **MTL4 denoiser creation crashes
+  Apple-side** (uncatchable SIGABRT inside MetalFX's graph compile;
+  compiler path fine for temporal, legacy denoiser fine, combination
+  aborts) — hard-off with `MANIFOLD_MTL4FX_DENOISER=1` re-test hatch,
+  BUG-woji (MTL4 probe bug); classic MTLFX remains the denoise path,
+  so DN-N's re-look still judges classic denoise quality. (2) **Barrier
+  stages**: the MTL4FX effect requires `outputTextureBarrierStages`
+  (validation assert; silent black without it); no public setter
+  exists — KVC writes the ivar; color defaults to Dispatch.
+  (3) **Explicit residency**: classic-created textures are invisible
+  to MTL4-committed work without a residency set on the MTL4 queue —
+  bridge-owned set, add-if-missing, commit-on-change, prune only when
+  >64 allocations and no frames in flight. Gate: new gpu-proof
+  `m4_temporal_scaler_encodes_one_frame` (create + encode + nonzero
+  readback) green; the MTL4 temporal upscaler wired in DN-L now
+  actually runs.
 - **DN-N — re-look gate (Peter).** Fused path, conditioned, Metal 4
   networks. PASS → default-flip + effect-card button + noise-gate
   re-baseline land (default-on denoise implies temporal_upscale —
