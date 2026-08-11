@@ -618,6 +618,10 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
             blas_keep,
             accel.instance_buffer.raw.clone(),
             accel.structure.clone(),
+            // The refit scratch is GPU-written for the refit's whole async
+            // duration; the RtAccel (its owner) can be replaced or torn
+            // down while this buffer is in flight.
+            accel.refit_scratch.raw.clone(),
         )),
     );
     cb.commit();
