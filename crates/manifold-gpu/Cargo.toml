@@ -90,6 +90,10 @@ objc2-metal = { version = "0.3", features = [
     "MTL4CommandAllocator",
     "MTL4CommandQueue",
     "MTL4CommandBuffer",
+    # RAYTRACING_DESIGN.md section 17.7 DN-L: explicit residency sets for
+    # MTL4 command queues — required so that classic-created textures are
+    # visible to MTL4FX scaler kernel reads/writes.
+    "MTLResidencySet",
 ] }
 objc2-metal-fx = { version = "0.3", features = [
     "MTLFXSpatialScaler",

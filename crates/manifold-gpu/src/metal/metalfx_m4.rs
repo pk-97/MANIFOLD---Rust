@@ -12,8 +12,9 @@
 use objc2::{AnyThread, Message, rc::Retained};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTLCommandBuffer, MTLDevice,
-    MTLEvent, MTLPixelFormat, MTLSharedEvent, MTLStages, MTLTexture,
+    MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTLAllocation, MTLCommandBuffer,
+    MTLDevice, MTLEvent, MTLPixelFormat, MTLResidencySet, MTLResidencySetDescriptor,
+    MTLSharedEvent, MTLStages, MTLTexture,
 };
 use objc2_metal_fx::{
     MTL4FXTemporalDenoisedScaler, MTL4FXTemporalScaler, MTLFXTemporalDenoisedScalerBase,
@@ -90,6 +91,16 @@ pub fn supports_m4_temporal(device: &ProtocolObject<dyn MTLDevice>) -> bool {
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
 }
 
+/// Cast a texture to its MTLAllocation conformance. MTLTexture conforms to
+/// MTLAllocation at the ObjC level; the objc2-metal bindings don't express
+/// it in the trait hierarchy, so this goes through the raw pointer. Same
+/// object, same lifetime — the cast is layout-transparent.
+fn as_allocation(tex: &ProtocolObject<dyn MTLTexture>) -> &ProtocolObject<dyn MTLAllocation> {
+    unsafe {
+        &*(tex as *const ProtocolObject<dyn MTLTexture> as *const ProtocolObject<dyn MTLAllocation>)
+    }
+}
+
 /// Metal 4 requires declaring which pipeline stages border the effect's
 /// textures: Metal validation asserts "_outputTextureBarrierStages not set"
 /// and WITHOUT validation the encode silently writes nothing (probed on
@@ -147,6 +158,7 @@ pub struct MTL4Bridge {
     event: GpuEvent,
     event_value: AtomicU64,
     saturated_logged: std::sync::atomic::AtomicBool,
+    residency_set: Retained<ProtocolObject<dyn MTLResidencySet>>,
 }
 
 struct MTL4AllocatorSlot {
@@ -187,7 +199,21 @@ impl MTL4Bridge {
             }
         });
 
-        log::info!("[MetalFX MTL4] Bridge created — typed MTL4 queue + 3 allocator ring + shared event");
+        // Metal 4 residency is explicit: classic-created textures are
+        // invisible to MTL4-committed work unless registered in a residency
+        // set attached to the MTL4 queue — without it the MTL4FX kernels
+        // silently read/write nothing (probe-proven, 2026-08-11). One set
+        // per bridge, attached once; ensure_resident() maintains contents.
+        let residency_set = {
+            let desc = MTLResidencySetDescriptor::new();
+            let set = device
+                .newResidencySetWithDescriptor_error(&desc)
+                .expect("[MetalFX MTL4] Failed to create residency set");
+            queue.addResidencySet(&set);
+            set
+        };
+
+        log::info!("[MetalFX MTL4] Bridge created — typed MTL4 queue + 3 allocator ring + shared event + residency set");
 
         Some(Self {
             queue,
@@ -195,6 +221,7 @@ impl MTL4Bridge {
             event,
             event_value: AtomicU64::new(0),
             saturated_logged: std::sync::atomic::AtomicBool::new(false),
+            residency_set,
         })
     }
 
@@ -226,6 +253,43 @@ impl MTL4Bridge {
         None
     }
 
+    /// Register this frame's textures in the queue-attached residency set.
+    /// Add-if-missing, commit only on change. Prunes only when the set
+    /// exceeds the cap AND no MTL4 work is in flight — removing a texture
+    /// an in-flight frame still reads is a page fault (BUG-84fv class).
+    fn ensure_resident(&self, textures: &[&ProtocolObject<dyn MTLTexture>]) {
+        const PRUNE_CAP: usize = 64;
+
+        let mut changed = false;
+        for tex in textures {
+            let allocation = as_allocation(tex);
+            if !self.residency_set.containsAllocation(allocation) {
+                self.residency_set.addAllocation(allocation);
+                changed = true;
+            }
+        }
+
+        if self.residency_set.allocationCount() > PRUNE_CAP {
+            let signaled = unsafe { self.event.raw().signaledValue() };
+            let all_idle = self
+                .allocators
+                .iter()
+                .all(|s| s.last_signal.load(Ordering::Relaxed) <= signaled);
+            if all_idle {
+                self.residency_set.removeAllAllocations();
+                for tex in textures {
+                    self.residency_set.addAllocation(as_allocation(tex));
+                }
+                changed = true;
+                log::info!("[MetalFX MTL4] Residency set pruned (exceeded {PRUNE_CAP} allocations)");
+            }
+        }
+
+        if changed {
+            self.residency_set.commit();
+        }
+    }
+
     /// Encode MTL4FX scaler work with GPU-side synchronization only.
     ///
     /// Timeline per encode (returns true), or returns false when the allocator
@@ -245,6 +309,7 @@ impl MTL4Bridge {
         &self,
         classic_cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         device: &ProtocolObject<dyn MTLDevice>,
+        textures: &[&ProtocolObject<dyn MTLTexture>],
         encode_fn: F,
     ) -> bool
     where
@@ -258,6 +323,8 @@ impl MTL4Bridge {
             }
             return false;
         };
+
+        self.ensure_resident(textures);
 
         let wait_val = self.next_event_value();
         let signal_val = self.next_event_value();
@@ -519,7 +586,24 @@ impl Metal4FxDenoisedScaler {
         let scaler: &ProtocolObject<dyn MTL4FXTemporalDenoisedScaler> = &self.scaler;
         let device: &ProtocolObject<dyn MTLDevice> = &self.device;
 
-        self.bridge.encode_gpu_only(classic_cmd_buf, device, |mtl4_cmd_buf| {
+        let mut textures: [&ProtocolObject<dyn MTLTexture>; 11] = [
+            &color.raw, &depth.raw, &motion.raw, &normal.raw, &roughness.raw,
+            &diffuse_albedo.raw, &specular_albedo.raw, &specular_hit_distance.raw,
+            &output.raw,
+            &color.raw, // placeholder for exposure (index 9)
+            &color.raw, // placeholder for reactive_mask (index 10)
+        ];
+        let mut texture_count = 9;
+        if let Some(e) = exposure {
+            textures[9] = &e.raw;
+            texture_count += 1;
+        }
+        if let Some(rm) = reactive_mask {
+            textures[10] = &rm.raw;
+            texture_count += 1;
+        }
+
+        self.bridge.encode_gpu_only(classic_cmd_buf, device, &textures[..texture_count], |mtl4_cmd_buf| {
             unsafe {
                 let base: &ProtocolObject<dyn MTLFXTemporalDenoisedScalerBase> =
                     ProtocolObject::from_ref(scaler);
@@ -693,7 +777,10 @@ impl Metal4FxTemporalScaler {
         let scaler: &ProtocolObject<dyn MTL4FXTemporalScaler> = &self.scaler;
         let device: &ProtocolObject<dyn MTLDevice> = &self.device;
 
-        self.bridge.encode_gpu_only(classic_cmd_buf, device, |mtl4_cmd_buf| {
+        let textures: [&ProtocolObject<dyn MTLTexture>; 4] =
+            [&color.raw, &depth.raw, &motion.raw, &dst.raw];
+
+        self.bridge.encode_gpu_only(classic_cmd_buf, device, &textures, |mtl4_cmd_buf| {
             unsafe {
                 let base: &ProtocolObject<dyn MTLFXTemporalScalerBase> =
                     ProtocolObject::from_ref(scaler);
