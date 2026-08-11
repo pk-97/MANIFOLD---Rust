@@ -203,8 +203,9 @@ struct Uniforms {
     // rt_reflections && non-empty casters — the trace dispatch ran with
     // refl_spp > 0, so binding 43 holds traced data). y = the traced-
     // diffuse substitution gate (section 14 ED6: the GI gather ran with
-    // gi_spp > 0, so binding 42's `.rgb` holds env+GI radiance). zw
-    // reserved.
+    // gi_spp > 0, so binding 42's `.rgb` holds env+GI radiance). z =
+    // designated sun caster slot for svt substitution (TL5). w =
+    // RT shadow mask read gate (rt_shadows toggle).
     rt_flags: vec4<f32>,
     // TAA/MetalFX velocity jitter exclusion: (cur_x, cur_y, prev_x,
     // prev_y) as NDC offsets (jitter_px × 2/dim). MetalFX expects motion
@@ -651,9 +652,10 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     if slot_f < 0.0 {
         return 1.0;
     }
-    // RAYTRACING_DESIGN.md RT-D3: single uniform-gated bool branch — RT
-    // scenes never touch the shadow-map path below (it isn't even
-    // rendered for them, render_scene.rs's `!rt_enabled` gate). Native-
+    // RAYTRACING_DESIGN.md RT-D3: single uniform-gated bool branch —
+    // RT shadow masks replace shadow maps when rt_enabled AND rt_shadows
+    // toggle are both active (rt_flags.w > 0.5). When rt_shadows is off,
+    // maps are rendered and the raster PCSS/PCF path below runs. Native-
     // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
     // indexes the shadow-mask textures directly — they're already full-res
     // and depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
@@ -661,7 +663,11 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     // two Rgba16Float textures — slots 0-3 in `rt_shadow_mask`, slots 4-7
     // in `rt_shadow_mask2`; `slot_f >= 4.0` selects the second texture with
     // the slot index reduced by 4.
-    if u.scene_params.w > 0.5 {
+    // RT toggle: when rt_shadows is off (`rt_flags.w <= 0.5`), fall through
+    // to raster shadow maps even though RT is active for other terms. The
+    // sv textures weren't written (shadow_spp=0 in kernel), so reading them
+    // would deliver stale history — this gate is the read side.
+    if u.scene_params.w > 0.5 && u.rt_flags.w > 0.5 {
         let texel = textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0);
         let texel2 = textureLoad(rt_shadow_mask2, vec2<i32>(frag_xy), 0);
         let ch = i32(slot_f + 0.5);

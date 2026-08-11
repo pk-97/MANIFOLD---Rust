@@ -15930,6 +15930,24 @@
           "type": "bool"
         },
         {
+          "default": "true",
+          "label": "RT Shadows",
+          "name": "rt_shadows",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "RT Ambient Occlusion",
+          "name": "rt_ao",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "RT Global Illumination",
+          "name": "rt_gi",
+          "type": "bool"
+        },
+        {
           "default": "false",
           "label": "RT Denoise Feed",
           "name": "rt_denoise_feed",
