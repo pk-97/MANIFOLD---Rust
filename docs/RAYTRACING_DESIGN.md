@@ -1853,9 +1853,10 @@ TL-B's +11.4 is paid at translucency 0 — codegen/occupancy overhead
 loop, a per-candidate translucency deref), NOT extra traversal; the
 transmitting walk behaves bit-identically on binary scenes. The TL-C
 +4.3 vs the landing's +1.1 is a protocol difference (A3a sun-only snaps vs
-paused legs) — owed reconciliation at DN-I. **Recovery work item: binary
-scenes stop paying for the walk (separate sv kernel behind a
-scene-has-translucency flag, or GiMaterial shrink) — section 17.5 wave.**
+paused legs) — owed reconciliation at DN-I. **Done (e719a158):** two PSO variants via `MTLFunctionConstantValues`
+(`HAS_TRANSLUCENCY` index 100), binary dispatch selected at runtime from
+`rt_has_translucency`. Binary RtApricot 4K sun-only: 39.4 -> 32.34 ms
+median; translucent leg 30.95 ms. Gate 6/6.
 
 The recommendation's shape: A+B+C together add zero rays and one texture; the
 only real risk line is the walk extension, and it is capped, measured, and
