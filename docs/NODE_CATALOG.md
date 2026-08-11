@@ -379,7 +379,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotWeather` | Apricot Weather | generator | Geometry | 165 |
+| `ApricotWeather` | Apricot Weather | generator | Geometry | 168 |
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
@@ -418,7 +418,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 126 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 129 |
 | `SoftFocus` | Soft Focus | effect | Stylize | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
