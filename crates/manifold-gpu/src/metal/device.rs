@@ -254,6 +254,23 @@ impl GpuDevice {
         self.queue.clone()
     }
 
+    /// Deterministic retirement for GPU-referenced objects (BUG-84fv class).
+    /// Commits an EMPTY command buffer whose completion handler owns `obj`;
+    /// Metal completes one queue's buffers in commit order, so the handler —
+    /// and therefore the drop — can only run after every buffer committed
+    /// before this call has finished executing. Anything earlier frames
+    /// still read is freed strictly after those reads end, with no frame
+    /// counting and no reliance on Metal's binding/useResource retention
+    /// (proven insufficient for indirectly-reached resources, BUG-jddy).
+    /// Use for objects that in-flight command buffers may reference through
+    /// raw GPU addresses (RT accel structures, bindless tables); normal
+    /// bound resources don't need it. A wedged/blacklisted queue never
+    /// fires the handler — the object leaks instead of faulting, the safe
+    /// direction. `label` names the retired object in crash logs.
+    pub fn retire_after_queue<T: 'static>(&self, obj: T, label: &'static str) {
+        retire_on_queue(&self.queue, obj, label);
+    }
+
     /// Create a GPU texture via device allocation (kernel call per texture).
     /// Prefer `TexturePool::acquire()` for transient textures.
     pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {
@@ -1835,4 +1852,40 @@ impl GpuDevice {
             GpuTexture::from_raw(mtl_texture, width, height, 1, format)
         }
     }
+}
+
+/// Queue-handle form of [`GpuDevice::retire_after_queue`] — for objects
+/// (e.g. `RtAccel`) that carry their own queue clone and self-retire from
+/// `Drop`, where no `&GpuDevice` is in scope. Commits an empty command
+/// buffer whose completion handler owns `obj`; see the method's doc for
+/// the ordering argument. `label` names the retired object in crash logs.
+pub(crate) fn retire_on_queue<T: 'static>(
+    queue: &ProtocolObject<dyn MTLCommandQueue>,
+    obj: T,
+    label: &'static str,
+) {
+    let Some(cb) = queue.commandBuffer() else {
+        // Queue exhausted (driver wedge) — drop inline; the GPU is already
+        // stopped, so nothing in flight can still read the object.
+        log::error!("[GPU] retire_after_queue: no command buffer for '{label}' — dropping inline");
+        drop(obj);
+        return;
+    };
+    unsafe { cb.setLabel(Some(&NSString::from_str(label))) };
+    struct Pin<T>(T);
+    // Safety: the handler runs on a Metal-owned callback thread; it only
+    // DROPS the pinned object. Callers pass Retained Metal handles (their
+    // retain/release is thread-safe) or plain data.
+    unsafe impl<T> Send for Pin<T> {}
+    let pin = Pin(obj);
+    let block = block2::RcBlock::new(move |_buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+        // Held by reference: the object drops when the block is released
+        // after firing — the RcBlock closure is Fn, not FnOnce, same
+        // pattern as raytrace.rs's completion pins.
+        let _hold = &pin;
+    });
+    unsafe {
+        cb.addCompletedHandler(block2::RcBlock::as_ptr(&block));
+    }
+    cb.commit();
 }
