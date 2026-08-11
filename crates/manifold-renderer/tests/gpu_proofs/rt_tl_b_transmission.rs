@@ -122,7 +122,7 @@ fn run_tl_fixture(
     let device = &h.device;
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, objects, &[]);
+    let accel = tracer.build_accel(device, objects, &[], None);
 
     // Upload gi_materials — real entries, unlike the template's zeroed dummy.
     // Positioned AFTER the accel build like the template to preserve Metal

@@ -185,7 +185,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     ];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects, &[]);
+    let accel = tracer.build_accel(device, &objects, &[], None);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
