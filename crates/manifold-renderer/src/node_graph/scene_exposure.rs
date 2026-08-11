@@ -323,6 +323,11 @@ mod tests {
         for spec in &meta.params {
             assert_eq!(spec.section.as_deref(), Some("Rendering"));
             assert!(spec.is_toggle, "{} must surface as a toggle row", spec.name);
+            assert!(
+                spec.card_visible,
+                "{} must be card-visible (the curated inspector card shows ALL stamped RT toggles)",
+                spec.name,
+            );
         }
     }
 

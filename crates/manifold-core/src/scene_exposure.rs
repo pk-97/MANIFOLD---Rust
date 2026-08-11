@@ -84,7 +84,15 @@ pub fn card_visible_for(type_id: &str, param: &str) -> bool {
         // Scene Setup panel's World "Rendering" section renders through the
         // card-filtered surface — hidden here means the section shows zero
         // rows anywhere.
-        "node.render_scene" => &["rt_enabled", "temporal_upscale", "rt_reflections"],
+        "node.render_scene" => &[
+            "rt_enabled",
+            "temporal_upscale",
+            "rt_reflections",
+            "rt_denoise_feed",
+            "rt_shadows",
+            "rt_ao",
+            "rt_gi",
+        ],
         _ => &[],
     };
     visible.contains(&param)
@@ -993,6 +1001,19 @@ mod tests {
         assert!(!card_visible_for("node.transform_3d", "scale_x"));
         assert!(!card_visible_for("node.transform_3d", "scale_y"));
         assert!(!card_visible_for("node.transform_3d", "scale_z"));
+    }
+
+    #[test]
+    fn card_visible_for_render_scene_shows_all_rt_toggles() {
+        // RAYTRACING_DESIGN.md D14 / section 5.2 / section 17 DN4 / hybrid-split
+        // levers: all seven stamped RT toggles must surface on the curated card.
+        assert!(card_visible_for("node.render_scene", "rt_enabled"));
+        assert!(card_visible_for("node.render_scene", "temporal_upscale"));
+        assert!(card_visible_for("node.render_scene", "rt_reflections"));
+        assert!(card_visible_for("node.render_scene", "rt_denoise_feed"));
+        assert!(card_visible_for("node.render_scene", "rt_shadows"));
+        assert!(card_visible_for("node.render_scene", "rt_ao"));
+        assert!(card_visible_for("node.render_scene", "rt_gi"));
     }
 
     #[test]
