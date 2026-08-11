@@ -23778,6 +23778,27 @@
           "name": "RT Reflections"
         },
         {
+          "default": "1",
+          "id": "35_rt_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "RT Shadows"
+        },
+        {
+          "default": "1",
+          "id": "35_rt_ao",
+          "max": "1",
+          "min": "0",
+          "name": "RT Ambient Occlusion"
+        },
+        {
+          "default": "1",
+          "id": "35_rt_gi",
+          "max": "1",
+          "min": "0",
+          "name": "RT Global Illumination"
+        },
+        {
           "default": "0",
           "id": "35_rt_denoise_feed",
           "max": "1",
@@ -27844,6 +27865,27 @@
           "max": "1",
           "min": "0",
           "name": "RT Reflections"
+        },
+        {
+          "default": "1",
+          "id": "30_rt_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "RT Shadows"
+        },
+        {
+          "default": "1",
+          "id": "30_rt_ao",
+          "max": "1",
+          "min": "0",
+          "name": "RT Ambient Occlusion"
+        },
+        {
+          "default": "1",
+          "id": "30_rt_gi",
+          "max": "1",
+          "min": "0",
+          "name": "RT Global Illumination"
         },
         {
           "default": "0",
