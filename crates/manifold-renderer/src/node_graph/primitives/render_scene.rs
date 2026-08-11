@@ -1034,6 +1034,13 @@ pub struct RenderScene {
     /// the translucent trace pipeline (walk_with_transmission) at dispatch time.
     /// False = binary pipeline (walk_with_alpha_test, pre-TL-B codegen).
     rt_has_translucency: bool,
+    /// RT term toggles previous-frame state — detect a live flip to reset
+    /// accumulation history (routed through `rt_irr_needs_reset`, the ONE
+    /// existing reset path). None = first frame (no prior state to compare).
+    rt_prev_toggle_shadows: Option<bool>,
+    rt_prev_toggle_ao: Option<bool>,
+    rt_prev_toggle_gi: Option<bool>,
+    rt_prev_toggle_refl: Option<bool>,
     /// RT-T2-C (object motion): per-object world→prev-world delta
     /// matrices (`prev_model * inverse(model)`, both straight off the
     /// draw uniforms) for `accumulate_irradiance`'s object-aware
@@ -1540,6 +1547,10 @@ impl RenderScene {
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
             rt_has_translucency: false,
+            rt_prev_toggle_shadows: None,
+            rt_prev_toggle_ao: None,
+            rt_prev_toggle_gi: None,
+            rt_prev_toggle_refl: None,
             rt_obj_motion: None,
             rt_obj_motion_capacity: 0,
             rt_normal_sources: None,
@@ -1733,6 +1744,37 @@ impl RenderScene {
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_reflections"),
                 label: "RT Reflections",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(true),
+                range: None,
+                enum_values: &[],
+            },
+            // RT toggles (section 17.x wave): per-term card params so Peter can
+            // flip RT shadows / AO / GI on and off per scene from the layer
+            // inspector. All default ON = today's behavior. Inert when
+            // `rt_enabled` false. Spp assembly at evaluate time gates on these;
+            // the kernel already handles spp=0 for each gather individually.
+            // Turning a term off resets RT accumulation history so the old
+            // term doesn't smear — routed through the ONE existing reset path.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_shadows"),
+                label: "RT Shadows",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(true),
+                range: None,
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_ao"),
+                label: "RT Ambient Occlusion",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(true),
+                range: None,
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_gi"),
+                label: "RT Global Illumination",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(true),
                 range: None,
@@ -4052,6 +4094,30 @@ impl EffectNode for RenderScene {
         // (Q3). T5 fine-tunes the spp/roughness-band constants.
         let rt_reflections = rt_enabled
             && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true)));
+        // RT term toggles — per-term card params. Each defaults ON = today's
+        // behavior. Inert when rt_enabled is false. Live-flip detection routes
+        // through rt_irr_needs_reset to avoid the old term smearing.
+        let rt_shadows_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_shadows"), Some(ParamValue::Bool(true)));
+        let rt_ao_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
+        let rt_gi_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
+        // Detect toggle flips: any term that was on last frame and is now off
+        // (or vice versa) needs history reset so the old signal doesn't
+        // trail. Routed through rt_irr_needs_reset — the ONE existing path
+        // (the negative-rg gate). First frame (None = no prior state) only
+        // fires the TemporalResetDetector; toggles only matter on flip.
+        let toggle_flipped = rt_enabled && (
+            self.rt_prev_toggle_shadows.is_some_and(|p| p != rt_shadows_enabled)
+            || self.rt_prev_toggle_ao.is_some_and(|p| p != rt_ao_enabled)
+            || self.rt_prev_toggle_gi.is_some_and(|p| p != rt_gi_enabled)
+            || self.rt_prev_toggle_refl.is_some_and(|p| p != rt_reflections)
+        );
+        self.rt_prev_toggle_shadows = Some(rt_shadows_enabled);
+        self.rt_prev_toggle_ao = Some(rt_ao_enabled);
+        self.rt_prev_toggle_gi = Some(rt_gi_enabled);
+        self.rt_prev_toggle_refl = Some(rt_reflections);
         // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
         // `false` whenever there's no resident accel yet, OR a topology
         // (re)build hasn't completed. Every downstream "use RT shadows"
@@ -4470,6 +4536,12 @@ impl EffectNode for RenderScene {
             // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
             // light substitutes rt_sun_tint for the luma vis channel.
             uniforms.rt_flags[2] = if rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            // RT term toggles: rt_flags.w = RT shadow mask read gate. When
+            // rt_shadows is off, shadow_factor falls through to raster shadow
+            // maps. The kernel still dispatches (for AO/GI/refl), but the sv
+            // textures are not written (shadow_spp=0 gated in-kernel) and the
+            // WGSL never reads them (gated here).
+            uniforms.rt_flags[3] = if rt_shadows_enabled && rt_ready { 1.0 } else { 0.0 };
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
             // clip varyings. Zero whenever temporal_upscale is off.
@@ -5549,10 +5621,12 @@ impl EffectNode for RenderScene {
 
                 // RT-A3a: mask params — built for the split case when trace
                 // sizes differ. When sizes match, unused (shadow folded into
-                // lighting dispatch).
+                // lighting dispatch). Gated on rt_shadows_enabled: if shadows
+                // are off, this dispatch is skipped entirely.
+                let mask_shadow_spp: u32 = if rt_shadows_enabled { 1 } else { 0 };
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
-                    1, // shadow_spp
+                    mask_shadow_spp,
                     self.jitter_frame_index,
                     [mask_half_w, mask_half_h],
                     [width, height],
@@ -5576,15 +5650,18 @@ impl EffectNode for RenderScene {
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
                 // sizes match (one fused dispatch at monolithic perf); 0 when
                 // split (separate mask dispatch handles shadow at its own size).
-                let lighting_shadow_spp: u32 = if mask_sizes_differ { 0 } else { 1 };
+                // Gated on rt_shadows_enabled.
+                let lighting_shadow_spp: u32 =
+                    if rt_shadows_enabled && !mask_sizes_differ { 1 } else { 0 };
                 // DN-I sweep knobs (probe-only, production-inert): env-set spp
                 // overrides so the operating-point matrix runs off ONE build.
                 // Unset = the committed constants, byte-identical behavior.
+                // Gated on per-term toggles: off → 0 (kernel skips the gather).
                 let sweep_spp = |name: &str, default: u32| -> u32 {
                     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
                 };
-                let ao_spp = sweep_spp("MANIFOLD_RT_SWEEP_AO_SPP", AO_SAMPLES_PER_PIXEL);
-                let gi_spp = sweep_spp("MANIFOLD_RT_SWEEP_GI_SPP", GI_SAMPLES_PER_PIXEL);
+                let ao_spp = if rt_ao_enabled { sweep_spp("MANIFOLD_RT_SWEEP_AO_SPP", AO_SAMPLES_PER_PIXEL) } else { 0 };
+                let gi_spp = if rt_gi_enabled { sweep_spp("MANIFOLD_RT_SWEEP_GI_SPP", GI_SAMPLES_PER_PIXEL) } else { 0 };
                 let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     lighting_shadow_spp,
@@ -5880,7 +5957,8 @@ impl EffectNode for RenderScene {
                 // gates identically to this `if rt_ready` branch (nested in
                 // the same `rt_enabled` block), so it's `Some` here.
                 let reset = reset_decision.expect("will_rt_accumulate_this_frame implies Some")
-                    || std::mem::take(&mut self.rt_irr_needs_reset);
+                    || std::mem::take(&mut self.rt_irr_needs_reset)
+                    || toggle_flipped;
                 // RT-T1-C: `prev_view_proj` is the SAME local captured
                 // above (BUG-311) before `self.prev_view_proj` was
                 // overwritten to this frame's `view_proj` — exactly what
@@ -7515,14 +7593,15 @@ mod tests {
         assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
         // `objects` + `lights` + `rt_enabled` (D14) + `temporal_upscale`
         // (section 5.2 P4) + `rt_reflections` (section 9 RD9) +
-        // `rt_denoise_feed` (section 17.5 DN4) — per-object TRS moved to
+        // `rt_denoise_feed` (section 17.5 DN4) + `rt_shadows` +
+        // `rt_ao` + `rt_gi` (RT term toggles) — per-object TRS moved to
         // `node.scene_object`'s `transform` input
         // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3);
         // instances carries no per-object instance_count param either
         // (REALTIME_3D_DESIGN.md section 10 D11). Neither toggle grows with object
         // count — this assertion is about object count, not the fixed
         // scene-level toggle set.
-        assert_eq!(s.parameters().len(), 6);
+        assert_eq!(s.parameters().len(), 9);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
 
@@ -7535,7 +7614,7 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 6, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(node.parameters().len(), 9, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -7587,7 +7666,7 @@ mod tests {
         assert!(node.inputs().iter().any(|p| p.name == "object_31"));
         // objects/lights + fixed scene-level toggles — object count never
         // grows the param list.
-        assert_eq!(node.parameters().len(), 6);
+        assert_eq!(node.parameters().len(), 9);
     }
 
     #[test]
