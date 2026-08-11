@@ -13,7 +13,7 @@ use objc2::{AnyThread, Message, rc::Retained};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTLCommandBuffer, MTLDevice,
-    MTLEvent, MTLPixelFormat, MTLSharedEvent, MTLTexture,
+    MTLEvent, MTLPixelFormat, MTLSharedEvent, MTLStages, MTLTexture,
 };
 use objc2_metal_fx::{
     MTL4FXTemporalDenoisedScaler, MTL4FXTemporalScaler, MTLFXTemporalDenoisedScalerBase,
@@ -30,7 +30,20 @@ use crate::{GpuEvent, GpuTextureFormat};
 // ─── Availability ─────────────────────────────────────────────────────
 
 /// Check if MTL4FX Temporal Denoised Scaler is available on this system.
+///
+/// STOPGAP (BUG-woji): hard-off. On macOS 26.6.1 the MTL4 denoiser creation
+/// aborts the process (uncatchable SIGABRT) inside MetalFX's own graph
+/// specialization (`_M4FXTemporalDenoisingScalingEffect` → `mlKernelMetal4`
+/// → MPSGraphExecutable "Incompatible shape for parameter at index 0").
+/// Native-repro proven: the MTL4Compiler works (MTL4 temporal scaler
+/// creates fine) and the denoiser works via the legacy no-compiler path —
+/// only the combination aborts, and no descriptor property controls it.
+/// Apple framework bug; `supportsMetal4FX:` answers YES regardless.
+/// Set MANIFOLD_MTL4FX_DENOISER=1 to re-test after a macOS update.
 pub fn metalfx_m4_denoiser_available() -> bool {
+    if std::env::var_os("MANIFOLD_MTL4FX_DENOISER").is_none() {
+        return false;
+    }
     mtl4fx_creation_supported(
         c"MTLFXTemporalDenoisedScalerDescriptor",
         objc2::sel!(newTemporalDenoisedScalerWithDevice:compiler:),
@@ -75,6 +88,29 @@ pub fn supports_m4_temporal(device: &ProtocolObject<dyn MTLDevice>) -> bool {
         return false;
     }
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
+}
+
+/// Metal 4 requires declaring which pipeline stages border the effect's
+/// textures: Metal validation asserts "_outputTextureBarrierStages not set"
+/// and WITHOUT validation the encode silently writes nothing (probed on
+/// Tahoe 26.6.1). The color input defaults to MTLStageDispatch; the output
+/// defaults to unset. There is no public setter for the output stages —
+/// KVC writes the ivar directly. Tripwire: the gpu-proofs smoke tests in
+/// this module (an Apple rename turns this into a KVC exception there).
+unsafe fn set_mtl4fx_barrier_stages<T: ?Sized>(scaler: &ProtocolObject<T>) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+    let all: Option<Retained<AnyObject>> =
+        msg_send![class!(NSNumber), numberWithUnsignedLongLong: MTLStages::All.0 as u64];
+    let Some(all) = all else {
+        log::error!("[MetalFX MTL4] NSNumber creation failed — barrier stages unset, MTL4FX encode may produce black output");
+        return;
+    };
+    for key in ["colorTextureBarrierStages", "outputTextureBarrierStages"] {
+        let key = NSString::from_str(key);
+        let _: () = msg_send![scaler, setValue: &*all, forKey: &*key];
+    }
 }
 
 // ─── Format mapping ───────────────────────────────────────────────────
@@ -407,6 +443,7 @@ impl Metal4FxDenoisedScaler {
             base.setMotionVectorScaleX(input_width as f32 * 0.5);
             base.setMotionVectorScaleY(input_height as f32 * 0.5);
             base.setDepthReversed(depth_reversed);
+            set_mtl4fx_barrier_stages(&scaler);
         }
 
         log::info!(
@@ -606,6 +643,7 @@ impl Metal4FxTemporalScaler {
             base.setInputContentHeight(input_height as usize);
             base.setMotionVectorScaleX(input_width as f32 * 0.5);
             base.setMotionVectorScaleY(input_height as f32 * 0.5);
+            set_mtl4fx_barrier_stages(&scaler);
         }
 
         log::info!(
@@ -971,6 +1009,101 @@ mod tests {
             "MTL4 denoised MAE ({:.6}) not below 50% of noisy MAE ({:.6}) -- denoiser reduction too weak",
             result_mae,
             noisy_mae,
+        );
+    }
+
+    /// Smoke proof for the MTL4 temporal scaler: on a rig reporting
+    /// available, creation must succeed, one encode must complete without
+    /// GPU error, and the output must carry content (any nonzero byte).
+    /// This is the tripwire for the barrier-stages requirement documented
+    /// on `set_mtl4fx_barrier_stages`.
+    #[test]
+    fn m4_temporal_scaler_encodes_one_frame() {
+        let device = GpuDevice::new();
+
+        if !metalfx_m4_temporal_available() {
+            eprintln!("[metalfx_m4 test] MTL4FXTemporalScaler not available -- skipping");
+            return;
+        }
+
+        const IN_W: u32 = 64;
+        const IN_H: u32 = 64;
+        const OUT_W: u32 = 128;
+        const OUT_H: u32 = 128;
+
+        let bridge = device
+            .mtl4_bridge()
+            .expect("MTL4 bridge must be available when MTL4FX temporal is available");
+        let scaler = Metal4FxTemporalScaler::new(
+            device.raw_device(),
+            bridge,
+            IN_W,
+            IN_H,
+            OUT_W,
+            OUT_H,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("Metal4FxTemporalScaler::new returned None on a rig reporting available");
+
+        let npixels = (IN_W * IN_H) as usize;
+        let mut color_data = vec![0.0f32; npixels * 4];
+        for y in 0..IN_H {
+            for x in 0..IN_W {
+                let idx = ((y * IN_W + x) * 4) as usize;
+                color_data[idx] = (x + y) as f32 / (IN_W + IN_H - 2) as f32;
+                color_data[idx + 3] = 1.0;
+            }
+        }
+        let color = upload_texture(
+            &device, IN_W, IN_H, GpuTextureFormat::Rgba16Float, &color_data, "m4t_color",
+        );
+        let depth = upload_texture(
+            &device, IN_W, IN_H, GpuTextureFormat::R32Float, &vec![0.5f32; npixels], "m4t_depth",
+        );
+        let motion = upload_texture(
+            &device, IN_W, IN_H, GpuTextureFormat::Rg16Float, &vec![0.0f32; npixels * 2], "m4t_motion",
+        );
+        let output = device.create_texture(&GpuTextureDesc {
+            width: OUT_W,
+            height: OUT_H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "m4t_output",
+            mip_levels: 1,
+        });
+
+        let mut enc = device.create_encoder("m4-temporal-smoke");
+        let encoded = scaler.encode(
+            enc.raw_cmd_buf(),
+            &color,
+            &depth,
+            &motion,
+            &output,
+            0.0,
+            0.0,
+            true, // reset
+        );
+        assert!(
+            encoded,
+            "MTL4 temporal encode skipped on a single-frame test (allocator ring should not be saturated)"
+        );
+        enc.commit_and_wait_completed();
+
+        let bpp = output.format.bytes_per_pixel();
+        let row_bytes = bpp * output.width;
+        let total = (row_bytes * output.height) as u64;
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("readback");
+        enc.copy_texture_to_buffer(&output, &readback, output.width, output.height, row_bytes);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared buffer mapped pointer");
+        let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, total as usize) };
+        let nonzero = bytes.iter().filter(|&&b| b != 0).count();
+        assert!(
+            nonzero > 0,
+            "MTL4 temporal scaler output is all zeros — encode completed but wrote nothing"
         );
     }
 }
