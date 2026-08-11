@@ -5390,15 +5390,12 @@ impl EffectNode for RenderScene {
                         eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
                     }
                 }
-                // The old accel goes INTO the build as its `retire` pin:
-                // prior frames' Generators buffers can still be mid-trace
-                // against it (async commit + frames_in_flight pacing), and
-                // the new build's completion handler fires only after
-                // everything committed before it on this queue — provably
-                // after those traces (raytrace.rs `build_accel` doc).
-                let old = self.rt_accel.take();
-                let fresh = tracer.build_accel(gpu.device, &objects, &gi_materials_data, old);
-                self.rt_accel = Some(fresh);
+                // The old accel is dropped here — safe: `RtAccel`'s
+                // `Drop` self-retires its Metal handles through
+                // `retire_on_queue` (raytrace.rs), so prior frames'
+                // Generators traces provably finish before anything
+                // frees. No caller-side handoff needed.
+                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects, &gi_materials_data));
                 self.rt_accel_topo_key = Some(topo_key);
                 // BUG-oqta: only a content-settle-triggered build records
                 // the content key (why: the trigger block above).
@@ -5409,8 +5406,8 @@ impl EffectNode for RenderScene {
                 self.rt_accel_pending_key = None;
                 self.rt_accel_content_pending_key = None;
                 // BUG-320: the fresh build must be observed ready
-                // before tracing resumes — the old accel is retired into
-                // the build's completion pin and no longer traced against.
+                // before tracing resumes — the old accel is dropped
+                // (self-retiring Drop) and no longer traced against.
                 self.rt_accel_built = false;
                 log::info!(
                     "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"

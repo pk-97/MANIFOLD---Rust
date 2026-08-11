@@ -142,7 +142,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects, &[], None);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;

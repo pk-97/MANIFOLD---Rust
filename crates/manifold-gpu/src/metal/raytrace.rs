@@ -136,6 +136,35 @@ pub struct RtAccel {
     /// GPU buffers for the kernel's alias-draw + point-sample step (RS-C);
     /// CPU-side local-space vertices for refit alongside the TLAS.
     pub emissive_table: Option<EmissiveLightTable>,
+    /// Queue clone for `Drop`'s self-retire (see the Drop impl below).
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+}
+
+/// BUG-84fv class, root fix: an RtAccel must NEVER free its Metal objects
+/// while a previously-committed command buffer could still reference them
+/// (prior frames' Generators traces reach the TLAS/BLAS/instance/geometry
+/// through raw GPU addresses; encode pacing lets the CPU run frames ahead
+/// of GPU completion, and Metal's binding retention is proven insufficient
+/// for this path — BUG-jddy). Drop therefore retires clones of every
+/// Metal handle through `retire_on_queue`'s empty-buffer completion pin:
+/// the actual deallocations happen only after everything committed before
+/// the drop has finished on the GPU. Covers every scenario uniformly —
+/// rebuild swap, superseded build/refit, primitive teardown (clip cut,
+/// preset swap, project close) — because the protection lives in the
+/// object's death, not in each call site.
+impl Drop for RtAccel {
+    fn drop(&mut self) {
+        let pins = (
+            self.structure.clone(),
+            self.descriptor.clone(),
+            self.refit_scratch.raw.clone(),
+            self.blas.iter().map(|b| b.structure.clone()).collect::<Vec<_>>(),
+            self.instance_buffer.raw.clone(),
+            self.geometry_buffers.clone(),
+            self.emissive_table.as_ref().map(|t| (t.triangles.raw.clone(), t.aliases.raw.clone())),
+        );
+        super::device::retire_on_queue(&self.queue, pins, "RT accel retire");
+    }
 }
 
 // Safety: matches every other manifold-gpu resource wrapper (`GpuTexture`,
@@ -387,18 +416,11 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
 /// evaluate() ever runs) — never racing this frame's own still-encoding,
 /// uncommitted mesh-gen work).
 ///
-/// `retire`: the accel this build REPLACES, if any. Deterministic
-/// lifetime handoff, not a frame-count heuristic: this build's command
-/// buffer commits to the same queue strictly after every prior frame's
-/// Generators buffer, so when its completion handler fires, every trace
-/// dispatch that could still read the old accel has provably completed
-/// (queue order + completion-handler ordering — Metal executes one
-/// queue's buffers in commit order). The old accel rides the pins below
-/// until that moment; Metal's binding/useResource retention is proven
-/// insufficient for the accel path on its own (BUG-jddy class), so a
-/// plain drop at swap time frees memory in-flight traces can still
-/// read (BUG-84fv page-fault class).
-pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial], retire: Option<RtAccel>) -> RtAccel {
+/// The accel this build REPLACES needs no handoff: `RtAccel`'s `Drop`
+/// self-retires through `retire_on_queue` (the root fix — see the Drop
+/// impl), so a plain swap/drop/teardown is always safe regardless of
+/// caller.
+pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> RtAccel {
     let cb = device
         .raw_queue()
         .commandBuffer()
@@ -478,13 +500,6 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
             geometry_buffers.clone(),
             blas_structures.clone(),
             instance_buffer.raw.clone(),
-            // The replaced accel: held until this build's buffer completes,
-            // which queue-order proves is after every prior-frame trace
-            // against it (see the fn doc). A build superseded mid-flight is
-            // safe the same way: the superseding build commits later on the
-            // same queue, so its handler can't fire before the in-flight
-            // build's writes finish.
-            retire,
         )),
     );
     cb.commit();
@@ -501,6 +516,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         instance_buffer,
         geometry_buffers,
         ready,
+        queue: device.clone_queue(),
         emissive_table,
     }
 }
@@ -4606,10 +4622,7 @@ pub trait ShadowRayTracer {
     /// load / topology change for an RT-enabled scene; never mid-frame.
     /// RS-B: `gi_materials` is the per-object material table (SAME order
     /// as `objects`) — consumed to build the emissive-triangle light table.
-    /// `retire`: the accel this build replaces — held alive through the new
-    /// build's completion (queue order proves every prior-frame trace
-    /// against it has finished by then); `None` for the first build.
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial], retire: Option<Self::Accel>) -> Self::Accel;
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel;
 
     /// Refit `accel`'s instance transforms in place from `objects` — cheap
     /// (TLAS-only update), used when objects move but the object SET and
@@ -5247,8 +5260,8 @@ impl MetalShadowRayTracer {
 impl ShadowRayTracer for MetalShadowRayTracer {
     type Accel = RtAccel;
 
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial], retire: Option<Self::Accel>) -> Self::Accel {
-        build_accel(device, objects, gi_materials, retire)
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel {
+        build_accel(device, objects, gi_materials)
     }
 
     fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) {
