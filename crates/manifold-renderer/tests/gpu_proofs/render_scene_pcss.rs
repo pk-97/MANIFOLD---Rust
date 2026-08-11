@@ -273,3 +273,174 @@ fn existing_softness_tiers_are_unaffected_by_contact() {
         "Soft tier shows no measurable penumbra (width {soft_width}px) on the committed scanline"
     );
 }
+
+/// RT-toggles: raster shadow fallback — verify that shadow softness changes
+/// are visible when RT is on but `rt_shadows` is toggled off. The WGSL
+/// `shadow_factor` falls through to the raster PCF/PCSS path (rt_flags.w=0),
+/// the caster table carries fresh softness params, and shadow maps are
+/// rendered under the widened gate.
+///
+/// Scene: the same ground-plane + occluder as the PCSS suite, but with
+/// `rt_enabled: true` and `rt_shadows: false` on render_scene. Rendered with
+/// Hard (index 0) and VerySoft (index 2) at the FAR height — the transition
+/// between these tiers (3×3 → 7×7 kernel) must produce measurably different
+/// gradient widths, proving the raster fallback is live.
+///
+/// Uses the FAR height (occluder well above ground) so penumbrae are wide
+/// enough to differentiate kernel sizes; RT warmup frames let the async accel
+/// build settle.
+const RT_TOGGLE_SHADOW_WARMUP_FRAMES: i64 = 16;
+
+fn pcss_rt_toggle_scene_json(occluder_y: f32, softness: u32, light_size: f32) -> String {
+    format!(
+        r#"{{"version":2,"name":"RenderSceneRtToggleShadowsProof","nodes":[
+        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
+            "max_capacity":{{"type":"Int","value":8192}},
+            "resolution_x":{{"type":"Int","value":20}},
+            "resolution_y":{{"type":"Int","value":20}},
+            "size_x":{{"type":"Float","value":10.0}},
+            "size_y":{{"type":"Float","value":10.0}}}}}},
+        {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
+            "src_cols":{{"type":"Int","value":20}},
+            "src_rows":{{"type":"Int","value":20}}}}}},
+        {{"id":5,"typeId":"node.grid_mesh","nodeId":"occ_grid","params":{{
+            "max_capacity":{{"type":"Int","value":8192}},
+            "resolution_x":{{"type":"Int","value":10}},
+            "resolution_y":{{"type":"Int","value":10}},
+            "size_x":{{"type":"Float","value":3.0}},
+            "size_y":{{"type":"Float","value":3.0}}}}}},
+        {{"id":6,"typeId":"node.make_triangles","nodeId":"occ_tris","params":{{
+            "src_cols":{{"type":"Int","value":10}},
+            "src_rows":{{"type":"Int","value":10}}}}}},
+        {{"id":7,"typeId":"node.transform_3d","nodeId":"occ_xform","params":{{
+            "pos_y":{{"type":"Float","value":{occluder_y}}}}}}},
+        {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":0.7}},
+            "tilt":{{"type":"Float","value":0.95}},
+            "distance":{{"type":"Float","value":60.0}},
+            "fov_y":{{"type":"Float","value":0.14}}}}}},
+        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+            "color_r":{{"type":"Float","value":1.0}},
+            "color_g":{{"type":"Float","value":1.0}},
+            "color_b":{{"type":"Float","value":1.0}}}}}},
+        {{"id":8,"typeId":"node.light","nodeId":"sun","params":{{
+            "mode":{{"type":"Enum","value":0}},
+            "pos_x":{{"type":"Float","value":3.0}},
+            "pos_y":{{"type":"Float","value":20.0}},
+            "pos_z":{{"type":"Float","value":3.0}},
+            "aim_x":{{"type":"Float","value":0.0}},
+            "aim_y":{{"type":"Float","value":0.0}},
+            "aim_z":{{"type":"Float","value":0.0}},
+            "intensity":{{"type":"Float","value":1.0}},
+            "range":{{"type":"Float","value":30.0}},
+            "cast_shadows":{{"type":"Float","value":1.0}},
+            "shadow_softness":{{"type":"Enum","value":{softness}}},
+            "light_size":{{"type":"Float","value":{light_size}}},
+            "shadow_resolution":{{"type":"Int","value":2048}}}}}},
+        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":2}},
+            "lights":{{"type":"Int","value":1}},
+            "rt_enabled":{{"type":"Bool","value":true}},
+            "rt_shadows":{{"type":"Bool","value":false}},
+            "rt_ao":{{"type":"Bool","value":true}},
+            "rt_gi":{{"type":"Bool","value":false}},
+            "rt_reflections":{{"type":"Bool","value":false}}}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"final"}}
+        ],"wires":[
+        {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
+        {{"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"}},
+        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
+        {{"fromNode":6,"fromPort":"out","toNode":20,"toPort":"mesh_1"}},
+        {{"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"}},
+        {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
+        {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
+        {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_1"}},
+        {{"fromNode":8,"fromPort":"out","toNode":20,"toPort":"light_0"}},
+        {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
+        ]}}"#
+    )
+}
+
+fn render_rt_toggle_readback(json: &str) -> (Vec<u8>, u32, u32) {
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        json,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("rt-toggle shadow scene must build");
+
+    let target = h.make_target("rt-toggle-shadows-pcss");
+    for frame in 0..RT_TOGGLE_SHADOW_WARMUP_FRAMES {
+        let ctx = PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("rt-toggle-shadows-enc");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
+        }
+        enc.commit_and_wait_completed();
+    }
+    (h.readback(&target.texture), h.width, h.height)
+}
+
+/// RT toggles — raster shadow fallback: changing shadow softness from Hard
+/// (3×3 PCF) to VerySoft (7×7 PCF) when RT is on but RT shadows are off must
+/// produce visibly wider penumbrae, proving the raster PCF/PCSS path is live.
+#[test]
+fn rt_off_shadows_softness_change_visible_when_rt_on() {
+    let (hard_bytes, w, h) =
+        render_rt_toggle_readback(&pcss_rt_toggle_scene_json(FAR_HEIGHT, 0, 0.0));
+    let (verysoft_bytes, _, _) =
+        render_rt_toggle_readback(&pcss_rt_toggle_scene_json(FAR_HEIGHT, 2, 0.0));
+
+    let hard_shade = shade_column(&luma_image(&hard_bytes), w, h, SCANLINE_COL);
+    let verysoft_shade = shade_column(&luma_image(&verysoft_bytes), w, h, SCANLINE_COL);
+
+    let hard_width = gradient_width(&hard_shade, 0.05, 0.95);
+    let verysoft_width = gradient_width(&verysoft_shade, 0.05, 0.95);
+
+    eprintln!(
+        "RT-on + RT-shadows-off gradient width: hard={hard_width}px verysoft={verysoft_width}px"
+    );
+
+    assert!(
+        verysoft_width >= 1,
+        "VerySoft tier shows no measurable penumbra (width {verysoft_width}px) — \
+         shadow fallback may not be rendering"
+    );
+
+    // The VerySoft kernel (7×7, 49 taps) vs Hard (3×3, 9 taps) at the FAR
+    // height should measurably widen the penumbra. The gate is conservative
+    // (≥1px wider, matching the soft-tier minimum gate above) to avoid noise
+    // false positives.
+    assert!(
+        verysoft_width > hard_width,
+        "RT-on + RT-shadows-off: VerySoft gradient ({verysoft_width}px) is not wider than \
+         Hard ({hard_width}px) — shadow softness change is invisible (BUG)"
+    );
+}

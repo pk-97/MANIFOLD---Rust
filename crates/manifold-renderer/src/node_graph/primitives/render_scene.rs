@@ -4555,12 +4555,15 @@ impl EffectNode for RenderScene {
             // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
             // the value the EMIT_AO_MASK fragment variants write to the
             // ao_mask attachment. 0 for unlit-kind materials (baked_look)
-            // and scene-wide whenever RT is live; 1 for every lit raster
-            // pixel. Same reserved-slot reuse doctrine as `scene_params.w`
-            // above. Written unconditionally — non-mask pipelines never
-            // read it.
+            // and scene-wide whenever RT is providing AO (RT on + RT AO on);
+            // 1 for every lit raster pixel and whenever RT AO is toggled off
+            // (so the downstream GTAO masked_mix darkens with screen-space
+            // occlusion instead of reading the unwritten RT AO channel).
+            // Same reserved-slot reuse doctrine as `scene_params.w` above.
+            // Written unconditionally — non-mask pipelines never read it.
             uniforms.fog_params[2] =
-                if material.kind == MaterialKind::Unlit || (rt_enabled && rt_ready) {
+                if material.kind == MaterialKind::Unlit || (rt_enabled && rt_ready && rt_ao_enabled)
+                {
                     0.0
                 } else {
                     1.0
