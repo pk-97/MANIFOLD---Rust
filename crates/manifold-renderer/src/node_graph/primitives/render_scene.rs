@@ -169,13 +169,6 @@ pub(crate) const MAX_SHADOW_CASTING_LIGHTS: usize = 4;
 /// frame-pacing luck.
 const FRAMES_IN_FLIGHT: usize = 3;
 
-/// Frames a retired RT accel stays in `rt_accel_graveyard` before drop:
-/// `FRAMES_IN_FLIGHT` covers the worst-case in-flight Generators lag the
-/// pacing wait permits (a trace dispatch encoded at frame F may still be
-/// executing at F + FRAMES_IN_FLIGHT - 1), + 1 margin for the
-/// surface-signal vs. completion-handler skew.
-const RT_ACCEL_RETIRE_FRAMES: u64 = (FRAMES_IN_FLIGHT + 1) as u64;
-
 /// Per-caster shadow metadata, packed as 5 `vec4<f32>` into the
 /// `@binding(9)` caster table (`MAX_SHADOW_CASTING_LIGHTS` slots, always
 /// bound). Columns 0–3 are the light's `shadow_view_proj`; the 5th vec4 is
@@ -1007,23 +1000,6 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// Replaced accels held until the GPU has provably retired every
-    /// Generators command buffer that could still trace against them.
-    /// The swap below hands the old accel to 1-3 in-flight frames
-    /// (Generators commits async; encode pacing only bounds the lag to
-    /// frames_in_flight), and Metal's "binding retains the resource" doc
-    /// claim is proven insufficient for the accel path (BUG-jddy class) —
-    /// the dispatch's useResource declarations cover residency, not
-    /// object lifetime under reclaim pressure. `(evaluate tick at
-    /// retirement, accel)`; entries purge once older than
-    /// `RT_ACCEL_RETIRE_FRAMES`. One structure set (~MBs) per entry, and
-    /// rebuild churn is the pathological case by construction — bounded
-    /// by the frame margin, never by scene count.
-    rt_accel_graveyard: Vec<(u64, manifold_gpu::raytrace::RtAccel)>,
-    /// Monotonic evaluate tick for graveyard aging. Self-counted (not the
-    /// pipeline frame): a paused generator's entries simply live longer —
-    /// the safe direction.
-    rt_accel_tick: u64,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1553,8 +1529,6 @@ impl RenderScene {
             rt_accel_content_key: None,
             rt_accel_content_pending_key: None,
             rt_accel_built: false,
-            rt_accel_graveyard: Vec::new(),
-            rt_accel_tick: 0,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_half2: None,
@@ -5169,12 +5143,6 @@ impl EffectNode for RenderScene {
         // wrong per-instance shadow positions — escalate if this becomes
         // load-bearing, per the P1 brief's own escalation line). ----
         if rt_enabled {
-            self.rt_accel_tick += 1;
-            if !self.rt_accel_graveyard.is_empty() {
-                let tick = self.rt_accel_tick;
-                self.rt_accel_graveyard
-                    .retain(|(retired, _)| tick - retired < RT_ACCEL_RETIRE_FRAMES);
-            }
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
                 .iter()
@@ -5422,7 +5390,15 @@ impl EffectNode for RenderScene {
                         eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
                     }
                 }
-                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects, &gi_materials_data));
+                // The old accel goes INTO the build as its `retire` pin:
+                // prior frames' Generators buffers can still be mid-trace
+                // against it (async commit + frames_in_flight pacing), and
+                // the new build's completion handler fires only after
+                // everything committed before it on this queue — provably
+                // after those traces (raytrace.rs `build_accel` doc).
+                let old = self.rt_accel.take();
+                let fresh = tracer.build_accel(gpu.device, &objects, &gi_materials_data, old);
+                self.rt_accel = Some(fresh);
                 self.rt_accel_topo_key = Some(topo_key);
                 // BUG-oqta: only a content-settle-triggered build records
                 // the content key (why: the trigger block above).
@@ -5433,7 +5409,8 @@ impl EffectNode for RenderScene {
                 self.rt_accel_pending_key = None;
                 self.rt_accel_content_pending_key = None;
                 // BUG-320: the fresh build must be observed ready
-                // before tracing resumes — the old accel is gone.
+                // before tracing resumes — the old accel is retired into
+                // the build's completion pin and no longer traced against.
                 self.rt_accel_built = false;
                 log::info!(
                     "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"

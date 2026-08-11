@@ -386,7 +386,19 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
 /// per-frame content-thread cycle commits+waits before the next frame's
 /// evaluate() ever runs) — never racing this frame's own still-encoding,
 /// uncommitted mesh-gen work).
-pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> RtAccel {
+///
+/// `retire`: the accel this build REPLACES, if any. Deterministic
+/// lifetime handoff, not a frame-count heuristic: this build's command
+/// buffer commits to the same queue strictly after every prior frame's
+/// Generators buffer, so when its completion handler fires, every trace
+/// dispatch that could still read the old accel has provably completed
+/// (queue order + completion-handler ordering — Metal executes one
+/// queue's buffers in commit order). The old accel rides the pins below
+/// until that moment; Metal's binding/useResource retention is proven
+/// insufficient for the accel path on its own (BUG-jddy class), so a
+/// plain drop at swap time frees memory in-flight traces can still
+/// read (BUG-84fv page-fault class).
+pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial], retire: Option<RtAccel>) -> RtAccel {
     let cb = device
         .raw_queue()
         .commandBuffer()
@@ -466,6 +478,13 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
             geometry_buffers.clone(),
             blas_structures.clone(),
             instance_buffer.raw.clone(),
+            // The replaced accel: held until this build's buffer completes,
+            // which queue-order proves is after every prior-frame trace
+            // against it (see the fn doc). A build superseded mid-flight is
+            // safe the same way: the superseding build commits later on the
+            // same queue, so its handler can't fire before the in-flight
+            // build's writes finish.
+            retire,
         )),
     );
     cb.commit();
@@ -4587,7 +4606,10 @@ pub trait ShadowRayTracer {
     /// load / topology change for an RT-enabled scene; never mid-frame.
     /// RS-B: `gi_materials` is the per-object material table (SAME order
     /// as `objects`) — consumed to build the emissive-triangle light table.
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel;
+    /// `retire`: the accel this build replaces — held alive through the new
+    /// build's completion (queue order proves every prior-frame trace
+    /// against it has finished by then); `None` for the first build.
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial], retire: Option<Self::Accel>) -> Self::Accel;
 
     /// Refit `accel`'s instance transforms in place from `objects` — cheap
     /// (TLAS-only update), used when objects move but the object SET and
@@ -5225,8 +5247,8 @@ impl MetalShadowRayTracer {
 impl ShadowRayTracer for MetalShadowRayTracer {
     type Accel = RtAccel;
 
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel {
-        build_accel(device, objects, gi_materials)
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial], retire: Option<Self::Accel>) -> Self::Accel {
+        build_accel(device, objects, gi_materials, retire)
     }
 
     fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) {

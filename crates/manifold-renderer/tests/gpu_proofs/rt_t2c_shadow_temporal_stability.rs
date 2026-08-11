@@ -190,7 +190,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects, &[]);
+    let accel = tracer.build_accel(device, &objects, &[], None);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;

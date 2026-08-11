@@ -124,7 +124,7 @@ fn run_tlc_fixture(
     let device = &h.device;
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, objects, &[]);
+    let accel = tracer.build_accel(device, objects, &[], None);
 
     let gi_materials_buffer = write_shared_buffer(device, gi_materials);
 
