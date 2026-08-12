@@ -75,6 +75,12 @@ CELLS = [
 # FAIL (load-bearing) or a WARN (scene-dependent). The universal INERT check is
 # separate and always a FAIL. rt_enabled is handled by its own branch above
 # (RT channels must vanish/collapse, composite must change).
+# rt_shadows is FAIL here but gets downgraded to WARN by the coverage gate:
+# a fixture with no shadowed pixels cannot show "luma rises when shadows turn
+# off", so the direction is vacuous rather than load-bearing on such a scene.
+# rt_ao stays WARN — the AO signal lives in mask_half's G component (R=vis,
+# G=ao), but that component is folded into the channel luma stat, so there is
+# no clean AO-only number to gate a coverage check on.
 FLIP_DIRECTION = {
     "rt_shadows":       ("luma_rise",    "FAIL"),
     "rt_ao":            ("luma_rise",    "WARN"),
@@ -96,6 +102,10 @@ RISE_SD_REL = 0.05        # "sd rises" — 5% relative (sd is small and unit-dep
 RISE_SD_ABS = 1e-4
 RAMP_SPREAD = 1e-3        # sun-x-ramp: composite must move across captures by this much
 SNAP_JUMP_REL = 0.5       # sun-intensity-snap: luma must jump >=50% relative after frame 60
+# The accumulated-visibility `mask` channel reads ~1.0 luma when every pixel is
+# fully visible (nothing shadowed). At or above this, a shadow direction check
+# has nothing to observe and is downgraded to a vacuous WARN.
+SHADOW_COVERAGE_LUMA = 0.99
 
 # rt_capture.rs prints this stdout marker the instant the flip is sent.
 FLIP_SPLIT_RE = re.compile(r"=== LIVE FLIP")
@@ -128,6 +138,40 @@ def composite_series(text):
             except ValueError:
                 continue
     return out
+
+
+def pre_flip_channel_luma(text, label):
+    """Last luma for `label` before the flip marker, or None if absent."""
+    pre, _ = split_at_flip(text)
+    series = []
+    for line in pre.splitlines():
+        m = STATS_RE.search(line)
+        if m and m.group("label") == label:
+            try:
+                series.append(_num(m.group("luma")))
+            except ValueError:
+                continue
+    return series[-1] if series else None
+
+
+def shadow_coverage_note(name, log_text):
+    """'no shadow coverage, vacuous' note for rt_shadows when the pre-flip
+    visibility mask reads ~1.0 (no shadowed pixels); None otherwise.
+
+    The gate is on the accumulated-visibility `mask` channel (what the show
+    consumes), with `mask_half` (raw trace-res vis) as fallback. A mask at or
+    above SHADOW_COVERAGE_LUMA means the scene has nothing to un-shadow, so a
+    luma-rise direction is unobservable — the check is downgraded to a WARN
+    note rather than a FAIL. Non-rt_shadows cells return None immediately."""
+    if name != "rt_shadows":
+        return None
+    cov = pre_flip_channel_luma(log_text, "mask")
+    if cov is None:
+        cov = pre_flip_channel_luma(log_text, "mask_half")
+    if cov is not None and cov >= SHADOW_COVERAGE_LUMA:
+        return (f"fixture has no shadow coverage (mask luma {cov:.4f}); "
+                f"direction vacuous")
+    return None
 
 # rt_capture.rs stderr formats (rt_capture.rs: process_capture + live-flip verdict):
 #   [rt-capture] <label> f=NNNN dim=WxH hit=H luma=L sd=S mean=[...] center=[...] path
@@ -291,10 +335,14 @@ def check_cell(name, kind, parsed, png_count, rc, log_text):
                 elif direction == "any_change":
                     ok = abs(dl) > CHANGE_LUMA or abs(dh) > CHANGE_HIT
                 if not ok:
-                    msg = (f"composite direction '{direction}' not met "
-                           f"(hit {b[1]:.6f}→{a[1]:.6f}, luma {b[2]:.6f}→{a[2]:.6f}, "
-                           f"sd {b[3]:.6f}→{a[3]:.6f})")
-                    (fail if severity == "FAIL" else warn)(msg)
+                    note = shadow_coverage_note(name, log_text)
+                    if note:
+                        warn(note)
+                    else:
+                        msg = (f"composite direction '{direction}' not met "
+                               f"(hit {b[1]:.6f}→{a[1]:.6f}, luma {b[2]:.6f}→{a[2]:.6f}, "
+                               f"sd {b[3]:.6f}→{a[3]:.6f})")
+                        (fail if severity == "FAIL" else warn)(msg)
             else:
                 (fail if severity == "FAIL" else warn)(
                     "no before/after composite stats to run the direction check")
