@@ -81,6 +81,9 @@ CELLS = [
 # rt_ao stays WARN — the AO signal lives in mask_half's G component (R=vis,
 # G=ao), but that component is folded into the channel luma stat, so there is
 # no clean AO-only number to gate a coverage check on.
+# rt_denoise_feed is "sd_rise" here but flip-aware: a fixture storing the
+# toggle at 0 flips it ON (0→1), so the check inverts to "sd_fall" (denoiser
+# engaging) instead. Both directions are FAIL-severity.
 FLIP_DIRECTION = {
     "rt_shadows":       ("luma_rise",    "FAIL"),
     "rt_ao":            ("luma_rise",    "WARN"),
@@ -173,6 +176,49 @@ def shadow_coverage_note(name, log_text):
                 f"direction vacuous")
     return None
 
+
+def label_rows(text):
+    """label -> count of per-frame stats rows in a text blob."""
+    out = {}
+    for line in text.splitlines():
+        m = STATS_RE.search(line)
+        if m:
+            out[m.group("label")] = out.get(m.group("label"), 0) + 1
+    return out
+
+
+def vanished_by_absence(pre, post):
+    """Labels with ≥1 stats row pre-flip and zero rows post-flip.
+
+    rt-capture's own verdict walks a running last-seen map, so a channel that
+    stops being captured post-flip (its texture is gone) never registers as
+    VANISHED — its stale value just stops updating. The per-frame log sees the
+    truth: the label has pre rows and no post rows. This is the parser-side
+    VANISHED that catches the rt_enabled off case (BUG-18l class false positive:
+    rt-capture printed LIVE-FLIP INERT while every RT channel genuinely
+    vanished)."""
+    pre_counts = label_rows(pre)
+    post_counts = label_rows(post)
+    return [lab for lab in pre_counts if pre_counts[lab] > 0 and post_counts.get(lab, 0) == 0]
+
+
+def appeared_by_absence(pre, post):
+    """Labels with zero rows pre-flip and ≥1 row post-flip (turned ON by flip)."""
+    pre_counts = label_rows(pre)
+    post_counts = label_rows(post)
+    return [lab for lab in post_counts if post_counts[lab] > 0 and pre_counts.get(lab, 0) == 0]
+
+
+def parse_flip_values(text):
+    """(before, after) floats from the `--live-flip:` line, or (None, None)."""
+    m = LIVE_FLIP_RE.search(text)
+    if not m:
+        return None, None
+    try:
+        return float(m.group("before")), float(m.group("after"))
+    except ValueError:
+        return None, None
+
 # rt_capture.rs stderr formats (rt_capture.rs: process_capture + live-flip verdict):
 #   [rt-capture] <label> f=NNNN dim=WxH hit=H luma=L sd=S mean=[...] center=[...] path
 #   [rt-capture] <label> stats changed: hit X → Y, luma A → B
@@ -186,6 +232,13 @@ CHANGED_RE = re.compile(r"\[rt-capture\] (?P<label>\S+) stats changed:")
 APPEARED_RE = re.compile(r"\[rt-capture\] (?P<label>\S+) APPEARED after flip:")
 VANISHED_RE = re.compile(r"\[rt-capture\] (?P<label>\S+) VANISHED after flip")
 PARAM_NOT_FOUND_RE = re.compile(r"\[rt-capture\] Param '([^']+)' not found")
+# `[rt-capture] --live-flip: layer[0] param '8_rt_denoise_feed' 0.00 → 1.00` —
+# the flip's before/after values. A fixture that stores a toggle at 0 gets
+# turned ON (0→1) by the flip, which inverts the expected direction.
+LIVE_FLIP_RE = re.compile(
+    r"\[rt-capture\] --live-flip: layer\[\d+\] param '[^']+' "
+    r"(?P<before>[-0-9.]+) → (?P<after>[-0-9.]+)"
+)
 
 
 def log(msg):
@@ -301,19 +354,33 @@ def check_cell(name, kind, parsed, png_count, rc, log_text):
             fail(f"BLACK composite at f={comp_last[0]} hit={h:.6f} luma={l:.6f}")
 
     if kind == "flip":
-        changed_any = len(verdicts) > 0
+        pre, post = split_at_flip(log_text)
+        # Verdict union: rt-capture's own verdict lines plus parser-side
+        # presence (vanished/appeared by absence). rt-capture's verdict compares
+        # last-seen stats, so a channel that stops being captured never shows as
+        # VANISHED — the per-frame log is the only place that transition is
+        # visible.
+        rt_changed = {lab for (k, lab) in verdicts if k == "changed"}
+        vanished = {lab for (k, lab) in verdicts if k == "vanished"} \
+            | set(vanished_by_absence(pre, post))
+        appeared = {lab for (k, lab) in verdicts if k == "appeared"} \
+            | set(appeared_by_absence(pre, post))
+        changed_any = bool(rt_changed | vanished | appeared)
         if not changed_any:
             fail("INERT live flip — no channel changed/APPEARED/VANISHED (BUG-18l class)")
 
-        pre, post = split_at_flip(log_text)
         b = composite_series(pre)[-1] if composite_series(pre) else None
         a = composite_series(post)[-1] if composite_series(post) else None
+        flip_before, _ = parse_flip_values(log_text)
 
-        # rt_enabled: RT channels must vanish or collapse, composite must change.
+        # rt_enabled: RT channels must vanish or collapse, composite must
+        # change. When rt_enabled turns off every non-composite channel stops
+        # being captured — vanished-by-absence is the expected shape, and the
+        # INERT FAIL above must not fire on it.
         if name == "rt_enabled":
-            vanished = [lab for (k, lab) in verdicts if k == "vanished" and lab != "composite"]
-            changed_noncomp = [lab for (k, lab) in verdicts if k == "changed" and lab != "composite"]
-            if not vanished and not changed_noncomp:
+            noncomp_vanish = vanished - {"composite"}
+            changed_noncomp = rt_changed - {"composite"}
+            if not noncomp_vanish and not changed_noncomp:
                 warn("no RT channel vanished or changed — raster fallback not exercised")
             if b and a and abs(a[2] - b[2]) < CHANGE_LUMA and abs(a[1] - b[1]) < CHANGE_HIT:
                 warn(f"composite did not change across rt_enabled flip (luma {b[2]:.6f}→{a[2]:.6f})")
@@ -321,6 +388,12 @@ def check_cell(name, kind, parsed, png_count, rc, log_text):
         # Direction check for the remaining flip cells.
         if name in FLIP_DIRECTION and name != "rt_enabled":
             direction, severity = FLIP_DIRECTION[name]
+            # A fixture that stores the toggle at 0 gets turned ON (0→1) by the
+            # flip, inverting the expected direction. rt_denoise_feed: 1→0
+            # (feed off) expects sd_rise; 0→1 (feed on, denoiser engaging)
+            # expects sd_fall.
+            if name == "rt_denoise_feed" and flip_before is not None and flip_before < 0.5:
+                direction = "sd_fall"
             if b is not None and a is not None:
                 dh = a[1] - b[1]   # hit delta
                 dl = a[2] - b[2]   # luma delta
@@ -332,6 +405,8 @@ def check_cell(name, kind, parsed, png_count, rc, log_text):
                     ok = abs(dl) > SHIFT_LUMA or abs(dh) > CHANGE_HIT
                 elif direction == "sd_rise":
                     ok = (ds > RISE_SD_ABS and a[3] > b[3] * (1 + RISE_SD_REL))
+                elif direction == "sd_fall":
+                    ok = (b[3] - a[3] > RISE_SD_ABS and a[3] < b[3] * (1 - RISE_SD_REL))
                 elif direction == "any_change":
                     ok = abs(dl) > CHANGE_LUMA or abs(dh) > CHANGE_HIT
                 if not ok:
