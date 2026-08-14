@@ -533,10 +533,12 @@ impl PresetRuntime {
         // (BUG-1l7f — this is the imported-glTF footgun, since
         // `assemble_import_graph` promotes EVERY scene-atom param to a card).
         let mut bound = BoundGraph::new(bindings, &mut graph, flat_doc.as_ref());
-        for finding in bound.shadowed_def_params.clone() {
-            if crate::node_graph::is_baseline_shadow(type_id.as_str(), &finding) {
-                continue;
-            }
+        for finding in crate::node_graph::audible_shadow_findings(
+            &bound,
+            type_id.as_str(),
+            None,
+            None,
+        ) {
             record_chain_error(
                 &mut chain_errors,
                 ChainError::CardBindingShadowsDefParam {

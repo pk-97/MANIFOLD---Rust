@@ -352,6 +352,10 @@ pub fn shadow_baseline_entries() -> &'static [(&'static str, &'static str, &'sta
     SHADOW_BASELINE
 }
 
+/// The fused view's retarget map: `(original node_id, param)` →
+/// `(fused node_id, n{i}_field)`. Empty on unfused builds.
+pub type FusedRetarget = AHashMap<(String, String), (NodeId, String)>;
+
 /// Map a fused-space shadow finding back to the original def's address.
 ///
 /// On a fused build the def handed to [`find_shadowed_def_params`] is the fused
@@ -367,7 +371,7 @@ pub fn shadow_baseline_entries() -> &'static [(&'static str, &'static str, &'sta
 /// finding unchanged.
 pub fn unretarget_shadow(
     finding: &ShadowedDefParam,
-    retarget: &AHashMap<(String, String), (NodeId, String)>,
+    retarget: &FusedRetarget,
 ) -> ShadowedDefParam {
     for ((orig_node, orig_param), (fused_id, field)) in retarget {
         if fused_id.as_str() == finding.node_id && *field == finding.param {
@@ -379,6 +383,42 @@ pub fn unretarget_shadow(
         }
     }
     finding.clone()
+}
+
+/// Filter a freshly-bound graph's shadow findings down to the ones worth
+/// logging, under their original def names: fused-space findings reverse-mapped
+/// through `retarget`, the segment `c{i}.` namespace stripped, baseline-known
+/// residue suppressed. The single home for that decision — the three build
+/// drains (single-card, chain segment, generator) wrap each survivor in a
+/// `ChainError` and log it.
+pub fn audible_shadow_findings(
+    bound: &BoundGraph,
+    preset_type_id: &str,
+    retarget: Option<&FusedRetarget>,
+    segment_prefix: Option<&str>,
+) -> Vec<ShadowedDefParam> {
+    let empty;
+    let retarget = match retarget {
+        Some(r) => r,
+        None => {
+            empty = FusedRetarget::default();
+            &empty
+        }
+    };
+    bound
+        .shadowed_def_params
+        .iter()
+        .filter_map(|finding| {
+            let mut canonical = unretarget_shadow(finding, retarget);
+            if let Some(prefix) = segment_prefix
+                && let Some(stripped) = canonical.node_id.strip_prefix(prefix)
+            {
+                let stripped = stripped.to_string();
+                canonical.node_id = stripped;
+            }
+            (!is_baseline_shadow(preset_type_id, &canonical)).then_some(canonical)
+        })
+        .collect()
 }
 
 /// Push every inner-node param value declared in `def` into the live `graph`,

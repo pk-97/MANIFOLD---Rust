@@ -714,30 +714,17 @@ impl PresetRuntime {
                         // the same address space `node_map` is keyed in — so it
                         // resolves this card's bindings directly (BUG-1l7f).
                         let mut bound = BoundGraph::new(bindings, &mut graph, Some(&view.def));
-                        for finding in bound.shadowed_def_params.clone() {
-                            // A fused segment reports in fused-kernel space
-                            // (`fused_region_0.n9_amount`); map back through the
-                            // retarget so the baseline — keyed on the original
-                            // def's names — still recognizes known residue.
-                            let mut plain =
-                                crate::node_graph::unretarget_shadow(&finding, &view.retarget);
-                            // A segment def's node ids carry the `c{i}.` prefix,
-                            // so strip it before the per-preset baseline lookup.
-                            if let Some(stripped) = plain.node_id.strip_prefix(prefix.as_str()) {
-                                let stripped = stripped.to_string();
-                                plain.node_id = stripped;
-                            }
-                            if crate::node_graph::is_baseline_shadow(
-                                fx.effect_type().as_str(),
-                                &plain,
-                            ) {
-                                continue;
-                            }
+                        for finding in crate::node_graph::audible_shadow_findings(
+                            &bound,
+                            fx.effect_type().as_str(),
+                            Some(&view.retarget),
+                            Some(prefix.as_str()),
+                        ) {
                             record_chain_error(
                                 &mut errors,
                                 ChainError::CardBindingShadowsDefParam {
                                     effect_type: Some(fx.effect_type().clone()),
-                                    finding: plain,
+                                    finding,
                                 },
                             );
                         }
@@ -1157,21 +1144,17 @@ impl PresetRuntime {
             // from, so it's the def whose baked node params the planting can
             // shadow (BUG-1l7f).
             let mut bound = BoundGraph::new(bindings, &mut graph, Some(splice_def));
-            for finding in bound.shadowed_def_params.clone() {
-                // A fused build reports in fused-kernel space
-                // (`fused_region_0.n5_amount`); map back through the retarget
-                // so the baseline — keyed on the original def's names — still
-                // recognizes known residue.
-                let canonical =
-                    crate::node_graph::unretarget_shadow(&finding, &view.fused_retarget);
-                if crate::node_graph::is_baseline_shadow(fx.effect_type().as_str(), &canonical) {
-                    continue;
-                }
+            for finding in crate::node_graph::audible_shadow_findings(
+                &bound,
+                fx.effect_type().as_str(),
+                Some(&view.fused_retarget),
+                None,
+            ) {
                 record_chain_error(
                     &mut errors,
                     ChainError::CardBindingShadowsDefParam {
                         effect_type: Some(fx.effect_type().clone()),
-                        finding: canonical,
+                        finding,
                     },
                 );
             }
