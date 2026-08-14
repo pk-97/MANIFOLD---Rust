@@ -101,14 +101,11 @@ pub(crate) fn decode_capture_pixels(
     out
 }
 
-/// Shared stats computation — reused by headless harness and live capture.
-/// Returns (hit_frac, mean_luma, stddev).
-pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice) -> (f64, f64, f64) {
-    let pixels = decode_capture_pixels(cap, device);
-    let pixel_count = pixels.len();
+/// Stats over already-decoded pixels. Returns (hit_frac, mean_luma, stddev).
+pub(crate) fn channel_stats(label: &str, pixels: &[[f32; 4]]) -> (f64, f64, f64) {
     let mut n_hits = 0usize;
     let mut sum_luma = 0.0f64; let mut sum_luma_sq = 0.0f64;
-    let is_composite = cap.label == "composite";
+    let is_composite = label == "composite";
     for [r, g, b, a] in pixels.iter().copied() {
         if is_composite {
             if r > 0.03 || g > 0.03 || b > 0.03 { n_hits += 1; }
@@ -118,19 +115,29 @@ pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gp
         let luma = 0.2126 * r.max(0.0) + 0.7152 * g.max(0.0) + 0.0722 * b.max(0.0);
         sum_luma += luma as f64; sum_luma_sq += (luma*luma) as f64;
     }
-    if pixel_count == 0 { return (0.0, 0.0, 0.0); }
-    let hit_frac = n_hits as f64 / pixel_count as f64;
-    let mn = sum_luma / pixel_count as f64;
-    let vr = (sum_luma_sq / pixel_count as f64) - mn*mn;
+    if pixels.is_empty() { return (0.0, 0.0, 0.0); }
+    let n = pixels.len() as f64;
+    let hit_frac = n_hits as f64 / n;
+    let mn = sum_luma / n;
+    let vr = (sum_luma_sq / n) - mn*mn;
     (hit_frac, mn, vr.sqrt())
 }
 
-fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_dir: &std::path::Path) {
-    let (hit_frac, mn, sd) = compute_rt_channel_stats(cap, device);
-    let pixels = decode_capture_pixels(cap, device);
+/// Shared stats computation — reused by headless harness and live capture.
+/// Decodes the texture; callers that already hold pixels use `channel_stats`.
+pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice) -> (f64, f64, f64) {
+    channel_stats(&cap.label, &decode_capture_pixels(cap, device))
+}
+
+/// PNG + stats line for one capture, from pixels decoded ONCE by the caller.
+/// A 4K channel decode is a full-texture readback plus an 8M-pixel f32 vec —
+/// re-decoding per consumer was a measurable share of the capture cost
+/// (BUG-olp9).
+fn write_capture_png(cap: &RtCaptureSlot, pixels: &[[f32; 4]], stats: (f64, f64, f64), out_dir: &std::path::Path) {
     if pixels.is_empty() {
         return;
     }
+    let (hit_frac, mn, sd) = stats;
 
     // BUG-fh95: per-channel means + center-region means (middle 20% box) —
     // the open-plane probe reads vis (r) / ao (g) at frame center from the
@@ -270,8 +277,10 @@ fn drain_captures(
         .unwrap_or_else(|| PathBuf::from("/tmp/rt_capture"));
     let _ = std::fs::create_dir_all(&dir);
     for c in &caps {
-        last_stats.insert(c.label.clone(), compute_rt_channel_stats(c, device));
-        process_capture(c, device, &dir);
+        let pixels = decode_capture_pixels(c, device);
+        let stats = channel_stats(&c.label, &pixels);
+        last_stats.insert(c.label.clone(), stats);
+        write_capture_png(c, &pixels, stats, &dir);
     }
 }
 
