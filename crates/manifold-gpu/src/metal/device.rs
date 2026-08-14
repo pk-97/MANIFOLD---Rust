@@ -23,9 +23,18 @@ use crate::types::*;
 /// BUG-olp9 diagnostic: MANIFOLD_GPU_ALLOC_LOG=1 prints every texture/buffer
 /// allocation (label, dims, format, bytes) to stderr. Census tool for the
 /// RT-startup memory transient — not hot-path safe, env-gated, read once.
+/// MANIFOLD_GPU_ALLOC_BT=1 additionally prints a caller backtrace per event.
 pub(crate) fn alloc_log_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_LOG").is_some())
+}
+
+pub(crate) fn alloc_log_backtrace() {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_BT").is_some()) {
+        let bt = std::backtrace::Backtrace::force_capture();
+        eprintln!("[gpu-alloc-bt] {bt}");
+    }
 }
 
 /// Generate a compute clear shader for a given WGSL storage texel format.
@@ -286,6 +295,7 @@ impl GpuDevice {
                 "[gpu-alloc] tex {} {}x{}x{} {:?} mips={}",
                 desc.label, desc.width, desc.height, desc.depth, desc.format, desc.mip_levels
             );
+            alloc_log_backtrace();
         }
         let mtl_desc = Self::build_mtl_texture_desc(desc);
         let raw = self
@@ -324,6 +334,7 @@ impl GpuDevice {
     pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
         if alloc_log_enabled() {
             eprintln!("[gpu-alloc] bufshared {size}");
+            alloc_log_backtrace();
         }
         let raw = self
             .device
