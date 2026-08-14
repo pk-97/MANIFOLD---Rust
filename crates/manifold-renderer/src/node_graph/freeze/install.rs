@@ -332,6 +332,12 @@ thread_local! {
     /// Generator twin — values are fused defs (generators compile via `from_def`).
     static FUSED_GENERATOR_CACHE: std::cell::RefCell<LruCache<Option<Arc<EffectGraphDef>>>> =
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
+    /// Effect-view keys compiling on the worker right now (BUG-j8gy) — the
+    /// segment `SEGMENT_PENDING` analog: dedupes enqueues across the rebuilds
+    /// that happen while a compile is in flight, value is the enqueue time for
+    /// the pump-side deadline.
+    static FUSED_EFFECT_PENDING: std::cell::RefCell<AHashMap<u64, std::time::Instant>> =
+        std::cell::RefCell::new(AHashMap::default());
 }
 
 /// Test-only cache size observation for D8/P7 knob-invariance proofs.
@@ -379,6 +385,193 @@ pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDe
     let compiled = fuse_generator_def(def, &registry).map(Arc::new);
     FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
     compiled
+}
+
+/// Per-card fused-view selection for the chain build (BUG-j8gy): the relight
+/// default-augment, the Ready/Pending/Refused lookup, and the one-line FUSED
+/// attribution log. Returns the fused view when Ready, and whether the card is
+/// waiting on the worker (Pending) so the runtime arms the swap-in handshake.
+/// `is_watched` = the editor's preview target, kept unfused so node-output
+/// preview can sample inner-node textures and edits render live.
+pub fn select_card_fused_view(
+    fx: &manifold_core::effects::PresetInstance,
+    base_view: &LoadedPresetView,
+    primitives: &PrimitiveRegistry,
+    is_watched: bool,
+) -> (Option<Arc<LoadedPresetView>>, bool) {
+    // Fusion is on-demand and keyed by the def's CONTENT, so ANY shape —
+    // shipped, edited in the node editor, or created — fuses through one
+    // cache. The "effective def" is the user's edited graph when present, else
+    // the canonical preset. There is no `has_override` veto: an override is
+    // just the effective def to fuse. The fused view keeps the same outer-card
+    // params + skip mode, so the chain build's splice / outer_param_index /
+    // bindings lines are shape-identical either way.
+    let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+    // D8/P7: relight fuses — augment with DEFAULT knob values before fusion so
+    // the cache key (and generated WGSL) is knob-invariant; live values write
+    // per-frame via `EffectSlot::relight_writes`. `height_from` changes
+    // template topology, so it legitimately recompiles.
+    let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight_active() {
+        std::borrow::Cow::Owned(crate::node_graph::relight::relight_augment(
+            effective_def,
+            primitives,
+            &manifold_core::effects::RelightParams::default(),
+        ))
+    } else {
+        std::borrow::Cow::Borrowed(effective_def)
+    };
+    if !should_render_fused(is_watched) {
+        return (None, false);
+    }
+    match fused_effect_view_for(&effective_def_for_fusion, base_view) {
+        FusedEffectLookup::Ready(v) => {
+            // One line per chain rebuild so the operator can confirm a card is
+            // rendering through the fused kernel. Editing-time event
+            // (topology change / resize / editor close), not per-frame.
+            // Grep `[freeze]`.
+            eprintln!(
+                "[freeze] {} → FUSED kernel (region collapsed to 1 dispatch)",
+                fx.effect_type().as_str()
+            );
+            (Some(v), false)
+        }
+        FusedEffectLookup::Pending => (None, true),
+        FusedEffectLookup::Refused => (None, false),
+    }
+}
+
+/// Lookup outcome for a per-card fused effect view (BUG-j8gy).
+pub enum FusedEffectLookup {
+    /// Compiled (and pipeline-prewarmed, when the prewarm device is installed)
+    /// — splice the fused view.
+    Ready(Arc<LoadedPresetView>),
+    /// Compiling on the worker — render unfused this build; the runtime
+    /// records the pending state and rebuilds when [`fused_effect_generation`]
+    /// advances (the swap-in, same handshake as segments).
+    Pending,
+    /// No fusable region or a stranded binding — render unfused, permanently
+    /// for this content (negative-cached).
+    Refused,
+}
+
+/// Bumped once per worker effect-view result landed by [`pump_segment_results`].
+/// A chain runtime built while any card was `Pending` records the generation it
+/// saw; the dispatcher rebuilds it when this advances (the fused swap-in
+/// trigger — the per-card analog of [`segment_generation`]).
+static FUSED_EFFECT_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub fn fused_effect_generation() -> u64 {
+    FUSED_EFFECT_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The chain build's door for per-card fusion (BUG-j8gy). Cache hit →
+/// `Ready`/`Refused`; miss → enqueue codegen + pipeline prewarm on the worker
+/// and report `Pending`, so an edited graph renders unfused (byte-identical to
+/// the unfused path) while the fused kernel compiles OFF the content thread,
+/// then swaps in on a later rebuild. The synchronous [`fused_view_for`] stays
+/// the door for startup prewarm (`tune_all`) and direct callers, where
+/// blocking is the point. Content thread only.
+pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> FusedEffectLookup {
+    let key = def_content_key(def);
+    if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
+        return match cached {
+            Some(view) => FusedEffectLookup::Ready(view),
+            None => FusedEffectLookup::Refused,
+        };
+    }
+    let newly_queued = FUSED_EFFECT_PENDING
+        .with(|p| p.borrow_mut().insert(key, std::time::Instant::now()))
+        .is_none();
+    // Tests stay deterministic: no worker thread, compile inline exactly as
+    // fused_view_for always has — every chain-build test sees the fused path.
+    #[cfg(test)]
+    {
+        let _ = newly_queued;
+        FUSED_EFFECT_PENDING.with(|p| p.borrow_mut().remove(&key));
+        let compiled = compile_fused_view(def, base);
+        FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
+        match compiled {
+            Some(view) => FusedEffectLookup::Ready(view),
+            None => FusedEffectLookup::Refused,
+        }
+    }
+    // Each cfg branch is a self-contained tail expression (the segment lookup
+    // convention), so neither build sees the other's tail as unreachable.
+    #[cfg(not(test))]
+    {
+        if newly_queued {
+            let job = EffectJob {
+                key,
+                def: def.clone(),
+                bindings: base.bindings.clone(),
+                type_id: base.type_id.clone(),
+                skip_mode: base.skip_mode,
+            };
+            if segment_worker().tx.send(FusionJob::Effect(Box::new(job))).is_err() {
+                // Worker died (startup panic) — refuse rather than wedge Pending.
+                FUSED_EFFECT_PENDING.with(|p| {
+                    p.borrow_mut().remove(&key);
+                });
+                FUSED_EFFECT_CACHE.with(|c| {
+                    c.borrow_mut().insert(key, None);
+                });
+                return FusedEffectLookup::Refused;
+            }
+        }
+        FusedEffectLookup::Pending
+    }
+}
+
+/// Panic-contained wrapper around the per-card fuse (the segment
+/// [`compile_segment_view_panic_safe`] rule): a codegen bug that panics
+/// mid-compile refuses the key instead of killing the worker thread.
+fn compile_effect_view_panic_safe(
+    job: &EffectJob,
+    registry: &PrimitiveRegistry,
+) -> Option<Arc<LoadedPresetView>> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fuse_view_parts(
+            &job.def,
+            &job.bindings,
+            &job.type_id,
+            job.skip_mode,
+            registry,
+            None,
+        )
+    })) {
+        Ok(view) => view.map(Arc::new),
+        Err(_) => {
+            eprintln!("[freeze] fused effect compile panicked — refusing key, worker continues");
+            None
+        }
+    }
+}
+
+/// `Pending` effect keys that outlived [`SEGMENT_COMPILE_DEADLINE`] expire into
+/// the negative cache — the [`expire_stale_segment_pending`] analog; same
+/// wedged-worker story, same deadline.
+fn expire_stale_effect_pending(now: std::time::Instant) {
+    let expired: Vec<u64> = FUSED_EFFECT_PENDING.with(|p| {
+        let pending = p.borrow();
+        if pending.is_empty() {
+            return Vec::new();
+        }
+        pending
+            .iter()
+            .filter(|(_, enqueued)| {
+                now.saturating_duration_since(**enqueued) >= SEGMENT_COMPILE_DEADLINE
+            })
+            .map(|(k, _)| *k)
+            .collect()
+    });
+    for key in expired {
+        FUSED_EFFECT_PENDING.with(|p| {
+            p.borrow_mut().remove(&key);
+        });
+        FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().insert(key, None));
+        eprintln!("[freeze] fused effect compile timed out — rendering unfused …");
+    }
 }
 
 // ===========================================================================
@@ -493,20 +686,52 @@ struct SegmentJob {
     cards: Vec<(EffectGraphDef, &'static LoadedPresetView)>,
 }
 
+/// Per-card fused-view compile job (BUG-j8gy). Owned clones of everything
+/// `fuse_view_parts` needs — the live def and base view can mutate under
+/// editing while the worker runs.
+struct EffectJob {
+    key: u64,
+    def: EffectGraphDef,
+    bindings: Vec<ParamBinding>,
+    type_id: PresetTypeId,
+    skip_mode: crate::node_graph::SkipMode,
+}
+
+// Variants are constructed only on the production (`not(test)`) lookup paths
+// (tests compile inline and never feed the worker — the SegmentWorker::tx
+// convention above); the match arms in the worker loop keep them read.
+#[cfg_attr(test, allow(dead_code))]
+enum FusionJob {
+    Segment(SegmentJob),
+    // Boxed: EffectGraphDef is the large payload and segment jobs the small
+    // one — keep the channel element narrow.
+    Effect(Box<EffectJob>),
+}
+
 struct SegmentResult {
     key: u64,
     view: Option<Arc<SegmentView>>,
+}
+
+struct EffectResult {
+    key: u64,
+    view: Option<Arc<LoadedPresetView>>,
+}
+
+enum FusionResult {
+    Segment(SegmentResult),
+    Effect(EffectResult),
 }
 
 struct SegmentWorker {
     // Only sent on from the production (`not(test)`) path; in test builds the
     // worker is never fed, so the field reads as dead there.
     #[cfg_attr(test, allow(dead_code))]
-    tx: std::sync::mpsc::Sender<SegmentJob>,
+    tx: std::sync::mpsc::Sender<FusionJob>,
     /// Drained only by the content thread ([`pump_segment_results`]); the
     /// Mutex exists solely because `OnceLock` requires `Sync` — it is never
     /// contended.
-    rx: std::sync::Mutex<std::sync::mpsc::Receiver<SegmentResult>>,
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<FusionResult>>,
 }
 
 /// Set once the worker thread exists, so [`pump_segment_results`] (called
@@ -514,25 +739,83 @@ struct SegmentWorker {
 /// actually enqueued.
 static WORKER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The GPU device the worker prewarms fused-kernel pipelines against (BUG-j8gy).
+/// A fused kernel's WGSL is fresh content on every edit, so the archive/MSL
+/// caches can never hit and the lazy `evaluate()`-time compile would pay full
+/// naga + spirv-opt + MTL on the CONTENT thread — multi-second on a big fused
+/// region, long enough to freeze output and trip the surface-wait guard. The
+/// worker compiles the pipeline into the device's caches before delivering the
+/// view, so the swap-in frame's `create_compute_pipeline` is a hash hit.
+/// Optional: unset in tests and registry-less tools, where the worker does
+/// codegen only and the first fused frame compiles lazily as before.
+static PREWARM_DEVICE: OnceLock<Arc<manifold_gpu::GpuDevice>> = OnceLock::new();
+
+/// Install the prewarm device. Called once from
+/// `ContentPipeline::set_native_gpu` (GUI and headless both pass through it).
+pub fn set_prewarm_device(device: Arc<manifold_gpu::GpuDevice>) {
+    let _ = PREWARM_DEVICE.set(device);
+}
+
+/// Compile every fused-region kernel in `def` into the device caches, on the
+/// caller's (worker) thread. Fail-open per kernel: a parse/compile failure or
+/// panic leaves the lazy `evaluate()` compile as the fallback, exactly the
+/// pre-prewarm behavior — prewarm is pure latency, never a correctness gate.
+fn prewarm_fused_pipelines(def: &EffectGraphDef) {
+    let Some(device) = PREWARM_DEVICE.get() else {
+        return;
+    };
+    for node in &def.nodes {
+        if node.type_id != "node.wgsl_compute" {
+            continue;
+        }
+        let Some(source) = node.wgsl_source.as_deref() else {
+            continue;
+        };
+        let Some(entry) =
+            crate::node_graph::primitives::wgsl_compute::select_compute_entry_name(source)
+        else {
+            continue;
+        };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            device.create_compute_pipeline(source, &entry, "node.wgsl_compute");
+        }));
+    }
+}
+
 fn segment_worker() -> &'static SegmentWorker {
     static WORKER: OnceLock<SegmentWorker> = OnceLock::new();
     WORKER.get_or_init(|| {
         WORKER_STARTED.store(true, std::sync::atomic::Ordering::Release);
-        let (tx_job, rx_job) = std::sync::mpsc::channel::<SegmentJob>();
-        let (tx_res, rx_res) = std::sync::mpsc::channel::<SegmentResult>();
+        let (tx_job, rx_job) = std::sync::mpsc::channel::<FusionJob>();
+        let (tx_res, rx_res) = std::sync::mpsc::channel::<FusionResult>();
         std::thread::Builder::new()
             .name("chain-fusion-worker".into())
             .spawn(move || {
-                // Segment codegen is pure CPU (the fuse decision is structural —
-                // the region partition — so there's no measurement). It runs off
-                // the content thread only to keep a big concat's partition + WGSL
-                // build off the live frame; no GPU device is needed.
+                // Segment + per-card codegen is pure CPU (the fuse decision is
+                // structural — the region partition — so there's no
+                // measurement). It runs off the content thread to keep the
+                // partition + WGSL build + pipeline prewarm off the live frame.
                 let registry = PrimitiveRegistry::with_builtin();
                 while let Ok(job) = rx_job.recv() {
-                    let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
-                        job.cards.iter().map(|(d, v)| (d, *v)).collect();
-                    let view = compile_segment_view_panic_safe(&card_refs, &registry);
-                    if tx_res.send(SegmentResult { key: job.key, view }).is_err() {
+                    let result = match job {
+                        FusionJob::Segment(job) => {
+                            let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
+                                job.cards.iter().map(|(d, v)| (d, *v)).collect();
+                            let view = compile_segment_view_panic_safe(&card_refs, &registry);
+                            if let Some(v) = &view {
+                                prewarm_fused_pipelines(&v.def);
+                            }
+                            FusionResult::Segment(SegmentResult { key: job.key, view })
+                        }
+                        FusionJob::Effect(job) => {
+                            let view = compile_effect_view_panic_safe(&job, &registry);
+                            if let Some(v) = &view {
+                                prewarm_fused_pipelines(&v.canonical_def);
+                            }
+                            FusionResult::Effect(EffectResult { key: job.key, view })
+                        }
+                    };
+                    if tx_res.send(result).is_err() {
                         return;
                     }
                 }
@@ -545,10 +828,11 @@ fn segment_worker() -> &'static SegmentWorker {
     })
 }
 
-/// Drain finished segment compiles into the content-thread cache. Call at
+/// Drain finished compiles into the content-thread caches. Call at
 /// chain-dispatch entry, before any rebuild decision. Each landed result bumps
-/// the generation so runtimes holding per-card fallbacks rebuild and pick the
-/// winner up.
+/// its cache's generation so runtimes holding unfused/per-card fallbacks
+/// rebuild and pick the winner up. Despite the name this drains BOTH job kinds
+/// (segments and per-card effect views) — they share the one worker.
 pub fn pump_segment_results() {
     if !WORKER_STARTED.load(std::sync::atomic::Ordering::Acquire) {
         return;
@@ -556,20 +840,33 @@ pub fn pump_segment_results() {
     let worker = segment_worker();
     let rx = worker.rx.lock().expect("segment worker rx poisoned");
     while let Ok(res) = rx.try_recv() {
-        if let Some(v) = &res.view {
-            eprintln!(
-                "[freeze] chain segment ready: {} cards fused into {} nodes",
-                v.card_bindings.len(),
-                v.def.nodes.len(),
-            );
+        match res {
+            FusionResult::Segment(res) => {
+                if let Some(v) = &res.view {
+                    eprintln!(
+                        "[freeze] chain segment ready: {} cards fused into {} nodes",
+                        v.card_bindings.len(),
+                        v.def.nodes.len(),
+                    );
+                }
+                SEGMENT_CACHE.with(|c| c.borrow_mut().insert(res.key, res.view));
+                SEGMENT_PENDING.with(|p| {
+                    p.borrow_mut().remove(&res.key);
+                });
+                SEGMENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            FusionResult::Effect(res) => {
+                FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().insert(res.key, res.view));
+                FUSED_EFFECT_PENDING.with(|p| {
+                    p.borrow_mut().remove(&res.key);
+                });
+                FUSED_EFFECT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         }
-        SEGMENT_CACHE.with(|c| c.borrow_mut().insert(res.key, res.view));
-        SEGMENT_PENDING.with(|p| {
-            p.borrow_mut().remove(&res.key);
-        });
-        SEGMENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    expire_stale_segment_pending(std::time::Instant::now());
+    let now = std::time::Instant::now();
+    expire_stale_segment_pending(now);
+    expire_stale_effect_pending(now);
 }
 
 /// Expire `Pending` segment keys that have outlived [`SEGMENT_COMPILE_DEADLINE`]
@@ -637,7 +934,7 @@ pub fn fused_segment_view_for(
                 key,
                 cards: cards.iter().map(|(d, v)| (d.clone(), *v)).collect(),
             };
-            if segment_worker().tx.send(job).is_err() {
+            if segment_worker().tx.send(FusionJob::Segment(job)).is_err() {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
                 SEGMENT_PENDING.with(|p| {
                     p.borrow_mut().remove(&key);
@@ -2932,6 +3229,68 @@ mod tests {
             "surviving-node binding keeps its enum convert — the real node still \
              declares a real Enum param"
         );
+    }
+
+    /// BUG-j8gy machinery: under `cfg(test)` the chain-build lookup compiles
+    /// inline (deterministic — no worker), so a fusable def comes back `Ready`
+    /// and lands in the content cache, exactly the pre-async behavior every
+    /// chain-build test relies on.
+    #[test]
+    fn fused_effect_view_for_compiles_inline_in_tests() {
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
+            .expect("ColorGrade canonical view");
+        match fused_effect_view_for(&base.canonical_def, base) {
+            FusedEffectLookup::Ready(view) => {
+                assert!(
+                    !view.fused_retarget.is_empty(),
+                    "ColorGrade fuses — Ready must carry the fused view"
+                );
+            }
+            FusedEffectLookup::Pending => panic!("test builds never report Pending"),
+            FusedEffectLookup::Refused => panic!("ColorGrade has a fusable region"),
+        }
+        // Second lookup is a cache hit on the same content key.
+        assert!(matches!(
+            fused_effect_view_for(&base.canonical_def, base),
+            FusedEffectLookup::Ready(_)
+        ));
+    }
+
+    /// BUG-j8gy machinery: a `Pending` effect key that outlives the compile
+    /// deadline expires into the negative cache (`Refused`) — the
+    /// [`segment_pending_expires_to_refused`] analog, same wedged-worker story.
+    #[test]
+    fn effect_pending_expires_to_refused() {
+        // Distinctive key — thread_local state persists across tests sharing a
+        // libtest worker thread.
+        const TEST_KEY: u64 = 0xF00D_BEEF_DEAD_0002;
+        let enqueued_at = std::time::Instant::now() - std::time::Duration::from_secs(120);
+        FUSED_EFFECT_PENDING.with(|p| {
+            p.borrow_mut().insert(TEST_KEY, enqueued_at);
+        });
+        FUSED_EFFECT_CACHE.with(|c| {
+            c.borrow_mut().remove(TEST_KEY);
+        });
+
+        expire_stale_effect_pending(std::time::Instant::now());
+
+        FUSED_EFFECT_PENDING.with(|p| {
+            assert!(
+                !p.borrow().contains_key(&TEST_KEY),
+                "expired key must leave the pending map"
+            );
+        });
+        FUSED_EFFECT_CACHE.with(|c| {
+            assert!(
+                matches!(c.borrow_mut().get(TEST_KEY), Some(None)),
+                "expired key must negative-cache as Refused"
+            );
+        });
+
+        // Cleanup — don't leak test state into whatever runs next on this thread.
+        FUSED_EFFECT_CACHE.with(|c| {
+            c.borrow_mut().remove(TEST_KEY);
+        });
     }
 
     /// D2: a `Pending` segment key that outlives `SEGMENT_COMPILE_DEADLINE`

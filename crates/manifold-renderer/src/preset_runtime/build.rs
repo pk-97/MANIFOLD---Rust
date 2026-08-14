@@ -640,6 +640,10 @@ impl PresetRuntime {
             built_generation: 0,
             pending_segments: false,
             built_segment_generation: 0,
+            // Generators fuse through their own content-keyed cache at build;
+            // the per-card async handshake (BUG-j8gy) doesn't apply here.
+            pending_fused_effects: false,
+            built_fused_effect_generation: 0,
             state_store: StateStore::new(),
             errors: chain_errors,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),

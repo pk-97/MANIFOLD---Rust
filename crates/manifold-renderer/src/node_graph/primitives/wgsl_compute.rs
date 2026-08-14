@@ -757,6 +757,15 @@ fn select_compute_entry(module: &naga::Module) -> Result<&naga::EntryPoint, Stri
         })
 }
 
+/// The entry-point name a `create_compute_pipeline` call for `source` will use
+/// (parse + the BUG-010 rule above). The freeze worker's pipeline prewarm goes
+/// through here so prewarm and the lazy `evaluate()` compile can never pick
+/// different entries.
+pub(crate) fn select_compute_entry_name(source: &str) -> Option<String> {
+    let module = naga::front::wgsl::parse_str(source).ok()?;
+    select_compute_entry(&module).ok().map(|e| e.name.clone())
+}
+
 fn introspect(source: &str) -> Result<ParsedShader, String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
 
