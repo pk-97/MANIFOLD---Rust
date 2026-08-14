@@ -736,6 +736,13 @@ pub struct RenderScene {
     /// channel into the specular_hit_distance graph output (R16Float).
     /// Created ONCE per device, never rebuilt.
     hit_dist_extract_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    /// BUG-om0v: MetalFX Temporal writes an opaque/undefined alpha into its
+    /// output texture, so the raw blit that used to close the `temporal_upscale`
+    /// tail propagated that alpha into `native_color` and made the scene layer
+    /// background opaque (blocking every layer below it). This combine pass
+    /// re-pairs the upscaled RGB with the scene's own alpha, bilinearly
+    /// upsampled from the render-res scratch. Created ONCE per device.
+    upscale_alpha_combine_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     /// RAYTRACING_DESIGN.md section 8.2 D22: single-sample `Rgba16Float` scratch
     /// color target — the SAME format `msaa_color` always resolves as —
     /// that Pass A resolves into (instead of the graph's native-res `color`
@@ -1484,6 +1491,7 @@ impl RenderScene {
             denoise_reactive_width: 0,
             denoise_reactive_height: 0,
             hit_dist_extract_pipeline: None,
+            upscale_alpha_combine_pipeline: None,
             rt_temporal_color_scratch: None,
             rt_temporal_color_scratch_width: 0,
             rt_temporal_color_scratch_height: 0,
@@ -6992,12 +7000,36 @@ impl EffectNode for RenderScene {
             // then presents that stale frame (one-frame freeze), the same
             // degradation the denoiser's MTL4 skip path documents.
             upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, reset);
-            gpu.native_enc.copy_texture_to_texture(
-                &upscaler.output.texture,
-                native_color,
-                native_width,
-                native_height,
-                1,
+            // BUG-om0v: MetalFX Temporal does not preserve the source's alpha
+            // channel — it writes an opaque (or otherwise undefined) alpha into
+            // `upscaler.output`, so blitting it straight into `native_color`
+            // (as this tail used to) made the scene layer's background opaque
+            // and blocked every layer beneath it. The non-upscale path carries
+            // the fragment shader's own alpha (0 in the background) through the
+            // MSAA resolve untouched. Fix at the root: re-pair the upscaled RGB
+            // with the scene's real alpha, bilinearly upsampled from the
+            // render-res scratch the upscaler read (`target`). `native_color`
+            // is Rgba16Float storage-writeable, so this is one compute pass —
+            // no new scratch and no second blit.
+            if self.upscale_alpha_combine_pipeline.is_none() {
+                self.upscale_alpha_combine_pipeline = Some(gpu.device.create_compute_pipeline(
+                    include_str!("shaders/upscale_alpha_combine.wgsl"),
+                    "cs_main",
+                    "node.render_scene upscale alpha combine",
+                ));
+            }
+            let combine_pipeline = self.upscale_alpha_combine_pipeline.as_ref().unwrap();
+            let combine_sampler = gpu.device.linear_sampler();
+            gpu.native_enc.dispatch_compute(
+                combine_pipeline,
+                &[
+                    GpuBinding::Texture { binding: 0, texture: &upscaler.output.texture },
+                    GpuBinding::Texture { binding: 1, texture: target },
+                    GpuBinding::Sampler { binding: 2, sampler: combine_sampler },
+                    GpuBinding::Texture { binding: 3, texture: native_color },
+                ],
+                [native_width.div_ceil(16), native_height.div_ceil(16), 1],
+                "node.render_scene upscale alpha combine",
             );
         }
         // PROBE: capture time just before denoiser encode.
