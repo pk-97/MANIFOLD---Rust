@@ -338,6 +338,13 @@ fn encode_blas_build(
 
     let raw_device = device.raw_device();
     let sizes = raw_device.accelerationStructureSizesWithDescriptor(&descriptor);
+    if crate::metal::device::alloc_log_enabled() {
+        eprintln!(
+            "[gpu-alloc] blas tris={} struct={} scratch={}",
+            obj.triangle_count, sizes.accelerationStructureSize, sizes.buildScratchBufferSize
+        );
+        crate::metal::device::alloc_log_backtrace();
+    }
     let structure = raw_device
         .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
         .expect("newAccelerationStructureWithSize failed");
@@ -475,6 +482,14 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
 
     let raw_device = device.raw_device();
     let sizes = raw_device.accelerationStructureSizesWithDescriptor(&descriptor);
+    if crate::metal::device::alloc_log_enabled() {
+        eprintln!(
+            "[gpu-alloc] tlas instances={} struct={} build_scratch={} refit_scratch={}",
+            objects.len(), sizes.accelerationStructureSize,
+            sizes.buildScratchBufferSize, sizes.refitScratchBufferSize
+        );
+        crate::metal::device::alloc_log_backtrace();
+    }
     let structure = raw_device
         .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
         .expect("newAccelerationStructureWithSize failed");
