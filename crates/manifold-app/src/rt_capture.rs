@@ -368,9 +368,24 @@ pub fn run(args: &[String]) -> ! {
         .find(|w| w[0] == "--live-flip")
         .map(|w| w[1].to_string());
 
-    // Resolve project path: skip the subcommand name (args[0]), then first non-flag arg.
+    // Resolve project path: skip the subcommand name (args[0]), then first
+    // non-flag arg that isn't a flag VALUE (--set-at and --animate take two).
+    let mut skip_next = 0u8;
     let project_path = args.iter().skip(1)
-        .find(|a| !a.starts_with("--"))
+        .find(|a| {
+            if skip_next > 0 {
+                skip_next -= 1;
+                return false;
+            }
+            match a.as_str() {
+                "--set-at" | "--animate" => { skip_next = 2; false }
+                "--frames" | "--width" | "--height" | "--capture-every"
+                | "--capture-from" | "--live-flip" | "--disable-driver-at"
+                | "--fps" => { skip_next = 1; false }
+                f if f.starts_with("--") => false,
+                _ => true
+            }
+        })
         .map(PathBuf::from)
         .unwrap_or_else(|| { eprintln!("usage: manifold rt-capture [--paused] <project.manifold> [--frames N]"); std::process::exit(2); });
     if !project_path.exists() { eprintln!("not found: {}", project_path.display()); std::process::exit(1); }
@@ -405,7 +420,14 @@ pub fn run(args: &[String]) -> ! {
     if let Some(h) = override_h {
         real_project.settings.output_height = h as i32;
     }
-    let fr = real_project.settings.frame_rate as f64;
+    // `--fps F`: override the project frame rate. With --frame-clock this
+    // stretches engine time per rendered frame (1/F s each), so a long
+    // timeline can be scanned in a fraction of the frames.
+    let fr: f64 = args
+        .windows(2)
+        .find(|w| w[0] == "--fps")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(real_project.settings.frame_rate as f64);
     let w = real_project.settings.output_width.max(1) as u32;
     let h = real_project.settings.output_height.max(1) as u32;
     println!("output={w}x{h} fps={fr}");
