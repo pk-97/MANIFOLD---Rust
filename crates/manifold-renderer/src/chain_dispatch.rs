@@ -183,6 +183,9 @@ pub fn dispatch_chain<'a>(
         Some(cg) => {
             cg.built_generation() != catalog_generation
                 || cg.awaiting_segment_swap()
+                // BUG-j8gy: per-card fused views land on the same worker —
+                // same swap-in handshake as segments.
+                || cg.awaiting_fused_swap()
                 // BUG-18l: a live forced-outputs change is a topology change
                 // — same handshake as the segment swap-in above.
                 || cg.awaiting_forced_outputs_rebuild()

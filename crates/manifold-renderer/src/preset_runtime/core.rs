@@ -129,6 +129,12 @@ pub struct PresetRuntime {
     /// build time. Compared by the dispatcher only while
     /// [`Self::pending_segments`] is set.
     pub(super) built_segment_generation: u64,
+    /// Per-card analog of `pending_segments` (BUG-j8gy): a card's fused view
+    /// was still compiling on the worker at build time, so it spliced unfused.
+    pub(super) pending_fused_effects: bool,
+    /// [`crate::node_graph::freeze::install::fused_effect_generation`] observed
+    /// at build time. Compared only while [`Self::pending_fused_effects`] is set.
+    pub(super) built_fused_effect_generation: u64,
     /// State store for stateful primitives that key per-owner state
     /// off `(node_id, owner_key)` rather than carrying it on the
     /// node instance directly. Today that's only `temporal::Feedback`,
@@ -558,6 +564,9 @@ impl PresetRuntime {
         // `segment_run` (module scope) — shared with the project-load
         // prewarm so the two can never disagree about what forms a segment.
         let mut pending_segments = false;
+        // BUG-j8gy: set when any card's fused view is still compiling on the
+        // worker — the per-card analog of `pending_segments`.
+        let mut pending_fused_effects = false;
         let mut units: Vec<SpliceUnit> = Vec::with_capacity(active_effects.len());
         if freeze_install::chain_fusion_enabled() {
             let members: Vec<SegmentMember> = active_effects
@@ -844,59 +853,20 @@ impl PresetRuntime {
                 );
                 return None;
             };
-            // Freeze compiler (design section 12, step 2): fusion is on-demand and keyed
-            // by the def's CONTENT, so ANY shape — shipped, edited in the node
-            // editor, or created — fuses through one cache. The "effective def" is
-            // the user's edited graph when present, else the canonical preset;
-            // `fused_view_for` compiles-on-miss + caches by that def's content, so
-            // an edited shape fuses on editor-close exactly like a shipped one
-            // (and a freshly-warmed canonical hits the cache `tune_all` filled).
-            // The gate (`should_render_fused`) only suppresses fusion while this
-            // effect is the editor's *watched* target — kept unfused so node-output
-            // preview can sample inner-node textures and edits render live. There
-            // is no `has_override` veto: an override is just the effective def to
-            // fuse. The fused view keeps the same outer-card params + skip mode, so
-            // every line below (splice, outer_param_index, bindings) is shape-
-            // identical. `fused_view_for` returns `None` for any shape with no
-            // fusable region (or a binding that would strand) → renders unfused.
+            // Freeze compiler (design section 12, step 2): fusion selection
+            // (relight augment, watched-target gate, async worker lookup,
+            // FUSED attribution log) lives in `select_card_fused_view`. The
+            // "effective def" is the user's edited graph when present, else the
+            // canonical preset — also the splice source when unfused.
             let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
-            // D8/P7: relight now fuses. Augment with DEFAULT knob values before
-            // the fusion compiler so the fused-view cache key (and generated
-            // WGSL) is knob-invariant; the live values are written per-frame
-            // via `EffectSlot::relight_writes`. `height_from` changes template
-            // topology, so it legitimately recompiles — it is not folded into
-            // the default-augmented key.
-            let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight_active() {
-                std::borrow::Cow::Owned(crate::node_graph::relight::relight_augment(
-                    effective_def,
+            let (fused_view, fused_pending) =
+                crate::node_graph::freeze::install::select_card_fused_view(
+                    fx,
+                    base_view,
                     primitives,
-                    &RelightParams::default(),
-                ))
-            } else {
-                std::borrow::Cow::Borrowed(effective_def)
-            };
-            let fused_view: Option<std::sync::Arc<LoadedPresetView>> =
-                if crate::node_graph::freeze::install::should_render_fused(
                     preview_effect == Some(&fx.id),
-                ) {
-                    crate::node_graph::freeze::install::fused_view_for(
-                        &effective_def_for_fusion,
-                        base_view,
-                    )
-                } else {
-                    None
-                };
-            if fused_view.is_some() {
-                // Step-7 attribution (minimal): one line per chain rebuild so the
-                // operator can confirm a card is rendering through the fused
-                // kernel. Rebuilds are editing-time events (topology change /
-                // resize / editor close), not per-frame, so not hot-path spam.
-                // Grep `[freeze]`.
-                eprintln!(
-                    "[freeze] {} → FUSED kernel (region collapsed to 1 dispatch)",
-                    fx.effect_type().as_str()
                 );
-            }
+            pending_fused_effects |= fused_pending;
             let view: &LoadedPresetView = fused_view.as_deref().unwrap_or(base_view);
             if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
@@ -1335,6 +1305,9 @@ impl PresetRuntime {
             built_generation: crate::preset_loader::catalog_generation(),
             pending_segments,
             built_segment_generation: crate::node_graph::freeze::install::segment_generation(),
+            pending_fused_effects,
+            built_fused_effect_generation:
+                crate::node_graph::freeze::install::fused_effect_generation(),
             state_store: StateStore::new(),
             errors,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
@@ -1584,6 +1557,15 @@ impl PresetRuntime {
         self.pending_segments
             && crate::node_graph::freeze::install::segment_generation()
                 != self.built_segment_generation
+    }
+
+    /// Per-card analog of [`Self::awaiting_segment_swap`] (BUG-j8gy): a worker
+    /// fused-view result landed since this chain built with an unfused
+    /// fallback — rebuild splices the fused (and pipeline-prewarmed) card in.
+    pub fn awaiting_fused_swap(&self) -> bool {
+        self.pending_fused_effects
+            && crate::node_graph::freeze::install::fused_effect_generation()
+                != self.built_fused_effect_generation
     }
 
     /// Compare a cached graph's topology hash to the current chain's.

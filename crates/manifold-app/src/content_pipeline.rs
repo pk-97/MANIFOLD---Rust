@@ -1210,6 +1210,10 @@ impl ContentPipeline {
     /// compositor native pipeline creation).
     #[cfg(target_os = "macos")]
     pub fn set_native_gpu(&mut self, device: std::sync::Arc<manifold_gpu::GpuDevice>) {
+        // BUG-j8gy: the chain-fusion worker prewarms fused-kernel pipelines
+        // against this device so an edit-time fused swap-in never pays the
+        // naga+spirv-opt+MSL compile on the content thread.
+        manifold_renderer::node_graph::freeze::install::set_prewarm_device(device.clone());
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
         let pool = device.create_texture_pool(3);
@@ -1550,6 +1554,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             idx,
             pending,
             signaled,
+        );
+        // BUG-j8gy: signaled >= pending means the content queue already fired
+        // and the real blocker is a UI-side bridge read fence — name it, or
+        // the next reader misdiagnoses this as a content-queue hang (clearing
+        // the signal below is then a no-op and the wait re-trips every 5s).
+        let bridge_state = |name: &str, b: &Option<Arc<crate::shared_texture::SharedTextureBridge>>| {
+            b.as_ref().map_or_else(
+                || format!("{name}=none"),
+                |b| {
+                    let (front, published, reads) = b.debug_slot_state(idx);
+                    format!("{name}(front={front} published={published} reads_in_flight={reads})")
+                },
+            )
+        };
+        log::error!(
+            "[ContentPipeline]   slot {} bridges: {} {} {}",
+            idx,
+            bridge_state("preview", &self.preview_bridge),
+            bridge_state("node_preview", &self.node_preview_bridge),
+            bridge_state("node_atlas", &self.node_atlas_bridge),
         );
         self.surface_signal_values[idx] = 0;
     }

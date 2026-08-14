@@ -330,6 +330,18 @@ impl SharedTextureBridge {
         slot_free && self.reads_in_flight[slot].load(Ordering::Acquire) == 0
     }
 
+    /// Slot-state dump for the surface-timeout diagnostic (BUG-j8gy): when the
+    /// content thread's surface wait times out, the blocker is named by these
+    /// three numbers — front still ON the slot means the UI never consumed a
+    /// newer frame; reads_in_flight > 0 means a UI read lease hasn't retired.
+    pub fn debug_slot_state(&self, slot: usize) -> (u32, bool, u64) {
+        (
+            self.front_index(),
+            self.published[slot].load(Ordering::Acquire),
+            self.reads_in_flight[slot].load(Ordering::Acquire),
+        )
+    }
+
     /// Probe-side diagnostics: the in-flight read count for a slot
     /// (bridge-probe's stuck-state dump; perf-soak is the probe's feature).
     #[cfg(feature = "perf-soak")]
