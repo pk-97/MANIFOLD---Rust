@@ -32,27 +32,41 @@ impl GeneratorRegistry {
     pub fn prewarm_all(&self, device: &std::sync::Arc<GpuDevice>) {
         let json_count = bundled_preset_type_ids(PresetKind::Generator).count();
         log::info!("Pre-warming {json_count} JSON generator pipelines...");
+        // BUG-olp9: the loop below builds a full PresetRuntime per bundled
+        // generator — including pre_allocate_resources, which allocates every
+        // preset's Array buffers at declared capacity — then drops it.
+        // Measured (rt-capture cure test, 2026-08-14): 5.73GB of buffer
+        // allocation churn per process startup, 0.84GB peak RSS, and ZERO
+        // pipeline compiles (from_def is deviceless; MetalBackend/Executor
+        // construction compiles nothing — the atom sweep + hand-written
+        // prewarms below do the real pipeline warming). The loop's remaining
+        // value is parse/plan validation of bundled presets, which
+        // `graph-tool validate` covers at authoring time. Skip it unless
+        // MANIFOLD_PRESET_PREWARM=1 re-enables it for debugging.
+        let preset_prewarm = std::env::var_os("MANIFOLD_PRESET_PREWARM").is_some();
         // Pre-warm JSON-defined generators. We need a default
         // render resolution here — use a small placeholder; real sizes
         // come through on the first frame's `resize`. The pipelines
         // baked into each primitive cache at first dispatch regardless.
         let registry = PrimitiveRegistry::with_builtin();
-        for type_id in bundled_preset_type_ids(PresetKind::Generator) {
-            if let Some(json) = bundled_preset_json(&type_id)
-                && let Err(e) = PresetRuntime::from_json_str_with_device(
-                    &json,
-                    &registry,
-                    std::sync::Arc::clone(device),
-                    256,
-                    256,
-                    self.target_format,
-                    None,
-                )
-            {
-                log::warn!(
-                    "Pre-warm of bundled generator preset {} failed: {e}",
-                    type_id.as_str(),
-                );
+        if preset_prewarm {
+            for type_id in bundled_preset_type_ids(PresetKind::Generator) {
+                if let Some(json) = bundled_preset_json(&type_id)
+                    && let Err(e) = PresetRuntime::from_json_str_with_device(
+                        &json,
+                        &registry,
+                        std::sync::Arc::clone(device),
+                        256,
+                        256,
+                        self.target_format,
+                        None,
+                    )
+                {
+                    log::warn!(
+                        "Pre-warm of bundled generator preset {} failed: {e}",
+                        type_id.as_str(),
+                    );
+                }
             }
         }
 
