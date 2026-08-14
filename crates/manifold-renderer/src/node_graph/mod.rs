@@ -93,7 +93,7 @@ pub use boundary_nodes::{
 pub use binding_migration::migrate_user_param_bindings_to_node_id;
 pub use bound_graph::{
     BoundGraph, ShadowedDefParam, apply_inner_param_overrides, find_shadowed_def_params,
-    is_baseline_shadow, shadow_baseline_entries,
+    is_baseline_shadow, shadow_baseline_entries, unretarget_shadow,
 };
 pub use bundled_presets::{
     bundled_preset_def, bundled_preset_json, bundled_preset_type_ids, loaded_presets_from_bundled,

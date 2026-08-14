@@ -352,6 +352,35 @@ pub fn shadow_baseline_entries() -> &'static [(&'static str, &'static str, &'sta
     SHADOW_BASELINE
 }
 
+/// Map a fused-space shadow finding back to the original def's address.
+///
+/// On a fused build the def handed to [`find_shadowed_def_params`] is the fused
+/// def, so a card-owned param reports as `fused_region_0.n5_amount` — while
+/// [`SHADOW_BASELINE`] and anyone reading the log know it as `grade_mix.amount`.
+/// The baseline check never matched the fused name, so every fused rebuild of a
+/// baselined preset re-logged known dead residue as a fresh `[chain-error]`.
+/// Reverse the view's retarget (`(original node, param) → (fused node, field)`)
+/// so the baseline lookup and the recorded finding both speak the original
+/// names. Segment retarget keys carry the card's `c{i}.` namespace; callers
+/// strip that prefix for the baseline lookup exactly as before. No match
+/// (unfused build, or a finding on a node that survived fusion) returns the
+/// finding unchanged.
+pub fn unretarget_shadow(
+    finding: &ShadowedDefParam,
+    retarget: &AHashMap<(String, String), (NodeId, String)>,
+) -> ShadowedDefParam {
+    for ((orig_node, orig_param), (fused_id, field)) in retarget {
+        if fused_id.as_str() == finding.node_id && *field == finding.param {
+            return ShadowedDefParam {
+                node_id: orig_node.clone(),
+                param: orig_param.clone(),
+                ..finding.clone()
+            };
+        }
+    }
+    finding.clone()
+}
+
 /// Push every inner-node param value declared in `def` into the live `graph`,
 /// resolving each def node to its runtime instance through `node_map`. Flattens
 /// groups first so a group-interface override routes onto its concrete inner node
