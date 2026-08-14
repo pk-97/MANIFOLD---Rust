@@ -1606,6 +1606,10 @@ impl GpuDevice {
 
     /// Create a GPU heap for sub-allocation.
     pub fn create_heap(&self, size: u64, storage_mode: GpuStorageMode) -> GpuHeap {
+        if alloc_log_enabled() {
+            eprintln!("[gpu-alloc] heap {size} {storage_mode:?}");
+            alloc_log_backtrace();
+        }
         let desc = unsafe {
             use objc2::AnyThread;
             MTLHeapDescriptor::init(MTLHeapDescriptor::alloc())
