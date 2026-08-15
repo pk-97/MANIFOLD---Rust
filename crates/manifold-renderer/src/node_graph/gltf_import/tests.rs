@@ -185,10 +185,108 @@ fn object_cap_exceeded_glb_errors_loudly_never_truncates() {
     );
 }
 
-/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
-/// triangle (so the asset has SOME geometry and `gltf_import_summary`
-/// doesn't bail with "parsed no geometry"), `Mat1`'s sole primitive is
-/// tagged `KHR_draco_mesh_compression`.
+/// Build a one-triangle `.glb` spanning `[-half, +half]` on X/Y — the
+/// smallest asset whose bbox exercises the synthesized camera's
+/// size-scaled clip planes. Same container shape as
+/// `write_synthetic_multimaterial_glb`.
+fn write_synthetic_sized_glb(half: f32) -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[-half, -half, 0.0], [half, -half, 0.0], [-half, half, 0.0]];
+    let mut bin = Vec::with_capacity(36);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] }],
+        "accessors": [{
+            "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+            "min": [-half, -half, 0.0], "max": [half, half, 0.0],
+        }],
+        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+        "materials": [{ "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } }],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let mut json_padded = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_sized_{}_{}_{}.glb",
+        half,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+    path
+}
+
+/// The synthesized orbit camera's `far` must scale with the framed scene
+/// (kuma_heavy_robot class: posed radius ~2700 clipped against the fixed
+/// 200 default into a black frame), while a compact asset keeps the
+/// primitive's default EXACTLY — the same golden-stability guarantee the
+/// `near` scaling (BUG-165/BUG-169) makes.
+#[test]
+fn import_camera_far_scales_with_scene_size() {
+    let cam_far = |half: f32| {
+        let path = write_synthetic_sized_glb(half);
+        let (def, _report) = assemble_import_graph(&path).expect("assemble sized synthetic glb");
+        std::fs::remove_file(&path).ok();
+        let cam = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.orbit_camera")
+            .expect("assembled graph has an orbit_camera node");
+        match cam.params.get("far") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("orbit_camera far param missing or wrong type: {other:?}"),
+        }
+    };
+
+    let small = cam_far(0.5);
+    assert_eq!(
+        small,
+        crate::node_graph::primitives::DEFAULT_FAR,
+        "compact asset keeps the default far exactly (golden stability)"
+    );
+
+    // half=1500: bbox radius ~2121, distance ~4667 — the old fixed 200
+    // sat in front of the whole scene (black frame); the stamp must clear
+    // distance + radius (~6788) with slack.
+    let large = cam_far(1500.0);
+    assert!(
+        large > 6800.0,
+        "large asset's far must clear distance + radius (~6788), got {large}"
+    );
+    assert!(
+        large <= 10_000.0,
+        "far stays within node.orbit_camera's declared range max, got {large}"
+    );
+}
+
+
 ///
 /// A "no-fallback" Draco export (the common case — the whole point of
 /// Draco is the size win, and a redundant uncompressed fallback accessor

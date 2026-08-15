@@ -19,6 +19,7 @@ use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TY
 use crate::node_graph::gltf_load;
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::DEFAULT_NEAR as CAMERA_NEAR_DEFAULT;
+use crate::node_graph::primitives::DEFAULT_FAR as CAMERA_FAR_DEFAULT;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use crate::node_graph::scene_exposure::metadata_for_node_type;
 
@@ -171,6 +172,21 @@ pub(super) fn build_import_graph(
     // sub-threshold objects get a smaller near plane.
     let front_margin = (distance - radius).max(1e-4);
     let near_clip = CAMERA_NEAR_DEFAULT.min(front_margin * 0.5);
+    // `far` is the same class of bug as `near` above, at the opposite end:
+    // the orbit camera's fixed default (CAMERA_FAR_DEFAULT, 200) was never
+    // scaled to the framed object either, so any asset whose POSED bbox
+    // puts geometry past 200 units depth-clips to a black frame at the
+    // default framing (kuma_heavy_robot: Sketchfab FBX-convert with a 100x
+    // armature node, posed radius ~2700, camera distance ~6000 — 100%
+    // black until `far` is raised by hand). The camera sits `distance` from
+    // the bbox center and the farthest corner is at most `radius` behind
+    // the center, so `distance + 1.5 * radius` clears the whole scene with
+    // a half-radius slack. The DEFAULT floor keeps every currently-passing
+    // asset's far IDENTICAL to before (2.2 * radius + 1.5 * radius stays
+    // under 200 whenever radius <= ~54 — every Khronos conformance asset);
+    // the 10000 ceiling is `node.orbit_camera`'s declared range max, past
+    // which the value would clamp at param load anyway.
+    let far_clip = CAMERA_FAR_DEFAULT.max(distance + 1.5 * radius).min(10_000.0);
 
     let path_str = path.to_string_lossy().into_owned();
     let stem = path
@@ -277,6 +293,8 @@ pub(super) fn build_import_graph(
     cam_node.params.insert("look_y".to_string(), float(0.0));
     // BUG-165/BUG-169 fix — see `near_clip` computation above.
     cam_node.params.insert("near".to_string(), float(near_clip));
+    // See `far_clip` above — the far-plane half of the same fix.
+    cam_node.params.insert("far".to_string(), float(far_clip));
     let cam_node_params = cam_node.params.clone();
     nodes.push(cam_node);
     stamp_scene_node_exposures_into(

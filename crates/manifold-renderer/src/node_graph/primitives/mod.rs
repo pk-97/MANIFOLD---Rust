@@ -453,7 +453,7 @@ pub use simplex_field_2d::{SIMPLEX_FIELD_OUTPUT_CHANNELS, SimplexField2D};
 pub use simplex_noise_force_at_particles::SimplexNoiseForceAtParticles;
 pub use simplex_per_instance::SimplexPerInstance;
 pub use affine_scalar::AffineScalar;
-pub use camera_orbit::{CameraOrbit, DEFAULT_NEAR};
+pub use camera_orbit::{CameraOrbit, DEFAULT_FAR, DEFAULT_NEAR};
 pub use free_camera::FreeCamera;
 pub use look_at_camera::LookAtCamera;
 pub use camera_lens::CameraLens;

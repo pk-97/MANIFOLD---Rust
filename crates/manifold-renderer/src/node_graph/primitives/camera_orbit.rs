@@ -32,6 +32,12 @@ use crate::node_graph::primitive::Primitive;
 /// the magic number.
 pub const DEFAULT_NEAR: f32 = 0.05;
 
+/// Same single-source role as `DEFAULT_NEAR`, for `far` — the import
+/// camera scales it to the framed object (large posed assets clip to black
+/// against the fixed default otherwise) instead of duplicating the magic
+/// number.
+pub const DEFAULT_FAR: f32 = 200.0;
+
 crate::primitive! {
     name: CameraOrbit,
     type_id: "node.orbit_camera",
@@ -111,7 +117,7 @@ crate::primitive! {
             name: Cow::Borrowed("far"),
             label: "Far",
             ty: ParamType::Float,
-            default: ParamValue::Float(200.0),
+            default: ParamValue::Float(DEFAULT_FAR),
             range: Some((1.0, 10000.0)),
             enum_values: &[],
         },
@@ -141,7 +147,7 @@ impl Primitive for CameraOrbit {
         };
         let far = match ctx.params.get("far") {
             Some(ParamValue::Float(f)) => *f,
-            _ => 200.0,
+            _ => DEFAULT_FAR,
         };
 
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, roll, near, far);
