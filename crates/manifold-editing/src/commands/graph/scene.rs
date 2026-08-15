@@ -235,6 +235,7 @@ impl Command for AddSceneObjectCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
                 &mut meta.params,
@@ -424,6 +425,7 @@ impl Command for AddSceneLightCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
                 &mut meta.params,
@@ -1101,6 +1103,7 @@ impl Command for AddSceneEnvironmentCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
                 &mut meta.params,
@@ -1235,6 +1238,7 @@ impl Command for AddSceneFogCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
                 &mut meta.params,
@@ -1496,6 +1500,7 @@ impl Command for ImportModelIntoSceneCommand {
                         value_aliases: Vec::new(),
                         string_params: Vec::new(),
                         string_bindings: Vec::new(),
+                        scene_bounds: None,
                     }
                 });
                 meta.params.extend(new_card_params);
@@ -2405,6 +2410,7 @@ mod tests {
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: Vec::new(),
@@ -3100,6 +3106,7 @@ mod tests {
             category: "Geometry".to_string(),
             osc_prefix: "existing".to_string(),
             legacy_discriminant: None,
+            scene_bounds: None,
             available: true,
             is_line_based: false,
             params: vec![],

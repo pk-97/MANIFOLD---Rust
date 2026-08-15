@@ -322,6 +322,7 @@ impl Command for InsertMeshModifierCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
                 &mut meta.params,

@@ -258,57 +258,10 @@ pub(super) fn dispatch_project(
         // command a card/node-face/group-face write would — no new mutation
         // path (section 4).
         ProjectAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
-            if let Some(default) = generator_catalog_default(project, layer_id) {
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                // Bound param → edit the binding's instance slot, never the
-                // def — a def write on a bound param is re-seeded over on
-                // rebuild (the importer-camera deadness this guards against).
-                let bound = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.binding_id_for_node_param(*node_doc_id, param_id)
-                    })
-                    .flatten()
-                    // Tracking instance (graph: None — fresh imports).
-                    .or_else(|| {
-                        manifold_core::effects::binding_id_for_node_param_in(
-                            &default,
-                            *node_doc_id,
-                            param_id,
-                        )
-                    });
-                if let Some(id) = bound {
-                    let pid = manifold_core::effects::ParamId::from(id);
-                    let old_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten();
-                    if let Some(old_val) = old_val
-                        && (old_val - *value).abs() > f32::EPSILON
-                    {
-                        project.with_preset_graph_mut(&target, |inst| {
-                            inst.set_base_param(pid.as_ref(), *value);
-                        });
-                        let cmd = manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                            target, pid, old_val, *value,
-                        );
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    return DispatchResult::handled();
-                }
-                let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                    target,
-                    *node_doc_id,
-                    param_id.clone(),
-                    manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value },
-                    default,
-                )
-                .with_scope(scope_path.clone());
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            if let Some(cmd) =
+                apply_scene_param_write(project, layer_id, scope_path.clone(), *node_doc_id, param_id, *value)
+            {
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::handled()
         }
@@ -445,6 +398,133 @@ pub(super) fn dispatch_project(
                 boxed.execute(project);
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
+            DispatchResult::structural()
+        }
+        // scene-panel-ux: "Frame" button (Object selection). Reads the
+        // effective def through the SAME SceneVm the panel builds, takes the
+        // object's current translate as the focus point, and writes camera
+        // params through `apply_scene_param_write` — the one write path every
+        // scene-panel control shares (bound → binding slot, else def write).
+        // All writes land as ONE CompositeCommand so a frame is one undo.
+        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_index) => {
+            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
+            let Some(default) = generator_catalog_default(project, layer_id) else {
+                return DispatchResult::handled();
+            };
+            // The layer's override graph when it has one — the panel's VM
+            // reads the same effective def, so framing agrees with the rows
+            // the user was looking at when they clicked.
+            let effective = project
+                .timeline
+                .find_layer_by_id(layer_id)
+                .and_then(|(_, l)| l.generator_graph().cloned())
+                .unwrap_or_else(|| default.clone());
+            let Some(vm) = SceneVm::from_def(&effective) else {
+                eprintln!("[Scene] frame-selected: no scene in this graph");
+                return DispatchResult::handled();
+            };
+            let Some(pos) = vm.objects.iter().find_map(|o| match o {
+                SceneObjectVm::Known(r) if r.index == *object_index => {
+                    r.transform.as_ref().map(|t| t.pos_value)
+                }
+                _ => None,
+            }) else {
+                eprintln!("[Scene] frame-selected: object {object_index} has no transform row");
+                return DispatchResult::handled();
+            };
+            // Scene radius from the item-2 bounds chain: half the largest
+            // axis extent, floored at 1.0 — the scale the importer framed at.
+            let radius = vm
+                .scene_bounds
+                .map(|(mn, mx)| (0..3).map(|a| (mx[a] - mn[a]) * 0.5).fold(1.0f32, f32::max))
+                .unwrap_or(1.0);
+            let distance = 2.2 * radius;
+            let mut writes: Vec<Box<dyn manifold_editing::command::Command + Send>> = Vec::new();
+            match &vm.camera {
+                // camera_orbit pivots at (0, look_y, 0) — it has no target
+                // params, so exact aim is impossible. Frame = pull back far
+                // enough that the object at its offset from the pivot fits
+                // (distance covers radius + horizontal offset), and lift the
+                // pivot to the object's height.
+                CameraVm::Orbit(row) => {
+                    let offset = (pos.0 * pos.0 + pos.2 * pos.2).sqrt();
+                    let d = 2.2 * (radius + offset);
+                    for (pid, v) in [("look_y", pos.1), ("distance", d)] {
+                        if let Some(cmd) = apply_scene_param_write(
+                            project,
+                            layer_id,
+                            Vec::new(),
+                            row.node_doc_id,
+                            pid,
+                            v,
+                        ) {
+                            writes.push(cmd);
+                        }
+                    }
+                }
+                CameraVm::LookAt(row) => {
+                    let node = effective.nodes.iter().find(|n| n.id == row.node_doc_id);
+                    let pf = |name: &str, dflt: f32| {
+                        node.and_then(|n| n.params.get(name))
+                            .and_then(|v| match v {
+                                manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
+                                _ => None,
+                            })
+                            .unwrap_or(dflt)
+                    };
+                    let cur_pos = (pf("pos_x", 0.0), pf("pos_y", 0.0), pf("pos_z", 0.0));
+                    let cur_tgt = (pf("target_x", 0.0), pf("target_y", 0.0), pf("target_z", 0.0));
+                    let mut dir = (
+                        cur_tgt.0 - cur_pos.0,
+                        cur_tgt.1 - cur_pos.1,
+                        cur_tgt.2 - cur_pos.2,
+                    );
+                    let len = (dir.0 * dir.0 + dir.1 * dir.1 + dir.2 * dir.2).sqrt();
+                    // Degenerate view (camera sitting on its target): fall
+                    // back to looking down -Z rather than producing NaNs.
+                    dir = if len > 1e-6 { (dir.0 / len, dir.1 / len, dir.2 / len) } else { (0.0, 0.0, -1.0) };
+                    let new_pos = (
+                        pos.0 - dir.0 * distance,
+                        pos.1 - dir.1 * distance,
+                        pos.2 - dir.2 * distance,
+                    );
+                    for (pid, v) in [
+                        ("target_x", pos.0),
+                        ("target_y", pos.1),
+                        ("target_z", pos.2),
+                        ("pos_x", new_pos.0),
+                        ("pos_y", new_pos.1),
+                        ("pos_z", new_pos.2),
+                    ] {
+                        if let Some(cmd) = apply_scene_param_write(
+                            project,
+                            layer_id,
+                            Vec::new(),
+                            row.node_doc_id,
+                            pid,
+                            v,
+                        ) {
+                            writes.push(cmd);
+                        }
+                    }
+                }
+                CameraVm::Free(_) | CameraVm::Custom { .. } | CameraVm::None => {
+                    eprintln!("[Scene] frame-selected unsupported for this camera type");
+                    return DispatchResult::handled();
+                }
+            }
+            if writes.is_empty() {
+                return DispatchResult::handled();
+            }
+            // One undo unit for the whole camera move (ExecuteBatch records
+            // the batch; the local write already happened per-param inside
+            // apply_scene_param_write, same as the single-slider path).
+            let batch: Vec<Box<dyn manifold_editing::command::Command>> =
+                writes.into_iter().map(|c| c as Box<dyn manifold_editing::command::Command>).collect();
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::ExecuteBatch(batch, "Frame camera on object".to_string()),
+            );
             DispatchResult::structural()
         }
 
@@ -740,6 +820,65 @@ pub(crate) fn find_node_by_scope<'a>(
 /// `Application::handle_text_input_commit`'s `SceneObjectRename` arm can
 /// reuse it too — the panel's rename commit is the same "address the layer
 /// directly" shape as the four arms below.
+/// The ONE write path every scene-panel param change takes. Bound param →
+/// edit the binding's instance slot, never the def — a def write on a bound
+/// param is re-seeded over on rebuild (the importer-camera deadness this
+/// guards against). Unbound → def-level `SetGraphNodeParamCommand`. Applies
+/// the local write itself and returns the command for the content thread —
+/// sent singly by `SceneSetupParamChanged`, or batched under one
+/// `CompositeCommand` by frame-selected so a camera frame is one undo unit.
+/// `None` when the layer has no generator default or the bound value is
+/// unchanged (the epsilon no-change guard).
+fn apply_scene_param_write(
+    project: &mut Project,
+    layer_id: &LayerId,
+    scope_path: Vec<u32>,
+    node_doc_id: u32,
+    param_id: &str,
+    value: f32,
+) -> Option<Box<dyn manifold_editing::command::Command + Send>> {
+    let default = generator_catalog_default(project, layer_id)?;
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let bound = project
+        .with_preset_graph_mut(&target, |inst| inst.binding_id_for_node_param(node_doc_id, param_id))
+        .flatten()
+        // Tracking instance (graph: None — fresh imports).
+        .or_else(|| {
+            manifold_core::effects::binding_id_for_node_param_in(&default, node_doc_id, param_id)
+        });
+    if let Some(id) = bound {
+        let pid = manifold_core::effects::ParamId::from(id);
+        let old_val = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.params
+                    .contains(pid.as_ref())
+                    .then(|| inst.get_base_param(pid.as_ref()))
+            })
+            .flatten()?;
+        if (old_val - value).abs() <= f32::EPSILON {
+            return None;
+        }
+        project.with_preset_graph_mut(&target, |inst| {
+            inst.set_base_param(pid.as_ref(), value);
+        });
+        return Some(Box::new(
+            manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, pid, old_val, value),
+        ));
+    }
+    let mut cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+            target,
+            node_doc_id,
+            param_id.to_string(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+            default,
+        )
+        .with_scope(scope_path),
+    );
+    cmd.execute(project);
+    Some(cmd)
+}
+
 pub(crate) fn generator_catalog_default(
     project: &Project,
     layer_id: &LayerId,
@@ -883,6 +1022,74 @@ mod tests {
         );
         assert!(result.structural_change, "adding a light is a structural graph edit");
         assert_eq!(lights_param(&project, &layer_id, render_scene_id), before + 1.0);
+    }
+
+    /// scene-panel-ux gate: the properties-header "Frame" button drives the
+    /// orbit camera to frame the selected object through the SAME
+    /// dispatch_project arm a click reaches. Orbit cameras pivot at
+    /// (0, look_y, 0), so framing = look_y at the object's height and
+    /// distance covering radius + the object's horizontal offset.
+    #[test]
+    fn scene_setup_frame_selected_writes_orbit_camera_params() {
+        use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let def_before = effective_def(&project, &layer_id);
+        let vm = SceneVm::from_def(&def_before).expect("SceneStarter resolves as a scene");
+        let cam_id = match &vm.camera {
+            CameraVm::Orbit(r) => r.node_doc_id,
+            other => panic!("SceneStarter camera should be orbit, got {other:?}"),
+        };
+        let obj_pos = vm
+            .objects
+            .iter()
+            .find_map(|o| match o {
+                SceneObjectVm::Known(r) if r.index == 0 => r.transform.as_ref().map(|t| t.pos_value),
+                _ => None,
+            })
+            .expect("SceneStarter object 0 has a transform");
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, 0);
+        let result = dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(result.structural_change, "framing the camera is a param write");
+
+        let def_after = effective_def(&project, &layer_id);
+        let cam = def_after
+            .nodes
+            .iter()
+            .find(|n| n.id == cam_id)
+            .expect("camera node still present");
+        let get = |pid: &str| match cam.params.get(pid) {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("{pid} should be a float param, got {other:?}"),
+        };
+        let radius = vm
+            .scene_bounds
+            .map(|(mn, mx)| (0..3).map(|a| (mx[a] - mn[a]) * 0.5).fold(1.0f32, f32::max))
+            .unwrap_or(1.0);
+        let offset = (obj_pos.0 * obj_pos.0 + obj_pos.2 * obj_pos.2).sqrt();
+        let expected_distance = 2.2 * (radius + offset);
+        assert!(
+            (get("distance") - expected_distance).abs() < 1e-4,
+            "distance = 2.2 × (radius + offset): got {}, want {expected_distance}",
+            get("distance")
+        );
+        assert!(
+            (get("look_y") - obj_pos.1).abs() < 1e-4,
+            "look_y lifts to the object's height: got {}, want {}",
+            get("look_y"),
+            obj_pos.1
+        );
     }
 
     /// BUG-193 gate: "remove-object button emits RemoveSceneObjectCommand" —

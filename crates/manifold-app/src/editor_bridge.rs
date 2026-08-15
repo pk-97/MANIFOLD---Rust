@@ -1993,6 +1993,7 @@ mod binding_reroute_tests {
                 category: "Test".into(),
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: vec![ParamSpecDef {

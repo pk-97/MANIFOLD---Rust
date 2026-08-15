@@ -2072,7 +2072,7 @@ mod tests {
         let vp = panel.layer_scroll.viewport();
         panel.route_pointer_down(thumb, Vec2::new(vp.x, vp.y), Modifiers::NONE, &tree);
         assert!(panel.dragging_scrollbar);
-        let _ = panel.handle_drag(Vec2::new(vp.x, vp.y + vp.height * 0.8), &mut tree);
+        let _ = panel.handle_drag(Vec2::new(vp.x, vp.y + vp.height * 0.8), &mut tree, false);
 
         assert!(
             panel.take_scrolled_in_place(),

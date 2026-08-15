@@ -920,6 +920,7 @@ pub fn sync_inspector_data(
                                 camera,
                                 camera_sections,
                                 world_sections,
+                                scene_bounds: vm.scene_bounds,
                             }))
                         }
                     }

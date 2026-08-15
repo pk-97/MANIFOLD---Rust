@@ -842,6 +842,7 @@ impl PresetInstance {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_bounds: None,
         });
         meta.params.push(spec.clone());
         meta.bindings.push(BindingDef {
@@ -941,6 +942,7 @@ impl PresetInstance {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_bounds: None,
         });
 
         // Absolute binding index of the `position`-th user-added entry
@@ -1744,6 +1746,7 @@ mod tests {
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: vec![ParamSpecDef {

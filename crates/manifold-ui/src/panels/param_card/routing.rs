@@ -382,7 +382,9 @@ impl ParamCardPanel {
     /// Drag-move dispatch. The state mutation + tree repositioning is identical
     /// for both kinds; only the emitted [`PanelAction`] variant differs, so the
     /// body is shared and branches on `kind` at each emission point.
-    pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
+    /// `fine` is Shift-held, sampled per move (not just at grab) so pressing/
+    /// releasing Shift mid-drag re-scales sensitivity live (D8).
+    pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree, fine: bool) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
         // Envelope target handle drag — update depth, reposition the orange bar
@@ -580,8 +582,18 @@ impl ParamCardPanel {
             && let Some(ids) = self.row_host.slider_ids.get(pi).and_then(|s| s.as_ref())
         {
             let info = &self.rows[pi];
-            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
-            let val = BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max);
+            // D8 fine mode: scale the pointer delta off the grab value (0.1x
+            // when Shift held). `start_x` recovers the grab without a second
+            // stored copy; for a non-fine drag this is exactly the old
+            // absolute-position math (grab value + full-range delta).
+            let track_span = TrackSpan::of(tree.get_bounds(ids.track));
+            let start_x = self.drag.start_x().unwrap_or(pos.x);
+            let base = BitmapSlider::normalized_to_value(
+                BitmapSlider::x_to_normalized(track_span, start_x),
+                info.spec.min,
+                info.spec.max,
+            );
+            let val = fine_scrub_value(base, pos.x - start_x, track_span.width, info.spec.min, info.spec.max, fine);
             let val = if info.spec.whole_numbers { val.round() } else { val };
             let display_norm = BitmapSlider::value_to_normalized(val, info.spec.min, info.spec.max);
             let text = format_param_value(

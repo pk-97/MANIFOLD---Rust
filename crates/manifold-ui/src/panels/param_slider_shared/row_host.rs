@@ -426,6 +426,54 @@ impl RowHost {
         vec![PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, rows[pi].id.clone(), mode_idx))]
     }
 
+    /// If `node_id` is a numeric param's value cell, build the
+    /// `BeginParamTextInput` action that opens a type-in box for it — target +
+    /// id, the cell's anchor rect, the base value to prefill, the clamp range,
+    /// and the int-rounding flag. Returns `None` for non-value-cell nodes and
+    /// for enum rows (`value_labels` use the dropdown, not text); toggle/
+    /// trigger rows carry no slider bundle, so they never match.
+    ///
+    /// Shared so the effect/generator card and the scene properties card resolve
+    /// the SAME double-click gesture through the SAME code (D13/D14) — the scene
+    /// panel routes its rows here instead of carrying a `value_cell_typein` copy.
+    pub(crate) fn value_cell_typein(
+        &self,
+        node_id: NodeId,
+        tree: &UITree,
+        rows: &[ParamRow],
+        base_values: &[f32],
+        target: GraphParamTarget,
+    ) -> Option<PanelAction> {
+        debug_assert_eq!(
+            crate::slider::BitmapSlider::intent_for(
+                crate::slider::SliderZone::ValueCell,
+                crate::intent::Gesture::DoubleClick
+            ),
+            Some(crate::slider::SliderIntent::EditValue),
+            "value_cell_typein is the contract's ValueCell+DoubleClick->EditValue translation (D13/D14)"
+        );
+        for (pi, slot) in self.slider_ids.iter().enumerate() {
+            let Some(ids) = slot else { continue };
+            if ids.value_text != node_id {
+                continue;
+            }
+            let info = rows.get(pi)?;
+            if info.spec.value_labels.is_some() {
+                return None;
+            }
+            return Some(PanelAction::Root(RootAction::BeginParamTextInput {
+                target,
+                param_id: rows[pi].id.clone(),
+                anchor: tree.get_bounds(ids.value_text),
+                value: base_values.get(pi).copied().unwrap_or(info.spec.default),
+                min: info.spec.min,
+                max: info.spec.max,
+                whole_numbers: info.spec.whole_numbers,
+            }));
+        }
+        None
+    }
+
     /// Route a resolved `(row, role)` hit to the `PanelAction` the old per-kind
     /// gauntlets emitted for that element — ONE match, both card kinds (D5).
     /// Identity comes off `rows[row].id`; the wire target is the caller's

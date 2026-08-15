@@ -133,6 +133,7 @@ mod sections_for_doc_ids_tests {
             category: "Diagnostic".to_string(),
             osc_prefix: "gltf_import_fixture".to_string(),
             legacy_discriminant: None,
+            scene_bounds: None,
             available: true,
             is_line_based: false,
             params: vec![

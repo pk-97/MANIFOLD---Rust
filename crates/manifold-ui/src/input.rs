@@ -221,6 +221,7 @@ pub enum UIEvent {
         node_id: Option<NodeId>,
         pos: Vec2,
         delta: Vec2,
+        modifiers: Modifiers,
     },
     /// Terminal drag event — fires for every drag that began, even when the
     /// pressed widget left the tree mid-drag. A drag that began MUST end: the
@@ -314,10 +315,12 @@ impl UIEvent {
                 node_id,
                 pos,
                 delta,
+                modifiers,
             } => Self::Drag {
                 node_id: *node_id,
                 pos: off(*pos),
                 delta: *delta,
+                modifiers: *modifiers,
             },
             Self::DragEnd { node_id, pos } => Self::DragEnd {
                 node_id: *node_id,
@@ -593,6 +596,7 @@ impl UIInputSystem {
                             node_id: tree.node_for_widget(pw),
                             pos: screen_pos,
                             delta,
+                            modifiers: self.modifiers,
                         });
                     }
                 }

@@ -187,6 +187,11 @@ pub enum ProjectAction {
     /// second (third, nth) model added to a scene the panel already shows,
     /// no graph editor trip required.
     SceneSetupImportModelClicked(LayerId, u32),
+    /// scene-panel-ux lane: "Frame" button in properties header (Object selection).
+    /// `(layer_id, render_scene_node_doc_id, object_index)`. Computes camera focus
+    /// parameters to frame the selected object and writes them through the same
+    /// param-change path every other slider uses.
+    SceneSetupFrameSelected(LayerId, u32, usize),
     /// P5 "Add modifier" chip: `(layer_id, group_node_id, type_id)`.
     /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
     /// at the end of the object's stack (no position picker in v1 — D6's

@@ -2406,6 +2406,7 @@ mod tests {
             node_id: Some(gain_value),
             pos: Vec2::new(120.0, 50.0),
             delta: Vec2::new(20.0, 0.0),
+            modifiers: Modifiers::NONE,
         });
         match actions.as_slice() {
             [PanelAction::Scrub(ValueRef::AudioSendGain(id), ScrubPhase::Move(ScrubValue::Scalar(db)))] => {
