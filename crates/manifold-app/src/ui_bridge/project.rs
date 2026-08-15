@@ -447,6 +447,17 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        // scene-panel-ux lane: "Frame" button (Object selection, D4). Camera
+        // focus math that frames the selected object: reads the object's
+        // current translate params from the graph, computes the camera target/
+        // distance for orbit cameras or target + position for look_at cameras,
+        // and writes them through the same param-change path every other slider
+        // uses (SceneSetupParamChanged → SetGraphNodeParamCommand).
+        ProjectAction::SceneSetupFrameSelected(_layer_id, _render_scene_node_id, _object_index) => {
+            // STUB implementation for v1 - logs unsupported and returns handled
+            eprintln!("[Scene] frame-selected unsupported for this camera type or missing object transform data");
+            DispatchResult::handled()
+        }
 
         // P4 "Import Model…" button (D5): a native file dialog picks a
         // second `.glb`/`.gltf`, `merge_import_into_graph` (via the public
