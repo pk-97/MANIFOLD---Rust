@@ -28,13 +28,15 @@ use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
 use manifold_foundation::{AudioSendId, LayerId};
 
-use super::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
+use super::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef, ParamsAction};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioCardState, ModTab, ParamModState, RowHost, build_param_row,
+    ROW_ROLE_SECTION_HEADER, param_row_key_base,
 };
 use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
+use crate::slider::GAP;
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -47,6 +49,10 @@ const KEY_ADD_OBJECT: u64 = 80_014;
 const KEY_ADD_LIGHT: u64 = 80_015;
 /// "Import Model…" (P4, D4/D5) — merges a second glb into this scene.
 const KEY_IMPORT_MODEL: u64 = 80_016;
+/// Outliner fold header keys (scene-panel-ux lane): Scene, Lights, Objects
+const KEY_OUTLINER_SCENE: u64 = 80_017;
+const KEY_OUTLINER_LIGHTS: u64 = 80_018;
+const KEY_OUTLINER_OBJECTS: u64 = 80_019;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
 /// Objects are a variable-length list (unlike the four fixed Environment/Fog
@@ -547,6 +553,8 @@ pub enum SceneSelection {
     Light(u32),
     Camera,
     World,
+    /// scene-panel-ux lane: outliner group fold toggle (Scene/Lights/Objects)
+    OutlinerFold(&'static str),
 }
 
 /// D7's four empty/live states for the selected layer.
@@ -852,6 +860,13 @@ pub struct ScenePanel {
     /// header's "Duplicate" button, when a Known object is selected this
     /// frame — resolves to `PanelAction::SceneSetupDuplicateObject`.
     object_duplicate_ids: Vec<(NodeId, usize)>,
+    /// scene-panel-ux lane: fold state for properties sections, keyed by
+    /// section NAME globally within the panel (folding "Material" folds it
+    /// for every object). UI-local, never serialized. Missing entry = expanded.
+    section_folded: ahash::AHashMap<String, bool>,
+    /// scene-panel-ux lane: fold state for outliner groups (Scene/Lights/Objects).
+    /// UI-local, never serialized. Missing entry = expanded.
+    outliner_folded: ahash::AHashMap<&'static str, bool>,
     /// P5: `(node_id, group_node_id, modifier_node_id)` for every modifier
     /// row's remove button built this frame.
     modifier_remove_ids: Vec<(NodeId, u32, u32)>,
@@ -911,6 +926,8 @@ impl Default for ScenePanel {
             object_name_ids: Vec::new(),
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
+            section_folded: ahash::AHashMap::new(),
+            outliner_folded: ahash::AHashMap::new(),
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
             add_modifier_button_id: None,
@@ -1256,6 +1273,7 @@ impl ScenePanel {
     fn selection_exists(vm: &SceneSetupVm, sel: SceneSelection) -> bool {
         match sel {
             SceneSelection::Camera | SceneSelection::World => true,
+            SceneSelection::OutlinerFold(_) => true, // Fold headers always exist
             SceneSelection::Object(id) => {
                 vm.objects.iter().any(|o| matches!(o, ObjectRowVm::Known(r) if r.object_node_id == id))
             }
@@ -1293,83 +1311,101 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         selected: SceneSelection,
     ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Scene", section_label_style());
-        cy += ROW_H;
-        cy = self.build_outliner_row(
-            tree, inner_x, inner_w, cy, "\u{1F4F7} Camera", SceneSelection::Camera, selected, EyeSlot::Empty,
-        );
-        cy = self.build_outliner_row(
-            tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, EyeSlot::Empty,
-        );
+        // Scene group header
+        let scene_folded = self.outliner_folded.get("Scene").copied().unwrap_or(false);
+        cy = self.build_outliner_fold_header(tree, inner_x, inner_w, cy, "Scene", scene_folded, KEY_OUTLINER_SCENE);
+        if !scene_folded {
+            cy = self.build_outliner_row(
+                tree, inner_x, inner_w, cy, "\u{1F4F7} Camera", SceneSelection::Camera, selected, EyeSlot::Empty,
+            );
+            cy = self.build_outliner_row(
+                tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, EyeSlot::Empty,
+            );
+        }
 
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Lights", section_label_style());
-        cy += ROW_H;
-        for light in &vm.lights {
-            match light {
-                LightRowVm::Known(row) => {
-                    let label = format!("\u{1F4A1} {}", row.name);
-                    cy = self.build_outliner_row(
-                        tree,
-                        inner_x,
-                        inner_w,
-                        cy,
-                        &label,
-                        SceneSelection::Light(row.node_doc_id),
-                        selected,
-                        EyeSlot::Empty,
-                    );
-                }
-                LightRowVm::Custom { index } => {
-                    // No addressable node id (D12/D3) — listed, never hidden,
-                    // but not a selectable target (nothing to show in
-                    // Properties beyond the same "custom" label). Same row
-                    // template as a selectable row (D5), minus the click.
-                    cy = self.build_outliner_row_static(
-                        tree,
-                        inner_x,
-                        inner_w,
-                        cy,
-                        &format!("\u{1F4A1} Light {index} — custom (edit in graph)"),
-                        false,
-                    );
+        // Lights group header
+        let lights_folded = self.outliner_folded.get("Lights").copied().unwrap_or(false);
+        cy = self.build_outliner_fold_header(tree, inner_x, inner_w, cy, "Lights", lights_folded, KEY_OUTLINER_LIGHTS);
+        if !lights_folded {
+            for light in &vm.lights {
+                match light {
+                    LightRowVm::Known(row) => {
+                        let label = format!("\u{1F4A1} {}", row.name);
+                        cy = self.build_outliner_row(
+                            tree,
+                            inner_x,
+                            inner_w,
+                            cy,
+                            &label,
+                            SceneSelection::Light(row.node_doc_id),
+                            selected,
+                            EyeSlot::Empty,
+                        );
+                    }
+                    LightRowVm::Custom { index } => {
+                        // No addressable node id (D12/D3) — listed, never hidden,
+                        // but not a selectable target (nothing to show in
+                        // Properties beyond the same "custom" label). Same row
+                        // template as a selectable row (D5), minus the click.
+                        cy = self.build_outliner_row_static(
+                            tree,
+                            inner_x,
+                            inner_w,
+                            cy,
+                            &format!("\u{1F4A1} Light {index} — custom (edit in graph)"),
+                            false,
+                        );
+                    }
                 }
             }
         }
 
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Objects", section_label_style());
-        cy += ROW_H;
-        for obj in &vm.objects {
-            match obj {
-                ObjectRowVm::Known(row) => {
-                    let label = format!("\u{25A0} {}", row.name);
-                    cy = self.build_outliner_row(
-                        tree,
-                        inner_x,
-                        inner_w,
-                        cy,
-                        &label,
-                        SceneSelection::Object(row.object_node_id),
-                        selected,
-                        EyeSlot::Live(row.visible.clone()),
-                    );
-                }
-                ObjectRowVm::Custom { index } => {
-                    cy = self.build_outliner_row_static(
-                        tree,
-                        inner_x,
-                        inner_w,
-                        cy,
-                        &format!("\u{25A0} Object {index} — custom (edit in graph)"),
-                        true,
-                    );
+        // Objects group header with Import Model button
+        let objects_folded = self.outliner_folded.get("Objects").copied().unwrap_or(false);
+        cy = self.build_outliner_fold_header_with_button(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            "Objects",
+            objects_folded,
+            KEY_OUTLINER_OBJECTS,
+            KEY_IMPORT_MODEL,
+            "Import Model…",
+        );
+        if !objects_folded {
+            for obj in &vm.objects {
+                match obj {
+                    ObjectRowVm::Known(row) => {
+                        let label = format!("\u{25A0} {}", row.name);
+                        cy = self.build_outliner_row(
+                            tree,
+                            inner_x,
+                            inner_w,
+                            cy,
+                            &label,
+                            SceneSelection::Object(row.object_node_id),
+                            selected,
+                            EyeSlot::Live(row.visible.clone()),
+                        );
+                    }
+                    ObjectRowVm::Custom { index } => {
+                        cy = self.build_outliner_row_static(
+                            tree,
+                            inner_x,
+                            inner_w,
+                            cy,
+                            &format!("\u{25A0} Object {index} — custom (edit in graph)"),
+                            true,
+                        );
+                    }
                 }
             }
         }
         cy += ROW_GAP;
 
-        // D6: one compact row, three equal-width buttons — was three
-        // stacked full-width rows (~200px of permanent height reclaimed).
-        let action_w = (inner_w - 2.0 * ROW_GAP) / 3.0;
+        // D6: one compact row, two equal-width buttons — was three with Import Model
+        let action_w = (inner_w - ROW_GAP) / 2.0;
         self.add_object_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
@@ -1493,6 +1529,138 @@ impl ScenePanel {
         cy + ROW_H
     }
 
+    /// Build a foldable outliner group header (Scene/Lights/Objects). Returns the
+    /// updated cy position.
+    fn build_outliner_fold_header(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        name: &'static str,
+        folded: bool,
+        key: u64,
+    ) -> f32 {
+        let header_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            UIStyle {
+                bg_color: color::INSPECTOR_BG,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                corner_radius: color::SMALL_RADIUS,
+                ..UIStyle::default()
+            },
+            "",
+            key,
+        );
+        let triangle_w = 16.0;
+        let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
+        tree.add_label(
+            Some(header_id),
+            inner_x + GAP,
+            cy,
+            triangle_w,
+            ROW_H,
+            triangle,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        );
+        tree.add_label(
+            Some(header_id),
+            inner_x + GAP + triangle_w,
+            cy,
+            (inner_w - 2.0 * GAP - triangle_w).max(0.0),
+            ROW_H,
+            name,
+            section_label_style(),
+        );
+        // Register outliner fold header for click routing
+        self.outliner_row_ids.push((header_id, SceneSelection::OutlinerFold(name)));
+        cy + ROW_H
+    }
+
+    /// Build a foldable outliner group header with a right-aligned button
+    /// (Objects group with "Import Model…"). Returns the updated cy position.
+    fn build_outliner_fold_header_with_button(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        name: &'static str,
+        folded: bool,
+        header_key: u64,
+        button_key: u64,
+        button_label: &str,
+    ) -> f32 {
+        let header_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            UIStyle {
+                bg_color: color::INSPECTOR_BG,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                corner_radius: color::SMALL_RADIUS,
+                ..UIStyle::default()
+            },
+            "",
+            header_key,
+        );
+        let triangle_w = 16.0;
+        let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
+        tree.add_label(
+            Some(header_id),
+            inner_x + GAP,
+            cy,
+            triangle_w,
+            ROW_H,
+            triangle,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        );
+        // Measure button width
+        let btn_style = btn_style();
+        let button_w = tree.text_width(button_label, btn_style.font_size, crate::node::FontWeight::Regular) + 2.0 * GAP;
+        tree.add_label(
+            Some(header_id),
+            inner_x + GAP + triangle_w,
+            cy,
+            (inner_w - 2.0 * GAP - triangle_w - button_w - GAP).max(0.0),
+            ROW_H,
+            name,
+            section_label_style(),
+        );
+        // Right-aligned Import Model button
+        self.import_model_id = Some(tree.add_button_keyed(
+            Some(header_id),
+            inner_x + inner_w - button_w,
+            cy,
+            button_w,
+            ROW_H,
+            btn_style,
+            button_label,
+            button_key,
+        ));
+        // Register outliner fold header for click routing
+        self.outliner_row_ids.push((header_id, SceneSelection::OutlinerFold(name)));
+        cy + ROW_H
+    }
+
     /// The properties region: a header (name, plus Duplicate/Remove for
     /// Object/Light selections) then the selection's own rows — the EXISTING
     /// curated builders, relocated intact (never a generic param-tree
@@ -1549,12 +1717,71 @@ impl ScenePanel {
 
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(inner_w, false);
 
+        // Clear section header ids from previous build
+        self.properties_card.row_host.section_header_ids.clear();
+
         let mut i = 0usize;
         while i < retained.len() {
             let cur_section = config.rows[retained[i]].spec.section.clone();
             if let Some(name) = &cur_section {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, name.as_str(), label_style());
+                let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                // Build interactive section header row
+                let header_id = tree.add_button_keyed(
+                    Some(self.content_parent),
+                    inner_x,
+                    cy,
+                    inner_w,
+                    ROW_H,
+                    UIStyle {
+                        bg_color: color::INSPECTOR_BG,
+                        hover_bg_color: color::HOVER_OVERLAY,
+                        pressed_bg_color: color::PRESS_OVERLAY,
+                        corner_radius: color::SMALL_RADIUS,
+                        ..UIStyle::default()
+                    },
+                    "",
+                    param_row_key_base(&config.rows[retained[i]].id) | ROW_ROLE_SECTION_HEADER,
+                );
+                let triangle_w = 16.0;
+                let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
+                tree.add_label(
+                    Some(header_id),
+                    inner_x + GAP,
+                    cy,
+                    triangle_w,
+                    ROW_H,
+                    triangle,
+                    UIStyle {
+                        text_color: crate::color::TEXT_DIMMED_C32,
+                        font_size: crate::color::FONT_LABEL,
+                        text_align: TextAlign::Center,
+                        ..UIStyle::default()
+                    },
+                );
+                tree.add_label(
+                    Some(header_id),
+                    inner_x + GAP + triangle_w,
+                    cy,
+                    (inner_w - 2.0 * GAP - triangle_w).max(0.0),
+                    ROW_H,
+                    name.as_str(),
+                    label_style(),
+                );
+                // Register header for click routing
+                self.properties_card.row_host.section_header_ids.push((header_id, name.clone()));
+                self.properties_card.row_host.row_index.insert(
+                    tree.widget_of(header_id),
+                    i,
+                    RowRole::SectionHeader,
+                );
                 cy += ROW_H;
+                // Skip folded section's rows
+                if folded {
+                    while i < retained.len() && config.rows[retained[i]].spec.section.as_deref() == Some(name.as_str()) {
+                        i += 1;
+                    }
+                    continue;
+                }
             }
             while i < retained.len() && config.rows[retained[i]].spec.section == cur_section {
                 cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w, target.clone());
@@ -1686,6 +1913,7 @@ impl ScenePanel {
             }
             SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
+            SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
         }
     }
 
@@ -2107,6 +2335,13 @@ impl ScenePanel {
                 // `structural_change: true` rebuilds Properties THIS frame
                 // instead of waiting for the next unrelated sync.
                 if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
+                    // scene-panel-ux lane: handle outliner fold toggles
+                    if let SceneSelection::OutlinerFold(group_name) = sel {
+                        let folded = self.outliner_folded.entry(*group_name).or_insert(false);
+                        *folded = !*folded;
+                        return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
+                    }
+                    // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
                         self.selection.insert(vm.layer_id.clone(), *sel);
                         return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
@@ -2401,10 +2636,10 @@ impl ScenePanel {
     /// current values, mod state, active tab) is passed in by reference; the
     /// widget-id bundles the routing reads live on the embedded `row_host`.
     ///
-    /// Scene rows carry no OSC-copy flash and no foldable sections — neither
-    /// role is ever indexed into this card's `row_index` — so the router's
-    /// `copied_flash`/`section_folded` sinks are throwaway locals, genuinely
-    /// unused for scene rather than card state worth keeping.
+    /// Scene rows carry no OSC-copy flash — `copied_flash` is a throwaway
+    /// local, genuinely unused — but fold state IS now real (scene-panel-ux
+    /// lane): `section_folded` lives on `ScenePanel` and persists across
+    /// rebuilds.
     fn properties_row_action(
         &mut self,
         row: usize,
@@ -2414,7 +2649,6 @@ impl ScenePanel {
     ) -> Vec<PanelAction> {
         let card = &mut self.properties_card;
         let mut copied_flash = CopyToClipboardLabelState::default();
-        let mut section_folded: ahash::AHashMap<String, bool> = ahash::AHashMap::new();
         card.row_host.row_action(
             target,
             row,
@@ -2426,7 +2660,7 @@ impl ScenePanel {
             &mut card.mod_state,
             &mut card.mod_active_tab,
             &mut copied_flash,
-            &mut section_folded,
+            &mut self.section_folded,
         )
     }
 
@@ -2500,6 +2734,12 @@ fn outliner_row_key(sel: SceneSelection) -> u64 {
     match sel {
         SceneSelection::Camera => OUTLINER_KEY_BASE,
         SceneSelection::World => OUTLINER_KEY_BASE + 1,
+        SceneSelection::OutlinerFold(name) => match name {
+            "Scene" => KEY_OUTLINER_SCENE,
+            "Lights" => KEY_OUTLINER_LIGHTS,
+            "Objects" => KEY_OUTLINER_OBJECTS,
+            _ => OUTLINER_KEY_BASE + 100, // fallback
+        },
         SceneSelection::Light(id) => OUTLINER_KEY_BASE + 2 + (id as u64) * 2,
         SceneSelection::Object(id) => OUTLINER_KEY_BASE + 3 + (id as u64) * 2,
     }
@@ -2793,11 +3033,11 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Outliner rows: Camera + World + 1 Known light + 1 Known object are
+        // Outliner rows: Scene fold + Camera + World + Lights fold + 1 Known light + Objects fold + 1 Known object are
         // selectable (`outliner_row_ids`); the Custom object/light are
         // listed too but as plain labels (D3: never hidden, but no
         // addressable node id to select by, D12).
-        assert_eq!(panel.outliner_row_ids.len(), 4, "Camera + World + 1 known light + 1 known object");
+        assert_eq!(panel.outliner_row_ids.len(), 7, "Scene/Camera/World fold headers + Lights fold + 1 known light + Objects fold + 1 known object");
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
