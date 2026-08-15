@@ -1365,12 +1365,14 @@ pub(crate) struct GltfMaterialInfo {
     /// bucket — the sentinel is a first-class key, not a special case.
     pub animations: Vec<Option<GltfObjectAnimation>>,
     /// GLTF_ANIMATION_DESIGN.md A2 (D2): this object's resolved skin
-    /// topology, when its geometry is contributed by exactly one
-    /// mesh-owning node (the SAME single-node scope boundary `animation`
-    /// above uses) whose `node.skin()` is present. `None` for a static or
-    /// rigid-animated object, or when more than one node contributes this
-    /// material's geometry. BUG-207: resolved for the synthetic
-    /// default-material entry too (see `animations` above).
+    /// topology, when every mesh-owning node contributing its geometry
+    /// carries a `node.skin()` and all of them share ONE glTF skin index
+    /// (JOINTS_0 then indexes one shared palette, so N contributors
+    /// concatenate as trivially as one). `None` for a static or
+    /// rigid-animated object, or the mixed / different-skins multi-node
+    /// case (loud report line, never partial skinning). BUG-207: resolved
+    /// for the synthetic default-material entry too (see `animations`
+    /// above).
     pub skin: Option<GltfObjectSkin>,
     /// GLTF_ANIMATION_DESIGN.md A3: this object's resolved morph-target
     /// topology, when its geometry is contributed by exactly one
@@ -2380,22 +2382,25 @@ pub(crate) fn flatten_skinned_node(
     Ok((verts, joints, weights))
 }
 
-fn find_skinned_node_for_material<'a>(
+/// Collect EVERY skinned node whose mesh carries a primitive matching
+/// `material_index`, each paired with its glTF skin index — the multi-node
+/// shared-skin merge (a Sketchfab FBX convert splits one armature's meshes
+/// across several nodes under one material) needs all of them, not the
+/// first DFS hit.
+fn collect_skinned_nodes_for_material<'a>(
     node: &gltf::Node<'a>,
     material_index: u32,
-) -> Option<gltf::Node<'a>> {
-    if node.skin().is_some()
+    out: &mut Vec<(gltf::Node<'a>, usize)>,
+) {
+    if let Some(skin) = node.skin()
         && let Some(mesh) = node.mesh()
         && mesh.primitives().any(|p| primitive_material_matches(p.material().index(), material_index))
     {
-        return Some(node.clone());
+        out.push((node.clone(), skin.index()));
     }
     for child in node.children() {
-        if let Some(found) = find_skinned_node_for_material(&child, material_index) {
-            return Some(found);
-        }
+        collect_skinned_nodes_for_material(&child, material_index, out);
     }
-    None
 }
 
 /// Flatten `slot_nodes`' primitives (filtered to `material_index`) into a
@@ -2490,23 +2495,63 @@ fn flatten_rigid_multi_node(
 }
 
 /// Load a `.glb`'s skinned OR (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4, P3)
-/// rigid-multi-node-palette geometry for `material_index`. Tries the
-/// single skinned contributing node first (A2's original scope,
-/// unchanged); when none is found, falls back to D4's node-slot palette
-/// across every contributing node ([`find_material_contributing_nodes`]) —
-/// `gltf_import.rs` only reaches this fallback when
-/// `GltfMaterialInfo::rigid_multi_node` resolved (either the multi-node
-/// case or the single-node-ambiguous-ancestor case, both of which this
-/// same runtime node-enumeration reproduces identically to the import-time
-/// resolution, so slot order always agrees).
+/// rigid-multi-node-palette geometry for `material_index`. Collects EVERY
+/// skinned node contributing the material (A2's original single-node scope
+/// is the common one-node case of the same loop); when more than one is
+/// found they must all share ONE glTF skin index — the same condition
+/// `resolve_skin_for_key` checks at import time — and their vertices
+/// concatenate directly, since their JOINTS_0 all index that one shared
+/// palette. Only when NO skinned contributor exists does this fall back to
+/// D4's node-slot palette across every contributing node
+/// ([`find_material_contributing_nodes`]) — `gltf_import.rs` only reaches
+/// that fallback when `GltfMaterialInfo::rigid_multi_node` resolved
+/// (either the multi-node case or the single-node-ambiguous-ancestor case,
+/// both of which this same runtime node-enumeration reproduces identically
+/// to the import-time resolution, so slot order always agrees).
 pub(crate) fn load_gltf_skinned_mesh(
     path: &std::path::Path,
     material_index: u32,
 ) -> Result<SkinnedMeshData, String> {
     let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
-    for node in resolve_import_nodes(&document) {
-        if let Some(found) = find_skinned_node_for_material(&node, material_index) {
-            return flatten_skinned_node(&found, &buffers, material_index);
+    let mut skinned: Vec<(gltf::Node, usize)> = Vec::new();
+    for root in resolve_import_nodes(&document) {
+        collect_skinned_nodes_for_material(&root, material_index, &mut skinned);
+    }
+    match skinned.len() {
+        0 => {}
+        1 => {
+            let (node, _) = skinned.into_iter().next().unwrap();
+            return flatten_skinned_node(&node, &buffers, material_index);
+        }
+        _ => {
+            let distinct: std::collections::BTreeSet<usize> =
+                skinned.iter().map(|(_, s)| *s).collect();
+            if distinct.len() != 1 {
+                return Err(format!(
+                    "{}: {} skinned nodes contribute {} but use {} DIFFERENT skins — \
+                     a merged palette is unsupported",
+                    path.display(),
+                    skinned.len(),
+                    material_label(material_index),
+                    distinct.len()
+                ));
+            }
+            let (mut verts, mut joints, mut weights) = (Vec::new(), Vec::new(), Vec::new());
+            for (node, _) in &skinned {
+                let (v, j, w) = flatten_skinned_node(node, &buffers, material_index)?;
+                verts.extend(v);
+                joints.extend(j);
+                weights.extend(w);
+            }
+            if verts.is_empty() {
+                return Err(format!(
+                    "{}: {} skinned nodes contributed no geometry for {}",
+                    path.display(),
+                    skinned.len(),
+                    material_label(material_index)
+                ));
+            }
+            return Ok((verts, joints, weights));
         }
     }
     let slot_nodes = find_material_contributing_nodes(&document, material_index);
@@ -3084,8 +3129,16 @@ fn bind_pose_skin_matrices(
 
 /// Resolve `key`'s skin — `Some(material_index)` for a real material,
 /// `None` for the synthetic default-material bucket (BUG-207) — the SAME
-/// way for both: exactly one contributing node, and that node carries a
-/// `skin()`.
+/// way for both: every contributing node carries a `skin()`, and all of
+/// them share ONE glTF skin index. Multi-node materials used to bail here
+/// ("out of A2 scope, left unskinned") — but when every contributor is
+/// skinned against the SAME skin, their JOINTS_0 all index ONE shared
+/// joint palette, so concatenating their vertices is exactly the
+/// single-node case with more vertices (the common Sketchfab FBX-convert
+/// shape: one armature, several mesh nodes, one material). Contributors
+/// skinned against DIFFERENT skins (JOINTS_0 would index different
+/// palettes) or a mix of skinned and unskinned contributors stay bailed —
+/// loudly, naming which.
 fn resolve_skin_for_key(
     nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
     document: &gltf::Document,
@@ -3105,18 +3158,26 @@ fn resolve_skin_for_key(
             })
         }
         Some(nodes) if nodes.len() > 1 => {
-            if nodes
+            let skin_indices: Vec<Option<usize>> = nodes
                 .iter()
-                .any(|n| document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false))
-            {
+                .map(|n| document.nodes().nth(*n).and_then(|node| node.skin().map(|s| s.index())))
+                .collect();
+            let all_shared_skin = skin_indices.iter().all(Option::is_some)
+                && skin_indices.iter().collect::<std::collections::BTreeSet<_>>().len() == 1;
+            if all_shared_skin {
+                let shared = skin_indices[0].unwrap();
+                Some(GltfObjectSkin { skin_index: shared as u32, info: skins[shared].clone() })
+            } else {
+                let unskinned = skin_indices.iter().filter(|s| s.is_none()).count();
+                let distinct = skin_indices.iter().flatten().collect::<std::collections::BTreeSet<_>>().len();
                 animation_report_lines.push(format!(
-                    "{label}: geometry contributed by {} nodes, at \
-                     least one of which is skinned — multi-node-per-material skinning is \
-                     out of A2 scope, this object is left unskinned",
+                    "{label}: geometry contributed by {} nodes ({unskinned} unskinned, \
+                     {distinct} distinct skins) — only the all-skinned-shared-one-skin case \
+                     is supported, this object is left unskinned",
                     nodes.len()
                 ));
+                None
             }
-            None
         }
         _ => None,
     }
@@ -3217,10 +3278,12 @@ fn resolve_animations_for_key(
                 .iter()
                 .any(|n| document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false));
             if any_skinned {
-                // resolve_skin_for_key already reports this combination
-                // ("multi-node-per-material skinning is out of A2 scope")
-                // — a skinned node mixed into a multi-node material object
-                // stays that bail, not D4's node-slot palette.
+                // A skinned node in a multi-node material object needs no
+                // rigid-animation resolution — when every contributor
+                // shares one skin, `resolve_skin_for_key` routes the object
+                // through the skinned path (the skeleton pose drives it);
+                // the mixed/different-skins case stays bailed there with
+                // its own report line.
                 (Vec::new(), None)
             } else {
                 (Vec::new(), Some(GltfObjectRigidMultiNode { slot_nodes: nodes.iter().map(|&n| n as u32).collect() }))
@@ -3355,8 +3418,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     rmn.slot_nodes.len()
                 ));
             }
-            // A2 (D2): resolve this material's skin the same way — exactly
-            // one contributing node, and that node carries a `skin()`.
+            // A2 (D2): resolve this material's skin — every contributing
+            // node skinned against ONE shared glTF skin (a single
+            // contributor is the common case; the N-node shared-skin
+            // Sketchfab shape resolves identically).
             let skin = resolve_skin_for_key(
                 &nodes_by_material,
                 &document,
@@ -4446,6 +4511,94 @@ mod animation_tests {
 mod tests {
     use super::*;
 
+    /// The multi-node shared-skin merge, against the real fixture that
+    /// motivated it: surveillance_cam.glb's material 0 is fed by THREE
+    /// skinned mesh nodes (arm/cam/joint), all bound to the same 4-joint
+    /// skin — the Sketchfab FBX-convert shape. Pre-fix this object
+    /// imported unskinned (the whole model frozen; only the 4-vertex glass
+    /// pane animated). The resolve must now produce skin 0, and the runtime
+    /// load must concatenate all three nodes' geometry with every JOINTS_0
+    /// index still inside the one shared 4-slot palette.
+    #[test]
+    fn multi_node_shared_skin_material_resolves_and_concatenates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/surveillance_cam.glb");
+        // Skip-if-missing (azalea convention): the fixture is a local
+        // look-test drop, deliberately untracked per .gitignore's
+        // licensing-vet note.
+        if !path.exists() {
+            println!("multi_node_shared_skin_material_resolves_and_concatenates: fixture not found, skipping");
+            return;
+        }
+
+        let summary = gltf_import_summary(&path)
+            .unwrap_or_else(|e| panic!("gltf_import_summary({}): {e}", path.display()));
+        let mat0 = summary
+            .materials
+            .iter()
+            .find(|m| m.material_index == 0)
+            .expect("material 0 (standard_varnish) has geometry");
+        let skin = mat0
+            .skin
+            .as_ref()
+            .expect("material 0's three contributors share skin 0 — must resolve skinned");
+        assert_eq!(skin.skin_index, 0);
+        assert_eq!(skin.info.joint_node_indices.len(), 4, "the shared skin has 4 joints");
+        assert!(
+            !summary.animation_report_lines.iter().any(|l| l.contains("left unskinned")),
+            "no left-unskinned bail for the shared-skin shape: {:?}",
+            summary.animation_report_lines
+        );
+
+        let (verts, joints, weights) = load_gltf_skinned_mesh(&path, 0)
+            .unwrap_or_else(|e| panic!("load_gltf_skinned_mesh({}): {e}", path.display()));
+        // arm (1260) + cam (2748) + joint (96) triangle indices, one
+        // emitted vertex per index entry.
+        assert_eq!(verts.len(), 4104, "all three contributing nodes' geometry, concatenated");
+        assert_eq!(joints.len(), verts.len(), "coincident joints");
+        assert_eq!(weights.len(), verts.len(), "coincident weights");
+        assert!(
+            joints.iter().all(|j| j.iter().all(|&x| (0.0..4.0).contains(&x))),
+            "every JOINTS_0 entry indexes the shared 4-slot palette"
+        );
+
+        // The single-node glass material (4 verts, one contributing node)
+        // must keep resolving exactly as before the merge.
+        let glass = summary
+            .materials
+            .iter()
+            .find(|m| m.material_index == 1)
+            .expect("material 1 (glass) has geometry");
+        assert!(glass.skin.is_some(), "single-node skinned material still resolves");
+    }
+
+    /// The single-node path through the same collect-all loop the merge
+    /// introduced: kuma_heavy_robot's two materials are each fed by exactly
+    /// one skinned node (12-joint skin) — vertex counts must match the
+    /// file's index counts exactly (no double-collection, no loss).
+    #[test]
+    fn single_node_skinned_materials_unchanged_by_collect_all() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/kuma_heavy_robot_r-9000s.glb");
+        if !path.exists() {
+            println!("single_node_skinned_materials_unchanged_by_collect_all: fixture not found, skipping");
+            return;
+        }
+        let summary = gltf_import_summary(&path)
+            .unwrap_or_else(|e| panic!("gltf_import_summary({}): {e}", path.display()));
+        for (material_index, expected_verts) in [(0u32, 34014usize), (1u32, 34017usize)] {
+            let mat = summary
+                .materials
+                .iter()
+                .find(|m| m.material_index == material_index)
+                .expect("robot material has geometry");
+            let skin = mat.skin.as_ref().expect("robot material resolves skinned");
+            assert_eq!(skin.info.joint_node_indices.len(), 12);
+            let (verts, _, _) = load_gltf_skinned_mesh(&path, material_index)
+                .unwrap_or_else(|e| panic!("load_gltf_skinned_mesh({material_index}): {e}"));
+            assert_eq!(verts.len(), expected_verts, "material {material_index} vertex count");
+        }
+    }
     /// BUG-wfxe red proof: `NormalTangentMirrorTest.glb` (Khronos'
     /// conformance asset for exactly this path — authored tangents with
     /// BOTH handednesses, w = +1 and w = -1 halves) must import its
