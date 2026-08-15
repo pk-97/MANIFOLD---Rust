@@ -4599,6 +4599,34 @@ mod tests {
             assert_eq!(verts.len(), expected_verts, "material {material_index} vertex count");
         }
     }
+    /// Decisive seam-split for the robot's black-body report: the decoded
+    /// baseColor image (texture 0 → image 0, a 4096² JPEG) must arrive
+    /// bright CPU-side. If this fails, the vendored decoder is the bug;
+    /// if it passes, the black enters GPU-side (upload/resample/sample).
+    #[test]
+    fn robot_basecolor_jpeg_decodes_bright() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/kuma_heavy_robot_r-9000s.glb");
+        if !path.exists() {
+            println!("robot_basecolor_jpeg_decodes_bright: fixture not found, skipping");
+            return;
+        }
+        let (_doc, _buffers, images, report) =
+            import_glb(&path).unwrap_or_else(|e| panic!("import_glb: {e}"));
+        assert!(report.is_empty(), "no decode-failure substitutions expected: {report:?}");
+        let img = &images[0];
+        assert!(img.width >= 1024 && img.height >= 1024, "full-res decode, got {}x{}", img.width, img.height);
+        let bytes_per_px = img.pixels.len() / (img.width as usize * img.height as usize);
+        let mean: f64 = img
+            .pixels
+            .chunks_exact(bytes_per_px)
+            .map(|px| px.iter().take(3).map(|&c| c as f64).sum::<f64>() / 3.0)
+            .sum::<f64>()
+            / (img.width as usize * img.height as usize) as f64;
+        assert!(mean > 40.0, "the KUMA atlas is mostly bright orange/white — mean {mean:.1} says decode is dark");
+    }
+
+
     /// BUG-wfxe red proof: `NormalTangentMirrorTest.glb` (Khronos'
     /// conformance asset for exactly this path — authored tangents with
     /// BOTH handednesses, w = +1 and w = -1 halves) must import its
