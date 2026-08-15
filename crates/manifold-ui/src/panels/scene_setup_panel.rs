@@ -3998,6 +3998,6 @@ mod tests {
         // The full camera math (target = object position, distance = 2.2 × extent) is
         // tested in the app-side integration test that verifies the actual param writes.
         // This UI-level test verifies the button creation and routing infrastructure.
-        assert!(panel.object_frame_ids.len() > 0, "Frame button exists and is routable");
+        assert!(!panel.object_frame_ids.is_empty(), "Frame button exists and is routable");
     }
 }

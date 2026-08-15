@@ -860,6 +860,7 @@ mod import_model_tests {
             category: "Geometry".to_string(),
             osc_prefix: id.to_string(),
             legacy_discriminant: None,
+            scene_bounds: None,
             available: true,
             is_line_based: false,
             params: Vec::new(),

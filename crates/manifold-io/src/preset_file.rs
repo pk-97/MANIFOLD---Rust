@@ -86,6 +86,7 @@ mod tests {
                 category: "Generator".to_string(),
                 osc_prefix: "oilyFluid".to_string(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: vec![ParamSpecDef {

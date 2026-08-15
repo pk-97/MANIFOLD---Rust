@@ -1082,6 +1082,7 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: vec![
@@ -1350,6 +1351,7 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: vec![
@@ -1804,6 +1806,7 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
+                scene_bounds: None,
                 available: true,
                 is_line_based: false,
                 params: vec![ParamSpecDef {

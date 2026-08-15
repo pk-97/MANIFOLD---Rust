@@ -828,6 +828,7 @@ mod tests {
             category: "Filmic".to_string(),
             osc_prefix: "bloom_from_json".to_string(),
             legacy_discriminant: Some(12),
+            scene_bounds: None,
             available: true,
             is_line_based: false,
             params: vec![ParamSpecDef {
@@ -924,6 +925,7 @@ mod tests {
             category: "Filmic".to_string(),
             osc_prefix: "parity_check".to_string(),
             legacy_discriminant: None,
+            scene_bounds: None,
             available: true,
             is_line_based: false,
             params: vec![ParamSpecDef {

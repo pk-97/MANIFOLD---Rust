@@ -1158,6 +1158,7 @@ mod tests {
             category: "Stylize".to_string(),
             osc_prefix: "edge_stretch_by_color".to_string(),
             legacy_discriminant: None,
+            scene_bounds: None,
             available: true,
             is_line_based: false,
             params: vec![ParamSpecDef {
