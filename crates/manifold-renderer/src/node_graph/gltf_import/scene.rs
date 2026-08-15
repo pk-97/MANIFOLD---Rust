@@ -905,6 +905,10 @@ pub(super) fn build_import_graph(
             },
         ],
         string_bindings,
+        // Scene bounds for translate-slider range derivation (SCENE_PANEL_UX_DESIGN.md).
+        // Populated from the import-time AABB, read at VM-build time to compute
+        // scene-relative slider ranges (center ± 2×extent per axis).
+        scene_bounds: Some((summary.bbox_min, summary.bbox_max)),
     };
 
     let def = EffectGraphDef {

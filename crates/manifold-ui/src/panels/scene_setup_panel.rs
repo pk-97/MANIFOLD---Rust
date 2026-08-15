@@ -529,6 +529,11 @@ pub struct SceneSetupVm {
     /// environment/bake node + the atmosphere/fog node, whichever are
     /// wired) — see `ObjectKnownRow::sections`.
     pub world_sections: Vec<String>,
+    /// Scene bounds for translate-slider range derivation. `Some((min, max))`
+    /// when bounds are available (stored import bounds or camera-distance proxy),
+    /// used to compute scene-relative slider ranges (center ± 2×extent per axis).
+    /// Fallback to descriptor defaults when None.
+    pub scene_bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 /// P5's outliner selection (D7): the one scene item whose controls the
@@ -561,6 +566,16 @@ pub enum SceneSetupState {
 impl Default for SceneSetupState {
     fn default() -> Self {
         SceneSetupState::NoSelection("Select a layer to set up its scene.".to_string())
+    }
+}
+
+impl SceneSetupState {
+    /// Extract the `Live` VM if present, None otherwise.
+    pub fn as_live(&self) -> Option<&SceneSetupVm> {
+        match self {
+            SceneSetupState::Live(vm) => Some(vm),
+            _ => None,
+        }
     }
 }
 
@@ -1564,7 +1579,38 @@ impl ScenePanel {
         slider_w: f32,
         target: GraphParamTarget,
     ) -> f32 {
-        let info = self.properties_card.rows[slot].clone();
+        let mut info = self.properties_card.rows[slot].clone();
+
+        // Scene-relative range substitution for translate params (SCENE_PANEL_UX_DESIGN.md).
+        // When bounds are available, substitute the derived range (center ± 2×extent per axis)
+        // so both slider drag clamp and type-in clamp see the same widened range.
+        if let (Some((bounds_min, bounds_max)), param_id) = (
+            self.state.as_ref().and_then(|s| s.as_live()).and_then(|vm| vm.scene_bounds),
+            info.spec.id.split('_').last()
+        ) {
+            // Match transform_3d position params: pos_x, pos_y, pos_z
+            if let Some(axis) = param_id.strip_prefix("pos_").and_then(|suffix| match suffix {
+                "x" => Some(0),
+                "y" => Some(1),
+                "z" => Some(2),
+                _ => None,
+            }) {
+                // Compute center and extent for this axis
+                let center = (bounds_min[axis] + bounds_max[axis]) * 0.5;
+                let mut extent = bounds_max[axis] - bounds_min[axis];
+
+                // Floor extent at 1.0 so tiny scenes keep a usable range
+                extent = extent.max(1.0);
+
+                // Range is center ± 2×extent (per brief decision)
+                let range_min = center - 2.0 * extent;
+                let range_max = center + 2.0 * extent;
+
+                info.spec.min = range_min;
+                info.spec.max = range_max;
+            }
+        }
+
         let built = build_param_row(
             tree,
             Some(self.content_parent),

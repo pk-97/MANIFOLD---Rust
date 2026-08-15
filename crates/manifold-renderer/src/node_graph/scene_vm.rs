@@ -95,6 +95,12 @@ pub struct SceneVm {
     pub camera: CameraVm,
     pub environment: EnvironmentVm,
     pub atmosphere: AtmosphereVm,
+    /// Scene bounds for translate-slider range derivation. `Some((min, max))`
+    /// when the graph stores import-time bounds (populated by the glTF importer
+    /// from `GltfImportSummary`), read at VM-build time to compute scene-relative
+    /// slider ranges. Fallback chain in `from_def`: camera-distance proxy →
+    /// descriptor defaults.
+    pub scene_bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -407,6 +413,44 @@ impl SceneVm {
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
 
+        // Scene bounds extraction with fallback chain (SCENE_PANEL_UX_DESIGN.md):
+        // 1. Stored bounds from import-time AABB (glTF importer populates this)
+        // 2. Camera-distance proxy for scenes imported before this field existed
+        // 3. None → caller falls back to descriptor defaults
+        let scene_bounds = def.preset_metadata.as_ref().and_then(|meta| meta.scene_bounds)
+            .or_else(|| {
+                // Fallback 2: camera-distance proxy. The BUG-774a import math sets
+                // orbit camera distance = 2.2 × radius, so radius ≈ distance/2.2.
+                // Read the camera node's distance param and synthesize bounds centered
+                // on the camera target (if exposed) or origin. Conservative heuristic
+                // for legacy projects.
+                let camera = &camera;
+                let known_camera = match camera {
+                    CameraVm::Known(row) => row,
+                    CameraVm::None | CameraVm::Custom => return None,
+                };
+                let camera_node = root.node(known_camera.node_doc_id)?;
+                let distance = param_f32(camera_node, "distance", 0.0);
+                if distance <= 0.0 {
+                    return None;
+                }
+                // Recover radius from distance (inverse of BUG-774a math: distance = 2.2 * radius)
+                let radius = distance / 2.2;
+
+                // Try to read camera target (default to origin if not exposed)
+                let target = [
+                    param_f32(camera_node, "target_x", 0.0),
+                    param_f32(camera_node, "target_y", 0.0),
+                    param_f32(camera_node, "target_z", 0.0),
+                ];
+
+                // Synthesize bounds as a cube centered on target with extent = radius
+                let bounds_min = [target[0] - radius, target[1] - radius, target[2] - radius];
+                let bounds_max = [target[0] + radius, target[1] + radius, target[2] + radius];
+
+                Some((bounds_min, bounds_max))
+            });
+
         Some(SceneVm {
             scene_root_node_id,
             multiple_scenes,
@@ -422,6 +466,7 @@ impl SceneVm {
             camera,
             environment,
             atmosphere,
+            scene_bounds,
         })
     }
 }

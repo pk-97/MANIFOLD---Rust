@@ -435,6 +435,15 @@ pub struct PresetMetadata {
     /// position (the fan-out rule from `bindings` applies here too).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub string_bindings: Vec<StringBindingDef>,
+    /// Scene bounds for glTF imports: `(bbox_min, bbox_max)` per axis,
+    /// used to derive scene-relative translate slider ranges
+    /// (SCENE_PANEL_UX_DESIGN.md). Populated by the importer's framing
+    /// math (BUG-774a), read at VM-build time. `None` for presets that
+    /// aren't scene imports or were imported before this field existed —
+    /// the scene panel falls back to camera-distance proxy or descriptor
+    /// defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 fn default_available() -> bool {
