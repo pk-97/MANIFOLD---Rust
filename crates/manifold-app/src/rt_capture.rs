@@ -16,8 +16,8 @@
 //! substitution all function correctly after a project load.
 //!
 //! Usage:
-//!   cargo run --features perf-soak --bin manifold -- manifold rt-capture <project.manifold>
-//!   cargo run ... manifold rt-capture --paused <project>   # Play 60 → Pause 300
+//!   cargo run --features perf-soak --bin manifold -- rt-capture <project.manifold>
+//!   cargo run ... -- rt-capture --paused <project>   # Play 60 → Pause 300
 //!   --frame-clock: engine time = 1/fps per rendered frame, not wall clock
 //!                  (BUG-jbxt — driver-based motion repros under slow renders)
 //!   --set-at N param=value: one-shot param snap at frame N (repeatable)
