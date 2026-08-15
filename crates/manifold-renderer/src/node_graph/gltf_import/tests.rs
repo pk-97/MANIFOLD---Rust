@@ -286,7 +286,43 @@ fn import_camera_far_scales_with_scene_size() {
     );
 }
 
+/// Imported texture-source nodes stamp the source image's REAL pixel
+/// dimensions, not the hardcoded 1024² v1 default — the kuma robot's
+/// 4096² JPEG atlas used to land at quarter resolution (the base-color
+/// block's own TODO named the hole; every map family shared it).
+#[test]
+fn import_texture_sources_keep_authored_resolution() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/kuma_heavy_robot_r-9000s.glb");
+    if !path.exists() {
+        println!("import_texture_sources_keep_authored_resolution: fixture not found, skipping");
+        return;
+    }
+    let (def, _report) = assemble_import_graph(&path).expect("assemble robot glb");
+    let tex_nodes: Vec<_> = def
+        .nodes
+        .iter()
+        .filter_map(|n| n.group.as_ref())
+        .flat_map(|g| g.nodes.iter())
+        .filter(|n| n.type_id == "node.gltf_texture_source")
+        .collect();
+    assert!(!tex_nodes.is_empty(), "robot wires texture sources");
+    for node in tex_nodes {
+        for dim in ["width", "height"] {
+            match node.params.get(dim) {
+                Some(SerializedParamValue::Int { value }) => {
+                    assert_eq!(*value, 4096, "node {} {dim} must be the authored 4096", node.node_id)
+                }
+                other => panic!("texture source {} missing {dim}: {other:?}", node.node_id),
+            }
+        }
+    }
+}
 
+/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
+/// triangle (so the asset has SOME geometry and `gltf_import_summary`
+/// doesn't bail with "parsed no geometry"), `Mat1`'s sole primitive is
+/// tagged `KHR_draco_mesh_compression`.
 ///
 /// A "no-fallback" Draco export (the common case — the whole point of
 /// Draco is the size win, and a redundant uncompressed fallback accessor
@@ -1310,6 +1346,7 @@ fn all_materials_expose_opacity_and_wiring_survives_round_trip() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
@@ -1742,6 +1779,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
@@ -2003,6 +2041,7 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -2064,6 +2103,7 @@ fn build_import_graph_ao_group_consumes_ao_mask() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_ao_mask_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -2137,6 +2177,7 @@ fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2237,6 +2278,7 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2304,6 +2346,7 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2372,6 +2415,7 @@ fn imported_object_card_visible_shows_pos_hides_scale_and_material() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_card_visible_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -2444,6 +2488,7 @@ fn material_named_like_its_own_inner_handle_does_not_collide() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_mat_0_collision.glb");
     let (def, _report) =
@@ -2498,6 +2543,7 @@ fn scene_def_with_bbox_half_extent(half_extent: f32) -> EffectGraphDef {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
@@ -2517,6 +2563,7 @@ fn merge_summary(materials: Vec<super::gltf_load::GltfMaterialInfo>, half_extent
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     }
 }
 
@@ -3038,6 +3085,7 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3134,6 +3182,7 @@ fn unlit_material_imports_lit_by_default() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_unlit.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3210,6 +3259,7 @@ fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_orm.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3267,6 +3317,7 @@ fn vertex_color_varies_flag_produces_report_line_and_leaves_base_color_alone() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_vertex_color_varies.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3322,6 +3373,7 @@ fn over_featured_material_wires_clearcoat_texture_and_maps_transmission_to_blend
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3401,6 +3453,7 @@ fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_sun.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3507,6 +3560,7 @@ fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3590,6 +3644,7 @@ fn animated_material_wires_animation_source_into_its_own_transform_3d() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_wiring.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3681,6 +3736,7 @@ fn animation_cards_are_one_linked_section_per_glb() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_shared_anim_cards.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4247,6 +4303,7 @@ fn animation_selectors_survive_json_round_trip() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4298,6 +4355,7 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4427,6 +4485,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");

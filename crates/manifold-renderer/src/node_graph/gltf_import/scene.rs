@@ -590,6 +590,7 @@ pub(super) fn build_import_graph(
         node_anims_by_clip: &node_anims_by_clip,
         used_group_names: &mut used_group_names,
         fresh_id: &mut fresh_id,
+        texture_dims: &summary.texture_dims,
     };
     for (k, m) in materials.iter().enumerate() {
         let mut out = build_object_group(&mut import_ctx, k, k, k, m, "anim");

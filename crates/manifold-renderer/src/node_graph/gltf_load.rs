@@ -1615,6 +1615,11 @@ pub(crate) struct GltfImportSummary {
     /// one line per orthographic camera this importer doesn't resolve, never
     /// a silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
     pub camera_report_lines: Vec<String>,
+    /// Decoded pixel dimensions per `document.textures()` entry (texture
+    /// index, not image index). The importer stamps these onto every
+    /// `node.gltf_texture_source` it creates so maps keep their authored
+    /// resolution instead of resampling to the 1024² v1 default.
+    pub texture_dims: Vec<(u32, u32)>,
 }
 
 /// One embedded glTF camera resolved to world-space pose, ready for
@@ -2028,11 +2033,10 @@ pub(crate) struct GltfSkinInfo {
     /// Static world transform of the node chain ABOVE the joint tree, for
     /// joints whose `joint_parent == -1` — composed once at parse time
     /// from that ancestor chain's own node transforms (glTF's `matrix()`/
-    /// TRS, whichever the node specifies). A real asset whose
-    /// ancestor-of-root is ITSELF animated is a scope boundary A2 does
-    /// not resolve (not exercised by CesiumMan/Fox/BrainStem — re-derive
-    /// if a future asset needs it): that animation is silently not
-    /// applied here, never a crash.
+    /// TRS, whichever the node specifies). Since BUG-209's fix the pose
+    /// sampler reads this only as a parse-time record — root joints compose
+    /// through the whole-scene ANIMATED walk at runtime, which equals this
+    /// value when no ancestor animates.
     pub joint_root_world: Vec<Mat4>,
     pub inverse_bind_matrices: Vec<Mat4>,
     // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the per-joint bind-TRS fields that
@@ -3297,7 +3301,7 @@ fn resolve_animations_for_key(
 /// geometry, the world-space bbox, camera count, and unassigned-geometry
 /// count. One parse; no GPU. See [`GltfImportSummary`].
 pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSummary, String> {
-    let (document, buffers, _images, image_report_lines) = import_glb(path)?;
+    let (document, buffers, images, image_report_lines) = import_glb(path)?;
     let import_nodes = resolve_import_nodes(&document);
 
     let mut per_material: std::collections::BTreeMap<Option<usize>, u32> =
@@ -4080,6 +4084,25 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     let camera_parent_of = build_parent_map(&document);
     let (cameras, camera_report_lines) = parse_cameras(&document, &camera_parent_of);
 
+    // Per-texture decoded pixel dimensions (indexed by TEXTURE index, not
+    // image index) — the importer stamps these onto every
+    // `node.gltf_texture_source` so a 4K store-asset atlas isn't
+    // downsampled to the hardcoded 1024² v1 default. A texture whose image
+    // failed decode (dummy-substituted, BUG-ssgz) records the dummy's 2x2,
+    // which is correct: the substitute IS what the source node will load.
+    let texture_dims: Vec<(u32, u32)> = document
+        .textures()
+        .map(|t| {
+            // `source()` is the texture's image reference; KTX2 textures
+            // carry an extensions["KHR_texture_basisu"].source instead and
+            // return None here (their dummy-substitute dims don't matter).
+            t.source()
+                .and_then(|img| images.get(img.index()))
+                .map(|d| (d.width, d.height))
+                .unwrap_or((1024, 1024))
+        })
+        .collect();
+
     Ok(GltfImportSummary {
         materials,
         bbox_min,
@@ -4092,6 +4115,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         lights,
         cameras,
         camera_report_lines,
+        texture_dims,
     })
 }
 
