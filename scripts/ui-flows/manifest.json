@@ -118,6 +118,21 @@
       "scene": "gltfscene",
       "bug": "BUG-239/VD-035",
       "reason": "asserts name='scene_setup.object.roughness_value'; the converged object rows still expose name=None (no queryable widget name). Tracked (scene-flow no-name class; BUG-294 dock-scroll was the sibling, now fixed)."
+    },
+    "scene-setup-add-fog-drag": {
+      "scene": "gltfscene",
+      "bug": "BUG-vqlm",
+      "reason": "Red on main @ c03d7865 (2026-08-15): the add-fog click lands on the button but no fog is added; the panel rebuilds mid-flow with selection reverted from World to the default first object. Trunk bug, not a branch regression — verified identical at base. REMOVE from xfail when BUG-vqlm closes."
+    },
+    "scene-setup-fog-density-card-row": {
+      "scene": "gltfscene",
+      "bug": "BUG-vqlm",
+      "reason": "Same trunk break as scene-setup-add-fog-drag (BUG-vqlm): add-fog click never adds fog on main @ c03d7865. REMOVE from xfail when BUG-vqlm closes."
+    },
+    "scene-setup-fog-undo-removes-fog": {
+      "scene": "gltfscene",
+      "bug": "BUG-vqlm",
+      "reason": "Same trunk break as scene-setup-add-fog-drag (BUG-vqlm): add-fog click never adds fog on main @ c03d7865. REMOVE from xfail when BUG-vqlm closes."
     }
   },
   "unresolved": {}
