@@ -155,7 +155,7 @@ fn main() {
     }
 
     // --- `rt-capture` (headless RT channel verification) ---
-    // cargo run --features perf-soak --bin manifold -- manifold rt-capture <project> [--frames N]
+    // cargo run --features perf-soak --bin manifold -- rt-capture <project> [--frames N]
     #[cfg(all(feature = "perf-soak", target_os = "macos"))]
     {
         let args: Vec<String> = std::env::args().collect();

@@ -543,13 +543,21 @@ struct RenderSceneUniforms {
     /// Atmosphere (P3): fog colour (rgb; a reserved). Scene-wide — the same
     /// values are copied into every object's uniform.
     fog_color: [f32; 4],
-    /// `(fog_density, height_falloff, ao_mask_owed, 0)`. `fog_density == 0`
-    /// → no fog (unwired atmosphere = byte-identical to no atmosphere).
+    /// `(fog_density, height_falloff, ao_mask_owed, rt_ao_live)`.
+    /// `fog_density == 0` → no fog (unwired atmosphere = byte-identical to
+    /// no atmosphere).
     /// `z` (RAYTRACING_DESIGN.md section 12 AM1/AM2/AM6, was a
     /// permanently-zero reserved slot): the value the EMIT_AO_MASK fragment
     /// variants write to the ao_mask attachment — 0 for unlit-kind
-    /// materials and scene-wide whenever RT is live, else 1. Written per
-    /// object in the Pass 1 loop; non-mask pipelines never read it.
+    /// materials and scene-wide whenever RT is providing AO (RT on + RT AO on);
+    /// 1 for every lit raster pixel and whenever RT AO is toggled off
+    /// (so the downstream GTAO masked_mix darkens with screen-space
+    /// occlusion instead of reading the unwritten RT AO channel).
+    /// `w` (BUG-majv, was permanently-zero reserved): RT AO read gate for
+    /// `rt_or_flat_ambient` — 1 only when the trace dispatch actually wrote
+    /// the irradiance texture's `.a` this frame (rt_ao_enabled && rt_ready).
+    /// Both RT slots are written per object in the Pass 1 loop; non-mask
+    /// pipelines never read `z`, and `w` is inert when RT is off.
     fog_params: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
@@ -607,11 +615,15 @@ struct RenderSceneUniforms {
     /// color-texture presence flag, section 16.8).
     diffuse_transmission_params: [f32; 4],
     /// RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags the FRAGMENT
-    /// shader needs (scene_params.w only says "RT active", not "the
-    /// reflection texture holds traced data this frame"). `x` =
-    /// rt_reflections active (rt_enabled && rt_ready && rt_reflections &&
-    /// non-empty casters — written alongside `scene_params[3]`). `yzw`
-    /// reserved (R2's specular-accumulation flags).
+    /// shader needs (scene_params.w only says "RT active", not "channel X
+    /// holds traced data this frame"). Each gate mirrors its kernel's write
+    /// condition exactly (BUG-majv — a read gate wider than the write
+    /// condition reads a channel no kernel produced): `x` = rt_reflections
+    /// active (`rt_reflections && rt_ready`), `y` = GI diffuse substitution
+    /// (`rt_gi_enabled && rt_ready`, i.e. gi_spp > 0), `z` = designated sun
+    /// caster slot + 1, 0 = none (`rt_shadows_enabled && rt_ready`, i.e.
+    /// shadow_spp > 0 — the only config that writes rt_sun_tint), `w` = RT
+    /// shadow mask read gate (`rt_shadows_enabled && rt_ready`).
     rt_flags: [f32; 4],
     /// TAA/MetalFX velocity jitter exclusion: `(cur_x, cur_y, prev_x,
     /// prev_y)` as NDC offsets (jitter_px × 2/dim). MetalFX's temporal
@@ -4533,17 +4545,26 @@ impl EffectNode for RenderScene {
             // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
             // diffuse substitution gate — the raster may only read the RT
             // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
-            // gather actually ran this frame. gi_spp is always
-            // GI_SAMPLES_PER_PIXEL (> 0) whenever the trace dispatch runs,
-            // so "gi_spp > 0" is exactly `will_rt_accumulate_this_frame`.
-            // Mirrors the reflection fallback discipline (`rt_refl.a < 0`
-            // keeping the raster prefiltered fetch). No new scene param
-            // (MB4).
-            uniforms.rt_flags[1] = if will_rt_accumulate_this_frame { 1.0 } else { 0.0 };
+            // gather actually ran this frame. BUG-majv: that condition is
+            // `gi_spp > 0` on the trace dispatch, which since the per-term
+            // toggles means `rt_gi_enabled` too — this gate used to be
+            // `will_rt_accumulate_this_frame` alone, so RT-on + GI-off read
+            // an `.rgb` channel the kernel never wrote (stale or
+            // reset-to-zero across an off->on cycle: black diffuse with
+            // sparse residue). Mirrors the reflection fallback discipline
+            // (`rt_refl.a < 0` keeping the raster prefiltered fetch). No new
+            // scene param (MB4).
+            uniforms.rt_flags[1] = if rt_gi_enabled && rt_ready { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
             // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
             // light substitutes rt_sun_tint for the luma vis channel.
-            uniforms.rt_flags[2] = if rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            // BUG-majv: gate on rt_shadows_enabled, not bare rt_ready — the
+            // svt texture is only written by the mask/lighting dispatches at
+            // shadow_spp > 0, and `rt_ready` is latched (stays true with RT
+            // toggled off), so the old gate read a stale rt_sun_tint with RT
+            // off or with the shadow kernel disabled — a zeroed texture
+            // zeroed the sun's entire direct contribution.
+            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
             // RT term toggles: rt_flags.w = RT shadow mask read gate. When
             // rt_shadows is off, shadow_factor falls through to raster shadow
             // maps. The kernel still dispatches (for AO/GI/refl), but the sv
@@ -4576,6 +4597,16 @@ impl EffectNode for RenderScene {
                 } else {
                     1.0
                 };
+            // BUG-majv: `fog_params.w` (was permanently-zero reserved) = the
+            // RT AO read gate for `rt_or_flat_ambient`. The irradiance
+            // texture's `.a` is only written when the trace dispatch ran
+            // with ao_spp > 0 (or gi_spp > 0, which writes a neutral 1.0);
+            // gating on scene_params.w alone read a stale/zeroed `.a` with
+            // the AO kernel off, killing the ambient term after an
+            // off->on cycle. AO off also restores the raster's
+            // full-strength flat ambient (the 0.15 RT ceiling only applies
+            // when RT AO is actually providing the occlusion term).
+            uniforms.fog_params[3] = if rt_ao_enabled && rt_ready { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }

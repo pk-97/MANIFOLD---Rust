@@ -110,7 +110,12 @@ crate::primitive! {
             label: "Near",
             ty: ParamType::Float,
             default: ParamValue::Float(DEFAULT_NEAR),
-            range: Some((0.001, 10.0)),
+            // Max mirrors `far`'s 10_000 ceiling: glTF import scales `near`
+            // up with the framed object's front-face distance (BUG-774a),
+            // which legitimately reaches the thousands for 100x-armature
+            // Sketchfab converts — a 10.0 ceiling clamped those imports
+            // back into the z-fighting regime at param load.
+            range: Some((0.001, 10_000.0)),
             enum_values: &[],
         },
         ParamDef {

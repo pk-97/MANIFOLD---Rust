@@ -396,9 +396,10 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(44) var rt_shadow_mask2: texture_2d<f32>;
 // RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): full-res rgb
 // sun-transmission tint for the ONE designated sun caster (rt_flags.z =
-// slot+1, 0 = none). Always bound; 1x1 dummy when RT off or no designated
-// sun (the rt_reflection binding-43 discipline). Consumed in exactly ONE
-// textureLoad (I-TL3) in fs_pbr's light loop.
+// slot+1, 0 = none). Always bound; 1x1 dummy when RT off, no designated
+// sun, or the shadow kernel off (rt_flags.z is 0 in all three — only a
+// shadow_spp > 0 dispatch writes this texture, BUG-majv). Consumed in
+// exactly ONE textureLoad (I-TL3) in fs_pbr's light loop.
 @group(0) @binding(45) var rt_sun_tint: texture_2d<f32>;
 
 // RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
@@ -420,8 +421,16 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // texture is the accumulated ao (the kernel write sites carry it through
 // the same weights). RT-off remains `albedo * scene_params.y *
 // ambient_tint.rgb` — the Ambient knob is the flat fill on both paths.
+//
+// BUG-majv: the RT branch also requires `fog_params.w` (rt_ao_live) — the
+// irradiance texture's `.a` is only written when the trace dispatch ran
+// with ao_spp > 0 (gi_spp > 0 writes a neutral 1.0, but ao-only-off means
+// the AO term is the raster's job again). Gating on scene_params.w alone
+// read a stale/zeroed `.a` with the AO kernel off — after an RT off->on
+// cycle that zeroed the ambient term entirely. AO off restores the
+// full-strength flat ambient: byte-identical to the raster path.
 fn rt_or_flat_ambient(albedo_rgb: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
-    if u.scene_params.w > 0.5 {
+    if u.scene_params.w > 0.5 && u.fog_params.w > 0.5 {
         let irr = textureLoad(rt_irradiance_mask, vec2<i32>(frag_xy), 0);
         return albedo_rgb * u.scene_params.y * u.ambient_tint.rgb * AMBIENT_IRRADIANCE_SCALE * irr.a;
     }
@@ -1671,8 +1680,10 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     var irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
     // RAYTRACING_DESIGN.md section 14 ED2/ED6: traced env+GI diffuse
     // SUBSTITUTES for the irradiance-map fetch when the GI gather ran this
-    // frame (rt_flags.y > 0.5 — set iff `will_rt_accumulate_this_frame`,
-    // which is exactly `gi_spp > 0` on the trace dispatch) — the same
+    // frame (rt_flags.y > 0.5 — set iff the trace dispatch ran with
+    // gi_spp > 0, i.e. rt_enabled && rt_ready && rt_gi; BUG-majv: gating
+    // on the master accumulate condition alone read an `.rgb` channel the
+    // kernel never wrote whenever the GI term was toggled off) — the same
     // physical quantity, same scale (`ibl_irradiance.wgsl`'s estimator and
     // the gather are identical), never added on top (RD1/I-R3; the
     // 818a06b0 double-count trap). ED6 mirrors the reflection fallback
