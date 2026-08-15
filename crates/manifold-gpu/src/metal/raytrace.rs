@@ -2294,15 +2294,31 @@ kernel void upsample_shadow(
     // reference there (rt_edc_enclosure, 0.934 vs 0.965 estimator), so
     // it stays.
     uint void_taps = 0u;
+    // BUG-wzwe (grazing halo): a VOID tap must never blend into a surface
+    // destination — its lo_refl holds the env-sky miss value (sky-bright,
+    // hit distance 0) and its lo_sv holds unoccluded white, so a leaking
+    // void tap paints a bright ring along silhouettes (dashed where the
+    // depth gate flickers tap-to-tap). The depth gate can't be trusted to
+    // reject them: in nonlinear [0,1] depth, distant surfaces compress
+    // toward the void's 1.0 and pass. Skip them outright; the all-reject
+    // fallback then prefers the nearest NON-VOID tap.
+    int2 nearest_nonvoid = nearest_lo;
+    bool any_nonvoid = false;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
         uint2 gq = min(uint2((float2(q) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
         float qd = depth_tex.read(gq, 0);
-        if (qd >= 1.0 - 1e-6) void_taps++;
+        if (qd >= 1.0 - 1e-6) { void_taps++; continue; }
         float3 qn = lo_n.read(uint2(q)).xyz;
         float2 f = saturate(1.0 - fabs(lo_uv - 0.5 - float2(q)));
         float w_bilin = f.x * f.y;
+        if (!any_nonvoid || w_bilin > 0.5) {
+            // nearest-to-destination among the non-void taps (w_bilin is
+            // the bilinear proximity: > 0.5 only for the single nearest)
+            nearest_nonvoid = q;
+            any_nonvoid = true;
+        }
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
@@ -2317,7 +2333,7 @@ kernel void upsample_shadow(
         wsum += w;
     }
     if (wsum < 1e-4 && void_taps > 0u) {
-        uint2 uq = uint2(nearest_lo);
+        uint2 uq = uint2(any_nonvoid ? nearest_nonvoid : nearest_lo);
         hi_sv.write(sv_native ? lo_sv.read(tid) : lo_sv.read(uq), tid);
         hi_sv2.write(sv_native ? lo_sv2.read(tid) : lo_sv2.read(uq), tid);
         // RT-TL-C: nearest tap passthrough for all-reject (same as refl).

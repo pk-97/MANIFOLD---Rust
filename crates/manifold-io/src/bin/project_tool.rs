@@ -616,18 +616,45 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
         }
     };
 
-    // Simple string-based approach: find .glb paths and replace all occurrences
-    // The model path appears in multiple places (description fields, parameter defaults, etc.)
+    // The model path appears in several places (description fields, parameter
+    // defaults). The LIVE path is the one the loader actually feeds from:
+    // `presetMetadata.stringParams`/`stringBindings` defaultValue slots under
+    // /embeddedPresets. First-match-in-document-order can be a stale
+    // description that shares nothing with the loaded model (the RtApricotOn
+    // fixture's description held a long-dead /tmp path; replacing only it left
+    // the scene rendering the old model while reporting success). Majority
+    // vote across the loader-fed slots; first-match as fallback for
+    // non-embedded-preset projects.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    if let Some(presets) = root.pointer("/embeddedPresets").and_then(|v| v.as_array()) {
+        for p in presets.iter() {
+            for field in ["stringParams", "stringBindings"] {
+                let Some(entries) = p
+                    .pointer(&format!("/def/presetMetadata/{field}"))
+                    .and_then(|v| v.as_array())
+                else {
+                    continue;
+                };
+                for e in entries.iter() {
+                    if let Some(s) = e.get("defaultValue").and_then(|v| v.as_str())
+                        && s.ends_with(".glb") && s.contains("/")
+                    {
+                        *counts.entry(s.to_string()).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+    let majority = counts.into_iter().max_by_key(|(_, n)| *n).map(|(p, _)| p);
     let json_str = serde_json::to_string_pretty(&root).unwrap();
-
-    // Find the current model path by looking for .glb files
-    let old_path: String = json_str.lines()
-        .find_map(|line| {
-            let line = line.trim();
-            // Look for quoted strings ending in .glb that contain paths
-            line.split("\"")
-                .find(|s| s.ends_with(".glb") && s.contains("/"))
-                .map(|s| s.to_string())
+    let old_path: String = majority
+        .or_else(|| {
+            json_str.lines().find_map(|line| {
+                line.trim()
+                    .split("\"")
+                    .find(|s| s.ends_with(".glb") && s.contains("/"))
+                    .map(|s| s.to_string())
+            })
         })
         .unwrap_or_else(|| {
             eprintln!("error: no .glb model path found in project (not a 3D scene?)");
