@@ -30,9 +30,12 @@
 //!    frequently non-identity).
 //! 2. Compose each joint's WORLD matrix by walking its parent chain
 //!    (memoized, since `skin.joints()` order is not guaranteed
-//!    parent-before-child per spec) — `parent[j] == -1` roots at
-//!    `joint_root_world[j]` (the static ancestor-chain product ABOVE the
-//!    joint tree, precomputed at parse time).
+//!    parent-before-child per spec) — joints whose parent lies within the
+//!    joint tree compose joint-to-joint; root joints (`parent[j] == -1`)
+//!    compose through the WHOLE-scene walk (`resolve_world_whole_scene`),
+//!    which samples animated ancestors above the joint tree at `t` and
+//!    falls back to bind TRS (BUG-209: the pre-fix static `joint_root_world`
+//!    root silently dropped ancestor animation).
 //! 3. `skin_matrix[j] = world[j] * inverse_bind_matrices[j]`.
 
 use std::borrow::Cow;
@@ -469,6 +472,31 @@ pub(crate) fn sample_skeleton_pose(
         local[j] = sample_joint_local(anim_set, clip, skin.joint_node_indices[j], t);
     }
 
+    // BUG-209/BUG-5tj: a joint-tree ROOT's `joint_root_world` is the STATIC
+    // ancestor-chain product baked at parse time — any animation on a node
+    // ABOVE the joint tree (root motion on an armature object, a moving
+    // platform under the rig) was silently dropped, pinning the whole skin
+    // in place. Compose root joints through the whole-scene walk instead:
+    // `resolve_world_whole_scene` samples every ancestor's animated channel
+    // at `t` and falls back to bind TRS, so an unanimated chain reproduces
+    // `joint_root_world` exactly while an animated one now moves. Seeding
+    // the `world` memo array means `resolve_world`'s parent walk below hits
+    // the cache the moment it reaches a root — the joint-internal path is
+    // untouched.
+    let mut ws_memo = std::collections::HashMap::new();
+    for j in 0..n {
+        if parent[j] == -1 {
+            world[j] = Some(resolve_world_whole_scene(
+                skin.joint_node_indices[j] as usize,
+                anim_set,
+                clip,
+                t,
+                &mut ws_memo,
+                0,
+            ));
+        }
+    }
+
     let mut skin_matrices = Vec::with_capacity(n);
     // Same three-independent-slices shape `resolve_world`'s own caller
     // used pre-cache — see that impl's identical comment.
@@ -797,6 +825,54 @@ mod tests {
             node_bind_trs: Vec::new(),
         };
         assert!(sample_skeleton_pose(&anim_set, 0, 0, 0.0, 10).is_empty());
+    }
+
+    /// BUG-209/BUG-5tj: root motion authored ABOVE the joint tree must move
+    /// the skin. Node 0 is a non-joint ancestor with an animated translation
+    /// (0 → +10 on x); the skin's only joint is node 1, its
+    /// `joint_root_world` the STATIC bind composition (identity — node 0's
+    /// bind translation is 0). Pre-fix the skin stayed pinned at x=0
+    /// forever; at t=1 the skinned vertex must now sit at x=10.
+    #[test]
+    fn animated_ancestor_above_joint_tree_moves_the_skin() {
+        let root_channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
+        let anim_set = GltfAnimSet {
+            clips: vec![AnimClip { duration_s: 1.0, channels: vec![root_channel] }],
+            skins: vec![SkinTopology {
+                joint_node_indices: vec![1],
+                joint_parent: vec![-1],
+                joint_root_world: vec![MAT4_IDENTITY],
+                inverse_bind_matrices: vec![MAT4_IDENTITY],
+            }],
+            node_parents: vec![-1, 0],
+            node_bind_trs: vec![
+                BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+                BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+            ],
+        };
+        let matrices = sample_skeleton_pose(&anim_set, 0, 0, 1.0, 1);
+        assert_eq!(matrices.len(), 1);
+        assert!(
+            (matrices[0].c3[0] - 10.0).abs() < 1e-4,
+            "the animated ancestor's +10 x must reach the skin matrix, got {}",
+            matrices[0].c3[0]
+        );
+
+        // Unanimated equivalence: with an EMPTY clip, the whole-scene walk
+        // must reproduce exactly the static joint_root_world composition it
+        // replaced (bind TRS of every ancestor = the parse-time static
+        // product).
+        let mut static_set = anim_set.clone();
+        static_set.node_bind_trs[0] =
+            BindTrs { translation: [5.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] };
+        static_set.skins[0].joint_root_world = vec![mat4_from_trs([5.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0; 3])];
+        static_set.clips = vec![AnimClip { duration_s: 1.0, channels: Vec::new() }];
+        let matrices = sample_skeleton_pose(&static_set, 0, 0, 0.5, 1);
+        assert!(
+            (matrices[0].c3[0] - 5.0).abs() < 1e-4,
+            "unanimated chain must equal the old static joint_root_world, got {}",
+            matrices[0].c3[0]
+        );
     }
 
     /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D6/P2 gate: `clip_index`'s range is

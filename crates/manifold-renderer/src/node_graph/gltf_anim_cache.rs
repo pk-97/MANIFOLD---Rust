@@ -54,7 +54,11 @@ pub struct SkinTopology {
     /// joint in this skin.
     pub joint_parent: Vec<i32>,
     /// Static world transform of the node chain ABOVE the joint tree —
-    /// identity for joints whose parent lies within the joint tree.
+    /// identity for joints whose parent lies within the joint tree. Since
+    /// BUG-209's fix this is a parse-time FACT kept for reference/migration
+    /// only: `gltf_skeleton_pose` roots joint worlds in the whole-scene
+    /// animated walk (`resolve_world_whole_scene`), which equals this value
+    /// exactly when no ancestor is animated.
     pub joint_root_world: Vec<Mat4>,
     pub inverse_bind_matrices: Vec<Mat4>,
 }
