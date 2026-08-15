@@ -18,7 +18,6 @@ use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use crate::node_graph::gltf_load;
 use crate::node_graph::gltf_load::GltfImportSummary;
-use crate::node_graph::primitives::DEFAULT_NEAR as CAMERA_NEAR_DEFAULT;
 use crate::node_graph::primitives::DEFAULT_FAR as CAMERA_FAR_DEFAULT;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use crate::node_graph::scene_exposure::metadata_for_node_type;
@@ -161,17 +160,18 @@ pub(super) fn build_import_graph(
     // the fixed near plane sits IN FRONT of the object and the whole frame
     // clips to black every frame.
     //
-    // Fix: `near` tracks the object's own front-face distance (with a 2x
-    // safety margin so the surface never grazes the plane), capped at the
-    // pre-existing 0.05 default so every currently-passing asset whose
-    // front face already clears 0.05 gets the IDENTICAL near value as
-    // before (front_margin = 1.2 * radius stays >= 0.05 whenever radius >=
-    // ~0.0417 — true for every other passing Khronos asset checked:
-    // WaterBottle radius 0.151, DamagedHelmet 1.64, MetalRoughSpheres 6.99,
-    // TextureSettingsTest 7.21, Duck 1.27, Box 0.87). Only genuinely
-    // sub-threshold objects get a smaller near plane.
+    // Fix: `near` always tracks the object's own front-face distance with a
+    // 2x safety margin, in BOTH directions. Down keeps tiny assets rendering
+    // (BUG-165/169); up keeps 24-bit depth precision at the object's actual
+    // distance — BUG-774a (kuma_heavy_robot: front face ~3300 units out,
+    // near pinned at the 0.05 floor gives ~10 units of depth resolution
+    // there, so the model's two overlapping mesh shells z-fight into a
+    // triangle mosaic). At `front_margin * 0.5` the front face always gets
+    // ~2^23 depth slices per unit distance, at any scene scale. Depth
+    // precision is sub-pixel either way for mid-scale assets, so their
+    // rasterized output is unchanged by the higher near value.
     let front_margin = (distance - radius).max(1e-4);
-    let near_clip = CAMERA_NEAR_DEFAULT.min(front_margin * 0.5);
+    let near_clip = front_margin * 0.5;
     // `far` is the same class of bug as `near` above, at the opposite end:
     // the orbit camera's fixed default (CAMERA_FAR_DEFAULT, 200) was never
     // scaled to the framed object either, so any asset whose POSED bbox

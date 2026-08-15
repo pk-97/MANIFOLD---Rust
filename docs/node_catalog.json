@@ -12561,7 +12561,7 @@
           "name": "near",
           "range": [
             "0.001",
-            "10"
+            "10000"
           ],
           "tooltip": "Closest distance the camera can see. Anything nearer is clipped away. Leave it small unless the scene has extreme depth.",
           "type": "float"
@@ -22730,7 +22730,7 @@
         {
           "default": "0.05",
           "id": "1_near",
-          "max": "10",
+          "max": "10000",
           "min": "0.001",
           "name": "Near"
         },
@@ -24755,7 +24755,7 @@
         {
           "default": "0.05",
           "id": "37_near",
-          "max": "10",
+          "max": "10000",
           "min": "0.001",
           "name": "Near"
         },
@@ -25252,7 +25252,7 @@
         {
           "default": "0.05",
           "id": "2_near",
-          "max": "10",
+          "max": "10000",
           "min": "0.001",
           "name": "Near"
         },
@@ -26556,7 +26556,7 @@
         {
           "default": "0.01",
           "id": "43_near",
-          "max": "10",
+          "max": "10000",
           "min": "0.001",
           "name": "Near"
         },
@@ -27064,7 +27064,7 @@
         {
           "default": "0.05",
           "id": "1_near",
-          "max": "10",
+          "max": "10000",
           "min": "0.001",
           "name": "Near"
         },
