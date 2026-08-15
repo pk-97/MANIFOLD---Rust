@@ -222,13 +222,13 @@ impl UIRoot {
                     actions.append(&mut lh_actions);
                     self.drag_owner = self.resolve_drag_owner(*origin, *node_id);
                 }
-                UIEvent::Drag { pos, .. } => {
+                UIEvent::Drag { pos, modifiers, .. } => {
                     if self.drag_owner == Some(DragOwner::Inspector) {
                         if self.inspector.is_card_drag_active() {
                             self.inspector.update_card_drag(*pos, &mut self.tree);
                         } else if self.inspector.has_pressed_target() {
                             let mut drag_actions =
-                                self.inspector.handle_drag(*pos, &mut self.tree);
+                                self.inspector.handle_drag(*pos, &mut self.tree, modifiers.shift);
                             actions.append(&mut drag_actions);
                         }
                     }

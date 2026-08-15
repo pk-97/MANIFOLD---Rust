@@ -1628,7 +1628,7 @@ mod tests {
         UIEvent::DragBegin { node_id: None, pos: origin, origin, modifiers: Modifiers::NONE }
     }
     fn drag(pos: Vec2) -> UIEvent {
-        UIEvent::Drag { node_id: None, pos, delta: Vec2::ZERO }
+        UIEvent::Drag { node_id: None, pos, delta: Vec2::ZERO, modifiers: Modifiers::NONE }
     }
     fn drag_end(pos: Vec2) -> UIEvent {
         UIEvent::DragEnd { node_id: None, pos }

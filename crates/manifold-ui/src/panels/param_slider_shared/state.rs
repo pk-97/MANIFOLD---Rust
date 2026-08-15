@@ -622,6 +622,13 @@ impl ParamDragState {
             _ => None,
         }
     }
+
+    /// Grab x for the in-flight drag — the anchor a fine-mode scrub scales its
+    /// pointer delta around (D8). `None` when idle; `handle_drag` reads it to
+    /// recover the grab value without storing a second copy.
+    pub(crate) fn start_x(&self) -> Option<f32> {
+        self.drag.session().map(|s| s.start.x)
+    }
 }
 
 
@@ -645,6 +652,34 @@ pub(crate) fn format_param_value(
     } else {
         format!("{:.2}", val)
     }
+}
+
+/// Shared Shift-fine scaling for a param value scrub (the D8 fine-drag
+/// contract): holding Shift multiplies the pointer-to-value sensitivity by
+/// 0.1. One function so the effect/generator card's `handle_drag` and the
+/// scene panel's track scrub (`slider_drag_value`) can't drift apart — the
+/// "one implementation" the param surface is for.
+///
+/// `base` is the value at drag-start (the grab), `dx` the pointer travel in
+/// px since grab. A drag converts `dx` px to `dx * range / track_width` value
+/// units at full sensitivity (mathematically identical to absolute-position
+/// tracking for a non-fine drag, since `base` is the grab value); the fine
+/// factor scales that to a tenth. Clamped to `[min, max]` so a fine drag past
+/// the track edge can't overshoot the param's own range.
+pub(crate) fn fine_scrub_value(
+    base: f32,
+    dx: f32,
+    track_width: f32,
+    min: f32,
+    max: f32,
+    fine: bool,
+) -> f32 {
+    let sensitivity = if fine { 0.1 } else { 1.0 };
+    let mut value = base;
+    if track_width > 0.0 {
+        value += dx * (max - min) / track_width * sensitivity;
+    }
+    value.clamp(min, max)
 }
 
 
@@ -744,5 +779,44 @@ pub(crate) struct ToggleTriggerRowIds {
     /// `build_toggle_trigger_row`.
     pub(crate) mode_badge_id: Option<NodeId>,
     pub(crate) new_cy: f32,
+}
+
+#[cfg(test)]
+mod fine_scrub_tests {
+    use super::*;
+
+    /// D8: the pure sensitivity contract — 1 px of pointer travel maps to
+    /// `range / track_width` value units, a tenth of that under Shift (fine).
+    /// A 200-unit range over a 200 px track = 1 unit/px, so the numbers read
+    /// directly.
+    #[test]
+    fn shift_fine_scales_sensitivity_by_a_tenth() {
+        // Full sensitivity: 10 px of travel over a 200 px track on a 200-unit
+        // range = 10 units.
+        let coarse = fine_scrub_value(50.0, 10.0, 200.0, 0.0, 200.0, false);
+        assert!((coarse - 60.0).abs() < 1e-4, "coarse: {coarse}");
+        // Shift (fine): the same 10 px is a tenth — 1 unit.
+        let fine = fine_scrub_value(50.0, 10.0, 200.0, 0.0, 200.0, true);
+        assert!((fine - 51.0).abs() < 1e-4, "fine: {fine}");
+    }
+
+    /// The scene-panel pain case: ±100 world units on translate. A drag far
+    /// past the track edge (2000 px → 200 units at 0.1x) must clamp to the
+    /// param's own range, not the raw delta.
+    #[test]
+    fn fine_scrub_clamps_to_the_param_range() {
+        let clamped = fine_scrub_value(0.0, 2000.0, 200.0, -100.0, 100.0, true);
+        assert!((clamped - 100.0).abs() < 1e-4, "clamped: {clamped}");
+        let clamped_neg = fine_scrub_value(0.0, -2000.0, 200.0, -100.0, 100.0, true);
+        assert!((clamped_neg + 100.0).abs() < 1e-4, "clamped neg: {clamped_neg}");
+    }
+
+    /// A zero-width track (a degenerate layout) must not divide by zero — the
+    /// value stays at the grab, regardless of the fine flag.
+    #[test]
+    fn fine_scrub_zero_width_track_is_a_no_op() {
+        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, false), 25.0);
+        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, true), 25.0);
+    }
 }
 

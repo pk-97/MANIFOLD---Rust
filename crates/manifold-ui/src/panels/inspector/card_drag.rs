@@ -77,7 +77,8 @@ impl InspectorCompositePanel {
     /// Route drag events to the pressed sub-panel.
     /// Called from UIRoot::process_events (not through Panel::handle_event)
     /// because it needs &mut UITree for slider visual feedback.
-    pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
+    /// `fine` is Shift-held, forwarded to the param cards' value drags (D8).
+    pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree, fine: bool) -> Vec<PanelAction> {
         if self.dragging_scrollbar {
             // Drag the thumb to an absolute offset, then offset the content nodes
             // by the delta — the same in-place scroll the wheel uses. Previously
@@ -108,16 +109,16 @@ impl InspectorCompositePanel {
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag(pos, tree),
                 PressedTarget::MasterEffect(i) => self.effects[Self::SCOPE_MASTER]
                     .get_mut(i)
-                    .map(|c| c.handle_drag(pos, tree))
+                    .map(|c| c.handle_drag(pos, tree, fine))
                     .unwrap_or_default(),
                 PressedTarget::LayerEffect(i) => self.effects[Self::SCOPE_LAYER]
                     .get_mut(i)
-                    .map(|c| c.handle_drag(pos, tree))
+                    .map(|c| c.handle_drag(pos, tree, fine))
                     .unwrap_or_default(),
                 PressedTarget::GenParam => self
                     .gen_params
                     .as_mut()
-                    .map(|gp| gp.handle_drag(pos, tree))
+                    .map(|gp| gp.handle_drag(pos, tree, fine))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }

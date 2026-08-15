@@ -857,11 +857,12 @@ impl UIRoot {
                 UIEvent::DragBegin { node_id, .. } => {
                     self.inspector.try_begin_card_drag(*node_id, &mut self.tree);
                 }
-                UIEvent::Drag { pos, .. } => {
+                UIEvent::Drag { pos, modifiers, .. } => {
                     if self.inspector.is_card_drag_active() {
                         self.inspector.update_card_drag(*pos, &mut self.tree);
                     } else if self.inspector.has_pressed_target() {
-                        let mut drag_actions = self.inspector.handle_drag(*pos, &mut self.tree);
+                        let mut drag_actions =
+                            self.inspector.handle_drag(*pos, &mut self.tree, modifiers.shift);
                         actions.append(&mut drag_actions);
                     }
                 }

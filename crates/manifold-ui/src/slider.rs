@@ -820,6 +820,13 @@ impl SliderDragState {
             .unwrap_or(0.0)
     }
 
+    /// Grab x for the in-flight drag — the anchor a fine-mode scrub scales its
+    /// pointer delta around (D8). `None` when idle; the scene panel's
+    /// `slider_drag_value` reads it to recover the grab value.
+    pub fn drag_start_x(&self) -> Option<f32> {
+        self.drag.session().map(|s| s.start.x)
+    }
+
     /// End drag. Returns `true` if this slider was dragging (caller should
     /// emit Commit). Returns `false` if not dragging (no-op).
     pub fn end_drag(&mut self) -> bool {

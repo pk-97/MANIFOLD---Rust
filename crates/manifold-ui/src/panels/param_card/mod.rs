@@ -510,40 +510,15 @@ impl ParamCardPanel {
     /// (inspector.rs:2375) — this IS the contract's `(ValueCell, DoubleClick)
     /// -> EditValue` row (D13/D14), constructed at input time because the
     /// action's payload (anchor, value, clamp range) is live state, not a
-    /// build-time constant (D14). The debug_assert below is the single
-    /// written record that this call site and the contract table agree.
+    /// build-time constant (D14). The lookup is the shared
+    /// [`RowHost::value_cell_typein`] (where the D13/D14 debug_assert lives),
+    /// so the scene properties card resolves the same gesture identically.
     pub fn value_cell_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
-        debug_assert_eq!(
-            crate::slider::BitmapSlider::intent_for(
-                crate::slider::SliderZone::ValueCell,
-                crate::intent::Gesture::DoubleClick
-            ),
-            Some(crate::slider::SliderIntent::EditValue),
-            "value_cell_typein is the contract's ValueCell+DoubleClick->EditValue translation (D13/D14)"
-        );
         if !self.is_live() {
             return None;
         }
-        for (pi, slot) in self.row_host.slider_ids.iter().enumerate() {
-            let Some(ids) = slot else { continue };
-            if ids.value_text != node_id {
-                continue;
-            }
-            let info = self.rows.get(pi)?;
-            if info.spec.value_labels.is_some() {
-                return None;
-            }
-            return Some(PanelAction::Root(RootAction::BeginParamTextInput {
-                target: self.param_target(),
-                param_id: self.rows[pi].id.clone(),
-                anchor: tree.get_bounds(ids.value_text),
-                value: self.base_values.get(pi).copied().unwrap_or(info.spec.default),
-                min: info.spec.min,
-                max: info.spec.max,
-                whole_numbers: info.spec.whole_numbers,
-            }));
-        }
-        None
+        self.row_host
+            .value_cell_typein(node_id, tree, &self.rows, &self.base_values, self.param_target())
     }
 
     /// If `node_id` is a driver drawer's Free-period field, build the action that
@@ -1971,7 +1946,7 @@ mod tests {
         assert!(panel.is_dragging());
 
         let quarter_x = track_rect.x + track_rect.width * 0.25;
-        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Param(target, pid), ScrubPhase::Move(ScrubValue::Scalar(val)))]
                 if *target == GraphParamTarget::Effect(0) && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
@@ -1984,6 +1959,50 @@ mod tests {
             "end emits exactly one commit: {ended:?}"
         );
         assert!(!panel.is_dragging(), "drag slot cleared after end");
+    }
+
+    /// D8: Shift during a param drag scales the applied pointer delta by 0.1,
+    /// sampled per move (not just at grab). Drags the "radius" row (0..100,
+    /// whole numbers) 20 px from mid-track, coarse then fine, and asserts the
+    /// fine value moved a tenth of the coarse distance.
+    #[test]
+    fn param_drag_shift_fine_scales_sensitivity_per_move() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
+
+        // Coarse: 20 px right from mid-track on a 0..100 range.
+        let moved = panel.handle_drag(Vec2::new(mid_x + 20.0, track_rect.y), &mut tree, false);
+        let coarse_val = match moved.as_slice() {
+            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
+            other => panic!("expected a coarse param move, got {other:?}"),
+        };
+
+        // Back to the same grab, then the same 20 px under Shift (fine).
+        panel.handle_drag(Vec2::new(mid_x, track_rect.y), &mut tree, false);
+        let moved = panel.handle_drag(Vec2::new(mid_x + 20.0, track_rect.y), &mut tree, true);
+        let fine_val = match moved.as_slice() {
+            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
+            other => panic!("expected a fine param move, got {other:?}"),
+        };
+
+        let coarse_delta = (coarse_val - 50.0).abs();
+        let fine_delta = (fine_val - 50.0).abs();
+        assert!(coarse_delta > 1.0, "coarse must move: {coarse_val}");
+        assert!(
+            (fine_delta - coarse_delta * 0.1).abs() < 1.5,
+            "fine delta ({fine_delta}) must be ~0.1x coarse delta ({coarse_delta})"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Commit)]));
     }
 
     #[test]
@@ -2006,7 +2025,7 @@ mod tests {
 
         let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
         let new_x = track_rect.x + track_rect.width * 0.4;
-        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live trim range: {moved:?}"
@@ -2048,7 +2067,7 @@ mod tests {
 
         panel.handle_pointer_down(min_bar, Vec2::ZERO, &tree);
         let live = tree.get_bounds(track);
-        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, ..), ScrubPhase::Move(..))]),
             "trim drag still routes after scroll: {moved:?}"
@@ -2079,7 +2098,7 @@ mod tests {
 
         panel.handle_pointer_down(target_bar, Vec2::ZERO, &tree);
         let live = tree.get_bounds(track);
-        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(..), ScrubPhase::Move(..))]),
             "target drag still routes after scroll: {moved:?}"
@@ -2113,7 +2132,7 @@ mod tests {
 
         let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
         let new_x = track_rect.x + track_rect.width * 0.3;
-        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
             "track emits the live target norm: {moved:?}"
@@ -2151,7 +2170,7 @@ mod tests {
         assert!(panel.is_dragging());
 
         let new_x = decay_rect.x + decay_rect.width * 0.6;
-        let moved = panel.handle_drag(Vec2::new(new_x, decay_rect.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(new_x, decay_rect.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live decay value: {moved:?}"
@@ -2202,7 +2221,7 @@ mod tests {
         assert!(panel.is_dragging());
 
         let new_x = sens_rect.x + sens_rect.width * 0.7;
-        let moved = panel.handle_drag(Vec2::new(new_x, sens_rect.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(new_x, sens_rect.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live shape value: {moved:?}"
@@ -2242,7 +2261,7 @@ mod tests {
         assert!(panel.is_dragging());
 
         let new_x = step_rect.x + step_rect.width * 0.8;
-        let moved = panel.handle_drag(Vec2::new(new_x, step_rect.y), &mut tree);
+        let moved = panel.handle_drag(Vec2::new(new_x, step_rect.y), &mut tree, false);
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live step value: {moved:?}"

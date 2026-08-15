@@ -2208,28 +2208,29 @@ impl ScenePanel {
                 (!actions.is_empty() || *node_id == self.close_id, actions)
             }
             // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8): double-click on a
-            // drag-armable value cell opens its type-in box. Reuses the
-            // EXACT lookup PointerDown uses below (object/light/camera
-            // value cells + every slider's value-text cell, world_card
-            // included since C-P1a) — the same set arms both gestures by
-            // construction, which is the drag/type-in registration parity
-            // `dock_numeric_cells_register_full_contract` checks.
+            // drag-armable value cell opens its type-in box. The unified
+            // properties card's rows resolve through the SAME shared
+            // `RowHost::value_cell_typein` `ParamCardPanel` uses — target is
+            // the panel's own bound layer (BUG-292), value is the row's
+            // synced base, and the anchor rect is read from the live tree
+            // (`handle_event` has `&UITree`; the old "no tree" comment was
+            // stale). Emits `BeginParamTextInput`, the card's exact type-in
+            // action, so the app's `InspectorParam` commit drives the same
+            // `ValueRef::Param(GeneratorOf, ..)` scrub wire the drag uses.
             UIEvent::DoubleClick { node_id, .. } => {
-                // P2 slice 2a: double-click-to-type-in for the unified
-                // properties card's rows is NOT wired this slice —
-                // `ScenePanel::handle_event` has no `&UITree` (unlike
-                // `ParamCardPanel::value_cell_typein`, which needs one to
-                // resolve the type-in box's screen anchor), and the old
-                // bespoke `SceneSetupBeginNumericTextInput` action's payload
-                // (`scope_path`/`node_doc_id`) doesn't fit a real exposed
-                // `ParamId` either. Dragging, right-click-reset, and every
-                // D/E/A affordance all work; only this one precision-entry
-                // gesture is a known, flagged gap — see the P2 2a session
-                // report / BUG_BACKLOG.md for the follow-up shape (thread
-                // `&UITree` into `handle_event`, or a new action carrying a
-                // `cell_node_id` the app resolves against its own tree, the
-                // same indirection the deleted bespoke action used).
-                let _ = node_id;
+                if let SceneSetupState::Live(vm) = &self.state {
+                    let card = &self.properties_card;
+                    let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
+                    if let Some(action) = card.row_host.value_cell_typein(
+                        *node_id,
+                        tree,
+                        &card.rows,
+                        &card.current_values,
+                        target,
+                    ) {
+                        return (true, vec![action]);
+                    }
+                }
                 (false, Vec::new())
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
@@ -2274,20 +2275,21 @@ impl ScenePanel {
                 self.properties_card.drag_sliders.iter().any(|s| s.is_dragging()),
                 Vec::new(),
             ),
-            UIEvent::Drag { pos, .. } => {
+            UIEvent::Drag { pos, modifiers, .. } => {
                 // P2 slice 2a: continue an active slider drag. Live
                 // `ParamChanged` only, no undo unit (the card cadence: one
                 // `ParamCommit` fires on release, below).
                 // BUG-292: the layer captured at drag-start (`vm.layer_id`
                 // via `PointerDown` above), not the active-layer-resolved
-                // plain `Generator`.
+                // plain `Generator`. D8 fine mode: Shift scales the pointer
+                // sensitivity by 0.1, sampled per move so it toggles mid-drag.
                 if let Some(lid) = self.drag_layer_id.clone()
                     && let Some((pi, new_value)) = self
                         .properties_card
                         .drag_sliders
                         .iter()
                         .enumerate()
-                        .find_map(|(pi, sl)| slider_drag_value(sl, pos.x).map(|v| (pi, v)))
+                        .find_map(|(pi, sl)| slider_drag_value(sl, pos.x, modifiers.shift).map(|v| (pi, v)))
                 {
                     let target = GraphParamTarget::GeneratorOf(lid);
                     let pid = self.properties_card.rows[pi].id.clone();
@@ -2411,14 +2413,33 @@ impl ScenePanel {
 /// fill/thumb/value-box don't update mid-drag locally; they update on the
 /// SAME cadence the triplet cells' drag-scrub already does — the next
 /// `build_nodes` pass after the round trip lands (D1: no per-frame
-/// rebuild). Returns `None` when the slider isn't currently dragging.
-fn slider_drag_value(slider: &crate::slider::SliderDragState, pos_x: f32) -> Option<f32> {
+/// rebuild). D8 fine mode scales the delta off the grab by 0.1 when Shift
+/// is held (the shared [`fine_scrub_value`], so this and the card's
+/// `handle_drag` are one implementation). Returns `None` when the slider
+/// isn't currently dragging.
+fn slider_drag_value(
+    slider: &crate::slider::SliderDragState,
+    pos_x: f32,
+    fine: bool,
+) -> Option<f32> {
     if !slider.is_dragging() {
         return None;
     }
     let ids = slider.ids()?;
-    let norm = crate::slider::BitmapSlider::x_to_normalized(ids.track_span, pos_x);
-    Some(crate::slider::BitmapSlider::normalized_to_value(norm, slider.min, slider.max))
+    let start_x = slider.drag_start_x().unwrap_or(pos_x);
+    let base = crate::slider::BitmapSlider::normalized_to_value(
+        crate::slider::BitmapSlider::x_to_normalized(ids.track_span, start_x),
+        slider.min,
+        slider.max,
+    );
+    Some(crate::panels::param_slider_shared::fine_scrub_value(
+        base,
+        pos_x - start_x,
+        ids.track_span.width,
+        slider.min,
+        slider.max,
+        fine,
+    ))
 }
 
 /// Stable outliner-row key, derived from the selection identity itself
@@ -3296,6 +3317,201 @@ mod tests {
     }
 
     // ── P3: Lights + Camera sections ──
+
+    /// A World-selected scene with one real "Transform" section plus the
+    /// matching generator `ParamSurface` (one ±100 translate row) — the
+    /// fixture the scene type-in / fine-scrub tests need. `azalea_shaped_vm`'s
+    /// `world_sections` is empty, so it can't exercise the unified properties
+    /// card's rows.
+    fn world_transform_vm() -> (SceneSetupVm, ParamSurface) {
+        let mut vm = azalea_shaped_vm();
+        vm.world_sections = vec!["Transform".to_string()];
+        let surface = ParamSurface {
+            kind: crate::panels::param_card::ParamCardKind::Generator,
+            title: "Scene".to_string(),
+            collapsed: false,
+            enabled: true,
+            effect_index: 0,
+            effect_id: manifold_foundation::EffectId::new("scene-gen"),
+            supports_envelopes: false,
+            has_graph_mod: false,
+            layer_id: Some(LayerId::new("layer-1")),
+            rows: vec![ParamRow {
+                id: manifold_foundation::ParamId::from("translate_x"),
+                spec: RowSpec {
+                    name: "Translate X".to_string(),
+                    min: -100.0,
+                    max: 100.0,
+                    default: 0.0,
+                    whole_numbers: false,
+                    is_angle: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    is_trigger_gate: false,
+                    value_labels: None,
+                    section: Some("Transform".to_string()),
+                },
+                value: crate::param_surface::RowValue {
+                    base: 0.0,
+                    effective: 0.0,
+                    exposed: true,
+                    driven: false,
+                },
+                modulation: RowMod::default(),
+                mapping: RowMapping {
+                    osc_address: None,
+                    ableton_display: None,
+                    ableton_range: None,
+                    mappable: false,
+                },
+            }],
+            string_params: Vec::new(),
+            audio: AudioCardState::default(),
+            relight: crate::panels::param_card::RelightCardConfig::default(),
+        };
+        (vm, surface)
+    }
+
+    /// Build the world-transform fixture and select World, so the unified
+    /// properties card renders its one translate row. Returns the panel and a
+    /// fresh tree (post-selection rebuild).
+    fn scene_with_world_transform_selected() -> (ScenePanel, UITree) {
+        let (vm, surface) = world_transform_vm();
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure_params(Some(surface));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let (world_row_id, _) = *panel
+            .outliner_row_ids
+            .iter()
+            .find(|(_, sel)| *sel == SceneSelection::World)
+            .expect("World is always a selectable outliner row");
+        let (consumed, _) = panel.handle_event(
+            &UIEvent::Click {
+                node_id: world_row_id,
+                pos: Vec2::ZERO,
+                modifiers: Modifiers::default(),
+            },
+            &tree,
+        );
+        assert!(consumed, "World outliner row click must consume");
+
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.properties_card.rows.len(), 1, "the translate row renders under World");
+        assert!(panel.properties_card.row_host.slider_ids[0].is_some(), "the row has a slider");
+        (panel, tree)
+    }
+
+    /// D8: double-clicking the scene properties row's value cell routes through
+    /// the SHARED `RowHost::value_cell_typein` — the same `BeginParamTextInput`
+    /// action the inspector cards emit — carrying the panel's own bound layer
+    /// (`GeneratorOf`) and the row's real param id + clamp range.
+    #[test]
+    fn scene_properties_double_click_opens_the_shared_typein() {
+        let (mut panel, tree) = scene_with_world_transform_selected();
+        let value_cell = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().value_text;
+
+        let (consumed, actions) = panel.handle_event(
+            &UIEvent::DoubleClick {
+                node_id: value_cell,
+                pos: Vec2::ZERO,
+                modifiers: Modifiers::default(),
+            },
+            &tree,
+        );
+        assert!(consumed, "double-click on a scene value cell must consume");
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Root(RootAction::BeginParamTextInput { target, param_id, min, max, value, whole_numbers, .. })]
+                if *target == GraphParamTarget::GeneratorOf(LayerId::new("layer-1"))
+                    && param_id.as_ref() == "translate_x"
+                    && *min == -100.0 && *max == 100.0 && *value == 0.0 && !*whole_numbers
+        ), "scene type-in must carry GeneratorOf + the real param id + range, got {actions:?}");
+    }
+
+    /// D8: a double-click on a non-value-cell scene node (the track) emits
+    /// nothing — type-in is the value cell's gesture only.
+    #[test]
+    fn scene_properties_double_click_on_track_is_a_no_op() {
+        let (mut panel, tree) = scene_with_world_transform_selected();
+        let track = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().track;
+
+        let (consumed, actions) = panel.handle_event(
+            &UIEvent::DoubleClick {
+                node_id: track,
+                pos: Vec2::ZERO,
+                modifiers: Modifiers::default(),
+            },
+            &tree,
+        );
+        assert!(!consumed, "track double-click is not a type-in");
+        assert!(actions.is_empty());
+    }
+
+    /// D8 fine mode on the scene properties track: Shift during a drag scales
+    /// the pointer sensitivity by 0.1, through the same shared helper the card
+    /// uses (`slider_drag_value` → `fine_scrub_value`).
+    #[test]
+    fn scene_properties_drag_shift_fine_scales_sensitivity() {
+        let (mut panel, tree) = scene_with_world_transform_selected();
+        let track = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().track;
+        let track_rect = tree.get_bounds(track);
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        let (consumed, down) = panel.handle_event(
+            &UIEvent::PointerDown {
+                node_id: track,
+                pos: Vec2::new(mid_x, track_rect.y),
+                modifiers: Modifiers::default(),
+            },
+            &tree,
+        );
+        assert!(consumed, "track pointer-down must start the scene drag");
+        assert!(matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(..))]));
+
+        let coarse_val = {
+            let (_, actions) = panel.handle_event(
+                &UIEvent::Drag {
+                    node_id: Some(track),
+                    pos: Vec2::new(mid_x + 20.0, track_rect.y),
+                    delta: Vec2::new(20.0, 0.0),
+                    modifiers: Modifiers::NONE,
+                },
+                &tree,
+            );
+            match actions.as_slice() {
+                [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
+                other => panic!("expected a coarse scene move, got {other:?}"),
+            }
+        };
+        let fine_val = {
+            let (_, actions) = panel.handle_event(
+                &UIEvent::Drag {
+                    node_id: Some(track),
+                    pos: Vec2::new(mid_x + 20.0, track_rect.y),
+                    delta: Vec2::new(20.0, 0.0),
+                    modifiers: Modifiers { shift: true, ..Modifiers::NONE },
+                },
+                &tree,
+            );
+            match actions.as_slice() {
+                [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
+                other => panic!("expected a fine scene move, got {other:?}"),
+            }
+        };
+
+        let coarse_delta = coarse_val.abs();
+        let fine_delta = fine_val.abs();
+        assert!(coarse_delta > 1.0, "coarse must move: {coarse_val}");
+        assert!(
+            (fine_delta - coarse_delta * 0.1).abs() < 1.5,
+            "fine delta ({fine_delta}) must be ~0.1x coarse delta ({coarse_delta})"
+        );
+    }
 
     /// D3/D12's tolerance doctrine: an all-Custom-lights scene (no
     /// addressable id at all) must still render every row as an outliner
