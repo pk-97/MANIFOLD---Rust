@@ -73,6 +73,11 @@ pub(super) struct ImportCtx<'a> {
     /// Fresh numeric node-id source (a counter — importer output stays
     /// deterministic), mutated across the per-object loop.
     pub fresh_id: &'a mut dyn FnMut() -> u32,
+    /// Decoded pixel dimensions per glTF texture index
+    /// (`GltfImportSummary::texture_dims`) — every texture-source node
+    /// stamps its source image's real size instead of the 1024² v1
+    /// default, so a 4K store-asset atlas keeps its resolution.
+    pub texture_dims: &'a [(u32, u32)],
 }
 
 /// Build ONE object's group (mesh source + material + optional skin/morph/
@@ -920,13 +925,14 @@ pub(super) fn build_object_group(
                 .params
                 .insert("texture_index".to_string(), int(tex_index as i32));
             tex_node.params.insert("color_space".to_string(), enum_val(0)); // sRGB — correct for albedo
-            // v1 default — the summary doesn't carry per-texture pixel
-            // dimensions yet, so every base-color map resamples to 1024².
-            // TODO: thread the source image's actual width/height through
-            // `GltfImportSummary`/`GltfMaterialInfo` so a non-1024 texture
-            // doesn't resample.
-            tex_node.params.insert("width".to_string(), int(1024));
-            tex_node.params.insert("height".to_string(), int(1024));
+            // The source image's real dimensions (the v1 1024² default
+            // downsampled every 4K store-asset atlas — the kuma robot's
+            // 4096² baseColor landed at quarter resolution). 8192 is the
+            // param's declared range max.
+            let (tw, th) =
+                ctx.texture_dims.get(tex_index as usize).copied().unwrap_or((1024, 1024));
+            tex_node.params.insert("width".to_string(), int((tw.min(8192)) as i32));
+            tex_node.params.insert("height".to_string(), int((th.min(8192)) as i32));
             group_nodes.push(tex_node);
 
             group_wires.push(wire(tex_id, "out", scene_object_id, "base_color_map"));
@@ -977,6 +983,7 @@ pub(super) fn build_object_group(
             string_bindings: &mut string_bindings,
             tex_cache: &mut map_tex_cache,
             scene_object_id,
+            texture_dims: ctx.texture_dims,
         };
         wire_map_families(m, &mut object_assembly);
 

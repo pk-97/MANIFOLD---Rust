@@ -8,113 +8,12 @@ use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use crate::preset_runtime::PresetRuntime;
 use manifold_core::effect_graph_def::BindingTarget;
+use super::synthetic_glbs::*;
 use manifold_core::effect_graph_def::{EffectGraphNode, GROUP_TYPE_ID, SerializedParamValue};
 
 fn azalea_fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb")
-}
-
-/// Build a minimal, valid `.glb` with `n` distinct materials, each owning
-/// exactly one triangle (so every material has geometry and therefore
-/// counts toward `ImportReport::material_count`) — hand-rolled binary
-/// container (12-byte header + JSON chunk + BIN chunk, no external
-/// `.bin`/textures, no `uri` on the buffer so it resolves to the BIN
-/// chunk per spec section Binary glTF). GLB_CONFORMANCE_DESIGN.md G-P2: proves
-/// the FULL production parse path (`gltf::import` → `gltf_import_summary`
-/// → `build_import_graph`) imports every material 1:1, not just the
-/// graph-assembly half a synthetic [`GltfImportSummary`] would exercise.
-/// Written to the OS temp dir, not committed — a builder fn, not a
-/// binary asset (the phase brief's explicit call).
-fn write_synthetic_multimaterial_glb(n: usize) -> std::path::PathBuf {
-    let mut accessors = Vec::with_capacity(n);
-    let mut buffer_views = Vec::with_capacity(n);
-    let mut materials = Vec::with_capacity(n);
-    let mut primitives = Vec::with_capacity(n);
-    let mut bin = Vec::with_capacity(n * 36);
-
-    for i in 0..n {
-        // One triangle per material, spread along X so no two overlap —
-        // cosmetic, but keeps bbox/normal math non-degenerate.
-        let ox = i as f32 * 2.0;
-        let tri: [[f32; 3]; 3] = [[ox, 0.0, 0.0], [ox + 1.0, 0.0, 0.0], [ox, 1.0, 0.0]];
-        for v in &tri {
-            for c in v {
-                bin.extend_from_slice(&c.to_le_bytes());
-            }
-        }
-        let byte_offset = i * 36;
-        buffer_views.push(serde_json::json!({
-            "buffer": 0,
-            "byteOffset": byte_offset,
-            "byteLength": 36,
-        }));
-        accessors.push(serde_json::json!({
-            "bufferView": i,
-            "componentType": 5126, // FLOAT
-            "count": 3,
-            "type": "VEC3",
-            "min": [ox, 0.0, 0.0],
-            "max": [ox + 1.0, 1.0, 0.0],
-        }));
-        materials.push(serde_json::json!({
-            "name": format!("Mat{i}"),
-            "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] },
-        }));
-        // Mode omitted — glTF's default primitive mode is 4 (TRIANGLES).
-        primitives.push(serde_json::json!({
-            "attributes": { "POSITION": i },
-            "material": i,
-        }));
-    }
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "scene": 0,
-        "scenes": [{ "nodes": [0] }],
-        "nodes": [{ "mesh": 0 }],
-        "meshes": [{ "primitives": primitives }],
-        "accessors": accessors,
-        "bufferViews": buffer_views,
-        "materials": materials,
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
-
-    // GLB container: header + JSON chunk (space-padded to 4 bytes) + BIN
-    // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
-    // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_{n}mat_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
-    path
 }
 
 /// GLB_CONFORMANCE_DESIGN.md D4 / G-P2's named gate test: a 100-material
@@ -185,140 +84,80 @@ fn object_cap_exceeded_glb_errors_loudly_never_truncates() {
     );
 }
 
-/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
-/// triangle (so the asset has SOME geometry and `gltf_import_summary`
-/// doesn't bail with "parsed no geometry"), `Mat1`'s sole primitive is
-/// tagged `KHR_draco_mesh_compression`.
-///
-/// A "no-fallback" Draco export (the common case — the whole point of
-/// Draco is the size win, and a redundant uncompressed fallback accessor
-/// gives most of that back) omits `bufferView` on the base POSITION
-/// accessor entirely (spec-legal per KHR_draco_mesh_compression's
-/// conformance text: Draco-aware loaders ignore that accessor's
-/// `bufferView`/`byteOffset` anyway). That shape does NOT reach this
-/// module at all today — `parse_document_and_buffers` re-runs the vendored
-/// `gltf-json` crate's own structural `Validate` (BUG-213's filter only
-/// drops the `extensionsRequired` check), and that crate's accessor
-/// validation hook unconditionally requires `bufferView` unless the
-/// accessor is `sparse` (`gltf-json-1.4.1/src/accessor.rs`
-/// `accessor_validate_hook`) — it has no KHR_draco_mesh_compression
-/// awareness, so a genuinely spec-legal no-fallback Draco asset fails the
-/// WHOLE document's import at that gate with an opaque "bufferView
-/// Missing" error, never reaching `summarize_node`'s primitive loop this
-/// fix targets. Reported up alongside this change (see the lane report) —
-/// out of this fix's scope, since relaxing that structural gate is a
-/// separate, bigger decision.
-///
-/// This fixture instead reproduces the one Draco shape that DOES reach
-/// `summarize_node` today without tripping that earlier gate: `Mat1`'s
-/// POSITION accessor has a real `bufferView` (satisfies `Validate`) that
-/// is deliberately too small for its declared `count`/`type` — the same
-/// `reader.read_positions() == None` outcome (`accessor::Iter::new`'s
-/// `slice.get(start..end)` fails on a too-short buffer view), reachable
-/// via a truncated/corrupt buffer on ANY primitive, Draco-tagged or not.
-/// Same hand-rolled binary-container shape as
-/// `write_synthetic_multimaterial_glb`.
-fn write_synthetic_draco_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let mut bin = Vec::with_capacity(36);
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
+/// The synthesized orbit camera's `far` must scale with the framed scene
+/// (kuma_heavy_robot class: posed radius ~2700 clipped against the fixed
+/// 200 default into a black frame), while a compact asset keeps the
+/// primitive's default EXACTLY — the same golden-stability guarantee the
+/// `near` scaling (BUG-165/BUG-169) makes.
+#[test]
+fn import_camera_far_scales_with_scene_size() {
+    let cam_far = |half: f32| {
+        let path = write_synthetic_sized_glb(half);
+        let (def, _report) = assemble_import_graph(&path).expect("assemble sized synthetic glb");
+        std::fs::remove_file(&path).ok();
+        let cam = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.orbit_camera")
+            .expect("assembled graph has an orbit_camera node");
+        match cam.params.get("far") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("orbit_camera far param missing or wrong type: {other:?}"),
+        }
+    };
+
+    let small = cam_far(0.5);
+    assert_eq!(
+        small,
+        crate::node_graph::primitives::DEFAULT_FAR,
+        "compact asset keeps the default far exactly (golden stability)"
+    );
+
+    // half=1500: bbox radius ~2121, distance ~4667 — the old fixed 200
+    // sat in front of the whole scene (black frame); the stamp must clear
+    // distance + radius (~6788) with slack.
+    let large = cam_far(1500.0);
+    assert!(
+        large > 6800.0,
+        "large asset's far must clear distance + radius (~6788), got {large}"
+    );
+    assert!(
+        large <= 10_000.0,
+        "far stays within node.orbit_camera's declared range max, got {large}"
+    );
+}
+
+/// Imported texture-source nodes stamp the source image's REAL pixel
+/// dimensions, not the hardcoded 1024² v1 default — the kuma robot's
+/// 4096² JPEG atlas used to land at quarter resolution (the base-color
+/// block's own TODO named the hole; every map family shared it).
+#[test]
+fn import_texture_sources_keep_authored_resolution() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/kuma_heavy_robot_r-9000s.glb");
+    if !path.exists() {
+        println!("import_texture_sources_keep_authored_resolution: fixture not found, skipping");
+        return;
+    }
+    let (def, _report) = assemble_import_graph(&path).expect("assemble robot glb");
+    let tex_nodes: Vec<_> = def
+        .nodes
+        .iter()
+        .filter_map(|n| n.group.as_ref())
+        .flat_map(|g| g.nodes.iter())
+        .filter(|n| n.type_id == "node.gltf_texture_source")
+        .collect();
+    assert!(!tex_nodes.is_empty(), "robot wires texture sources");
+    for node in tex_nodes {
+        for dim in ["width", "height"] {
+            match node.params.get(dim) {
+                Some(SerializedParamValue::Int { value }) => {
+                    assert_eq!(*value, 4096, "node {} {dim} must be the authored 4096", node.node_id)
+                }
+                other => panic!("texture source {} missing {dim}: {other:?}", node.node_id),
+            }
         }
     }
-    // A few extra bytes so bufferView 1 (below) is a real, in-range slice
-    // of the buffer — just too short for accessor 1's VEC3*3 = 36 bytes.
-    bin.extend_from_slice(&[0u8; 4]);
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "extensionsUsed": ["KHR_draco_mesh_compression"],
-        "scene": 0,
-        "scenes": [{ "nodes": [0, 1] }],
-        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "DracoNode" }],
-        "meshes": [
-            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
-            {
-                "name": "DracoMesh",
-                "primitives": [{
-                    "attributes": { "POSITION": 1 },
-                    "material": 1,
-                    "extensions": {
-                        "KHR_draco_mesh_compression": {
-                            "bufferView": 0,
-                            "attributes": { "POSITION": 0 }
-                        }
-                    }
-                }]
-            },
-        ],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-            // Structurally valid (has bufferView + min/max, passes
-            // `Validate`) but the referenced bufferView is too short to
-            // actually supply 3 VEC3<f32> — `read_positions()` returns
-            // `None` at read time, same outcome a no-fallback Draco
-            // accessor's missing `bufferView` would produce if it ever
-            // got past the validation gate above.
-            {
-                "bufferView": 1,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-        ],
-        "bufferViews": [
-            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
-            { "buffer": 0, "byteOffset": 36, "byteLength": 4 },
-        ],
-        "materials": [
-            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-        ],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic draco glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_draco_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic draco glb to temp dir");
-    path
 }
 
 /// BUG-mbol: a Draco-compressed primitive must never silently vanish —
@@ -348,107 +187,6 @@ fn draco_primitive_reports_instead_of_vanishing_silently() {
     );
 }
 
-/// Build a minimal, valid `.glb` with ONE material (`Mat0`, real triangle
-/// geometry, so the asset always has something to import) whose
-/// `baseColorTexture` points at a KTX2/BasisU image: `mimeType:
-/// "image/ktx2"`, bufferView-embedded, and the bytes are garbage (not a
-/// real KTX2 container) — MANIFOLD has no BasisU transcoder either way, so
-/// the mime type alone is enough to prove the "unsupported source, not a
-/// corrupt one" report line without needing a real KTX2 encoder in the test.
-/// BUG-ssgz: this used to hard-fail the WHOLE document at `import_glb`
-/// (`gltf::image::Data::from_source` errors on any unrecognized mime type,
-/// same class of bug W1 already fixed for `image/webp`) — the mesh and
-/// material must now still import, with the texture swapped for a dummy.
-fn write_synthetic_ktx2_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let mut bin = Vec::with_capacity(48);
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-    // Not a real KTX2 container — just bytes no decoder anywhere
-    // recognizes. The mime type, not the payload, is what makes this
-    // KTX2/BasisU (a well-formed KTX2 file would fail to decode exactly
-    // the same way — MANIFOLD's `image` crate has no BasisU transcoder,
-    // see `crates/manifold-renderer/Cargo.toml`'s `image` feature list).
-    let ktx2_bytes: [u8; 8] = [0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB];
-    bin.extend_from_slice(&ktx2_bytes);
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "scene": 0,
-        "scenes": [{ "nodes": [0] }],
-        "nodes": [{ "mesh": 0 }],
-        "meshes": [
-            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
-        ],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-        ],
-        "bufferViews": [
-            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
-            { "buffer": 0, "byteOffset": 36, "byteLength": ktx2_bytes.len() },
-        ],
-        "images": [
-            { "name": "BrokenKtx2", "bufferView": 1, "mimeType": "image/ktx2" },
-        ],
-        "textures": [
-            { "source": 0 },
-        ],
-        "materials": [
-            {
-                "name": "Mat0",
-                "pbrMetallicRoughness": {
-                    "baseColorFactor": [0.5, 0.5, 0.5, 1.0],
-                    "baseColorTexture": { "index": 0 },
-                },
-            },
-        ],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic ktx2 glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_ktx2_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic ktx2 glb to temp dir");
-    path
-}
-
 /// BUG-ssgz: a KTX2/BasisU-textured material must import — mesh and
 /// material survive with a dummy texture substituted — instead of the
 /// undecodable image aborting the entire document.
@@ -470,125 +208,6 @@ fn ktx2_texture_reports_instead_of_aborting_whole_import() {
         "report must name the KTX2/BasisU decode failure, got: {:?}",
         report.report_lines
     );
-}
-
-/// Build a minimal, valid `.glb`: one triangle whose primitive carries
-/// BOTH `TEXCOORD_0` and `TEXCOORD_1`, textured by `Mat0` whose
-/// `occlusionTexture` explicitly points at `texCoord: 1`. Exercises both
-/// BUG-pm9m warning paths in one fixture — the material-slot check
-/// (occlusion references TEXCOORD_1) and the primitive-attribute check
-/// (the mesh itself carries a TEXCOORD_1 set) — same hand-rolled binary
-/// container shape as `write_synthetic_ktx2_glb`, with a second UV
-/// accessor and a `texCoord` override on the occlusion texture reference.
-fn write_synthetic_multi_uv_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let uv0: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
-    let uv1: [[f32; 2]; 3] = [[0.0, 0.5], [1.0, 0.5], [0.0, 1.5]];
-
-    let mut png = Vec::new();
-    {
-        use image::ImageEncoder;
-        let pixel: [u8; 4] = [255, 255, 255, 255];
-        image::codecs::png::PngEncoder::new(&mut png)
-            .write_image(&pixel, 1, 1, image::ExtendedColorType::Rgba8)
-            .expect("encode 1x1 fixture png");
-    }
-
-    let mut bin: Vec<u8> = Vec::new();
-    let pos_off = bin.len();
-    bin.extend(tri.iter().flatten().flat_map(|f| f.to_le_bytes()));
-    let uv0_off = bin.len();
-    bin.extend(uv0.iter().flatten().flat_map(|f| f.to_le_bytes()));
-    let uv1_off = bin.len();
-    bin.extend(uv1.iter().flatten().flat_map(|f| f.to_le_bytes()));
-    while !bin.len().is_multiple_of(4) {
-        bin.push(0);
-    }
-    let png_off = bin.len();
-    bin.extend_from_slice(&png);
-    while !bin.len().is_multiple_of(4) {
-        bin.push(0);
-    }
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "scene": 0,
-        "scenes": [{ "nodes": [0] }],
-        "nodes": [{ "mesh": 0 }],
-        "meshes": [
-            {
-                "primitives": [{
-                    "attributes": { "POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_1": 2 },
-                    "material": 0,
-                }],
-            },
-        ],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-            { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2" },
-            { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
-        ],
-        "bufferViews": [
-            { "buffer": 0, "byteOffset": pos_off, "byteLength": 36 },
-            { "buffer": 0, "byteOffset": uv0_off, "byteLength": 24 },
-            { "buffer": 0, "byteOffset": uv1_off, "byteLength": 24 },
-            { "buffer": 0, "byteOffset": png_off, "byteLength": png.len() },
-        ],
-        "images": [
-            { "name": "Occ", "bufferView": 3, "mimeType": "image/png" },
-        ],
-        "textures": [
-            { "source": 0 },
-        ],
-        "materials": [
-            {
-                "name": "Mat0",
-                "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] },
-                "occlusionTexture": { "index": 0, "texCoord": 1 },
-            },
-        ],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic multi-UV glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_multiuv_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic multi-uv glb to temp dir");
-    path
 }
 
 /// BUG-pm9m: TEXCOORD_1 is silently ignored today — every texture map
@@ -625,129 +244,6 @@ fn texcoord_1_reports_instead_of_silently_sampling_uv0() {
     );
 }
 
-/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
-/// triangle, `Mat1`'s sole primitive's POSITION accessor points at a
-/// bufferView tagged `EXT_meshopt_compression`.
-///
-/// Unlike Draco (`write_synthetic_draco_glb`), meshopt keeps a normal,
-/// correctly-sized bufferView — the whole point of the bug (BUG-7w79) is
-/// that `reader.read_positions()` would happily succeed and hand back
-/// compressed bytes reinterpreted as raw f32, silent garbage geometry with
-/// no error. So `bufferView` 1 here is real, in-range, and exactly the
-/// right length for 3 VEC3<f32> (unlike the Draco fixture's deliberately
-/// truncated one) — detection must come from the `EXT_meshopt_compression`
-/// tag in `bufferViews[1].extensions`, not from a failed read. No
-/// `extensionsRequired` entry (same choice `write_synthetic_draco_glb`
-/// makes for Draco): this fixture reproduces the "primitive silently reads
-/// wrong" shape, not the separate "whole document refuses to load" gate.
-fn write_synthetic_meshopt_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let mut bin = Vec::with_capacity(72);
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-    // Second bufferView's bytes are irrelevant content-wise (never read —
-    // the fix must reject before the read) but must be a real, in-range,
-    // correctly-sized slice so this fixture isolates the extension check
-    // from the "too-short buffer view" path the Draco fixture exercises.
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "extensionsUsed": ["EXT_meshopt_compression"],
-        "scene": 0,
-        "scenes": [{ "nodes": [0, 1] }],
-        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "MeshoptNode" }],
-        "meshes": [
-            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
-            {
-                "name": "MeshoptMesh",
-                "primitives": [{ "attributes": { "POSITION": 1 }, "material": 1 }]
-            },
-        ],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-            {
-                "bufferView": 1,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-        ],
-        "bufferViews": [
-            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
-            {
-                "buffer": 0,
-                "byteOffset": 36,
-                "byteLength": 36,
-                "extensions": {
-                    "EXT_meshopt_compression": {
-                        "buffer": 0,
-                        "byteOffset": 36,
-                        "byteLength": 36,
-                        "byteStride": 12,
-                        "count": 3,
-                        "mode": "ATTRIBUTES",
-                    },
-                },
-            },
-        ],
-        "materials": [
-            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-        ],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic meshopt glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_meshopt_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic meshopt glb to temp dir");
-    path
-}
-
 /// BUG-7w79: a meshopt-compressed primitive must never be read as raw
 /// bytes (garbage geometry, no error) — `Mat1` (meshopt-tagged) must be
 /// dropped from the imported objects and named in
@@ -776,115 +272,6 @@ fn meshopt_primitive_reports_instead_of_reading_garbage() {
         "report line must identify the mesh/node that was skipped, got: {:?}",
         report.report_lines
     );
-}
-
-/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
-/// F32 triangle, `Mat1`'s sole primitive's POSITION accessor is
-/// `KHR_mesh_quantization`-style: normalized SHORT components instead of
-/// F32.
-///
-/// BUG-jfe2: the vendored gltf crate's `Item::from_slice` reinterprets
-/// every accessor read as F32 stride — a normalized SHORT/BYTE accessor
-/// misaligns every subsequent byte, silent garbage geometry with no error.
-/// `bufferView` 1 here is real, in-range, and exactly the right length for
-/// 3 VEC3<i16> (18 bytes) — detection must come from the accessor's
-/// `componentType`, not from a failed read. No `extensionsRequired` entry
-/// (same choice the Draco/meshopt fixtures make): this fixture reproduces
-/// the "primitive silently reads wrong" shape, not the separate "whole
-/// document refuses to load" gate.
-fn write_synthetic_quantized_position_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let mut bin = Vec::with_capacity(36 + 18);
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-    // Normalized SHORT POSITION: 3 vertices * VEC3<i16> = 18 bytes.
-    // Component values are arbitrary — never legitimately read as
-    // dequantized geometry, only checked for componentType.
-    let quantized_tri: [[i16; 3]; 3] = [[0, 0, 0], [32767, 0, 0], [0, 32767, 0]];
-    for v in &quantized_tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "extensionsUsed": ["KHR_mesh_quantization"],
-        "scene": 0,
-        "scenes": [{ "nodes": [0, 1] }],
-        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "QuantizedPositionNode" }],
-        "meshes": [
-            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
-            {
-                "name": "QuantizedPositionMesh",
-                "primitives": [{ "attributes": { "POSITION": 1 }, "material": 1 }]
-            },
-        ],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-            {
-                "bufferView": 1,
-                "componentType": 5122, // SHORT
-                "normalized": true,
-                "count": 3,
-                "type": "VEC3",
-                "min": [0, 0, 0],
-                "max": [32767, 32767, 0],
-            },
-        ],
-        "bufferViews": [
-            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
-            { "buffer": 0, "byteOffset": 36, "byteLength": 18 },
-        ],
-        "materials": [
-            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-        ],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic quantized-position glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_quantized_position_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic quantized-position glb to temp dir");
-    path
 }
 
 /// BUG-jfe2: a `KHR_mesh_quantization`-style normalized-SHORT POSITION
@@ -920,124 +307,6 @@ fn quantized_position_primitive_reports_instead_of_reading_garbage() {
     );
 }
 
-/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
-/// F32 triangle (no NORMAL, exercises the face-normal fallback path
-/// elsewhere), `Mat1`'s sole primitive has a valid F32 POSITION accessor
-/// but a `KHR_mesh_quantization`-style normalized BYTE NORMAL accessor.
-///
-/// Proves a quantized NORMAL (or TEXCOORD_0) drops the whole primitive
-/// even when POSITION is valid F32 — partial garbage attributes (correct
-/// positions, garbage normals) are not acceptable.
-fn write_synthetic_quantized_normal_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let mut bin = Vec::with_capacity(36 + 36 + 9);
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-    // Mat1's valid F32 POSITION.
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-    // Normalized BYTE NORMAL: 3 vertices * VEC3<i8> = 9 bytes. Component
-    // values are arbitrary — never legitimately read, only checked for
-    // componentType.
-    let quantized_normals: [[i8; 3]; 3] = [[0, 0, 127], [0, 0, 127], [0, 0, 127]];
-    for v in &quantized_normals {
-        for c in v {
-            bin.push(*c as u8);
-        }
-    }
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "extensionsUsed": ["KHR_mesh_quantization"],
-        "scene": 0,
-        "scenes": [{ "nodes": [0, 1] }],
-        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "QuantizedNormalNode" }],
-        "meshes": [
-            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
-            {
-                "name": "QuantizedNormalMesh",
-                "primitives": [{ "attributes": { "POSITION": 1, "NORMAL": 2 }, "material": 1 }]
-            },
-        ],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-            {
-                "bufferView": 1,
-                "componentType": 5126, // FLOAT
-                "count": 3,
-                "type": "VEC3",
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 0.0],
-            },
-            {
-                "bufferView": 2,
-                "componentType": 5120, // BYTE
-                "normalized": true,
-                "count": 3,
-                "type": "VEC3",
-                "min": [0, 0, 0],
-                "max": [0, 0, 127],
-            },
-        ],
-        "bufferViews": [
-            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
-            { "buffer": 0, "byteOffset": 36, "byteLength": 36 },
-            { "buffer": 0, "byteOffset": 72, "byteLength": 9 },
-        ],
-        "materials": [
-            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
-        ],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic quantized-normal glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_quantized_normal_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic quantized-normal glb to temp dir");
-    path
-}
-
 /// BUG-jfe2: a valid F32 POSITION accessor does not save a primitive whose
 /// NORMAL is `KHR_mesh_quantization`-style normalized BYTE — partial
 /// garbage attributes are not acceptable, so the whole primitive is
@@ -1068,76 +337,6 @@ fn quantized_normal_primitive_reports_instead_of_reading_garbage() {
         "report line must identify the mesh/node that was skipped, got: {:?}",
         report.report_lines
     );
-}
-
-/// Build a minimal, valid `.glb` with ONE triangle primitive that has NO
-/// `material` key at all — glTF's implicit default material
-/// (GLB_XFAIL_BURNDOWN_DESIGN.md D4, BUG-171). No `materials` array in
-/// the document at all, matching a real asset like `BoxVertexColors.glb`
-/// that carries geometry but declares zero materials. Same hand-rolled
-/// binary-container shape as `write_synthetic_multimaterial_glb`.
-fn write_synthetic_default_material_glb() -> std::path::PathBuf {
-    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-    let mut bin = Vec::with_capacity(36);
-    for v in &tri {
-        for c in v {
-            bin.extend_from_slice(&c.to_le_bytes());
-        }
-    }
-
-    let doc = serde_json::json!({
-        "asset": { "version": "2.0" },
-        "scene": 0,
-        "scenes": [{ "nodes": [0] }],
-        "nodes": [{ "mesh": 0 }],
-        // No "material" key on the primitive — glTF's implicit default
-        // material. No "materials" array at all, matching a real asset
-        // that declares zero materials.
-        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
-        "accessors": [{
-            "bufferView": 0,
-            "componentType": 5126,
-            "count": 3,
-            "type": "VEC3",
-            "min": [0.0, 0.0, 0.0],
-            "max": [1.0, 1.0, 0.0],
-        }],
-        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
-        "buffers": [{ "byteLength": bin.len() }],
-    });
-    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
-
-    let mut json_padded = json_bytes;
-    while !json_padded.len().is_multiple_of(4) {
-        json_padded.push(b' ');
-    }
-    let mut bin_padded = bin;
-    while !bin_padded.len().is_multiple_of(4) {
-        bin_padded.push(0);
-    }
-    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
-
-    let mut glb = Vec::with_capacity(total_len);
-    glb.extend_from_slice(b"glTF");
-    glb.extend_from_slice(&2u32.to_le_bytes());
-    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
-    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"JSON");
-    glb.extend_from_slice(&json_padded);
-    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-    glb.extend_from_slice(b"BIN\0");
-    glb.extend_from_slice(&bin_padded);
-
-    let path = std::env::temp_dir().join(format!(
-        "manifold_synthetic_defaultmat_{}_{}.glb",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
-    path
 }
 
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171) / section 4 invariant ("no silent
@@ -1212,6 +411,7 @@ fn all_materials_expose_opacity_and_wiring_survives_round_trip() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
@@ -1644,6 +844,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
@@ -1905,6 +1106,7 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -1966,6 +1168,7 @@ fn build_import_graph_ao_group_consumes_ao_mask() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_ao_mask_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -2039,6 +1242,7 @@ fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2139,6 +1343,7 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2206,6 +1411,7 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2274,6 +1480,7 @@ fn imported_object_card_visible_shows_pos_hides_scale_and_material() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_card_visible_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -2346,6 +1553,7 @@ fn material_named_like_its_own_inner_handle_does_not_collide() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_mat_0_collision.glb");
     let (def, _report) =
@@ -2400,6 +1608,7 @@ fn scene_def_with_bbox_half_extent(half_extent: f32) -> EffectGraphDef {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
@@ -2419,6 +1628,7 @@ fn merge_summary(materials: Vec<super::gltf_load::GltfMaterialInfo>, half_extent
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     }
 }
 
@@ -2940,6 +2150,7 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3036,6 +2247,7 @@ fn unlit_material_imports_lit_by_default() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_unlit.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3089,7 +2301,6 @@ fn unlit_material_imports_lit_by_default() {
     );
 }
 
-
 /// D5 ORM-packing: when `occlusion_texture` and `mr_texture` share the
 /// same glTF texture index (the common "one packed ORM image" case),
 /// the importer must wire ONE `node.gltf_texture_source` into BOTH
@@ -3112,6 +2323,7 @@ fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_orm.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3169,6 +2381,7 @@ fn vertex_color_varies_flag_produces_report_line_and_leaves_base_color_alone() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_vertex_color_varies.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3224,6 +2437,7 @@ fn over_featured_material_wires_clearcoat_texture_and_maps_transmission_to_blend
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3303,6 +2517,7 @@ fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_sun.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3409,6 +2624,7 @@ fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3492,6 +2708,7 @@ fn animated_material_wires_animation_source_into_its_own_transform_3d() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_wiring.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3583,6 +2800,7 @@ fn animation_cards_are_one_linked_section_per_glb() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_shared_anim_cards.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4149,6 +3367,7 @@ fn animation_selectors_survive_json_round_trip() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4200,6 +3419,7 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4329,6 +3549,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");

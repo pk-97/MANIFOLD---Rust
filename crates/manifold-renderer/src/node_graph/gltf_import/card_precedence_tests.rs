@@ -52,6 +52,7 @@ fn an_imported_defs_authored_binding_still_overwrites_a_node_write_and_reports_i
         lights: Vec::new(),
         cameras: Vec::new(),
         camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_bug1l7f_test.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build import graph");

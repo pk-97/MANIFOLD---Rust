@@ -334,6 +334,7 @@ pub(super) fn merge_import_into_graph(
         node_anims_by_clip: &node_anims_by_clip,
         used_group_names: &mut used_group_names,
         fresh_id: &mut fresh_id,
+        texture_dims: &summary.texture_dims,
     };
     // BUG-w5wv: `local_k` (this merge's OWN inner-handle numbering) starts
     // past whatever the target scene's existing objects already used, so

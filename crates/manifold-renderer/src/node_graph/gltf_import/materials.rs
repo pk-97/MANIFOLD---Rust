@@ -45,6 +45,10 @@ pub(super) struct ObjectAssembly<'a> {
     pub tex_cache: &'a mut std::collections::HashMap<(u32, u32, u32), (u32, String)>,
     /// This object's `node.scene_object` numeric id — the wire destination.
     pub scene_object_id: u32,
+    /// Decoded pixel dimensions per glTF texture index — stamped onto each
+    /// source node so maps keep their authored resolution (was: hardcoded
+    /// 1024² v1 default, which downsampled every 4K store-asset atlas).
+    pub texture_dims: &'a [(u32, u32)],
 }
 
 /// One glTF texture-map family: the facts that distinguish it from the other
@@ -252,10 +256,13 @@ fn wire_map_family(family: &MapFamily, m: &GltfMaterialInfo, asm: &mut ObjectAss
         // mr row's `channel_mode`); every other family passes 0
         // (passthrough), byte-identical to before this param existed.
         node.params.insert("mode".to_string(), enum_val(channel_mode));
-        // Same v1 default the base-colour wiring uses — see its TODO about
-        // threading real per-texture dimensions through the summary.
-        node.params.insert("width".to_string(), int(1024));
-        node.params.insert("height".to_string(), int(1024));
+        // Authored resolution, not the 1024² v1 default (see
+        // `ObjectAssembly::texture_dims`). 8192 is the param's declared
+        // range max — a past-cap image resamples rather than clamping at
+        // param load.
+        let (tw, th) = asm.texture_dims.get(tex_index as usize).copied().unwrap_or((1024, 1024));
+        node.params.insert("width".to_string(), int((tw.min(8192)) as i32));
+        node.params.insert("height".to_string(), int((th.min(8192)) as i32));
         asm.group_nodes.push(node);
 
         asm.string_bindings.push(StringBindingDef {

@@ -594,6 +594,45 @@ mod gpu_tests {
         panic!("gltf_texture_source: decode never settled");
     }
 
+    /// Seam-split for the kuma robot's black-body report: its baseColor is
+    /// a 4096x4096 embedded JPEG (the conformance corpus tops out at
+    /// 2048). The decoded bytes are proven bright CPU-side
+    /// (`gltf_load::tests::robot_basecolor_jpeg_decodes_bright`), so the
+    /// blit+mip path must emit a non-black 1024² output. If this fails,
+    /// the 4K-source resample is the bug; if it passes, the black enters
+    /// downstream (scene_object/pbr sampling).
+    #[test]
+    fn four_k_jpeg_source_blits_non_black() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/kuma_heavy_robot_r-9000s.glb");
+        if !path.exists() {
+            println!("four_k_jpeg_source_blits_non_black: fixture not found, skipping");
+            return;
+        }
+        let device = crate::test_device();
+        let (w, h) = (1024u32, 1024u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target = RenderTarget::new(&device, w, h, format, "gltf-texture-source-4k-out");
+        let out_slot = backend.pre_bind_texture_2d(r_out, target);
+        let scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+
+        let params = params_at(path.to_str().unwrap(), 0.0, 0, w as f32, h as f32);
+        let mut prim = GltfTextureSource::new();
+        settle(&mut prim, &backend, &device, &scratch, &params);
+        let frame = readback(&device, &backend, out_slot, w, h);
+        let lit = frame
+            .chunks_exact(4)
+            .filter(|px| px[0] > 8 || px[1] > 8 || px[2] > 8)
+            .count();
+        assert!(
+            lit > (w * h) as usize / 2,
+            "the bright KUMA atlas must survive decode->upload->blit: only {lit}/{} lit texels",
+            w * h
+        );
+    }
+
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
     /// asset, frame 2's output is bit-identical to frame 1's, and the
     /// blit+mip skip (`mark_outputs_unchanged`) fires on frame 2.
