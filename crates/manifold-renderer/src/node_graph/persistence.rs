@@ -1429,6 +1429,7 @@ mod tests {
             value_aliases: vec![],
             string_params: vec![],
             string_bindings: vec![],
+            scene_bounds: None,
         });
         let doc = GraphDocument {
             version: EFFECT_GRAPH_VERSION_WITH_METADATA,

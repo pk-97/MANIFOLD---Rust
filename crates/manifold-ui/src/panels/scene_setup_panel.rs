@@ -1584,15 +1584,15 @@ impl ScenePanel {
         // Scene-relative range substitution for translate params (SCENE_PANEL_UX_DESIGN.md).
         // When bounds are available, substitute the derived range (center ± 2×extent per axis)
         // so both slider drag clamp and type-in clamp see the same widened range.
-        if let (Some((bounds_min, bounds_max)), param_id) = (
-            self.state.as_ref().and_then(|s| s.as_live()).and_then(|vm| vm.scene_bounds),
-            info.spec.id.split('_').last()
-        ) {
+        if let Some((bounds_min, bounds_max)) = self.state.as_live().and_then(|vm| vm.scene_bounds) {
+            // Extract param ID string from the ParamRow's id field (Cow<'static, str>)
+            let param_id = info.id.as_ref();
+
             // Match transform_3d position params: pos_x, pos_y, pos_z
             if let Some(axis) = param_id.strip_prefix("pos_").and_then(|suffix| match suffix {
-                "x" => Some(0),
-                "y" => Some(1),
-                "z" => Some(2),
+                "x" => Some(0usize),
+                "y" => Some(1usize),
+                "z" => Some(2usize),
                 _ => None,
             }) {
                 // Compute center and extent for this axis
@@ -2687,6 +2687,7 @@ mod tests {
             lights: Vec::new(),
             camera: CameraRowVm::None,
             camera_sections: Vec::new(), world_sections: Vec::new(),
+            scene_bounds: None,
         })));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
@@ -2781,6 +2782,7 @@ mod tests {
                 }),
             })),
             camera_sections: Vec::new(), world_sections: Vec::new(),
+            scene_bounds: None,
         }
     }
 

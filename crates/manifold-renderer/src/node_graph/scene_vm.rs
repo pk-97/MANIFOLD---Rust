@@ -426,9 +426,10 @@ impl SceneVm {
                 // for legacy projects.
                 let camera = &camera;
                 let known_camera = match camera {
-                    CameraVm::Known(row) => row,
-                    CameraVm::None | CameraVm::Custom => return None,
+                    CameraVm::Orbit(row) => row,
+                    CameraVm::None | CameraVm::Custom { .. } | CameraVm::Free(_) | CameraVm::LookAt(_) => return None,
                 };
+
                 let camera_node = root.node(known_camera.node_doc_id)?;
                 let distance = param_f32(camera_node, "distance", 0.0);
                 if distance <= 0.0 {

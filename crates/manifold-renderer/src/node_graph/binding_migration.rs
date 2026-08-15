@@ -174,6 +174,7 @@ mod tests {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_bounds: None,
         };
         EffectGraphDef {
             version: 0,

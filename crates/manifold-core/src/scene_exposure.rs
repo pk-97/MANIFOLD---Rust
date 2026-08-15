@@ -154,6 +154,7 @@ fn empty_scene_preset_metadata() -> PresetMetadata {
         value_aliases: Vec::new(),
         string_params: Vec::new(),
         string_bindings: Vec::new(),
+        scene_bounds: None,
     }
 }
 
