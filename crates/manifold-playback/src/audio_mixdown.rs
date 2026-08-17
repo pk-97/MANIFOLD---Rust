@@ -19,11 +19,12 @@
 //! the master while its tap stays hot, exactly like the live sub-track's
 //! output-volume gate (`master_hot`) vs its per-voice tap gate (`tap_hot`).
 //! Gain is the layer's linear gain, applied identically to both destinations.
-//! Per-clip placement matches live playback: varispeed `warp_ratio`, the clip
-//! `in_point`, and the decoder `encoder_delay` offset. Per-clip `is_muted` is
-//! intentionally NOT applied — live audio playback doesn't apply it either
-//! (`AudioLayerPlayback::update` gates on layer flags only), so applying it
-//! here would diverge from what the performer hears.
+//! Per-clip placement matches live playback: beat-anchored warp (warped clips are
+//! beat-linear; unwarped clips follow the tempo map), the clip `in_point`, and
+//! the decoder `encoder_delay` offset. Per-clip `is_muted` is intentionally NOT
+//! applied — live audio playback doesn't apply it either (`AudioLayerPlayback::update`
+//! gates on layer flags only), so applying it here would diverge from what the
+//! performer hears.
 //!
 //! Source samples are linearly interpolated, which folds the warp (varispeed)
 //! and the source→output sample-rate conversion into one resample — the same
@@ -37,7 +38,7 @@ use manifold_core::id::LayerId;
 use manifold_core::project::Project;
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
 use manifold_core::units::Bpm;
-use manifold_core::Beats;
+use manifold_core::{Beats, Seconds};
 
 use crate::audio_sync::preload_audio;
 
@@ -125,8 +126,6 @@ pub fn render_export_audio(
         .iter()
         .any(|l| l.is_audio() && l.is_solo);
 
-    let project_bpm = project.settings.bpm.0;
-
     let mut left = vec![0.0f32; total_frames];
     let mut right = vec![0.0f32; total_frames];
     let mut audible_in_range = false;
@@ -189,7 +188,6 @@ pub fn render_export_audio(
             let src_sr = pre.sound_data.sample_rate as f64;
             let file_dur = pre.clip_duration.0;
             let encoder_delay = pre.encoder_delay.0;
-            let ratio = clip.warp_ratio(project_bpm) as f64;
             let in_point = clip.in_point.0;
 
             // `audible_in_range` tracks the ORIGINAL [start_seconds,
@@ -212,10 +210,21 @@ pub fn render_export_audio(
 
             for i in i_start..i_end {
                 let now = render_start_seconds + i as f64 / out_sr;
-                // Source position the playhead is over (matches live playback):
-                // wall-clock since the clip start, scaled by the warp ratio,
-                // offset into the file by the in-point + encoder priming silence.
-                let src_pos = (now - clip_start_sec) * ratio + in_point + encoder_delay;
+
+                // Beat-anchored warp: convert render time to beat, then to source position
+                let clip_bpm = clip.recorded_bpm_resolved();
+                let src_pos = if clip_bpm > 0.0 {
+                    // Warped: pos(beat) = in_point + (beat - start_beat) × (60.0 / recorded_bpm)
+                    let beat = TempoMapConverter::seconds_to_beat(tempo_map, Seconds(now), bpm);
+                    let beats_since_start = (beat - clip.start_beat).0;
+                    let source_secs_per_beat = 60.0 / clip_bpm as f64;
+                    in_point + beats_since_start * source_secs_per_beat + encoder_delay
+                } else {
+                    // Unwarped: pos(beat) = in_point + secs(beat) - secs(start_beat)
+                    // which simplifies to the same as before: (now - clip_start_sec) + in_point + encoder_delay
+                    (now - clip_start_sec) + in_point + encoder_delay
+                };
+
                 if src_pos < 0.0 || src_pos >= file_dur {
                     continue;
                 }

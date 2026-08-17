@@ -42,6 +42,7 @@ use ringbuf::traits::{Consumer, Producer, Split};
 
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
+use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::PlaybackState;
 use manifold_core::{Beats, Seconds};
 
@@ -65,6 +66,63 @@ const TAP_RING_CAPACITY: usize = 16_384;
 /// A short volume/transport tween that declicks an edge (start, stop, seek-jump).
 fn declick() -> Tween {
     Tween { duration: Duration::from_millis(DECLICK_MS), ..Default::default() }
+}
+
+/// Pure function: compute the warped source file position (seconds) for a given beat.
+/// Beat-anchored warp — exact under any tempo map by construction.
+///
+/// # Arguments
+/// * `beat` - The transport beat to compute position for
+/// * `clip` - The audio clip (must be an audio clip with recorded_bpm resolved)
+/// * `project` - The project (for tempo map)
+///
+/// # Returns
+/// The source file position in seconds that should be playing at the given beat.
+///
+/// # Semantics
+/// - **Warped clip** (`recorded_bpm > 0`): source position is a pure function of beat:
+///   `pos(beat) = in_point + (beat − clip.start_beat) × (60.0 / recorded_bpm)`
+///   Voice playback rate at beat b = `local_bpm(b) / recorded_bpm`, where local_bpm uses
+///   the same priority as `PlaybackEngine::get_seconds_per_beat_at_beat`:
+///   live external tempo (Link/MIDI clock) first, then tempo map at that beat,
+///   then `settings.bpm` fallback.
+/// - **Unwarped clip** (`recorded_bpm == 0`): seconds-based position via tempo map:
+///   `pos(beat) = in_point + secs(beat) − secs(start_beat)`, rate 1.0.
+fn warped_source_position_at_beat(
+    beat: Beats,
+    clip: &manifold_core::clip::TimelineClip,
+    project: &Project,
+) -> f64 {
+    let clip_bpm = clip.recorded_bpm_resolved();
+    let in_point = clip.in_point.0;
+    let start_beat = clip.start_beat;
+
+    if clip_bpm <= 0.0 {
+        // Unwarped: seconds-based via tempo map
+        let start_secs = TempoMapConverter::beat_to_seconds_immut(
+            &project.tempo_map, start_beat, project.settings.bpm,
+        ).0;
+        let beat_secs = TempoMapConverter::beat_to_seconds_immut(
+            &project.tempo_map, beat, project.settings.bpm,
+        ).0;
+        in_point + (beat_secs - start_secs)
+    } else {
+        // Warped: beat-linear, source advances at 60/recorded_bpm seconds per beat
+        let beats_since_start = (beat - start_beat).0;
+        let source_secs_per_beat = 60.0 / clip_bpm as f64;
+        in_point + beats_since_start * source_secs_per_beat
+    }
+}
+
+/// Compute the local BPM at a given beat for voice playback rate.
+/// Uses the same priority as `PlaybackEngine::get_seconds_per_beat_at_beat`.
+fn local_bpm_at_beat(beat: Beats, project: &Project, engine: &PlaybackEngine) -> f32 {
+    // Priority 1: live external tempo (Link/MIDI Clock)
+    if let Some((live_bpm, _)) = engine.try_get_live_external_tempo() {
+        return live_bpm;
+    }
+    // Priority 2: tempo map (allocation-free immutable scan)
+    project.tempo_map.get_bpm_at_beat_immut(beat, project.settings.bpm).0
 }
 
 /// Pass-through tap effect on a layer's sub-track: copies the post-fader mono
@@ -212,7 +270,6 @@ impl AudioLayerPlayback {
     /// Drive every audio clip under the playhead. Called each content tick.
     pub fn update(&mut self, project: &Project, engine: &PlaybackEngine) {
         let beat = engine.current_beat();
-        let now = engine.current_time();
         let state = engine.current_state();
         // Audio layers have their own solo bus (design section 5): a soloed audio layer
         // silences other audio layers, independent of the visual solo.
@@ -248,13 +305,18 @@ impl AudioLayerPlayback {
                 continue;
             };
             active.insert(clip.id.clone());
-            // Source position the playhead is over: wall-clock elapsed since the
-            // clip start, scaled by the warp ratio (varispeed — the voice advances
-            // `ratio` seconds of source per wall second), offset into the file by
-            // the clip's in-point.
-            let ratio = clip.warp_ratio(project.settings.bpm.0);
-            let clip_start = engine.beat_to_timeline_time_immut(clip.start_beat);
-            let expected = (now - clip_start) * ratio as f64 + clip.in_point;
+            // Source position the playhead is over: beat-anchored warp.
+            // For warped clips: pos(beat) = in_point + (beat − start_beat) × (60 / recorded_bpm).
+            // For unwarped clips: pos(beat) = in_point + secs(beat) − secs(start_beat).
+            let expected = Seconds(warped_source_position_at_beat(beat, clip, project));
+
+            // Voice playback rate: local_bpm / recorded_bpm for warped clips, 1.0 for unwarped.
+            let clip_bpm = clip.recorded_bpm_resolved();
+            let ratio = if clip_bpm > 0.0 {
+                local_bpm_at_beat(beat, project, engine) / clip_bpm
+            } else {
+                1.0
+            };
             // Disjoint field borrows: the track (read) vs the manager + voices
             // (write) are distinct fields of `self`, so this type-checks without a
             // self method that would borrow all of `self`.
@@ -599,5 +661,121 @@ mod layer_tap_tests {
             "tap went silent (peak {peak:.4}) when sub-track muted to master — \
              output volume is applied before the tap; analysis-only needs a different tap point"
         );
+    }
+}
+
+#[cfg(test)]
+mod warped_position_tests {
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::project::Project;
+    use manifold_core::types::TempoPointSource;
+    use manifold_core::{Beats, Bpm, Seconds};
+
+    /// Helper: create a minimal engine for testing (no audio backend).
+    fn test_engine(project: Project) -> PlaybackEngine {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine
+    }
+
+    /// (a) Warped clip at constant tempo: pos(beat) = in_point + beats × (60/recorded_bpm)
+    #[test]
+    fn warped_position_constant_tempo() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(140.0);
+        let mut clip = TimelineClip::new_audio(
+            "test.wav".to_string(),
+            Beats::from_f32(4.0),
+            Beats::from_f32(8.0),
+            Seconds(2.0),
+            Seconds(120.0),
+        );
+        clip.set_recorded_bpm(120.0); // Warped
+
+        let engine = test_engine(project);
+        let project_binding = engine.project();
+        let project_ref = project_binding.as_ref().unwrap();
+        let pos_at_4 = warped_source_position_at_beat(Beats::from_f32(4.0), &clip, project_ref);
+        let pos_at_8 = warped_source_position_at_beat(Beats::from_f32(8.0), &clip, project_ref);
+        let pos_at_12 = warped_source_position_at_beat(Beats::from_f32(12.0), &clip, project_ref);
+
+        // pos(4) = 2.0 + (4-4) × (60/120) = 2.0
+        assert!((pos_at_4 - 2.0).abs() < 1e-6, "at start beat, position = in_point");
+        // pos(8) = 2.0 + 4 × 0.5 = 4.0
+        assert!((pos_at_8 - 4.0).abs() < 1e-6, "mid-clip position");
+        // pos(12) = 2.0 + 8 × 0.5 = 6.0
+        assert!((pos_at_12 - 6.0).abs() < 1e-6, "end-clip position");
+    }
+
+    /// (b) Warped clip with tempo map step: still beat-linear, step has no effect.
+    #[test]
+    fn warped_position_tempo_map_step() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        // Tempo step at beat 6 (inside the clip)
+        project.tempo_map.add_or_replace_point(Beats::from_f32(6.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+
+        let mut clip = TimelineClip::new_audio(
+            "test.wav".to_string(),
+            Beats::from_f32(4.0),
+            Beats::from_f32(6.0), // 4..10
+            Seconds(1.0),
+            Seconds(120.0),
+        );
+        clip.set_recorded_bpm(100.0); // Warped
+
+        let engine = test_engine(project);
+        let project_binding = engine.project();
+        let project_ref = project_binding.as_ref().unwrap();
+
+        // At beat 4 (start): pos = 1.0 + (4-4) × (60/100) = 1.0
+        let pos_4 = warped_source_position_at_beat(Beats::from_f32(4.0), &clip, project_ref);
+        assert!((pos_4 - 1.0).abs() < 1e-6);
+
+        // At beat 6 (tempo step): pos = 1.0 + 2 × 0.6 = 2.2
+        let pos_6 = warped_source_position_at_beat(Beats::from_f32(6.0), &clip, project_ref);
+        assert!((pos_6 - 2.2).abs() < 1e-6);
+
+        // At beat 10 (end): pos = 1.0 + 6 × 0.6 = 4.6
+        let pos_10 = warped_source_position_at_beat(Beats::from_f32(10.0), &clip, project_ref);
+        assert!((pos_10 - 4.6).abs() < 1e-6);
+    }
+
+    /// (c) Unwarped clip: follows tempo map (piecewise).
+    #[test]
+    fn unwarped_position_tempo_map() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        // Tempo halves at beat 6
+        project.tempo_map.add_or_replace_point(Beats::from_f32(6.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+
+        let clip = TimelineClip::new_audio(
+            "test.wav".to_string(),
+            Beats::from_f32(4.0),
+            Beats::from_f32(6.0), // 4..10
+            Seconds(1.5),
+            Seconds(120.0),
+        );
+        // No recorded_bpm → unwarped
+
+        let engine = test_engine(project);
+        let project_binding = engine.project();
+        let project_ref = project_binding.as_ref().unwrap();
+
+        // Unwarped: pos(beat) = in_point + secs(beat) - secs(start_beat)
+        let pos_4 = warped_source_position_at_beat(Beats::from_f32(4.0), &clip, project_ref);
+        assert!((pos_4 - 1.5).abs() < 1e-6, "unwarped at start: in_point only");
+
+        // At beat 6: secs(6) = 6 × (60/120) = 3.0, secs(4) = 2.0, so pos = 1.5 + 3.0 - 2.0 = 2.5
+        let pos_6 = warped_source_position_at_beat(Beats::from_f32(6.0), &clip, project_ref);
+        assert!((pos_6 - 2.5).abs() < 1e-4, "unwarped at tempo step");
+
+        // At beat 10: secs(10) = secs(6) + 4 × (60/60) = 3.0 + 4.0 = 7.0, secs(4) = 2.0
+        // pos = 1.5 + 7.0 - 2.0 = 6.5
+        let pos_10 = warped_source_position_at_beat(Beats::from_f32(10.0), &clip, project_ref);
+        assert!((pos_10 - 6.5).abs() < 1e-4, "unwarped at end");
     }
 }

@@ -74,6 +74,42 @@ impl TempoMap {
         Bpm::clamped(bpm.0)
     }
 
+    /// Immutable version of `get_bpm_at_beat` — allocation-free, order-independent.
+    /// Returns the BPM at a given beat: the point with the maximum beat <= query,
+    /// or the earliest-beat point's BPM if no such point exists (matching the &mut version's semantics).
+    /// Clamped to 20..300 BPM. Returns `fallback` if the map is empty.
+    pub fn get_bpm_at_beat_immut(&self, beat: Beats, fallback: Bpm) -> Bpm {
+        if self.points.is_empty() {
+            return Bpm::clamped(fallback.0);
+        }
+        // Track earliest beat (for initialization) and max beat <= query (for result)
+        let mut earliest_beat = Beats(f64::MAX);
+        let mut init_bpm = self.points[0].bpm;
+        let mut max_beat_le_query = Beats(f64::MIN);
+        let mut result_bpm = init_bpm;
+
+        for point in &self.points {
+            // Track earliest point for initialization (matching &mut version's points[0].bpm after sort)
+            if point.beat < earliest_beat {
+                earliest_beat = point.beat;
+                init_bpm = point.bpm;
+            }
+            // Track max-beat point <= query
+            if point.beat <= beat && point.beat >= max_beat_le_query {
+                max_beat_le_query = point.beat;
+                result_bpm = point.bpm;
+            }
+        }
+
+        // If no point satisfies beat <= query, use earliest point's BPM (matching &mut semantics)
+        let result = if max_beat_le_query == Beats(f64::MIN) {
+            init_bpm
+        } else {
+            result_bpm
+        };
+        Bpm::clamped(result.0)
+    }
+
     pub fn add_or_replace_point(
         &mut self,
         beat: Beats,
@@ -440,5 +476,50 @@ mod tests {
         // Next 4 beats at 60bpm = 4 seconds
         let seconds = TempoMapConverter::beat_to_seconds(&mut map, Beats(8.0), Bpm(120.0));
         assert!((seconds.0 - 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_bpm_at_beat_immut_matches_mut() {
+        let fallback = Bpm(140.0);
+
+        // Empty map: both should return fallback
+        let mut empty_map = TempoMap::default();
+        assert_eq!(empty_map.get_bpm_at_beat(Beats(4.0), fallback), empty_map.get_bpm_at_beat_immut(Beats(4.0), fallback));
+
+        // Test with genuinely unsorted map (built via add_or_replace_point in non-monotonic order)
+        let mut unsorted_map = TempoMap::default();
+        // Add points in non-monotonic beat order: 8, then 0, then 4
+        // This leaves is_sorted = false, so &mut version will sort on first call
+        unsorted_map.add_or_replace_point(Beats(8.0), Bpm(180.0), TempoPointSource::Manual, 0.001);
+        unsorted_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
+        unsorted_map.add_or_replace_point(Beats(4.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+
+        // Call IMMUT version FIRST on the fresh unsorted map to catch order bugs
+        // Query beat 10 should return 180 (max beat <= 10 is beat 8)
+        let immut_result_first = unsorted_map.get_bpm_at_beat_immut(Beats(10.0), fallback);
+        assert_eq!(immut_result_first, Bpm(180.0), "Immut version should return max-beat point (180 at beat 8) for query 10");
+
+        // Query before every point should return earliest point's BPM (120 at beat 0)
+        let immut_result_before_all = unsorted_map.get_bpm_at_beat_immut(Beats(-1.0), fallback);
+        assert_eq!(immut_result_before_all, Bpm(120.0), "Immut version should return earliest point's BPM for query before all points");
+
+        // Now test parity across multiple query beats
+        for query_beat in [Beats(0.0), Beats(2.0), Beats(4.0), Beats(6.0), Beats(8.0), Beats(10.0)] {
+            let mut_result = unsorted_map.get_bpm_at_beat(query_beat, fallback);
+            let immut_result = unsorted_map.get_bpm_at_beat_immut(query_beat, fallback);
+            assert_eq!(mut_result, immut_result, "Mismatch at beat {:?} after &mut sorted", query_beat);
+        }
+
+        // Test with sorted map for completeness
+        let mut sorted_map = TempoMap::default();
+        sorted_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
+        sorted_map.add_or_replace_point(Beats(4.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        sorted_map.add_or_replace_point(Beats(8.0), Bpm(180.0), TempoPointSource::Manual, 0.001);
+
+        for query_beat in [Beats(0.0), Beats(2.0), Beats(4.0), Beats(6.0), Beats(8.0), Beats(10.0)] {
+            let mut_result = sorted_map.get_bpm_at_beat(query_beat, fallback);
+            let immut_result = sorted_map.get_bpm_at_beat_immut(query_beat, fallback);
+            assert_eq!(mut_result, immut_result, "Sorted map mismatch at beat {:?}", query_beat);
+        }
     }
 }
