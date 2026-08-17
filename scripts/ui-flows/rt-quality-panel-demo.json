@@ -1,0 +1,41 @@
+[
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Shadows", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Ultra Low (1 spp)", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Ultra Low (1 spp)", "type": "Button", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Low (2 spp)", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "50% (half)", "type": "Button", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "75% (three-quarter)", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  "Dump"
+]

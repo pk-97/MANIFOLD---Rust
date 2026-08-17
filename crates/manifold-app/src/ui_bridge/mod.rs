@@ -286,6 +286,13 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 ctx.ui.toggle_scene_dock();
                 DispatchResult::structural()
             }
+            // RT Quality overlay (headless-harness path; the live app opens it
+            // in app_render's PanelAction loop). Structural: overlay geometry.
+            RootAction::OpenRtQuality => {
+                ctx.ui.rt_quality_panel.open();
+                ctx.ui.overlay_dirty = true;
+                DispatchResult::structural()
+            }
             // Dropdown/picker opens intercepted earlier in ui_root/app_render.
             // The pre-decomposition router routed these through the inspector
             // chain, which no handler claimed, so they returned `unhandled()`;

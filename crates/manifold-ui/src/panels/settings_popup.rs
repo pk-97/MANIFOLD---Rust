@@ -13,7 +13,7 @@
 //! only by the video-export encoder — live on-screen HDR is automatic, driven by
 //! the display's EDR headroom.
 
-use crate::{ProjectAction, TransportAction};
+use crate::{ProjectAction, RootAction, TransportAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color;
 use crate::input::{Key, UIEvent};
@@ -44,7 +44,7 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 
 /// Number of control rows under the single "Render" section. Kept in lockstep
 /// with `build_rows` so `body_height` matches the imperative layout.
-const ROW_COUNT: f32 = 4.0;
+const ROW_COUNT: f32 = 5.0;
 
 pub struct SettingsPopup {
     open: bool,
@@ -261,6 +261,20 @@ impl SettingsPopup {
             if self.hdr_on { "On" } else { "Off" },
         );
         self.actions.push((hdr_id, PanelAction::Project(ProjectAction::ToggleHdr)));
+        cy += ROW_H + ROW_GAP;
+
+        // RT Quality… opens the floating RT tier panel (RT_QUALITY_SETTINGS_DESIGN.md).
+        self.row_label(tree, inner_x, cy, "RT Quality");
+        let rt_id = tree.add_button(
+            Some(self.bg_id),
+            ctrl_x,
+            cy,
+            ctrl_w,
+            ROW_H,
+            components::dropdown_trigger_style(BTN_FONT),
+            "Configure…",
+        );
+        self.actions.push((rt_id, PanelAction::Root(RootAction::OpenRtQuality)));
     }
 
     fn row_label(&self, tree: &mut UITree, x: f32, y: f32, text: &str) {

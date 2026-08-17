@@ -972,6 +972,10 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(zoom_ppb);
+    // The live app's per-frame `push_state` feeds the RT Quality panel; the
+    // harness has no per-frame push, so mirror it here — a tier click's label
+    // repaint proves command → project → sync round-tripped.
+    ui.rt_quality_panel.configure(data.project.settings.rt_quality);
 }
 
 /// The push-state/reconcile tail half of `sync_build` (P2 split) — pushes
