@@ -236,6 +236,39 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
     }
 }
 
+/// Effect-path content key that normalizes binding metadata away.
+/// Clears `label`, `default_value`, `scale`, `offset` from every binding in
+/// `preset_metadata.bindings` before hashing — these fields never reach
+/// the generated WGSL (codegen only reads binding targets via `param_is_binding_target`).
+/// Keeps `id`, `target`, `convert`, `user_added` — retarget or add/remove changes
+/// binding-target classification and produces different WGSL, so they must stay in the key.
+///
+/// Split from `def_content_key` (generators) because the generator runtime reads
+/// `preset_metadata.bindings` directly from the cached fused def (registry.rs:253-268),
+/// so normalizing generator bindings would lose metadata at runtime. Effects don't read
+/// bindings from the cache — they flow through `ResolvedBinding::from_static` at slot-build time.
+pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    let mut normalized = def.clone();
+    clear_cosmetic_fields(&mut normalized.nodes);
+    // Normalize binding metadata for effects only
+    if let Some(meta) = normalized.preset_metadata.as_mut() {
+        for binding in &mut meta.bindings {
+            binding.label = String::new(); // cosmetic only
+            binding.default_value = 0.0; // not read by codegen
+            binding.scale = 1.0; // affine remap, doesn't affect WGSL
+            binding.offset = 0.0; // affine remap, doesn't affect WGSL
+            // Keep: id, target, convert, user_added (these affect binding-target classification)
+        }
+    }
+    match serde_json::to_vec(&normalized) {
+        Ok(bytes) => bytes.hash(&mut h),
+        Err(_) => return u64::MAX,
+    }
+    h.finish()
+}
+
 /// Cap on each content cache (effect view / generator def / segment view). The
 /// cached values are CPU codegen artifacts (a `LoadedPresetView` / fused
 /// `EffectGraphDef` — WGSL text + def structure, a few KB), NOT GPU pipelines:
@@ -353,7 +386,7 @@ pub(crate) fn fused_effect_cache_len_for_test() -> usize {
 /// fuse retargets them onto the fused nodes (refusing, → `None` → unfused, if one
 /// would strand). Selection reads only this; the blocking is just memoize-on-miss.
 pub fn fused_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
-    let key = def_content_key(def);
+    let key = effect_def_content_key(def);
     if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
     }
@@ -376,6 +409,13 @@ fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
 /// Generator twin of [`fused_view_for`]: a generator carries its modulation
 /// bindings inside `def.preset_metadata.bindings`, so fusing is self-contained
 /// (no separate `base`). Content-keyed, compile-on-miss, negative-cached.
+///
+/// NOTE: Uses `def_content_key` (not `effect_def_content_key`) because the
+/// generator runtime reads `preset_metadata.bindings` directly from the cached
+/// fused def (generators/registry.rs:253-268 via `from_def`). Normalizing
+/// generator bindings would lose this metadata at runtime. Effects don't read
+/// bindings from the cached def — they flow through `ResolvedBinding::from_static`
+/// at slot-build time — so effects use `effect_def_content_key`.
 pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDef>> {
     let key = def_content_key(def);
     if let Some(cached) = FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().get(key)) {
@@ -473,7 +513,7 @@ pub fn fused_effect_generation() -> u64 {
 /// the door for startup prewarm (`tune_all`) and direct callers, where
 /// blocking is the point. Content thread only.
 pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> FusedEffectLookup {
-    let key = def_content_key(def);
+    let key = effect_def_content_key(def);
     if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return match cached {
             Some(view) => FusedEffectLookup::Ready(view),
@@ -641,7 +681,7 @@ pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u6
     let mut h = ahash::AHasher::default();
     cards.len().hash(&mut h);
     for (def, _) in cards {
-        def_content_key(def).hash(&mut h);
+        effect_def_content_key(def).hash(&mut h);
     }
     h.finish()
 }
@@ -3409,6 +3449,130 @@ mod tests {
             "a process-leak call was found under node_graph/freeze/ — the fused-cache \
              leak model (FUSION_SOTA_DESIGN D5) must stay fully Arc/owned, not leaked:\n{}",
             violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn effect_key_ignores_binding_metadata() {
+        // Two effect defs differing only in binding label/default_value/scale/offset
+        // must produce the same effect content key AND byte-identical fused WGSL.
+        // These fields never reach the generated shader — codegen only reads binding
+        // targets via `param_is_binding_target` (region.rs:2178).
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
+            .expect("ColorGrade canonical view");
+
+        // Clone the base def and modify a binding's cosmetic fields
+        let mut def_with_metadata = (*base.canonical_def).clone();
+        if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
+                binding.label = "DIFFERENT_LABEL".to_string();
+                binding.default_value = 999.0;
+                binding.scale = 2.0;
+                binding.offset = 1.0;
+            }
+
+        // Effect content key must be identical (metadata doesn't affect codegen)
+        assert_eq!(
+            effect_def_content_key(&base.canonical_def),
+            effect_def_content_key(&def_with_metadata),
+            "binding metadata (label/default_value/scale/offset) must not affect effect content key"
+        );
+
+        // Generator key MUST still distinguish these (generator runtime reads bindings
+        // from the cached def, so normalization would lose metadata)
+        assert_ne!(
+            def_content_key(&base.canonical_def),
+            def_content_key(&def_with_metadata),
+            "generator key must still distinguish binding metadata differences"
+        );
+    }
+
+    #[test]
+    fn effect_key_distinguishes_binding_target_changes() {
+        // Two effect defs differing in a binding's target must produce different
+        // effect keys — retargeting changes which params the codegen treats as
+        // binding-exposed, producing different WGSL.
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
+            .expect("ColorGrade canonical view");
+
+        // Clone and modify a binding's target
+        let mut def_with_different_target = (*base.canonical_def).clone();
+        if let Some(meta) = def_with_different_target.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
+                // Change target to point to a different param — this MUST change the key
+                if let manifold_core::effect_graph_def::BindingTarget::Node { param, .. } = &mut binding.target {
+                    *param = "different_param".to_string();
+                }
+            }
+
+        assert_ne!(
+            effect_def_content_key(&base.canonical_def),
+            effect_def_content_key(&def_with_different_target),
+            "binding target changes must affect effect content key"
+        );
+    }
+
+    #[test]
+    fn generator_key_still_distinguishes_scale_offset() {
+        // Generator key must distinguish scale/offset changes because the generator
+        // runtime reads these from the cached fused def (registry.rs:253-268).
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("Plasma"))
+            .expect("Plasma canonical view");
+
+        let mut def_with_scale = (*base.canonical_def).clone();
+        if let Some(meta) = def_with_scale.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
+                binding.scale = 2.0;
+            }
+
+        assert_ne!(
+            def_content_key(&base.canonical_def),
+            def_content_key(&def_with_scale),
+            "generator key must still distinguish scale changes"
+        );
+    }
+
+    #[test]
+    fn effect_binding_metadata_produces_byte_identical_wgsl() {
+        // Two effect defs differing only in binding metadata must produce
+        // byte-identical fused WGSL. This proves that key equality isn't
+        // circular — the actual codegen output is the same, not just the hash.
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
+            .expect("ColorGrade canonical view");
+
+        // Clone and modify binding metadata
+        let mut def_with_metadata = (*base.canonical_def).clone();
+        if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
+                binding.label = "DIFFERENT_LABEL".to_string();
+                binding.default_value = 999.0;
+                binding.scale = 2.0;
+                binding.offset = 1.0;
+            }
+
+        // Fuse both defs and extract WGSL
+        let registry = PrimitiveRegistry::with_builtin();
+        let fused_a = fuse_canonical_def(&base.canonical_def, &registry)
+            .expect("canonical ColorGrade must fuse");
+        let fused_b = fuse_canonical_def(&def_with_metadata, &registry)
+            .expect("metadata-modified ColorGrade must fuse");
+
+        // Extract WGSL from fused nodes
+        let wgsl_a: String = fused_a.def.nodes.iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .filter_map(|n| n.wgsl_source.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let wgsl_b: String = fused_b.def.nodes.iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .filter_map(|n| n.wgsl_source.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(
+            wgsl_a, wgsl_b,
+            "binding metadata changes must produce byte-identical fused WGSL"
         );
     }
 }
