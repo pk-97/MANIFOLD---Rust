@@ -5,7 +5,7 @@ use manifold_core::LayerId;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
-use manifold_foundation::settings::RtQualitySettings;
+use manifold_core::settings::RtQualitySettings;
 use manifold_core::tempo::TempoPoint;
 use manifold_core::types::{BlendMode, MidiTriggerMode, QuantizeMode, TempoPointSource};
 use manifold_core::units::Bpm;

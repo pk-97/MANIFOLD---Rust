@@ -6,7 +6,7 @@ use crate::types::{
 use crate::units::{Beats, Bpm};
 use serde::{Deserialize, Serialize};
 
-// Re-export RT quality types from foundation so they can be used across UI, core, and editing
+// Re-export RT quality types from foundation (UI's accessible home)
 pub use manifold_foundation::settings::{
     RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution,
 };

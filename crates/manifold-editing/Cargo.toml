@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
-manifold-foundation = { path = "../manifold-foundation" }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }
