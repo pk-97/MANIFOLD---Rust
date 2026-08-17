@@ -1015,11 +1015,12 @@ struct MappingReverse {
 /// offset on the instance's per-instance graph override's `BindingDef` (their
 /// only home). The per-instance graph override (`graph` for an effect,
 /// `generator_graph` for a generator) is materialized from the caller-supplied
-/// `seed_def` first if the instance is still on the catalog default (`graph:
-/// None`), so a recalibration becomes a per-instance override exactly like a
-/// topology edit — the manifest already exists regardless, seeded at
-/// instantiation/load. The param is addressed by its stable id (never mutated
-/// — drivers/Ableton/OSC reference it).
+/// `seed_def` only when the edit carries scale/offset and the instance is
+/// still on the catalog default (`graph: None`) — a spec-only edit
+/// (label/min/max/invert/curve/section) has its whole home in the manifest,
+/// which is seeded at instantiation/load regardless, so it writes the manifest
+/// and bumps `graph_version` without materializing. The param is addressed by
+/// its stable id (never mutated — drivers/Ableton/OSC reference it).
 ///
 /// On first execute the pre-edit values are snapshotted for undo.
 #[derive(Debug)]
@@ -1110,12 +1111,22 @@ impl Command for EditParamMappingCommand {
         // The drag-commit path supplies its own pre-drag reverse, so skip the
         // self-capture (which would snapshot the preview-mutated spec).
         let keep_snapshot = self.explicit_reverse.is_none();
+        // A spec-only edit (label/min/max/curve/invert/section — no
+        // scale/offset) writes the manifest alone: scale/offset live on the
+        // graph binding, which such an edit doesn't touch, so materializing
+        // the per-instance override would only buy a structure bump and the
+        // renderer rebuild that follows — pure cost, and a sim/particle
+        // state reset on a live generator. The plain graph-version bump
+        // still fires so the renderer's user-tail rehydrate and the
+        // generator runtime's reshape re-bake see the edit.
+        let spec_only = new.scale.is_none() && new.offset.is_none();
         let snap = project
             .with_preset_graph_mut(&self.target, |host| {
                 // Materialize the per-instance graph override if the instance is
                 // still on the catalog default, so scale/offset (the binding
-                // half of the reshape) have a home.
-                if host.graph_def().is_none() {
+                // half of the reshape) have a home. Spec-only edits skip this —
+                // their only home is the manifest, which always exists.
+                if !spec_only && host.graph_def().is_none() {
                     let seed = seed_def?;
                     *host.graph_def_mut() = Some(seed);
                     host.bump_graph_structure_version();
@@ -1129,8 +1140,16 @@ impl Command for EditParamMappingCommand {
                 // scale/offset have no manifest home (they live on the
                 // BindingDef, which synth reads directly) — apply them onto
                 // the graph's binding, the only place they live. NOT part of
-                // the `meta.params` dual-write P2 deletes.
-                let prev_binding = apply_scale_offset_on_graph(host, &binding_id, &new);
+                // the `meta.params` dual-write P2 deletes. A spec-only edit
+                // has nothing to write there; it takes the plain
+                // graph-version bump `apply_scale_offset_on_graph` would have
+                // done as its only renderer signal.
+                let prev_binding = if spec_only {
+                    host.bump_graph_version();
+                    None
+                } else {
+                    apply_scale_offset_on_graph(host, &binding_id, &new)
+                };
 
                 // The manifest entry's `spec` is the LIVE reshape the
                 // renderer reads (`synth_user_binding` for a user param,
@@ -1626,6 +1645,148 @@ mod tests {
             project.settings.master_effects[0].graph.is_none(),
             "no per-instance graph materialized for an unknown id without a seed",
         );
+    }
+
+    /// A SPEC-ONLY edit (min/max/invert/curve — no scale/offset) on an
+    /// instance still at the catalog default must NOT materialize the
+    /// per-instance graph: the manifest is the whole home for those fields,
+    /// so the override would buy nothing but a structure bump and the
+    /// renderer rebuild that follows. The plain `graph_version` bump still
+    /// fires (the renderer's rehydrate/re-bake signal), and undo restores
+    /// the pre-edit manifest spec without ever having created an override.
+    #[test]
+    fn spec_only_edit_on_catalog_default_stays_unmaterialized() {
+        let mut project = Project::default();
+        let fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
+        let effect_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        seed_manifest_param(&mut project.settings.master_effects[0], "amount");
+        let v0 = project.settings.master_effects[0].graph_version;
+        let sv0 = project.settings.master_effects[0].graph_structure_version;
+
+        let edit = BindingMappingEdit {
+            min: Some(0.25),
+            max: Some(4.0),
+            invert: Some(true),
+            curve: Some(MacroCurve::Exponential),
+            ..Default::default()
+        };
+        // A seed def is supplied exactly as the app supplies it — the honesty
+        // is that it goes unused for a spec-only edit.
+        let mut cmd = EditParamMappingCommand::new(
+            GraphTarget::Effect(effect_id),
+            "amount".to_string(),
+            edit,
+            Some(seed_def_with_param("amount")),
+        );
+        cmd.execute(&mut project);
+
+        let fx = &project.settings.master_effects[0];
+        assert!(
+            fx.graph.is_none(),
+            "a spec-only edit must not materialize the per-instance graph",
+        );
+        assert_eq!(
+            fx.graph_structure_version, sv0,
+            "no structure bump (no rebuild) for a spec-only edit",
+        );
+        assert_eq!(
+            fx.graph_version,
+            v0 + 1,
+            "the plain graph-version bump still fires — the renderer's rehydrate signal",
+        );
+        let p = fx.params.get("amount").expect("manifest entry present");
+        assert_eq!(p.spec.min, 0.25);
+        assert_eq!(p.spec.max, 4.0);
+        assert!(p.spec.invert);
+        assert_eq!(p.spec.curve, MacroCurve::Exponential);
+        assert!(p.calibrated);
+
+        // Undo restores the pre-edit spec exactly, still without an override.
+        cmd.undo(&mut project);
+        let fx = &project.settings.master_effects[0];
+        assert!(fx.graph.is_none(), "undo must not materialize either");
+        let p = fx.params.get("amount").expect("manifest entry present");
+        assert_eq!(p.spec.min, 0.0, "undo restores the seeded min");
+        assert_eq!(p.spec.max, 1.0, "undo restores the seeded max");
+        assert!(!p.spec.invert, "undo restores the seeded invert");
+        assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
+        assert_ne!(
+            fx.graph_version,
+            v0 + 1,
+            "undo bumps graph_version so the renderer rehydrates the restored spec",
+        );
+
+        // Redo reapplies onto the still-unmaterialized instance.
+        cmd.execute(&mut project);
+        let fx = &project.settings.master_effects[0];
+        assert!(fx.graph.is_none());
+        assert_eq!(fx.params.get("amount").unwrap().spec.max, 4.0);
+    }
+
+    /// The generator twin of [`spec_only_edit_on_catalog_default_stays_unmaterialized`]:
+    /// a spec-only edit on a catalog-default generator writes the manifest and
+    /// bumps `graph_version` without materializing `generator_graph`. The
+    /// version bump is the signal the generator runtime's reshape re-bake
+    /// (`PresetRuntime::apply_manifest_reshape`, reached from the
+    /// generator_renderer per-frame sweep) keys on.
+    #[test]
+    fn spec_only_edit_on_catalog_default_generator_stays_unmaterialized() {
+        use manifold_core::PresetTypeId;
+        use manifold_core::layer::Layer;
+
+        let mut project = Project::default();
+        // "Plasma" is a compiled-in generator registration manifold-core
+        // carries, so `Layer::new_generator`'s `init_defaults()` seeds the
+        // manifest with a real "complexity" entry — no manual seed needed.
+        let layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.insert_layer(0, layer);
+        let v0 = project.timeline.layers[0].generator_graph_version();
+        let sv0 = project.timeline.layers[0].generator_graph_structure_version();
+
+        let edit = BindingMappingEdit {
+            curve: Some(MacroCurve::Exponential),
+            ..Default::default()
+        };
+        let mut cmd = EditParamMappingCommand::new(
+            GraphTarget::Generator(layer_id.clone()),
+            "complexity".to_string(),
+            edit,
+            Some(seed_def_with_param("complexity")),
+        );
+        cmd.execute(&mut project);
+
+        let layer = &project.timeline.layers[0];
+        assert!(
+            layer.generator_graph().is_none(),
+            "a spec-only edit must not materialize the generator override",
+        );
+        assert_eq!(
+            layer.generator_graph_structure_version(),
+            sv0,
+            "no structure bump (no generator rebuild) for a spec-only edit",
+        );
+        assert_eq!(
+            layer.generator_graph_version(),
+            v0 + 1,
+            "the graph-version bump is the re-bake signal the generator sweep keys on",
+        );
+        let p = layer
+            .gen_params()
+            .and_then(|gp| gp.params.get("complexity"))
+            .expect("manifest entry present");
+        assert_eq!(p.spec.curve, MacroCurve::Exponential);
+        assert!(p.calibrated);
+
+        cmd.undo(&mut project);
+        let layer = &project.timeline.layers[0];
+        assert!(layer.generator_graph().is_none(), "undo must not materialize either");
+        let p = layer
+            .gen_params()
+            .and_then(|gp| gp.params.get("complexity"))
+            .expect("manifest entry present");
+        assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
     }
 
     /// Generator command: materialize the layer's `generator_graph` from the

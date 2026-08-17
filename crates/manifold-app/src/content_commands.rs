@@ -589,6 +589,23 @@ impl ContentThread {
                 self.engine.mark_compositor_dirty_now();
             }
 
+            // ── Mapping-drag preview (lean structural maintenance) ──
+            ContentCommand::MutateProjectPreview(f) => {
+                // The mapping drawer's per-tick preview lands here. The
+                // closure runs; the renderer re-notify (video-library sync —
+                // a reshape never touches it) and the Ableton listener rebuild
+                // (refreshed at commit via the `Execute` arm) are skipped, so a
+                // drag tick costs the edit, never project-scale work. The
+                // overlay refresh stays: it's fingerprint-gated (free when the
+                // fork set didn't move) and the drawer can recalibrate a forked
+                // preset's card. See the variant's doc on `ContentCommand`.
+                if let Some(p) = self.engine.project_mut() {
+                    f(p);
+                }
+                self.refresh_preset_overlay_if_changed();
+                self.engine.mark_compositor_dirty_now();
+            }
+
             // ── Live value write (no structural maintenance) ───────
             ContentCommand::MutateProjectLive(f) => {
                 // Card-slider / opacity / macro drags land here, once per

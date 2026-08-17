@@ -286,7 +286,7 @@ mod scene_card_convergence_tests {
         /// The content-thread side of the loop: a real `EditingService` over
         /// its own project, driven exactly the way content_commands.rs drives
         /// it (`Execute` → `service.execute`, `ExecuteBatch` → `execute_batch`,
-        /// `MutateProject(Live)` → plain closure application, no undo entry).
+        /// `MutateProject(Live|Preview)` → plain closure application, no undo entry).
         struct ContentSide {
             project: Project,
             service: EditingService,
@@ -319,7 +319,9 @@ mod scene_card_convergence_tests {
                             self.undo_depth += k.max(1);
                             n += 1;
                         }
-                        ContentCommand::MutateProject(f) | ContentCommand::MutateProjectLive(f) => {
+                        ContentCommand::MutateProject(f)
+                        | ContentCommand::MutateProjectLive(f)
+                        | ContentCommand::MutateProjectPreview(f) => {
                             f(&mut self.project);
                         }
                         _ => {}

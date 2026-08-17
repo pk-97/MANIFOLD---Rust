@@ -257,10 +257,9 @@ pub(super) struct EffectSlot {
     ///
     /// The user tail is re-hydrated lazily when
     /// `effect.user_param_bindings_version` advances past
-    /// [`Self::user_bindings_version`]; a reshape edit bumps `graph_version`,
-    /// which forces a full chain rebuild (so the static prefix re-resolves
-    /// from the preset spec); the cache clears (via
-    /// [`BoundGraph::apply_inner_overrides`]) on a `graph_version` bump.
+    /// [`Self::user_bindings_version`]; a reshape edit bumps `graph_version`.
+    /// Only topology changes (node/wire add/remove) bump `graph_structure_version`
+    /// and force a full chain rebuild.
     pub(super) bound: BoundGraph,
     /// Last seen `PresetInstance.graph_version` for the user tail. User
     /// bindings live in the per-instance graph now, so a binding add /
@@ -1934,6 +1933,28 @@ impl PresetRuntime {
             // seg.bound (mut) + seg.node_map (shared) + self.graph (mut).
             seg.bound
                 .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
+        }
+    }
+
+    /// Re-bake every binding's reshape from the live manifest — the in-place
+    /// answer to a mapping-spec edit (label/min/max/curve/invert), which
+    /// bumps only `graph_version` and so never rebuilds. Mirrors the
+    /// build-time manifest overlay (BUG-078) on the running runtime, the way
+    /// the effect chain's user-tail rehydrate re-reads the manifest on the
+    /// same version bump — without it a curve/range recalibration on a
+    /// catalog-default generator (which no longer materializes an override,
+    /// so no rebuild follows) would never reach the inner nodes. `def` is
+    /// the instance's per-instance override when one exists: its
+    /// `BindingDef`s carry the scale/offset half of a mapping edit (a
+    /// scale/offset edit on a catalog-default instance materializes the
+    /// override, so `None` always implies the baked pair still stands).
+    pub fn apply_manifest_reshape(
+        &mut self,
+        manifest: &ParamManifest,
+        def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    ) {
+        if let Some(seg) = self.effect_nodes.first_mut() {
+            seg.bound.rebake_reshapes(manifest, def);
         }
     }
 
