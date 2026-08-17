@@ -206,7 +206,8 @@ pub struct ParamCardPanel {
     collapse_configured: bool,
     is_selected: bool,
     supports_envelopes: bool,
-    rows: Vec<ParamRow>,
+    /// Rows are pub for test access to verify spec updates reach the built card.
+    pub rows: Vec<ParamRow>,
     string_param_info: Vec<ParamCardStringInfo>,
 
     // ── State ──
@@ -336,6 +337,9 @@ pub struct ParamCardPanel {
     param_cache: Vec<f32>,
     toggle_cache: Vec<bool>,
     label_cache: Vec<Option<String>>,
+    /// Range cache — per-param (min, max) pairs, so range edits reach built cards live.
+    /// Stored as flat pairs for cache locality: [min₀, max₀, min₁, max₁, ...]
+    range_cache: Vec<f32>,
     /// P2 "value-change flash" (`UI_CRAFT_AND_MOTION_PLAN.md` section 4) — per-param
     /// one-shot fired when `sync_values` sees a genuine value change (not the
     /// post-`configure()` NaN resync, and not while this card's slider is being
@@ -461,6 +465,7 @@ impl ParamCardPanel {
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
+            range_cache: Vec::new(),
             value_flash: Vec::new(),
             value_snapback: Vec::new(),
             spawn_scale: AnimF32::new(1.0, color::MOTION_MED_MS),
@@ -1863,7 +1868,7 @@ mod tests {
 
         use crate::view::UiParamSlot as ParamSlot;
         // Row 0 is "radius", min 0 / max 100 / default 10.
-        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot { value: 50.0, base: 50.0, exposed: true, min: 0.0, max: 100.0 }, ParamSlot::exposed(0.8)]);
         let fill_id = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
         let width_at_50 = tree.get_bounds(fill_id).width;
 
@@ -1873,7 +1878,7 @@ mod tests {
         assert!(panel.value_snapback[0].is_animating(), "reset starts the row's own tween");
 
         // The next poll sees the model already at the new default (10.0).
-        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(10.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot { value: 10.0, base: 10.0, exposed: true, min: 0.0, max: 100.0 }, ParamSlot::exposed(0.8)]);
         let width_just_after = tree.get_bounds(fill_id).width;
         assert!(
             (width_just_after - width_at_50).abs() < 0.5,
