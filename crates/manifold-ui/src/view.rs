@@ -114,13 +114,29 @@ impl UiLayer {
 
 /// The UI's view of one effect/generator parameter slot — the values the param
 /// card pushes into its sliders. Built from `manifold_core::effects::ParamSlot`.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiParamSlot {
     /// Effective (post-modulation) value — what the slider displays.
     pub value: f32,
     /// User-intended base (pre-modulation) value.
     pub base: f32,
     pub exposed: bool,
+    /// Parameter minimum value — carried through the sync so range edits reach built cards live.
+    pub min: f32,
+    /// Parameter maximum value — carried through the sync so range edits reach built cards live.
+    pub max: f32,
+}
+
+impl Default for UiParamSlot {
+    fn default() -> Self {
+        Self {
+            value: 0.0,
+            base: 0.0,
+            exposed: false,
+            min: 0.0,
+            max: 1.0,
+        }
+    }
 }
 
 /// One entry of the per-frame value channel: a param's borrowed manifest id
@@ -139,6 +155,8 @@ impl UiParamSlot {
             value,
             base: value,
             exposed: true,
+            min: 0.0,
+            max: 1.0,
         }
     }
 }

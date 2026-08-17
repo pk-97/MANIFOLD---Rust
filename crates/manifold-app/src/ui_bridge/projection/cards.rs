@@ -582,6 +582,7 @@ mod sync_card_values_tests {
     use manifold_core::PresetTypeId;
     use crate::app::SelectionState;
     use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::effect_graph_def::ParamSpecDef;
 
     fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
         manifold_core::effect_graph_def::ParamSpecDef {
@@ -648,5 +649,53 @@ mod sync_card_values_tests {
         // No "stale text is gone" assertion: "0.50" legitimately appears on
         // other widgets (e.g. mapping trim fields seeded from the same
         // default), so disappearance is not a sound oracle here.
+    }
+
+    #[test]
+    fn project_param_range_edit_reaches_built_card_slider_via_sync_card_values() {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec(
+            "user_glow",
+            "Glow Amount",
+        ))]);
+        project.settings.master_effects.push(fx);
+
+        // Configure + build at the initial range (0.0–1.0).
+        let mut ui = UIRoot::new();
+        let selection = SelectionState::default();
+        sync_inspector_data(&mut ui, &project, None, &selection, &[]);
+        ui.build_inspector_in_rect(manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0));
+
+        // A calibration edit: change the param's min/max in the manifest.
+        project.settings.master_effects[0]
+            .params
+            .get_mut("user_glow")
+            .expect("user_glow param")
+            .spec = ParamSpecDef {
+                id: "user_glow".to_string(),
+                name: "Glow Amount".to_string(),
+                min: 10.0,  // Changed from 0.0
+                max: 100.0, // Changed from 1.0
+                default_value: 50.0,
+                ..ParamSpecDef::default()
+            };
+
+        // Only the value-sync call — no configure, no rebuild.
+        sync_card_values(&mut ui, &project, None);
+
+        // Verify the built card's row spec reflects the new range.
+        // This is the real oracle: the stored spec.min/max drive the slider's
+        // normalization math, so a stale spec would keep using 0..1 despite
+        // the manifest now saying 10..100.
+        let effect_card = ui.inspector.master_effect_mut(0).expect("effect card exists");
+        assert_eq!(
+            effect_card.rows[0].spec.min, 10.0,
+            "sync_card_values must update the built row's spec.min to match the manifest edit"
+        );
+        assert_eq!(
+            effect_card.rows[0].spec.max, 100.0,
+            "sync_card_values must update the built row's spec.max to match the manifest edit"
+        );
     }
 }
