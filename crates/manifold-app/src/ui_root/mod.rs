@@ -40,6 +40,7 @@ pub(crate) enum OverlayId {
     // built from the root pass and routed at the docked-panel site
     // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1/section 3.5).
     Settings,
+    RtQuality,
     BrowserPopup,
     AbletonPicker,
     Toast,
@@ -53,9 +54,10 @@ impl OverlayId {
     /// it must render above whatever spawned it. The toast (D11,
     /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) sits topmost of all — a status message
     /// must stay legible over an open modal/dropdown, not be hidden by one.
-    const Z_ORDER: [OverlayId; 6] = [
+    const Z_ORDER: [OverlayId; 7] = [
         OverlayId::PerfHud,
         OverlayId::Settings,
+        OverlayId::RtQuality,
         OverlayId::BrowserPopup,
         OverlayId::AbletonPicker,
         OverlayId::Dropdown,
@@ -165,6 +167,7 @@ pub struct UIRoot {
     pub audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel,
     pub scene_setup_panel: manifold_ui::panels::scene_setup_panel::ScenePanel,
     pub settings_popup: manifold_ui::panels::settings_popup::SettingsPopup,
+    pub rt_quality_panel: manifold_ui::panels::rt_quality_panel::RtQualityPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
     /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Fired by
     /// `Application` on `M::Undo`/`M::Redo` (see `app_render.rs`); ticked every
@@ -413,6 +416,7 @@ impl UIRoot {
             },
             scene_setup_panel: manifold_ui::panels::scene_setup_panel::ScenePanel::new(),
             settings_popup: manifold_ui::panels::settings_popup::SettingsPopup::new(),
+            rt_quality_panel: manifold_ui::panels::rt_quality_panel::RtQualityPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             toast: manifold_ui::panels::toast::ToastPanel::new(),
             last_export_toast_key: None,
@@ -1416,6 +1420,7 @@ impl UIRoot {
         self.ableton_picker.update(&mut self.tree);
         self.browser_popup.update(&mut self.tree);
         self.settings_popup.update(&mut self.tree);
+        self.rt_quality_panel.update(&mut self.tree);
     }
 
     /// Resize the Audio Setup level meters from live per-send levels. Cheap

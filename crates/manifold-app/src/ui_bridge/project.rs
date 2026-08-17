@@ -203,6 +203,21 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
+        ProjectAction::ChangeRtQuality(new_settings) => {
+            let old_settings = project.settings.rt_quality;
+            if *new_settings != old_settings {
+                let cmd = manifold_editing::commands::settings::ChangeRtQualityCommand::new(
+                    old_settings, new_settings.clone(),
+                );
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::handled()
+        }
         ProjectAction::SetGenType(opt_layer_id, new_type) => {
             let new_type = crate::ui_translate::preset_type_id_to_core(new_type);
             let resolved_idx = opt_layer_id

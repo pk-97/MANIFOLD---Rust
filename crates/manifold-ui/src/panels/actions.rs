@@ -254,6 +254,9 @@ pub enum ProjectAction {
     SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
     SetTonemapCurve(TonemapCurve),
     SetGenType(Option<LayerId>, PresetTypeId), // layer_id, preset type id
+    /// RT Quality settings: replace entire RtQualitySettings struct.
+    /// Dispatches `ChangeRtQualityCommand`. One undo unit covers all changes.
+    ChangeRtQuality(manifold_foundation::settings::RtQualitySettings),
 }
 
 #[derive(Debug, Clone)]

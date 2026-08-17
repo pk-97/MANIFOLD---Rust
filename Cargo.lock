@@ -2337,6 +2337,7 @@ version = "0.1.0"
 dependencies = [
  "inventory",
  "manifold-core",
+ "manifold-foundation",
  "manifold-io",
  "serde_json",
 ]

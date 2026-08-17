@@ -1,0 +1,19 @@
+[
+  {
+    "Comment": "RT Quality Settings Panel - P3 Phase Demo"
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Comment": "This flow demonstrates the RT Quality panel structure once it's wired to a menu item. The panel shows 5 rows (Shadows, AO, GI, Reflections, Ray Resolution) with 2 dropdown columns (Real-time, Export). Each dropdown cycles through quality tiers on click."
+  },
+  {
+    "Comment": "To properly test this flow, the RT Quality panel needs to be opened from a menu item (e.g., MANIFOLD ▸ Settings… ▸ RT Quality…), which is a follow-up integration task."
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "RT Quality", "type": "Label" } },
+      "check": "Exists"
+    }
+  }
+]
