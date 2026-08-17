@@ -111,6 +111,11 @@ pub struct Executor {
     /// release) so the graph editor can sample it. `None` disables capture —
     /// zero cost on the live path. Set per frame via [`set_preview_target`].
     preview_target: Option<NodeInstanceId>,
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
+    /// the active quality column (realtime vs export). Default = live constants
+    /// so tests and non-RT graphs run unchanged. Set per frame via
+    /// [`set_rt_quality`]; consumed by `render_scene` through the context.
+    rt_quality: crate::node_graph::RtQuality,
     /// The Texture2D output resource of `preview_target`, recorded during the
     /// step loop. After `execute_frame_*`, the integration layer reads its
     /// texture via [`Backend::slot_for`] + [`Backend::texture_2d`] and
@@ -394,6 +399,7 @@ impl Executor {
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
             preview_target: None,
+            rt_quality: crate::node_graph::RtQuality::default(),
             preview_resource: None,
             preview_scalar_inputs: Vec::new(),
             preview_scalar_outputs: Vec::new(),
@@ -557,6 +563,14 @@ impl Executor {
     /// can hand it to the integration layer for downscaling.
     pub fn set_preview_target(&mut self, node: Option<NodeInstanceId>) {
         self.preview_target = node;
+    }
+
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set the per-frame RT quality values
+    /// (samples per pixel for each RT term and ray resolution). Call once per
+    /// frame before `execute_frame_*` with the resolved values from the active
+    /// project column (realtime vs export). Cheap — stores by value, no allocation.
+    pub fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+        self.rt_quality = q;
     }
 
     /// The preview target's Texture2D output resource from the last frame, if
@@ -1307,6 +1321,7 @@ impl Executor {
                             step.node,
                             owner_key,
                             self.rebuild_epoch,
+                            self.rt_quality,
                         )
                         .with_errors(&mut self.error_scratch);
                         let has_gpu_binding = ctx.gpu.is_some();
@@ -1665,6 +1680,7 @@ impl Executor {
                     step.node,
                     owner_key,
                     self.rebuild_epoch,
+                    self.rt_quality,
                 )
                 .with_errors(&mut self.error_scratch);
                 inst.node.late_capture(&mut ctx);

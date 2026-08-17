@@ -351,6 +351,14 @@ impl PresetRuntime {
         self.executor.set_profile_scope(scope);
     }
 
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set per-frame RT quality values
+    /// (samples per pixel for each RT term and ray resolution). Call once per
+    /// frame before run() with the resolved values from the active project
+    /// column (realtime vs export). Forwards to the executor.
+    pub fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+        self.executor.set_rt_quality(q);
+    }
+
     /// Drain this chain's per-step CPU profiles recorded on the last profiled
     /// frame (each entry's `tag` is the scoped GPU-span join key).
     pub fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {

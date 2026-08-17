@@ -502,6 +502,11 @@ pub struct LayerCompositor {
     /// helpers) — `false` costs one `bool` set per dispatch, zero GPU/CPU
     /// timing. Set via [`Self::set_profiling`].
     profiling_enabled: bool,
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — per-frame RT quality values from the
+    /// active column (realtime vs export). Set per frame via [`set_rt_quality`];
+    /// forwarded to every chain's executor through dispatch_chain. Default = live
+    /// constants so tests and non-RT graphs run unchanged.
+    rt_quality: crate::node_graph::RtQuality,
     /// Force the serial composite path (D6 correction: profiled mode needs
     /// one shared compositor command buffer to attach the dispatch sampler
     /// to). Set via [`Self::set_force_serial`].
@@ -617,6 +622,7 @@ impl LayerCompositor {
             preview_request: None,
             dump_request: None,
             profiling_enabled: false,
+            rt_quality: crate::node_graph::RtQuality::default(),
             force_serial: false,
         }
     }
@@ -914,6 +920,7 @@ impl LayerCompositor {
         preview_effect: Option<&EffectId>,
         scope: &str,
         profiling: bool,
+        rt_quality: crate::node_graph::RtQuality,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -925,6 +932,7 @@ impl LayerCompositor {
             preview_effect,
             scope,
             profiling,
+            rt_quality,
         )
     }
 
@@ -1172,6 +1180,7 @@ impl LayerCompositor {
                         preview_fx.as_ref(),
                         &fx_scope(ld.layer_id),
                         self.profiling_enabled,
+                        self.rt_quality,
                     )
                 } else {
                     None
@@ -1473,6 +1482,7 @@ impl LayerCompositor {
                                 None,
                                 &led_scope(group.layer_id),
                                 self.profiling_enabled,
+                                self.rt_quality,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -1686,6 +1696,7 @@ impl LayerCompositor {
                     preview_fx.as_ref(),
                     &fx_scope(group_id),
                     self.profiling_enabled,
+                    self.rt_quality,
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -1955,6 +1966,7 @@ impl LayerCompositor {
                             preview_fx.as_ref(),
                             &fx_scope(ld.layer_id),
                             self.profiling_enabled,
+                            self.rt_quality,
                         )
                     } else {
                         None
@@ -2372,6 +2384,7 @@ impl Compositor for LayerCompositor {
                 preview_fx.as_ref(),
                 "master",
                 self.profiling_enabled,
+                self.rt_quality,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -2443,6 +2456,7 @@ impl Compositor for LayerCompositor {
                 None,
                 "led:master",
                 self.profiling_enabled,
+                self.rt_quality,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,
@@ -2592,6 +2606,35 @@ impl Compositor for LayerCompositor {
             return Vec::new();
         };
         crate::node_graph::outer_routings_from_view(view)
+    }
+
+    fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+        // RT_QUALITY_SETTINGS_DESIGN.md D5: forward to all chains, same sweep as set_profiling
+        self.rt_quality = q;
+        // Forward to all chains — same sweep as set_profiling
+        for (_id, chain) in self.effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_rt_quality(q);
+            }
+        }
+        for (_id, chain) in self.group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_rt_quality(q);
+            }
+        }
+        for (_id, chain) in self.led_group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_rt_quality(q);
+            }
+        }
+        if let Some(cg) = self.master_effect_chain.as_mut() {
+            cg.set_rt_quality(q);
+        }
+        if let Some(cg) = self.led_master_ec.as_mut()
+            && let Some(cg) = cg.as_mut()
+        {
+            cg.set_rt_quality(q);
+        }
     }
 }
 
