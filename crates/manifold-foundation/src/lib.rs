@@ -18,6 +18,7 @@
 pub mod feature_flags;
 pub mod hash;
 pub mod id;
+pub mod settings;
 pub mod units;
 
 pub use feature_flags::RELIGHT_FEATURE_ENABLED;

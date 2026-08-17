@@ -219,10 +219,6 @@ fn sun_cone_half_angle(softness: crate::node_graph::light::ShadowSoftness) -> f3
     }
 }
 
-/// RAYTRACING_DESIGN.md section 5.2 P2: AO rays per pixel in the half-res
-/// dispatch. Committed range 1–16 (higher = less noise, more GPU cost);
-/// Peter's morning gate tunes within it.
-const AO_SAMPLES_PER_PIXEL: u32 = 4;
 /// RAYTRACING_DESIGN.md section 5.2 P2: AO ray max distance, world units.
 /// Committed range 0.1–2.0 at the P0/P1 fixture scale (the apricot scan
 /// and this file's synthetic test scenes) — scene-scale dependent per
@@ -269,19 +265,13 @@ const RT_TRANSMISSION_WRAP: f32 = 0.5;
 /// The lag cost is covered by the `lighting_key` + per-texel moments gates,
 /// which snap real changes to alpha 0.5; full gpu-proofs suite green.
 const IRRADIANCE_ACCUM_ALPHA: f32 = 0.01;
-/// RAYTRACING_DESIGN.md section 5.2 P3: one-bounce GI gather rays per pixel
-/// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
-/// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
-/// rays in the SAME half-res dispatch); Peter's morning gate tunes within
-/// it.
-const GI_SAMPLES_PER_PIXEL: u32 = 4;
-/// GGX reflection rays per pixel, in the same half-res dispatch. Was 1,
-/// which measured 4.7 sRGB levels of frame-to-frame change on a fully static
-/// scene with a 171-level 99.9th percentile — variance no temporal filter can
-/// hide. Committed range 1–8: higher = calmer reflections, linearly more
-/// reflection-ray cost (they are the most expensive ray class, since a hit
-/// shades a full raster-parity surface).
-const REFL_SAMPLES_PER_PIXEL: u32 = 8;
+// GI and reflection spp (and AO's, above) were compile-time constants here
+// until RT_QUALITY_SETTINGS_DESIGN.md — they now come from the per-project
+// quality tiers (manifold-foundation RtQualityTier) via ctx.rt_quality.
+// The tuning knowledge stays: GI rides the same half-res dispatch as AO
+// (costs stack); reflection rays are the most expensive class — a hit
+// shades a full raster-parity surface, and 1 spp measured 4.7 sRGB levels
+// of frame-to-frame flicker on a static scene.
 /// RAYTRACING_DESIGN.md section 8.2 D22: reduced render resolution `temporal_upscale`
 /// draws color/depth/velocity at, relative to the scene's native (canvas)
 /// resolution — `render_dim = native_dim * NUM / DEN` (1/1.5 linear, D22
@@ -1031,6 +1021,13 @@ pub struct RenderScene {
     rt_mask_half2: Option<manifold_gpu::GpuTexture>,
     rt_mask_full2: Option<manifold_gpu::GpuTexture>,
     rt_mask_width: u32,
+    /// Trace-resolution dims of the mask dispatch (RT_QUALITY_SETTINGS_DESIGN.md
+    /// D4) — tracked separately from the full-res pair above because the
+    /// realloc guard must fire when EITHER changes (a fraction change can move
+    /// trace dims with full dims fixed, and truncating division can move full
+    /// dims with trace dims fixed).
+    rt_mask_trace_w: u32,
+    rt_mask_trace_h: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RT-A3a (D16a split mode): the mask dispatch's OWN params buffer.
@@ -1180,16 +1177,6 @@ pub struct RenderScene {
     rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
     /// RT native-resolution toggle, parsed once at init from
-    /// `MANIFOLD_RT_NATIVE_TERMS` (comma-separated subset of
-    /// shadow,ao,gi,reflection). RT-A3a split dispatch: terms map to dispatches
-    /// by their actual output writes. Shadow → mask dispatch (out_sv).
-    /// AO/GI/reflection → lighting dispatch (out_irr/out_refl).
-    /// Each dispatch runs at native resolution when ANY of its terms is listed.
-    /// Empty/absent = D11 half-res for all dispatches.
-    rt_native_shadow: bool,
-    rt_native_ao: bool,
-    rt_native_gi: bool,
-    rt_native_reflection: bool,
     /// Dedicated CPU-mapped upload buffer for `AtrousParams` (tiny: two
     /// `u32`s) — separate from `rt_params_buffer`/
     /// `rt_accumulate_params_buffer` for the same non-clobbering reason
@@ -1197,6 +1184,10 @@ pub struct RenderScene {
     rt_atrous_params_buffer: Option<manifold_gpu::GpuBuffer>,
     rt_irr_width: u32,
     rt_irr_height: u32,
+    /// Trace-resolution dims of the lighting dispatch — same dual-guard
+    /// discipline as `rt_mask_trace_w/h` above.
+    rt_irr_trace_w: u32,
+    rt_irr_trace_h: u32,
     /// Small dedicated upload buffer for `AccumulateParams` — kept
     /// separate from `rt_params_buffer` (which carries the larger
     /// `ShadowRayParams`) so `accumulate_irradiance`'s upload can't race
@@ -1561,6 +1552,8 @@ impl RenderScene {
             rt_mask_half2: None,
             rt_mask_full2: None,
             rt_mask_width: 0,
+            rt_mask_trace_w: 0,
+            rt_mask_trace_h: 0,
             rt_mask_height: 0,
             rt_params_buffer: None,
             rt_mask_params_buffer: None,
@@ -1606,10 +1599,6 @@ impl RenderScene {
             rt_mask_full2_b: None,
             rt_irr_full_b: None,
             rt_normal_full_b: None,
-            rt_native_shadow: false,
-            rt_native_ao: false,
-            rt_native_gi: false,
-            rt_native_reflection: false,
             rt_atrous_params_buffer: None,
             rt_lighting_key: None,
             rt_lighting_geo_key: None,
@@ -1618,6 +1607,8 @@ impl RenderScene {
             rt_lighting_geo_gesture: 0,
             rt_lighting_geo_prev_changed: false,
             rt_irr_width: 0,
+            rt_irr_trace_w: 0,
+            rt_irr_trace_h: 0,
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
             rt_reset_detector: TemporalResetDetector::new(),
@@ -1636,20 +1627,6 @@ impl RenderScene {
             light_port_names: Vec::new(),
         };
 
-        // Parse MANIFOLD_RT_NATIVE_TERMS env var once at init
-        let native_terms = std::env::var("MANIFOLD_RT_NATIVE_TERMS")
-            .unwrap_or_default()
-            .to_lowercase();
-        let terms: std::collections::HashSet<&str> = native_terms
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        s.rt_native_shadow = terms.contains("shadow");
-        s.rt_native_ao = terms.contains("ao");
-        s.rt_native_gi = terms.contains("gi");
-        s.rt_native_reflection = terms.contains("reflection");
 
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -2464,36 +2441,18 @@ impl RenderScene {
     /// irradiance in-kernel, never written here) — the SAME texture,
     /// extending the SAME dispatch (D16's seam note), not a second mask.
     /// RT-A3a: split into mask and lighting dispatches, each at its own resolution.
-    /// Resolution of the mask dispatch (shadow visibility only). Half-res by
-    /// default; native when `rt_native_shadow` is set.
-    fn rt_mask_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
-        if self.rt_native_shadow {
-            (width, height)
-        } else {
-            (width.div_ceil(2).max(1), height.div_ceil(2).max(1))
-        }
-    }
-
-    /// Resolution of the lighting dispatch (AO + GI + reflection + normal).
-    /// Half-res by default; native when ANY lighting term is listed in
-    /// `MANIFOLD_RT_NATIVE_TERMS`.
-    fn rt_lighting_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
-        let any_native = self.rt_native_ao
-            || self.rt_native_gi
-            || self.rt_native_reflection;
-        if any_native {
-            (width, height)
-        } else {
-            (width.div_ceil(2).max(1), height.div_ceil(2).max(1))
-        }
-    }
-
-    fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
+    /// Resolution of the mask dispatch (shadow visibility only). Trace-class sized (trace_w/h),
+    /// full-class sized (full_w/h) — trace dims change per D4 resolution settings.
+    fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) {
+        if self.rt_mask_width == full_w
+            && self.rt_mask_height == full_h
+            && self.rt_mask_trace_w == trace_w
+            && self.rt_mask_trace_h == trace_h
+            && self.rt_mask_full.is_some()
+        {
             return;
         }
 
-        let (mask_trace_w, mask_trace_h) = self.rt_mask_trace_size(width, height);
         let make = |w: u32, h: u32, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -2508,24 +2467,26 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
-        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
+        self.rt_mask_half = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
+        self.rt_mask_full = Some(make(full_w, full_h, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad — same format and lifecycle.
-        self.rt_mask_half2 = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half2 (RS-A vis)"));
-        self.rt_mask_full2 = Some(make(width, height, "node.render_scene rt_mask_full2 (RS-A vis)"));
+        self.rt_mask_half2 = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half2 (RS-A vis)"));
+        self.rt_mask_full2 = Some(make(full_w, full_h, "node.render_scene rt_mask_full2 (RS-A vis)"));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
-        self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
+        self.rt_mask_full_b = Some(make(full_w, full_h, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
         // RS-A: second sv quad à-trous ping-pong scratch.
-        self.rt_mask_full2_b = Some(make(width, height, "node.render_scene rt_mask_full2_b (RS-A atrous)"));
+        self.rt_mask_full2_b = Some(make(full_w, full_h, "node.render_scene rt_mask_full2_b (RS-A atrous)"));
         // RT-TL-C (section 16 TL5): sun-transmission tint — MASK-class
         // (written by the mask dispatch), same format and lifecycle as
         // rt_mask_half/rt_mask_full.
-        self.rt_svt_half = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_svt_half (RT-TL-C)"));
-        self.rt_svt_full = Some(make(width, height, "node.render_scene rt_svt_full (RT-TL-C)"));
+        self.rt_svt_half = Some(make(trace_w, trace_h, "node.render_scene rt_svt_half (RT-TL-C)"));
+        self.rt_svt_full = Some(make(full_w, full_h, "node.render_scene rt_svt_full (RT-TL-C)"));
         // RT-TL-C: à-trous ping-pong scratch — mirrors rt_mask_full_b.
-        self.rt_svt_full_b = Some(make(width, height, "node.render_scene rt_svt_full_b (RT-TL-C atrous)"));
-        self.rt_mask_width = width;
-        self.rt_mask_height = height;
+        self.rt_svt_full_b = Some(make(full_w, full_h, "node.render_scene rt_svt_full_b (RT-TL-C atrous)"));
+        self.rt_mask_width = full_w;
+        self.rt_mask_height = full_h;
+        self.rt_mask_trace_w = trace_w;
+        self.rt_mask_trace_h = trace_h;
     }
 
     /// RAYTRACING_DESIGN.md section 5.2 P2: half-res/full-res demodulated
@@ -2536,15 +2497,16 @@ impl RenderScene {
     /// undefined until the caller's next `accumulate_irradiance` call,
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
-    fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) -> bool {
-        if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history[0].is_some() {
+    fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) -> bool {
+        if self.rt_irr_width == full_w
+            && self.rt_irr_height == full_h
+            && self.rt_irr_trace_w == trace_w
+            && self.rt_irr_trace_h == trace_h
+            && self.rt_irr_history[0].is_some()
+        {
             return false;
         }
 
-        // RT-A3a: half-res textures are allocated at each dispatch's own resolution.
-        // Mask textures use rt_mask_trace_size, lighting textures use rt_lighting_trace_size.
-        let (_mask_half_w, _mask_half_h) = self.rt_mask_trace_size(width, height);
-        let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
         let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -2560,101 +2522,101 @@ impl RenderScene {
             })
         };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
-        // Lighting textures (irradiance, reflection, normal) at lighting resolution.
-        self.rt_irr_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
-        self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
-        // RT-R1 (section 9.3): half-res reflection-radiance output — same lifecycle
+        // Lighting textures (irradiance, reflection, normal) at trace resolution.
+        self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
+        self.rt_irr_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        // RT-R1 (section 9.3): trace-res reflection-radiance output — same lifecycle
         // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
         // inert/bind-only until then).
-        self.rt_refl_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        self.rt_refl_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
         // RT-R1 (section 9.3): full-res reflection-radiance output target & atrous
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
-        self.rt_refl_full = Some(make(width, height, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
-        self.rt_refl_full_b = Some(make(width, height, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
+        self.rt_refl_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
+        self.rt_refl_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
-        self.rt_normal_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
-        self.rt_normal_full = Some(make(width, height, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
+        self.rt_normal_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
+        self.rt_normal_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
         // RT-T1-D: second full-res scratch set for the à-trous filter's
         // ping-pong (same lifecycle as irradiance/normal above — not
         // persistent history, rewritten fresh every RT-ready frame).
-        self.rt_irr_full_b = Some(make(width, height, rgba16, "node.render_scene rt_irr_full_b (RT-T1-D atrous)"));
-        self.rt_normal_full_b = Some(make(width, height, rgba16, "node.render_scene rt_normal_full_b (RT-T1-D atrous)"));
+        self.rt_irr_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_full_b (RT-T1-D atrous)"));
+        self.rt_normal_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_normal_full_b (RT-T1-D atrous)"));
         // RT-T1-C: ping-pong history pairs (irradiance, depth, normal) —
         // see this struct's field doc comment for why two textures each.
         self.rt_irr_history = [
-            make(width, height, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
-            make(width, height, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
         ]
         .map(Some);
         // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
         // same reset rule as rt_irr_history (I-R2: one reset path, one flip).
         self.rt_refl_history = [
-            make(width, height, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
-            make(width, height, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
         ]
         .map(Some);
         // SV-ACCUM: shadow-visibility history pair — same lifecycle, reset
         // rule, and ping clock as rt_irr_history/rt_refl_history.
         self.rt_sv_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv_history_a (SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv_history_b (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_history_a (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_history_b (SV-ACCUM)"),
         ]
         .map(Some);
         // SV-ACCUM moments: per-channel first/second visibility moments.
         self.rt_sv_m1_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv_m1_a (SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv_m1_b (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m1_a (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m1_b (SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_sv_m2_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_sv_hold_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
         ]
         .map(Some);
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
         // independent sigma-gate per quad, same flip clock and lifecycle.
         self.rt_sv2_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv2_history_a (RS-A SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv2_history_b (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_history_a (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_history_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_sv2_m1_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv2_m1_a (RS-A SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv2_m1_b (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m1_a (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m1_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_sv2_m2_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv2_m2_a (RS-A SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv2_m2_b (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m2_a (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m2_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_sv2_hold_history = [
-            make(width, height, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
-            make(width, height, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
         // same lifecycle, reset rule, and ping clock as rt_irr_history.
         // Full res, Rgba16Float (same as every other history pair).
         self.rt_svt_history = [
-            make(width, height, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
-            make(width, height, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
         ]
         .map(Some);
         self.rt_depth_history = [
-            make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
-            make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
+            make(full_w, full_h, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
+            make(full_w, full_h, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
         ]
         .map(Some);
         self.rt_normal_history = [
-            make(width, height, rgba16, "node.render_scene rt_normal_history_a (RT-T1-C)"),
-            make(width, height, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_normal_history_a (RT-T1-C)"),
+            make(full_w, full_h, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
         ]
         .map(Some);
         // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rgba32Float`
@@ -2665,14 +2627,16 @@ impl RenderScene {
         // temporally-accumulated ao (`accumulate_irradiance`'s `history_write.a`
         // is the frame count, so the ao rides here).
         self.rt_moments_history = [
-            make(width, height, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
-            make(width, height, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
+            make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
+            make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
         ]
         .map(Some);
         self.rt_moments_valid = false;
         self.rt_history_ping = 0;
-        self.rt_irr_width = width;
-        self.rt_irr_height = height;
+        self.rt_irr_width = full_w;
+        self.rt_irr_height = full_h;
+        self.rt_irr_trace_w = trace_w;
+        self.rt_irr_trace_h = trace_h;
         true
     }
 
@@ -4123,6 +4087,15 @@ impl EffectNode for RenderScene {
             && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
         let rt_gi_enabled = rt_enabled
             && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
+        // RT_QUALITY_SETTINGS_DESIGN.md D5/D6: the active quality column,
+        // resolved per frame by the compositor from project settings.
+        // Copied out of ctx here — the dispatch code below runs after
+        // gpu_encoder() mutable borrows, where ctx is unreadable.
+        let rtq = ctx.rt_quality;
+        // Trace dispatch dims (D4): one ray-resolution fraction for both
+        // dispatches, truncating u64 math per output_canvas_scale discipline.
+        let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
+        let rt_trace_h = ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
         // Detect toggle flips: any term that was on last frame and is now off
         // (or vice versa) needs history reset so the old signal doesn't
         // trail. Routed through rt_irr_needs_reset — the ONE existing path
@@ -4955,9 +4928,9 @@ impl EffectNode for RenderScene {
             // irradiance targets, ensured here for the same NLL borrow
             // reason as above.
             if rt_enabled {
-                self.ensure_rt_masks(gpu.device, width, height);
+                self.ensure_rt_masks(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
-                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, width, height);
+                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
                 self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
@@ -5648,8 +5621,20 @@ impl EffectNode for RenderScene {
                 // lighting trace size (shadow native while lighting stays
                 // half). Otherwise fold shadow back into the lighting
                 // dispatch — one dispatch, monolithic perf.
-                let (mask_half_w, mask_half_h) = self.rt_mask_trace_size(width, height);
-                let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
+                // RT_QUALITY_SETTINGS_DESIGN.md D4: one ray-resolution
+                // fraction for both dispatches (the per-term native split
+                // went out with MANIFOLD_RT_NATIVE_TERMS) — the split below
+                // is structurally unreachable and always fuses today.
+                let trace_w = rt_trace_w;
+                let trace_h = rt_trace_h;
+                let (mask_half_w, mask_half_h) = if rt_shadows_enabled {
+                    (trace_w, trace_h)
+                } else {
+                    // Shadow disabled: mask dispatch still runs at 1x1 for the
+                    // fold-in case (lighting_shadow_spp = 0), sizing doesn't matter.
+                    (1, 1)
+                };
+                let (light_half_w, light_half_h) = (trace_w, trace_h);
                 let mask_sizes_differ =
                     mask_half_w != light_half_w || mask_half_h != light_half_h;
 
@@ -5669,7 +5654,7 @@ impl EffectNode for RenderScene {
                 // sizes differ. When sizes match, unused (shadow folded into
                 // lighting dispatch). Gated on rt_shadows_enabled: if shadows
                 // are off, this dispatch is skipped entirely.
-                let mask_shadow_spp: u32 = if rt_shadows_enabled { 1 } else { 0 };
+                let mask_shadow_spp: u32 = if rt_shadows_enabled { rtq.shadow_spp } else { 0 };
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     mask_shadow_spp,
@@ -5698,16 +5683,12 @@ impl EffectNode for RenderScene {
                 // split (separate mask dispatch handles shadow at its own size).
                 // Gated on rt_shadows_enabled.
                 let lighting_shadow_spp: u32 =
-                    if rt_shadows_enabled && !mask_sizes_differ { 1 } else { 0 };
-                // DN-I sweep knobs (probe-only, production-inert): env-set spp
-                // overrides so the operating-point matrix runs off ONE build.
-                // Unset = the committed constants, byte-identical behavior.
-                // Gated on per-term toggles: off → 0 (kernel skips the gather).
-                let sweep_spp = |name: &str, default: u32| -> u32 {
-                    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
-                };
-                let ao_spp = if rt_ao_enabled { sweep_spp("MANIFOLD_RT_SWEEP_AO_SPP", AO_SAMPLES_PER_PIXEL) } else { 0 };
-                let gi_spp = if rt_gi_enabled { sweep_spp("MANIFOLD_RT_SWEEP_GI_SPP", GI_SAMPLES_PER_PIXEL) } else { 0 };
+                    if rt_shadows_enabled && !mask_sizes_differ { rtq.shadow_spp } else { 0 };
+                // RT_QUALITY_SETTINGS_DESIGN.md D5: per-frame spp from the
+                // quality column, gated on the per-term toggles — off → 0
+                // (kernel skips the gather). I2: a tier is never 0.
+                let ao_spp = if rt_ao_enabled { rtq.ao_spp } else { 0 };
+                let gi_spp = if rt_gi_enabled { rtq.gi_spp } else { 0 };
                 let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     lighting_shadow_spp,
@@ -5727,7 +5708,7 @@ impl EffectNode for RenderScene {
                     // the rt_reflections scene param, gated on rt_enabled;
                     // T5 tunes the spp/roughness-band constants. 0.6/0.1 are
                     // the RD7 starting constants.
-                    if rt_reflections { sweep_spp("MANIFOLD_RT_SWEEP_REFL_SPP", REFL_SAMPLES_PER_PIXEL) } else { 0 },
+                    if rt_reflections { rtq.refl_spp } else { 0 },
                     0.6,
                     0.1,
                     emissive_table_mean_power,
@@ -8877,5 +8858,33 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(param.name, "rt_denoise_feed");
         assert_eq!(param.default, ParamValue::Bool(false));
         assert_eq!(param.ty, crate::node_graph::parameters::ParamType::Bool);
+    }
+
+    /// RT_QUALITY_SETTINGS_DESIGN.md I3: a ray-resolution change reallocates
+    /// the RT targets and reports the reset — temporal history never survives
+    /// a trace-dims change, and a canvas change with truncating-equal trace
+    /// dims still reallocates the full-res targets.
+    #[test]
+    fn ray_resolution_or_canvas_change_fires_rt_realloc_reset() {
+        let device = crate::test_device();
+        let mut s = RenderScene::new();
+
+        // First allocation resets.
+        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        s.ensure_rt_masks(&device, 128, 128, 256, 256);
+        // Same dims: no realloc, no reset.
+        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        // Tier flip (Half → Native at fixed canvas): trace dims change.
+        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
+        assert_eq!(s.rt_irr_trace_w, 256);
+        // The truncation hole: canvas 256 → 257 at Quarter (trace 64 → 64).
+        // Full-class textures (history included) must still realloc.
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
+        assert_eq!(s.rt_irr_width, 257);
+        // Masks guard follows the same dual-pair discipline.
+        s.ensure_rt_masks(&device, 64, 64, 256, 256);
+        assert_eq!(s.rt_mask_trace_w, 64);
+        assert_eq!(s.rt_mask_width, 256);
     }
 }

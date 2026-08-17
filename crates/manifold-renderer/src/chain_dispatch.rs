@@ -155,6 +155,7 @@ pub fn dispatch_chain<'a>(
     preview_effect: Option<&EffectId>,
     scope: &str,
     profiling: bool,
+    rt_quality: crate::node_graph::RtQuality,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
         return None;
@@ -227,6 +228,10 @@ pub fn dispatch_chain<'a>(
     // replaces `cg`'s executor) can never leave a stale scope/profiling flag.
     cg.set_profile_scope(scope);
     cg.set_profiling(profiling);
+    // D6 correction for rt_quality: same rationale as profiling above —
+    // rebuild swaps the executor, so per-call re-application keeps the value
+    // from going stale.
+    cg.set_rt_quality(rt_quality);
     let t0 = std::time::Instant::now();
     let ran = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
     if ran {

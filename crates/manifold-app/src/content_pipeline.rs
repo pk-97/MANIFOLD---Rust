@@ -1830,6 +1830,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // instead of busy-spinning. Export mode waits via wait_for_gpu_idle().
         let _poll_ms = self.last_fence_wait_ms;
 
+        // RT_QUALITY_SETTINGS_DESIGN.md D2/D5: resolve the active quality
+        // column once per frame, before any rendering. Copy out of the
+        // project borrow so `engine` stays usable below.
+        if let Some(project) = engine.project() {
+            let column = if export_mode {
+                project.settings.rt_quality.export
+            } else {
+                project.settings.rt_quality.realtime
+            };
+            self.compositor
+                .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
+        }
+
         // Extract timing values before split borrow. Time/beat stay f64 from
         // the playback clock all the way to the GPU uniform boundary — no f32
         // round-trip — so beat phase stays exact over a long show.

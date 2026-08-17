@@ -58,6 +58,8 @@ pub enum MenuAction {
     Scene,
     // App menu
     Settings,
+    /// Open the RT Quality settings panel
+    RtQuality,
 }
 
 /// Id of the "Clear Recent Projects" item appended to the recent submenu.
@@ -247,6 +249,13 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
         MenuAction::Settings,
         "Settings…",
         Some("CmdOrCtrl+,"),
+    ));
+    let _ = app_m.append(&item(
+        actions,
+        "app.rt_quality",
+        MenuAction::RtQuality,
+        "RT Quality…",
+        None,
     ));
     let _ = app_m.append(&PredefinedMenuItem::separator());
     let _ = app_m.append(&PredefinedMenuItem::services(None));

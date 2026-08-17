@@ -101,7 +101,7 @@ pub use bundled_presets::{
 };
 pub use effect_node::{
     intern_name, EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
-    NodeRequires, NodeWire, ParamValues,
+    NodeRequires, NodeWire, ParamValues, RtQuality,
 };
 pub use execution::{Executor, StepProfile};
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};

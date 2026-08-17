@@ -106,7 +106,7 @@ pub fn run(scene: &str, script_path: &str) {
         eprintln!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, \
              paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \
-             gltfanimscene, envmod)"
+             gltfanimscene, envmod, rtquality)"
         );
         std::process::exit(2);
     };
@@ -163,6 +163,15 @@ pub fn run(scene: &str, script_path: &str) {
         ui.audio_setup_panel.open();
         ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
         ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);
+    }
+    // `rtquality` is the RT Quality panel's flow-testing scene: the panel
+    // opens from the MANIFOLD menu / Settings popup, both outside the UITree
+    // selector surface — so, script-mode only, pre-open it (same call the
+    // live dispatch makes), then the flow's clicks drive the real
+    // dropdown → ChangeRtQualityCommand → state-sync path.
+    if scene == "rtquality" {
+        ui.rt_quality_panel.open();
+        ui.overlay_dirty = true;
     }
     super::sync_build(&mut ui, &data, zoom_ppb);
 

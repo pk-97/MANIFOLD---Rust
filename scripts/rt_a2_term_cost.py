@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """RT A2 — per-term native-resolution frame-cost measurement.
 
+RETIRED PROBE (RT_QUALITY_SETTINGS_DESIGN.md D8): MANIFOLD_RT_NATIVE_TERMS is
+deleted from the renderer — setting it below is a silent no-op. Ray dispatch
+resolution is now a per-project setting (ProjectSettings.rt_quality). This
+script is kept for its protocol notes; to re-run the experiment, set the
+fixture project's rt_quality ray_resolution instead. The env assignment in
+run_capture() is inert.
+
 Measures steady-state content frame time for the single shared RT dispatch at
-half-res (today's behavior) vs native (MANIFOLD_RT_NATIVE_TERMS=shadow,ao,gi,
-reflection). Answers the budget question: does running the whole RT dispatch at
-native 4K fit the 41.6ms (24fps) ceiling?
+half-res (today's behavior) vs native. Answers the budget question: does
+running the whole RT dispatch at native 4K fit the 41.6ms (24fps) ceiling?
 
 ARCHITECTURE NOTE (why this is two configs, not four):
   All four RT terms (shadow vis, AO, GI, reflection) are written by ONE Metal
@@ -92,6 +98,10 @@ def run_one(fixture_rel: str, lighting_snaps, native_terms: str):
     """Run rt-capture once; return (frame_times_dict, stderr_tail, ok)."""
     fixture_abs = str((SLOT / fixture_rel).resolve())
     env = os.environ.copy()
+    # RETIRED (D8): the renderer no longer reads MANIFOLD_RT_NATIVE_TERMS —
+    # this assignment is inert. Ray resolution is a project setting now.
+    if native_terms:
+        log("WARNING: MANIFOLD_RT_NATIVE_TERMS is retired (inert) — set rt_quality in the fixture instead")
     env["MANIFOLD_RT_NATIVE_TERMS"] = native_terms
     # Unique capture dir per run so two runs never interleave their PNGs.
     env["MANIFOLD_RT_CAPTURE_DIR"] = f"/tmp/rt_a2_{os.getpid()}_{int(time.time()*1000)}"

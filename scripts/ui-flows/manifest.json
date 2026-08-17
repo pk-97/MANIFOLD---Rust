@@ -69,6 +69,9 @@
     ],
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
       "audio-setup"
+    ],
+    "crates/manifold-ui/src/panels/rt_quality_panel.rs": [
+      "rt-quality"
     ]
   },
   "flows": {
@@ -108,7 +111,8 @@
     "calibrated-param-card-reads-manifest": "inspector",
     "drag-clip-release-over-inspector": "timeline",
     "scene-setup-ux-p2-demo": "gltfscene",
-    "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene"
+    "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
+    "rt-quality-panel-demo": "rtquality"
   },
   "expected_fail": {
     "scene-panel-card-convergence-c-p1b-object-scrub": {

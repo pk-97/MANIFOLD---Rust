@@ -61,6 +61,53 @@ pub struct FrameTime {
     pub frame_count: i64,
 }
 
+/// Resolved per-frame RT quality values — samples per pixel for each
+/// RT term plus ray-tracing dispatch resolution. Lives in manifold-renderer
+/// (next to FrameTime) and is set per-frame by the compositor via
+/// Executor::set_rt_quality.
+///
+/// Default = live constants: shadows=1, ao/gi=4, reflections=8, ray=1/2.
+/// Export mode: higher spp from RtQualitySettings::export column.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RtQuality {
+    pub shadow_spp: u32,
+    pub ao_spp: u32,
+    pub gi_spp: u32,
+    pub refl_spp: u32,
+    pub ray_res_num: u32,
+    pub ray_res_den: u32,
+}
+
+impl Default for RtQuality {
+    fn default() -> Self {
+        // Live defaults match today's constants (design D2):
+        // shadows UltraLow(1), ao/gi Medium(4), reflections High(8), ray Half(1/2)
+        Self {
+            shadow_spp: 1,
+            ao_spp: 4,
+            gi_spp: 4,
+            refl_spp: 8,
+            ray_res_num: 1,
+            ray_res_den: 2,
+        }
+    }
+}
+
+impl RtQuality {
+    /// Resolve a project settings column (live or export) to dispatch values.
+    pub fn from_column(c: &manifold_core::settings::RtQualityColumn) -> Self {
+        let (num, den) = c.ray_resolution.fraction();
+        Self {
+            shadow_spp: c.shadows.spp(),
+            ao_spp: c.ao.spp(),
+            gi_spp: c.gi.spp(),
+            refl_spp: c.reflections.spp(),
+            ray_res_num: num,
+            ray_res_den: den,
+        }
+    }
+}
+
 /// Map of parameter name → current value for one node instance, one frame.
 ///
 /// Keyed by `Cow<'static, str>` so variadic nodes (`render_scene`) can store
@@ -229,6 +276,11 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// new executor's low generation numbers. `0` on the legacy [`Self::new`]
     /// constructor (no executor lifetime concept — test/standalone paths).
     pub rebuild_epoch: u64,
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values
+    /// from the active column (realtime vs export). Plain value, not
+    /// Option: the executor always provides it (live defaults when
+    /// unset). Primitives consuming RT (render_scene) read from here.
+    pub rt_quality: RtQuality,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -253,6 +305,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             texture_swap_request: None,
             outputs_unchanged: false,
             rebuild_epoch: 0,
+            rt_quality: RtQuality::default(),
         }
     }
 
@@ -269,6 +322,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         node_id: NodeInstanceId,
         owner_key: OwnerKey,
         rebuild_epoch: u64,
+        rt_quality: RtQuality,
     ) -> Self {
         Self {
             time,
@@ -284,6 +338,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             texture_swap_request: None,
             outputs_unchanged: false,
             rebuild_epoch,
+            rt_quality,
         }
     }
 

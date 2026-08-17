@@ -567,6 +567,10 @@ impl Application {
                     }
                 }
                 M::Settings => self.pending_open_settings = true,
+                M::RtQuality => {
+                    self.ws.ui_root.rt_quality_panel.open();
+                    self.ws.ui_root.overlay_dirty = true;
+                }
             }
         }
 
@@ -930,6 +934,14 @@ impl Application {
                     // here, headless harness via `ui_bridge::dispatch`).
                     self.ws.ui_root.toggle_scene_dock();
                     needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::Root(RootAction::OpenRtQuality) => {
+                    // Settings popup ▸ RT Quality ▸ Configure… — floating
+                    // overlay (not a dock): open + dirty nudge, same shape as
+                    // the pending_open_settings block below.
+                    self.ws.ui_root.rt_quality_panel.open();
+                    self.ws.ui_root.overlay_dirty = true;
                     continue;
                 }
                 PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {

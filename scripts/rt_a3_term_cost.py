@@ -95,6 +95,11 @@ def run_one(fixture_rel: str, lighting_snaps, native_terms: str):
     """Run rt-capture once; return (frame_times_dict, stderr_tail, ok)."""
     fixture_abs = str((SLOT / fixture_rel).resolve())
     env = os.environ.copy()
+    # RETIRED (RT_QUALITY_SETTINGS_DESIGN.md D8): the renderer no longer reads
+    # MANIFOLD_RT_NATIVE_TERMS — this assignment is inert. Ray resolution is a
+    # per-project setting (ProjectSettings.rt_quality) now.
+    if native_terms:
+        log("WARNING: MANIFOLD_RT_NATIVE_TERMS is retired (inert) — set rt_quality in the fixture instead")
     env["MANIFOLD_RT_NATIVE_TERMS"] = native_terms
     # Unique capture dir per run so two runs never interleave their PNGs.
     env["MANIFOLD_RT_CAPTURE_DIR"] = f"/tmp/rt_a3_{os.getpid()}_{int(time.time()*1000)}"

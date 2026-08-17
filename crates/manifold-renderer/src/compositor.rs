@@ -277,6 +277,10 @@ pub trait Compositor: Send {
     /// for compositors without effect chains.
     fn set_profiling(&mut self, _on: bool) {}
 
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set per-frame RT quality values.
+    /// Default no-op for compositors without RT chains.
+    fn set_rt_quality(&mut self, _q: crate::node_graph::RtQuality) {}
+
     /// Force the serial composite path even with 2+ active layers
     /// (PERF_BUDGET_GATE_DESIGN D6 correction): profiled mode needs one
     /// shared compositor command buffer to attach the dispatch-profiling
