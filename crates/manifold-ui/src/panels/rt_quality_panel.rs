@@ -3,7 +3,8 @@
 //!
 //! A floating modal for configuring RT sample counts (shadows/AO/GI/reflections)
 //! and ray dispatch resolution, with separate "Real-time" and "Export" columns.
-//! Opened from the project settings surface (MANIFOLD ▸ Settings… ▸ RT Quality…).
+//! Opened from the Settings popup (⌘,) — the RT Quality row's Configure… button
+//! dispatches `RootAction::OpenRtQuality`.
 //!
 //! Self-contained like [`super::settings_popup`]: builds `UITree` nodes and maps
 //! clicked node ids back to [`PanelAction`] (the `ChangeRtQuality` action), already
@@ -219,13 +220,13 @@ impl RtQualityPanel {
         cy += SECTION_H;
 
         // Build rows: Shadows, AO, GI, Reflections, Ray Resolution
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Shadows", |col| col.shadows);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Shadows", TierField::Shadows);
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "AO", |col| col.ao);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "AO", TierField::Ao);
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "GI", |col| col.gi);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "GI", TierField::Gi);
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Reflections", |col| col.reflections);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Reflections", TierField::Reflections);
         cy += ROW_H + ROW_GAP;
         self.build_resolution_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w);
     }
@@ -241,7 +242,7 @@ impl RtQualityPanel {
         export_x: f32,
         export_w: f32,
         label: &str,
-        getter: impl Fn(&RtQualityColumn) -> RtQualityTier,
+        field: TierField,
     ) {
         // Row label
         tree.add_label(
@@ -255,7 +256,7 @@ impl RtQualityPanel {
         );
 
         // Real-time dropdown
-        let realtime_tier = getter(&self.settings.realtime);
+        let realtime_tier = field.get(&self.settings.realtime);
         let realtime_id = tree.add_button(
             Some(self.bg_id),
             realtime_x,
@@ -265,10 +266,10 @@ impl RtQualityPanel {
             dropdown_btn_style(BTN_FONT),
             realtime_tier.label(),
         );
-        self.actions.push((realtime_id, build_tier_action(true, self.settings, realtime_tier)));
+        self.actions.push((realtime_id, build_tier_action(true, self.settings, field)));
 
         // Export dropdown
-        let export_tier = getter(&self.settings.export);
+        let export_tier = field.get(&self.settings.export);
         let export_label = export_tier.label();
         let export_id = tree.add_button(
             Some(self.bg_id),
@@ -279,7 +280,7 @@ impl RtQualityPanel {
             dropdown_btn_style(BTN_FONT),
             export_label,
         );
-        self.actions.push((export_id, build_tier_action(false, self.settings, export_tier)));
+        self.actions.push((export_id, build_tier_action(false, self.settings, field)));
     }
 
     /// Build the ray resolution row with fraction labels ("50% (half)", etc.).
@@ -446,42 +447,58 @@ fn dropdown_btn_style(font: u16) -> UIStyle {
 
 // ── Action builders (cycle through tiers/resolutions) ──
 
-/// Build a PanelAction that cycles the tier for the given column and field.
-/// The dropdown shows the current tier; clicking cycles to the next tier in UI order.
+/// Which tier row a click targets — by identity, never by matching the
+/// current value (two rows sharing a tier would misroute the click).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TierField {
+    Shadows,
+    Ao,
+    Gi,
+    Reflections,
+}
+
+impl TierField {
+    fn get(self, col: &RtQualityColumn) -> RtQualityTier {
+        match self {
+            TierField::Shadows => col.shadows,
+            TierField::Ao => col.ao,
+            TierField::Gi => col.gi,
+            TierField::Reflections => col.reflections,
+        }
+    }
+
+    fn set(self, col: &mut RtQualityColumn, tier: RtQualityTier) {
+        match self {
+            TierField::Shadows => col.shadows = tier,
+            TierField::Ao => col.ao = tier,
+            TierField::Gi => col.gi = tier,
+            TierField::Reflections => col.reflections = tier,
+        }
+    }
+}
+
+/// Build a PanelAction that cycles the given tier field to the next tier in
+/// UI order. The dropdown shows the current tier; clicking cycles.
 fn build_tier_action(
     is_realtime: bool,
     current_settings: RtQualitySettings,
-    field_value: RtQualityTier,
+    field: TierField,
 ) -> PanelAction {
-    // Find current index and compute next tier (cycle back to start)
-    let current_idx = TIERS.iter().position(|&t| t == field_value).unwrap_or(0);
-    let next_idx = (current_idx + 1) % TIERS.len();
-    let next_tier = TIERS[next_idx];
+    let current = field.get(if is_realtime {
+        &current_settings.realtime
+    } else {
+        &current_settings.export
+    });
+    let current_idx = TIERS.iter().position(|&t| t == current).unwrap_or(0);
+    let next_tier = TIERS[(current_idx + 1) % TIERS.len()];
 
     let mut new_settings = current_settings;
-
-    // Apply the change by matching which field has the current value
-    if is_realtime {
-        if current_settings.realtime.shadows == field_value {
-            new_settings.realtime.shadows = next_tier;
-        } else if current_settings.realtime.ao == field_value {
-            new_settings.realtime.ao = next_tier;
-        } else if current_settings.realtime.gi == field_value {
-            new_settings.realtime.gi = next_tier;
-        } else if current_settings.realtime.reflections == field_value {
-            new_settings.realtime.reflections = next_tier;
-        }
+    let column = if is_realtime {
+        &mut new_settings.realtime
     } else {
-        if current_settings.export.shadows == field_value {
-            new_settings.export.shadows = next_tier;
-        } else if current_settings.export.ao == field_value {
-            new_settings.export.ao = next_tier;
-        } else if current_settings.export.gi == field_value {
-            new_settings.export.gi = next_tier;
-        } else if current_settings.export.reflections == field_value {
-            new_settings.export.reflections = next_tier;
-        }
-    }
+        &mut new_settings.export
+    };
+    field.set(column, next_tier);
 
     PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings))
 }

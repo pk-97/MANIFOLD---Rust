@@ -207,7 +207,7 @@ pub(super) fn dispatch_project(
             let old_settings = project.settings.rt_quality;
             if *new_settings != old_settings {
                 let cmd = manifold_editing::commands::settings::ChangeRtQualityCommand::new(
-                    old_settings, new_settings.clone(),
+                    old_settings, *new_settings,
                 );
                 {
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
@@ -216,7 +216,9 @@ pub(super) fn dispatch_project(
                     ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                 }
             }
-            DispatchResult::handled()
+            // The panel's tier labels are baked into the tree at build —
+            // structural so the overlay rebuilds and the click is visible.
+            DispatchResult::structural()
         }
         ProjectAction::SetGenType(opt_layer_id, new_type) => {
             let new_type = crate::ui_translate::preset_type_id_to_core(new_type);

@@ -43,6 +43,9 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "automationplaceholder" => Some(automation_placeholder_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
+        // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
+        // timeline content; the panel itself is pre-opened in script.rs.
+        "rtquality" => Some(timeline_scene()),
         "gltfscene" => Some(gltf_scene()),
         "gltfanimscene" => Some(gltf_anim_scene()),
         "heldoutmerge" => Some(heldout_merge_scene()),

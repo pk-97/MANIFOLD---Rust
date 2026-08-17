@@ -602,6 +602,10 @@ pub enum RootAction {
     /// closes the other dock, same either/or toggle policy as that pair).
     /// Header button.
     OpenSceneSetup,
+    /// Open the RT Quality panel (RT_QUALITY_SETTINGS_DESIGN.md) — per-project
+    /// raytracing sample tiers + ray resolution, real-time and export columns.
+    /// Opened from the Settings popup; a floating overlay, not a dock.
+    OpenRtQuality,
     /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
     /// The panel has already updated its UI-local selection; this action's
     /// only job is to ride the dispatch loop back as `structural_change:
