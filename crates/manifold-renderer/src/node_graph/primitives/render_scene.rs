@@ -8859,4 +8859,32 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(param.default, ParamValue::Bool(false));
         assert_eq!(param.ty, crate::node_graph::parameters::ParamType::Bool);
     }
+
+    /// RT_QUALITY_SETTINGS_DESIGN.md I3: a ray-resolution change reallocates
+    /// the RT targets and reports the reset — temporal history never survives
+    /// a trace-dims change, and a canvas change with truncating-equal trace
+    /// dims still reallocates the full-res targets.
+    #[test]
+    fn ray_resolution_or_canvas_change_fires_rt_realloc_reset() {
+        let device = crate::test_device();
+        let mut s = RenderScene::new();
+
+        // First allocation resets.
+        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        s.ensure_rt_masks(&device, 128, 128, 256, 256);
+        // Same dims: no realloc, no reset.
+        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        // Tier flip (Half → Native at fixed canvas): trace dims change.
+        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
+        assert_eq!(s.rt_irr_trace_w, 256);
+        // The truncation hole: canvas 256 → 257 at Quarter (trace 64 → 64).
+        // Full-class textures (history included) must still realloc.
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
+        assert_eq!(s.rt_irr_width, 257);
+        // Masks guard follows the same dual-pair discipline.
+        s.ensure_rt_masks(&device, 64, 64, 256, 256);
+        assert_eq!(s.rt_mask_trace_w, 64);
+        assert_eq!(s.rt_mask_width, 256);
+    }
 }
