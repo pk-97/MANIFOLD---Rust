@@ -383,32 +383,21 @@ pub fn sync_clip_positions(
     }
 }
 
-/// Piecewise beat→file-seconds breakpoints for an audio clip's waveform,
-/// mirroring exactly what `AudioLayerPlayback::update` computes for the
-/// voice's expected source position (`crates/manifold-playback/src/
-/// audio_layer_playback.rs` ~:251-257): `expected = (now - clip_start) *
-/// warp_ratio + in_point`, where `now`/`clip_start` are transport seconds
-/// from `engine.beat_to_timeline_time_immut`, i.e.
-/// `TempoMapConverter::beat_to_seconds_immut` — the project's piecewise tempo
-/// map integration, NOT a constant seconds-per-beat. Audio playback is
-/// correct; the waveform painter draws a single linear window, so a varying
-/// tempo map made the two disagree.
+/// Beat-anchored beat→file-seconds breakpoints for an audio clip's waveform.
 ///
-/// Reproducing that beat→seconds function pointwise at the clip's start beat,
-/// every tempo-map point strictly inside the clip, and its end beat gives a
-/// piecewise-*linear* (in beats, matching the pixel x-axis) mapping: constant
-/// between tempo points, a new slope at each one. Each pair is `(x_frac,
-/// file_secs)` — `x_frac` beat-linear in `[0, 1]` across the clip, `file_secs`
-/// the source-file position playback would be at for that beat. A
-/// constant-tempo clip (no tempo-map point strictly inside it) yields exactly
-/// 2 breakpoints — the old single linear window, reproduced exactly since
-/// `warp_ratio` (unaffected by the tempo map) is unchanged and the only
-/// segment IS start→end.
+/// For **warped clips** (recorded_bpm > 0), source position is a pure function of beat:
+/// `pos(beat) = in_point + (beat − start_beat) × (60.0 / recorded_bpm)`.
+/// The mapping is beat-linear — tempo maps and Link don't affect it. Returns exactly 2
+/// breakpoints: start and end.
 ///
-/// Empty for non-audio clips or non-positive duration. Baked once here per
-/// clip per structural sync (not per frame in the renderer) — plain
-/// `Vec<(f32, f32)>` data, no core types, per `manifold-ui`'s layering rule
-/// (depends on `manifold-foundation` only).
+/// For **unwarped clips** (recorded_bpm == 0), source position follows the tempo map:
+/// `pos(beat) = in_point + secs(beat) − secs(start_beat)`. Returns breakpoints at each
+/// tempo-map point inside the clip (piecewise-linear in beats).
+///
+/// Each breakpoint is `(x_frac, file_secs)` — `x_frac` beat-linear in `[0, 1]` across the clip,
+/// `file_secs` the source-file position at that beat. Empty for non-audio clips or non-positive
+/// duration. Baked once per clip per structural sync (not per frame). Returns plain data, no
+/// core types, per `manifold-ui`'s layering rule (depends on `manifold-foundation` only).
 fn audio_waveform_breakpoints(
     clip: &manifold_core::clip::TimelineClip,
     project: &Project,
@@ -420,30 +409,44 @@ fn audio_waveform_breakpoints(
     if duration_beats <= 0.0 {
         return Vec::new();
     }
+
     let start_beat = clip.start_beat;
-    let end_beat = clip.start_beat + clip.duration_beats;
-    let project_bpm = project.settings.bpm;
-    let ratio = clip.warp_ratio(project_bpm.0);
     let in_point = clip.in_point.0 as f32;
-    let start_secs =
-        TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, start_beat, project_bpm).0;
+    let clip_bpm = clip.recorded_bpm_resolved();
 
-    let file_secs_at = |beat: Beats| -> f32 {
-        let secs =
-            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project_bpm).0;
-        ((secs - start_secs) as f32) * ratio + in_point
-    };
+    if clip_bpm > 0.0 {
+        // Warped clip: beat-linear, tempo-independent
+        // pos(beat) = in_point + (beat - start_beat) × (60.0 / recorded_bpm)
+        let source_secs_per_beat = 60.0 / clip_bpm;
+        let start_file_secs = in_point;
+        let end_file_secs = in_point + duration_beats * source_secs_per_beat;
+        vec![(0.0, start_file_secs), (1.0, end_file_secs)]
+    } else {
+        // Unwarped clip: follows tempo map, piecewise-linear in beats
+        // pos(beat) = in_point + secs(beat) - secs(start_beat)
+        let project_bpm = project.settings.bpm;
+        let start_secs =
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, start_beat, project_bpm).0;
 
-    let mut breakpoints = Vec::with_capacity(2 + project.tempo_map.points().len());
-    breakpoints.push((0.0, file_secs_at(start_beat)));
-    for point in project.tempo_map.points() {
-        if point.beat > start_beat && point.beat < end_beat {
-            let x_frac = (point.beat - start_beat).as_f32() / duration_beats;
-            breakpoints.push((x_frac, file_secs_at(point.beat)));
+        let file_secs_at = |beat: Beats| -> f32 {
+            let secs =
+                TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project_bpm).0;
+            in_point + (secs - start_secs) as f32
+        };
+
+        let mut breakpoints = Vec::with_capacity(2 + project.tempo_map.points().len());
+        breakpoints.push((0.0, file_secs_at(start_beat)));
+
+        let end_beat = start_beat + clip.duration_beats;
+        for point in project.tempo_map.points() {
+            if point.beat > start_beat && point.beat < end_beat {
+                let x_frac = (point.beat - start_beat).as_f32() / duration_beats;
+                breakpoints.push((x_frac, file_secs_at(point.beat)));
+            }
         }
+        breakpoints.push((1.0, file_secs_at(end_beat)));
+        breakpoints
     }
-    breakpoints.push((1.0, file_secs_at(end_beat)));
-    breakpoints
 }
 
 #[cfg(test)]
@@ -456,11 +459,10 @@ mod audio_waveform_breakpoints_tests {
     use manifold_core::{Bpm, Seconds};
 
     /// (a) A single-point (i.e. effectively constant-tempo) map must yield
-    /// exactly 2 breakpoints — clip start and end — reproducing the old
-    /// `dur_beats * warped_secs_per_beat` window exactly: `file_secs_at(end)`
-    /// must equal `duration_beats * (60 / bpm) * warp_ratio + in_point`.
+    /// exactly 2 breakpoints — clip start and end. For unwarped clips, this reproduces
+    /// the tempo-map integration: `file_secs_at(end) = in_point + duration_beats * spb`.
     #[test]
-    fn single_tempo_point_reproduces_old_constant_mapping() {
+    fn single_tempo_point_unwarped_clip() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(140.0);
         project
@@ -493,13 +495,11 @@ mod audio_waveform_breakpoints_tests {
         );
     }
 
-    /// (b) A 3-point tempo map (120 BPM then 60 BPM partway through the clip)
-    /// must place a breakpoint exactly at the tempo-change beat, and every
-    /// breakpoint's `file_secs` must match
-    /// `TempoMapConverter::beat_to_seconds_immut` differences directly — the
-    /// same integration playback performs, not a flat per-beat scalar.
+    /// (b) A tempo map with a change inside the clip must place breakpoints at each
+    /// tempo-change beat for unwarped clips (piecewise-linear in beats). Each breakpoint's
+    /// `file_secs` must match the tempo-map-integrated seconds.
     #[test]
-    fn three_point_map_matches_tempo_map_converter_directly() {
+    fn tempo_map_step_unwarped_clip() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
         project
@@ -531,8 +531,8 @@ mod audio_waveform_breakpoints_tests {
         let end_secs =
             TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(16.0), Bpm(120.0)).0;
 
-        // recorded_bpm unset → warp_ratio == 1.0, in_point == 0 → file_secs is
-        // exactly the tempo-map-integrated elapsed seconds since clip start.
+        // Unwarped clip (recorded_bpm unset): file_secs is the tempo-map-integrated
+        // elapsed seconds since clip start.
         assert!((bp[0].1 - 0.0).abs() < 1e-6);
         assert!(
             (bp[1].1 - ((mid_secs - start_secs) as f32)).abs() < 1e-4,
@@ -548,10 +548,8 @@ mod audio_waveform_breakpoints_tests {
         );
     }
 
-    /// (c) `in_point` must offset every breakpoint's `file_secs` uniformly —
-    /// it enters the formula as a flat additive term, exactly like
-    /// `AudioLayerPlayback`'s `expected = (now - clip_start) * ratio +
-    /// clip.in_point`.
+    /// (c) `in_point` must offset every breakpoint's `file_secs` uniformly — it
+    /// enters as a flat additive term in both warped and unwarped cases.
     #[test]
     fn in_point_offsets_every_breakpoint() {
         let mut project = Project::default();
@@ -596,5 +594,92 @@ mod audio_waveform_breakpoints_tests {
         let project = Project::default();
         let clip = TimelineClip::new_generator(Beats::ZERO, Beats::from_f32(4.0));
         assert!(audio_waveform_breakpoints(&clip, &project).is_empty());
+    }
+
+    /// (d) Warped clips (recorded_bpm > 0) are beat-linear regardless of tempo map.
+    /// A tempo step mid-clip has NO effect on the warped window — always exactly 2 breakpoints.
+    #[test]
+    fn warped_clip_ignores_tempo_map() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(140.0);
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(140.0), TempoPointSource::Manual, 0.001);
+        // Tempo change mid-clip at beat 10 (inside clip 8..16)
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::from_f32(10.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+
+        let mut clip = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::from_f32(8.0),
+            Beats::from_f32(8.0), // 8..16
+            Seconds(2.0),
+            Seconds(120.0),
+        );
+        clip.set_recorded_bpm(120.0); // Warped: recorded at 120 BPM
+
+        let bp = audio_waveform_breakpoints(&clip, &project);
+        assert_eq!(bp.len(), 2, "warped clips ignore tempo map → exactly 2 breakpoints");
+        assert_eq!(bp[0], (0.0, 2.0), "clip start at in_point");
+        // Warped: pos(beat) = in_point + (beat - start_beat) × (60 / recorded_bpm)
+        // 8 beats × (60/120) = 4 seconds of source
+        assert!(
+            (bp[1].1 - (2.0 + 4.0)).abs() < 1e-4,
+            "warped end file_secs {} should equal in_point + dur_beats * (60/recorded_bpm)",
+            bp[1].1
+        );
+    }
+
+    /// (e) Warped clip with constant tempo: still beat-linear, matches the same formula.
+    #[test]
+    fn warped_clip_constant_tempo() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(140.0);
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(140.0), TempoPointSource::Manual, 0.001);
+
+        let mut clip = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::from_f32(4.0),
+            Beats::from_f32(8.0), // 4..12
+            Seconds(1.5),
+            Seconds(120.0),
+        );
+        clip.set_recorded_bpm(120.0); // Warped
+
+        let bp = audio_waveform_breakpoints(&clip, &project);
+        assert_eq!(bp.len(), 2);
+        assert_eq!(bp[0], (0.0, 1.5));
+        // 8 beats × (60/120) = 4 seconds of source
+        assert!(
+            (bp[1].1 - (1.5 + 4.0)).abs() < 1e-4,
+            "warped constant tempo: end at in_point + dur_beats * (60/recorded_bpm)"
+        );
+    }
+
+    /// (f) Warped clip with in_point offset: in_point is a flat additive term.
+    #[test]
+    fn warped_clip_with_in_point() {
+        let project = Project::default();
+
+        let mut clip = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::ZERO,
+            Beats::from_f32(4.0),
+            Seconds(5.0), // Late entry into the file
+            Seconds(120.0),
+        );
+        clip.set_recorded_bpm(100.0); // Warped
+
+        let bp = audio_waveform_breakpoints(&clip, &project);
+        assert_eq!(bp.len(), 2);
+        assert_eq!(bp[0], (0.0, 5.0), "warped start at in_point");
+        // 4 beats × (60/100) = 2.4 seconds of source
+        assert!(
+            (bp[1].1 - (5.0 + 2.4)).abs() < 1e-4,
+            "warped with in_point: end at in_point + dur_beats * (60/recorded_bpm)"
+        );
     }
 }

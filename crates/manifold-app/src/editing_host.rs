@@ -715,21 +715,24 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
 
         // Audio clips bound to their decoded file length, warped: the source
-        // advances at `warped_spb = spb * warp_ratio` per beat, so the most beats
-        // we can show is the remaining file (after in_point) divided by that.
+        // advances at `60 / recorded_bpm` seconds per beat (beat-anchored), so the
+        // most beats we can show is the remaining file (after in_point) divided by that.
         if clip.is_audio() {
             let file_secs = clip.source_duration.as_f32();
             if file_secs <= 0.0 {
                 return Beats::ZERO;
             }
             let available = (file_secs - clip.in_point.as_f32()).max(0.0);
-            let warped_spb =
-                self.get_seconds_per_beat() * clip.warp_ratio(self.project.settings.bpm.0);
-            return if warped_spb > 0.0 {
-                Beats(available as f64 / warped_spb as f64)
+            let clip_bpm = clip.recorded_bpm_resolved();
+            if clip_bpm > 0.0 {
+                // Warped: source advances at 60/recorded_bpm seconds per beat
+                let source_secs_per_beat = 60.0 / clip_bpm;
+                return Beats(available as f64 / source_secs_per_beat as f64);
             } else {
-                Beats::ZERO
-            };
+                // Unwarped: bound by current tempo (this is approximate, but good enough for UI limits)
+                let spb = self.get_seconds_per_beat();
+                return Beats(available as f64 / spb as f64);
+            }
         }
 
         if clip.video_clip_id.is_empty() {

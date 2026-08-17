@@ -643,9 +643,12 @@ pub struct ChangeClipRecordedBpmCommand {
     /// on the first execute and restored on undo. Untouched for non-audio clips.
     old_duration: Option<Beats>,
     new_duration: Option<Beats>,
+    /// Whether to rescale duration for audio clips. Detection path must not rescale.
+    rescale: bool,
 }
 
 impl ChangeClipRecordedBpmCommand {
+    /// Constructor for the normal rescaling behavior (Ableton model).
     pub fn new(clip_id: ClipId, old_bpm: f32, new_bpm: f32) -> Self {
         Self {
             clip_id,
@@ -653,6 +656,21 @@ impl ChangeClipRecordedBpmCommand {
             new_bpm,
             old_duration: None,
             new_duration: None,
+            rescale: true,
+        }
+    }
+
+    /// Constructor for BPM detection: set the recorded BPM without rescaling duration.
+    /// Detection deliberately does not rescale because the clip's timeline length
+    /// was already set at import time; we're just correcting the BPM metadata.
+    pub fn new_no_rescale(clip_id: ClipId, old_bpm: f32, new_bpm: f32) -> Self {
+        Self {
+            clip_id,
+            old_bpm,
+            new_bpm,
+            old_duration: None,
+            new_duration: None,
+            rescale: false,
         }
     }
 }
@@ -665,11 +683,10 @@ impl Command for ChangeClipRecordedBpmCommand {
         let project_bpm = project.settings.bpm.0;
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             let is_audio = clip.is_audio();
-            if self.old_duration.is_none() {
-                self.old_duration = Some(clip.duration_beats);
-            }
-            clip.recorded_bpm = self.new_bpm;
-            if is_audio {
+            if self.rescale && is_audio {
+                if self.old_duration.is_none() {
+                    self.old_duration = Some(clip.duration_beats);
+                }
                 let eff = |bpm: f32| if bpm > 0.0 { bpm } else { project_bpm };
                 let (old_eff, new_eff) = (eff(self.old_bpm), eff(self.new_bpm));
                 if let Some(old_dur) = self.old_duration
@@ -681,13 +698,15 @@ impl Command for ChangeClipRecordedBpmCommand {
                     self.new_duration = Some(scaled);
                 }
             }
+            clip.recorded_bpm = self.new_bpm;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.recorded_bpm = self.old_bpm;
-            if clip.is_audio()
+            if self.rescale
+                && clip.is_audio()
                 && let Some(old_dur) = self.old_duration
             {
                 clip.set_duration_beats(old_dur);

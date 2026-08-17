@@ -444,6 +444,37 @@ fn change_clip_recorded_bpm_rescales_audio_clip_length() {
 }
 
 #[test]
+fn change_clip_recorded_bpm_no_rescale_sets_bpm_without_changing_duration() {
+    // BPM detection path: set the recorded BPM without rescaling duration.
+    // The clip's timeline length was set at import time; we're just correcting
+    // the BPM metadata. Duration stays constant, BPM changes, undo restores both.
+    let mut project = make_test_project();
+    let mut audio = TimelineClip::new_audio(
+        "/x.wav".into(),
+        Beats(0.0),
+        Beats(4.0),
+        manifold_core::units::Seconds(0.0),
+        manifold_core::units::Seconds(2.0),
+    );
+    audio.recorded_bpm = 120.0; // Warp is on
+    let clip_id = audio.id.clone();
+    project.timeline.layers[1].restore_clip(audio);
+    project.timeline.rebuild_clip_lookup();
+
+    // Detection finds 128 BPM: set it without rescaling duration
+    let mut cmd = ChangeClipRecordedBpmCommand::new_no_rescale(clip_id.clone(), 120.0, 128.0);
+    cmd.execute(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!((clip.recorded_bpm - 128.0).abs() < 0.01, "BPM updated");
+    assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "duration unchanged at 4 beats");
+
+    cmd.undo(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!((clip.recorded_bpm - 120.0).abs() < 0.01, "BPM restored");
+    assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "duration still 4 beats");
+}
+
+#[test]
 fn split_clip_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
