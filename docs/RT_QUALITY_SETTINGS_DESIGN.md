@@ -40,7 +40,7 @@ Export renders through the **normal content-thread pipeline** — the frame loop
 
 ## 3. Data model (committed signatures)
 
-`crates/manifold-core/src/settings.rs` (same file as `ProjectSettings`):
+`crates/manifold-foundation/src/settings.rs` (**amended 2026-08-17 during P3** — originally committed to `manifold-core/src/settings.rs`; the P3 lane hit the hard rule "`ui` depends only on `foundation` — UI-reachable shared types go in `foundation`" (CLAUDE.md), because the panel needs `RtQualityTier::label()`. Types live in foundation — which already carries serde; `manifold-core/src/settings.rs` re-exports them and `ProjectSettings` keeps the field; editing imports via `manifold_core::settings`, no new crate edge):
 
 ```rust
 /// Six-step spp ladder, shared by all RT features (D3).
@@ -107,7 +107,7 @@ Seams:
 
 - `Executor` gains `rt_quality: RtQuality` (default = live defaults) + `pub fn set_rt_quality(&mut self, q: RtQuality)` — shaped like `set_preview_target` (execution.rs:558).
 - `EffectNodeContext` gains `pub rt_quality: RtQuality` — a plain value, not `Option`: the `with_state` constructor takes it from the executor's field; test construction paths use `RtQuality::default()` (live constants) so existing tests compile and behave unchanged.
-- The compositor call site (wherever it already sets per-frame executor state before `execute_frame_*`) resolves `project.settings.rt_quality` column by `engine.is_export_mode()` → `RtQuality` → `set_rt_quality`. Exact call site named in P2's read-back; one site, found by `rg "set_preview_target" crates/manifold-renderer/src --type rust -l` minus the editor path.
+- The compositor call site resolves `project.settings.rt_quality` column by `engine.is_export_mode()` → `RtQuality` → `compositor.set_rt_quality(...)` once per frame. **Named seam (amended 2026-08-17, P2 escalation):** the `profiling` flag's path is the precedent end to end — `LayerCompositor` field + setter (`layer_compositor.rs:499-504`, :2151) → plain arg through `apply_effects` → `dispatch_chain` (`chain_dispatch.rs:148-159`) → `cg.set_rt_quality(q)` via a `PresetRuntime` passthrough (`preset_runtime/instrumentation.rs:344` shape), re-applied EVERY `dispatch_chain` call (`chain_dispatch.rs:228-229`) because a chain rebuild swaps the executor and would drop a set-once value. `PresetContext` is NOT touched.
 - `render_scene.rs`: spp reads become `ctx.rt_quality.*_spp` gated by the existing node bools (bools still zero the spp — on/off unchanged); dispatch dims become `native_dim * num / den` with the same truncating integer arithmetic as `output_canvas_scale`. Constants `AO/GI/REFL_SAMPLES_PER_PIXEL` and both env probes deleted.
 
 ## 4. Invariants & enforcement
