@@ -213,6 +213,7 @@ impl ParamCardPanel {
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
         self.label_cache = vec![None; n];
+        self.range_cache = vec![f32::NAN; n * 2]; // (min, max) pairs per param
         self.value_flash.resize_with(n, Transient::default);
         self.value_flash.truncate(n);
         self.value_snapback
@@ -1682,6 +1683,8 @@ impl ParamCardPanel {
             if let Some(b) = self.base_values.get_mut(i) {
                 *b = slot.base;
             }
+            // Sync range FIRST so that the value sync uses the updated spec
+            self.sync_param_range(tree, i, slot.min, slot.max);
             self.sync_param_value(tree, i, slot.value);
             if let Some(c) = self.row_value_synced.get_mut(i) {
                 *c = true;
@@ -1876,6 +1879,44 @@ impl ParamCardPanel {
                 .map(|a| a.value());
             self.row_host
                 .push_slider_value(tree, i, val, &info.spec, display_norm_override);
+        }
+    }
+
+    /// Sync a parameter's min/max range when it differs from the cached range.
+    /// Compare-and-set: only updates the built slider's range when the incoming
+    /// min/max differ from what's cached, avoiding redundant tree writes.
+    fn sync_param_range(&mut self, _tree: &mut UITree, i: usize, min: f32, max: f32) {
+        // Range indices in the flat cache: min₀, max₀, min₁, max₁, ...
+        let min_idx = i * 2;
+        let max_idx = i * 2 + 1;
+
+        // Check if range has changed (NaN means first sync after configure)
+        let range_changed = self.range_cache.get(min_idx)
+            .map(|&cached_min| (cached_min, self.range_cache.get(max_idx).copied().unwrap_or(f32::NAN)))
+            .map(|(cached_min, cached_max)| {
+                (cached_min.is_nan() || (min - cached_min).abs() > f32::EPSILON) ||
+                (cached_max.is_nan() || (max - cached_max).abs() > f32::EPSILON)
+            })
+            .unwrap_or(true); // Cache miss = first sync = update
+
+        if !range_changed {
+            return; // No change, skip tree update
+        }
+
+        // Update cache
+        if let Some(cached_min) = self.range_cache.get_mut(min_idx) {
+            *cached_min = min;
+        }
+        if let Some(cached_max) = self.range_cache.get_mut(max_idx) {
+            *cached_max = max;
+        }
+
+        // Update the built row's spec to reflect the new range
+        // This only affects future value syncs — the current spec is used for normalization
+        // We need to update the spec in the rows array so subsequent syncs use the new range
+        if let Some(row) = self.rows.get_mut(i) {
+            row.spec.min = min;
+            row.spec.max = max;
         }
     }
 
