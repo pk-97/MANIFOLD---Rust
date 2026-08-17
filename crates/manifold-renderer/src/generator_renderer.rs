@@ -922,6 +922,14 @@ impl GeneratorRenderer {
             }
         }
 
+        // Swapping to "no generator" removes the instance: there is no
+        // NONE preset to install, and falling through to the swap would
+        // warn in the registry and leave the old generator rendering.
+        if new_type.is_none() {
+            self.layer_generators.remove(layer_id);
+            return;
+        }
+
         // If the type changed, force the generator swap now.
         let needs_swap = self
             .layer_generators
@@ -1096,6 +1104,12 @@ impl GeneratorRenderer {
     ) -> Option<&manifold_gpu::GpuTexture> {
         let gp = layer.gen_params()?;
         let gen_type = gp.generator_type().clone();
+        // The NONE sentinel is not a preset — a layer whose gen_params
+        // outlived its generator has no default look to thumbnail, and
+        // asking the registry for it warns on every retry.
+        if gen_type.is_none() {
+            return None;
+        }
 
         let needs_create = self
             .thumb_gens
@@ -1197,10 +1211,11 @@ impl GeneratorRenderer {
 
 impl ClipRenderer for GeneratorRenderer {
     fn can_handle(&self, clip: &TimelineClip) -> bool {
-        // A generator clip carries neither a video source nor an image
-        // source. Image clips also have an empty `video_clip_id`, so they
-        // must be excluded explicitly — `ImageRenderer` claims them.
-        clip.video_clip_id.is_empty() && clip.image_path.is_empty()
+        // A generator clip carries no media source. Image and audio clips
+        // also have an empty `video_clip_id`, so they must be excluded
+        // explicitly — `ImageRenderer` claims images, and audio clips are
+        // driven by `audio_layer_playback`, never by a pixel renderer.
+        clip.video_clip_id.is_empty() && clip.image_path.is_empty() && !clip.is_audio()
     }
 
     fn start_clip(
@@ -1215,6 +1230,16 @@ impl ClipRenderer for GeneratorRenderer {
         let (layer_id, gen_type) = layer
             .map(|l| (l.layer_id.clone(), l.generator_type().clone()))
             .unwrap_or_default();
+        // A media-less clip on a layer with no generator (empty arrangement
+        // clip) renders nothing. Bail BEFORE the registry lookup: the NONE
+        // sentinel is not a preset, so the attempt would warn and fail —
+        // and since a failed start never enters `active_clip_ids`, the
+        // scheduler re-issues it every frame, spamming the log for the
+        // clip's whole duration. The `false` retry that remains is two
+        // field checks, silent and cheap.
+        if gen_type.is_none() {
+            return false;
+        }
         // Find clip_index within the layer for O(1) string_params lookup in render_all.
         // This scan runs once per clip start (0-2 per frame), not per-frame.
         let clip_index = layer
