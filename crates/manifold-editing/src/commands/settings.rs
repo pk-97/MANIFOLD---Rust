@@ -5,6 +5,7 @@ use manifold_core::LayerId;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
+use manifold_core::settings::RtQualitySettings;
 use manifold_core::tempo::TempoPoint;
 use manifold_core::types::{BlendMode, MidiTriggerMode, QuantizeMode, TempoPointSource};
 use manifold_core::units::Bpm;
@@ -1068,3 +1069,90 @@ impl Command for RenameMacroLabelCommand {
         "Rename Macro Label"
     }
 }
+
+/// Change RT quality settings (whole-struct replace).
+/// Shaped like ChangeBpmCommand: undo stores the prior RtQualitySettings.
+#[derive(Debug)]
+pub struct ChangeRtQualityCommand {
+    old_settings: RtQualitySettings,
+    new_settings: RtQualitySettings,
+}
+
+impl ChangeRtQualityCommand {
+    pub fn new(old_settings: RtQualitySettings, new_settings: RtQualitySettings) -> Self {
+        Self {
+            old_settings,
+            new_settings,
+        }
+    }
+}
+
+impl Command for ChangeRtQualityCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.rt_quality = self.new_settings;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.rt_quality = self.old_settings;
+    }
+
+    fn description(&self) -> &str {
+        "Change RT Quality"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution};
+
+    #[test]
+    fn change_rt_quality_execute_undo_redo_round_trip() {
+        let mut project = Project::default();
+        let old_settings = project.settings.rt_quality;
+
+        let new_settings = RtQualitySettings {
+            realtime: RtQualityColumn {
+                shadows: RtQualityTier::Low,
+                ao: RtQualityTier::High,
+                gi: RtQualityTier::ExtraHigh,
+                reflections: RtQualityTier::Ultra,
+                ray_resolution: RtRayResolution::Quarter,
+            },
+            export: RtQualityColumn {
+                shadows: RtQualityTier::ExtraHigh,
+                ao: RtQualityTier::Ultra,
+                gi: RtQualityTier::Ultra,
+                reflections: RtQualityTier::Ultra,
+                ray_resolution: RtRayResolution::ThreeQuarter,
+            },
+        };
+
+        let mut command = ChangeRtQualityCommand::new(old_settings, new_settings);
+
+        // Execute
+        command.execute(&mut project);
+        assert_eq!(project.settings.rt_quality.realtime.shadows, RtQualityTier::Low);
+        assert_eq!(project.settings.rt_quality.realtime.ao, RtQualityTier::High);
+        assert_eq!(project.settings.rt_quality.realtime.gi, RtQualityTier::ExtraHigh);
+        assert_eq!(project.settings.rt_quality.realtime.reflections, RtQualityTier::Ultra);
+        assert_eq!(project.settings.rt_quality.realtime.ray_resolution, RtRayResolution::Quarter);
+
+        // Undo
+        command.undo(&mut project);
+        assert_eq!(project.settings.rt_quality.realtime.shadows, old_settings.realtime.shadows);
+        assert_eq!(project.settings.rt_quality.realtime.ao, old_settings.realtime.ao);
+        assert_eq!(project.settings.rt_quality.realtime.gi, old_settings.realtime.gi);
+        assert_eq!(project.settings.rt_quality.realtime.reflections, old_settings.realtime.reflections);
+        assert_eq!(project.settings.rt_quality.realtime.ray_resolution, old_settings.realtime.ray_resolution);
+
+        // Redo (execute again)
+        command.execute(&mut project);
+        assert_eq!(project.settings.rt_quality.realtime.shadows, RtQualityTier::Low);
+        assert_eq!(project.settings.rt_quality.realtime.ao, RtQualityTier::High);
+        assert_eq!(project.settings.rt_quality.realtime.gi, RtQualityTier::ExtraHigh);
+        assert_eq!(project.settings.rt_quality.realtime.reflections, RtQualityTier::Ultra);
+        assert_eq!(project.settings.rt_quality.realtime.ray_resolution, RtRayResolution::Quarter);
+    }
+}
+

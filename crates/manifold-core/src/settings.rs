@@ -6,6 +6,120 @@ use crate::types::{
 use crate::units::{Beats, Bpm};
 use serde::{Deserialize, Serialize};
 
+/// Six-step spp ladder, shared by all RT features (D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RtQualityTier {
+    UltraLow,
+    Low,
+    #[default]
+    Medium,
+    High,
+    ExtraHigh,
+    Ultra,
+}
+
+impl RtQualityTier {
+    pub fn spp(self) -> u32 {
+        match self {
+            RtQualityTier::UltraLow => 1,
+            RtQualityTier::Low => 2,
+            RtQualityTier::Medium => 4,
+            RtQualityTier::High => 8,
+            RtQualityTier::ExtraHigh => 16,
+            RtQualityTier::Ultra => 32,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RtQualityTier::UltraLow => "Ultra Low (1 spp)",
+            RtQualityTier::Low => "Low (2 spp)",
+            RtQualityTier::Medium => "Medium (4 spp)",
+            RtQualityTier::High => "High (8 spp)",
+            RtQualityTier::ExtraHigh => "Extra High (16 spp)",
+            RtQualityTier::Ultra => "Ultra (32 spp)",
+        }
+    }
+}
+
+/// RT dispatch resolution relative to native canvas (D4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RtRayResolution {
+    Quarter,
+    #[default]
+    Half,
+    ThreeQuarter,
+    Native,
+}
+
+impl RtRayResolution {
+    /// (numerator, denominator) — integer fraction, same discipline as
+    /// `output_canvas_scale`'s (num, den) at render_scene.rs:284+.
+    pub fn fraction(self) -> (u32, u32) {
+        match self {
+            RtRayResolution::Quarter => (1, 4),
+            RtRayResolution::Half => (1, 2),
+            RtRayResolution::ThreeQuarter => (3, 4),
+            RtRayResolution::Native => (1, 1),
+        }
+    }
+}
+
+/// One column of the grid — the values one usage mode (live or export) runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RtQualityColumn {
+    pub shadows: RtQualityTier,
+    pub ao: RtQualityTier,
+    pub gi: RtQualityTier,
+    pub reflections: RtQualityTier,
+    pub ray_resolution: RtRayResolution,
+}
+
+impl Default for RtQualityColumn {
+    fn default() -> Self {
+        Self {
+            shadows: RtQualityTier::UltraLow,
+            ao: RtQualityTier::Medium,
+            gi: RtQualityTier::Medium,
+            reflections: RtQualityTier::High,
+            ray_resolution: RtRayResolution::Half,
+        }
+    }
+}
+
+impl RtQualityColumn {
+    /// Export default column: shadows High, ao/gi High, reflections ExtraHigh, ray Native.
+    pub fn export_default() -> Self {
+        Self {
+            shadows: RtQualityTier::High,
+            ao: RtQualityTier::High,
+            gi: RtQualityTier::High,
+            reflections: RtQualityTier::ExtraHigh,
+            ray_resolution: RtRayResolution::Native,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RtQualitySettings {
+    pub realtime: RtQualityColumn,
+    #[serde(default = "RtQualityColumn::export_default")]
+    pub export: RtQualityColumn,
+}
+
+impl Default for RtQualitySettings {
+    fn default() -> Self {
+        Self {
+            realtime: RtQualityColumn::default(),
+            export: RtQualityColumn::export_default(),
+        }
+    }
+}
+
 /// Project-wide settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +213,9 @@ pub struct ProjectSettings {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ableton_set_context: Option<crate::ableton_mapping::AbletonSetContext>,
+
+    #[serde(default)]
+    pub rt_quality: RtQualitySettings,
 
     #[serde(default = "default_neg_one_f")]
     pub inspector_width: f32,
@@ -302,6 +419,7 @@ impl Default for ProjectSettings {
             legacy_strobe_rate: None,
             legacy_strobe_mode: None,
             legacy_master_effect_order: None,
+            rt_quality: RtQualitySettings::default(),
         }
     }
 }
@@ -501,3 +619,147 @@ fn default_neg_one_i32() -> i32 {
 fn default_true() -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn rt_quality_tier_spp_ladder() {
+        assert_eq!(RtQualityTier::UltraLow.spp(), 1);
+        assert_eq!(RtQualityTier::Low.spp(), 2);
+        assert_eq!(RtQualityTier::Medium.spp(), 4);
+        assert_eq!(RtQualityTier::High.spp(), 8);
+        assert_eq!(RtQualityTier::ExtraHigh.spp(), 16);
+        assert_eq!(RtQualityTier::Ultra.spp(), 32);
+    }
+
+    #[test]
+    fn rt_quality_tier_spp_always_positive() {
+        for tier in [
+            RtQualityTier::UltraLow,
+            RtQualityTier::Low,
+            RtQualityTier::Medium,
+            RtQualityTier::High,
+            RtQualityTier::ExtraHigh,
+            RtQualityTier::Ultra,
+        ] {
+            assert!(tier.spp() >= 1, "spp() must be >= 1 for {:?}", tier);
+        }
+    }
+
+    #[test]
+    fn rt_quality_live_defaults_match_constants() {
+        let live = RtQualityColumn::default();
+        // Live defaults from design D2:
+        // shadows UltraLow (1), ao/gi Medium (4), reflections High (8), ray Half
+        assert_eq!(live.shadows, RtQualityTier::UltraLow);
+        assert_eq!(live.ao, RtQualityTier::Medium);
+        assert_eq!(live.gi, RtQualityTier::Medium);
+        assert_eq!(live.reflections, RtQualityTier::High);
+        assert_eq!(live.ray_resolution, RtRayResolution::Half);
+        // Verify spp values match today's constants exactly
+        assert_eq!(live.shadows.spp(), 1);
+        assert_eq!(live.ao.spp(), 4);
+        assert_eq!(live.gi.spp(), 4);
+        assert_eq!(live.reflections.spp(), 8);
+        assert_eq!(live.ray_resolution.fraction(), (1, 2));
+    }
+
+    #[test]
+    fn rt_quality_export_defaults() {
+        let export = RtQualityColumn::export_default();
+        // Export defaults from design D2:
+        // shadows High (8), ao/gi High (8), reflections ExtraHigh (16), ray Native
+        assert_eq!(export.shadows, RtQualityTier::High);
+        assert_eq!(export.ao, RtQualityTier::High);
+        assert_eq!(export.gi, RtQualityTier::High);
+        assert_eq!(export.reflections, RtQualityTier::ExtraHigh);
+        assert_eq!(export.ray_resolution, RtRayResolution::Native);
+        // Verify spp values
+        assert_eq!(export.shadows.spp(), 8);
+        assert_eq!(export.ao.spp(), 8);
+        assert_eq!(export.gi.spp(), 8);
+        assert_eq!(export.reflections.spp(), 16);
+        assert_eq!(export.ray_resolution.fraction(), (1, 1));
+    }
+
+    #[test]
+    fn rt_quality_serde_round_trip() {
+        let settings = RtQualitySettings {
+            realtime: RtQualityColumn {
+                shadows: RtQualityTier::Low,
+                ao: RtQualityTier::ExtraHigh,
+                gi: RtQualityTier::High,
+                reflections: RtQualityTier::Ultra,
+                ray_resolution: RtRayResolution::Quarter,
+            },
+            export: RtQualityColumn {
+                shadows: RtQualityTier::ExtraHigh,
+                ao: RtQualityTier::Ultra,
+                gi: RtQualityTier::ExtraHigh,
+                reflections: RtQualityTier::Ultra,
+                ray_resolution: RtRayResolution::ThreeQuarter,
+            },
+        };
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let deserialized: RtQualitySettings = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.realtime.shadows, RtQualityTier::Low);
+        assert_eq!(deserialized.realtime.ao, RtQualityTier::ExtraHigh);
+        assert_eq!(deserialized.realtime.gi, RtQualityTier::High);
+        assert_eq!(deserialized.realtime.reflections, RtQualityTier::Ultra);
+        assert_eq!(deserialized.realtime.ray_resolution, RtRayResolution::Quarter);
+
+        assert_eq!(deserialized.export.shadows, RtQualityTier::ExtraHigh);
+        assert_eq!(deserialized.export.ao, RtQualityTier::Ultra);
+        assert_eq!(deserialized.export.gi, RtQualityTier::ExtraHigh);
+        assert_eq!(deserialized.export.reflections, RtQualityTier::Ultra);
+        assert_eq!(deserialized.export.ray_resolution, RtRayResolution::ThreeQuarter);
+    }
+
+    #[test]
+    fn rt_quality_missing_field_gets_defaults() {
+        // Old JSON without rt_quality field should deserialize to defaults
+        let old_json = r#"{
+            "outputWidth": 1920,
+            "outputHeight": 1080,
+            "frameRate": 60.0,
+            "vsyncEnabled": true,
+            "exportHdr": false,
+            "videoLibraryPaths": [],
+            "videoPlayerPoolSize": 10,
+            "maxLayers": 8,
+            "bpm": 120.0,
+            "timeSignatureNumerator": 4,
+            "timeSignatureDenominator": 4,
+            "renderScale": 1.0
+        }"#;
+
+        let settings: ProjectSettings = serde_json::from_str(old_json).unwrap();
+        let defaults = RtQualitySettings::default();
+
+        assert_eq!(settings.rt_quality.realtime.shadows, defaults.realtime.shadows);
+        assert_eq!(settings.rt_quality.realtime.ao, defaults.realtime.ao);
+        assert_eq!(settings.rt_quality.realtime.gi, defaults.realtime.gi);
+        assert_eq!(settings.rt_quality.realtime.reflections, defaults.realtime.reflections);
+        assert_eq!(settings.rt_quality.realtime.ray_resolution, defaults.realtime.ray_resolution);
+
+        assert_eq!(settings.rt_quality.export.shadows, defaults.export.shadows);
+        assert_eq!(settings.rt_quality.export.ao, defaults.export.ao);
+        assert_eq!(settings.rt_quality.export.gi, defaults.export.gi);
+        assert_eq!(settings.rt_quality.export.reflections, defaults.export.reflections);
+        assert_eq!(settings.rt_quality.export.ray_resolution, defaults.export.ray_resolution);
+    }
+
+    #[test]
+    fn rt_ray_resolution_fraction() {
+        assert_eq!(RtRayResolution::Quarter.fraction(), (1, 4));
+        assert_eq!(RtRayResolution::Half.fraction(), (1, 2));
+        assert_eq!(RtRayResolution::ThreeQuarter.fraction(), (3, 4));
+        assert_eq!(RtRayResolution::Native.fraction(), (1, 1));
+    }
+}
+
