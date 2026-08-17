@@ -1548,13 +1548,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let idx = self.write_surface_index;
         let pending = self.surface_signal_values[idx];
         let signaled = self.native_event.as_ref().map_or(0, |e| e.signaled_value());
-        log::error!(
-            "[ContentPipeline] GPU timeout waiting for surface {} \
-             (signal={}, signaled={})",
-            idx,
-            pending,
-            signaled,
-        );
+
+        if signaled >= pending {
+            // GPU fence already signaled — content thread is waiting on a UI bridge to release its slot
+            log::error!(
+                "[ContentPipeline] waiting for UI bridge to release slot {} \
+                 (signal={}, signaled={})",
+                idx,
+                pending,
+                signaled,
+            );
+        } else {
+            // GPU fence not yet signaled — genuine GPU timeout
+            log::error!(
+                "[ContentPipeline] GPU timeout waiting for surface {} \
+                 (signal={}, signaled={})",
+                idx,
+                pending,
+                signaled,
+            );
+        }
         // BUG-j8gy: signaled >= pending means the content queue already fired
         // and the real blocker is a UI-side bridge read fence — name it, or
         // the next reader misdiagnoses this as a content-queue hang (clearing
