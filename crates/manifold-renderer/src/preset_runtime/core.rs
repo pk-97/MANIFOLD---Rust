@@ -257,10 +257,9 @@ pub(super) struct EffectSlot {
     ///
     /// The user tail is re-hydrated lazily when
     /// `effect.user_param_bindings_version` advances past
-    /// [`Self::user_bindings_version`]; a reshape edit bumps `graph_version`,
-    /// which forces a full chain rebuild (so the static prefix re-resolves
-    /// from the preset spec); the cache clears (via
-    /// [`BoundGraph::apply_inner_overrides`]) on a `graph_version` bump.
+    /// [`Self::user_bindings_version`]; a reshape edit bumps `graph_version`.
+    /// Only topology changes (node/wire add/remove) bump `graph_structure_version`
+    /// and force a full chain rebuild.
     pub(super) bound: BoundGraph,
     /// Last seen `PresetInstance.graph_version` for the user tail. User
     /// bindings live in the per-instance graph now, so a binding add /

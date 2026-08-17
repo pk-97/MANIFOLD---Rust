@@ -16,7 +16,7 @@ use manifold_core::project::Project;
 use parking_lot::Mutex;
 use std::net::UdpSocket;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 // ── Constants ────────���────────────────────────────────────────────
 
@@ -2514,7 +2514,10 @@ impl Drop for AbletonBridge {
 /// every call site would fight those borrows for no benefit; there is one
 /// bridge per process and the atomic only throttles log volume, never
 /// drives behavior.
-static OSC_SEND_FAILED: AtomicBool = AtomicBool::new(false);
+/// Tracks consecutive successful OSC sends for flap-resistant reconnection detection.
+/// Requires 3 consecutive successes before logging "reconnected" to avoid UDP
+/// connected-socket flap where ok/fail alternates when the remote port is down.
+static CONSECUTIVE_SUCCESSES: AtomicU8 = AtomicU8::new(0);
 
 /// What `send_osc_to` should log for this outcome, decided by
 /// [`note_send_outcome`]. Split out as a pure state transition (no I/O, no
@@ -2533,21 +2536,51 @@ enum SendLogAction {
     InfoReconnected,
 }
 
-/// Advance the throttle state machine for one send outcome. `flag` tracks
-/// "the previous attempt failed" — `swap` both reads and updates it
-/// atomically in one step, so this is safe to call from a single-threaded
-/// context (as `send_osc_to` is) without a lock.
-fn note_send_outcome(flag: &AtomicBool, ok: bool) -> SendLogAction {
+/// Advance the throttle state machine for one send outcome. `consecutive_successes`
+/// tracks recovery progress — we require 3 consecutive successful sends before
+/// declaring a reconnected (INFO) to avoid UDP connected-socket flap where
+/// ok/fail alternates every send when the remote port is down.
+fn note_send_outcome(consecutive_successes: &AtomicU8, ok: bool) -> SendLogAction {
     if ok {
-        if flag.swap(false, Ordering::Relaxed) {
+        // Increment success counter; log INFO only after 3 consecutive successes.
+        // Saturate at 3 to prevent u8 wrap (255→0) causing spurious InfoReconnected.
+        let count = consecutive_successes.load(Ordering::Relaxed);
+        let new_count = if count < 3 { count + 1 } else { 3 };
+        consecutive_successes.store(new_count, Ordering::Relaxed);
+
+        if new_count == 3 && count < 3 {
+            // Third consecutive success — sustained recovery confirmed.
             SendLogAction::InfoReconnected
         } else {
             SendLogAction::Silent
         }
-    } else if flag.swap(true, Ordering::Relaxed) {
-        SendLogAction::DebugRepeat
     } else {
+        // Failure resets the counter to 0.
+        consecutive_successes.store(0, Ordering::Relaxed);
+        SendLogAction::DebugRepeat
+    }
+}
+
+/// First-failure flag for detecting WARN vs DEBUG. This is separate from the
+/// consecutive-successes counter so we can distinguish "first failure ever" from
+/// "repeated failures during sustained outage".
+static FIRST_FAILURE_SEEN: AtomicBool = AtomicBool::new(false);
+
+/// Wrapper that combines consecutive-successes throttling with first-failure detection.
+fn note_send_outcome_with_first_failure(ok: bool) -> SendLogAction {
+    let action = note_send_outcome(&CONSECUTIVE_SUCCESSES, ok);
+
+    // If we just achieved sustained recovery (InfoReconnected), reset the first-failure flag
+    // so a subsequent failure will warn again (not treated as a repeat).
+    if matches!(action, SendLogAction::InfoReconnected) {
+        FIRST_FAILURE_SEEN.store(false, Ordering::Relaxed);
+    }
+
+    // Override to WARN_FIRST if this is the first failure we've seen.
+    if !ok && !FIRST_FAILURE_SEEN.swap(true, Ordering::Relaxed) {
         SendLogAction::WarnFirst
+    } else {
+        action
     }
 }
 
@@ -2557,8 +2590,9 @@ fn note_send_outcome(flag: &AtomicBool, ok: bool) -> SendLogAction {
 /// When Ableton isn't running, `sock.send` fails with "Connection refused"
 /// on every heartbeat (~1.5s) — BUG-038: this spammed WARN indefinitely.
 /// Now: warn once on the first failure, downgrade repeated identical
-/// failures to DEBUG, and log an INFO "reconnected" the moment a send
-/// succeeds again.
+/// failures to DEBUG, and log an INFO "reconnected" after 3 consecutive
+/// successful sends (UDP connected-socket flap causes alternating ok/fail;
+/// the flap-resistant throttle prevents WARN/INFO spam on sustained outage).
 fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]) {
     if let Some(sock) = socket {
         let msg = rosc::OscMessage {
@@ -2569,12 +2603,12 @@ fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]
         match rosc::encoder::encode(&packet) {
             Ok(buf) => match sock.send(&buf) {
                 Ok(_) => {
-                    if note_send_outcome(&OSC_SEND_FAILED, true) == SendLogAction::InfoReconnected
+                    if note_send_outcome_with_first_failure(true) == SendLogAction::InfoReconnected
                     {
                         log::info!("[AbletonBridge] OSC send reconnected");
                     }
                 }
-                Err(e) => match note_send_outcome(&OSC_SEND_FAILED, false) {
+                Err(e) => match note_send_outcome_with_first_failure(false) {
                     SendLogAction::DebugRepeat => {
                         log::debug!("[AbletonBridge] OSC send failed for {address}: {e}");
                     }
@@ -3271,23 +3305,82 @@ mod tests {
     // isolated from others running in parallel.
     #[test]
     fn osc_send_throttle_warns_once_then_downgrades_then_reconnects() {
-        let flag = AtomicBool::new(false);
+        let successes = AtomicU8::new(0);
+        let first_failure = AtomicBool::new(false);
+
+        // Helper that combines both counters for testing.
+        let test_outcome = |ok: bool| -> SendLogAction {
+            let action = note_send_outcome(&successes, ok);
+
+            // Reset first_failure flag on sustained recovery.
+            if matches!(action, SendLogAction::InfoReconnected) {
+                first_failure.store(false, Ordering::Relaxed);
+            }
+
+            if !ok && !first_failure.swap(true, Ordering::Relaxed) {
+                SendLogAction::WarnFirst
+            } else {
+                action
+            }
+        };
 
         // First failure — WARN.
-        assert_eq!(note_send_outcome(&flag, false), SendLogAction::WarnFirst);
+        assert_eq!(test_outcome(false), SendLogAction::WarnFirst);
         // Repeated failures while still down — DEBUG, not WARN again.
-        assert_eq!(note_send_outcome(&flag, false), SendLogAction::DebugRepeat);
-        assert_eq!(note_send_outcome(&flag, false), SendLogAction::DebugRepeat);
+        assert_eq!(test_outcome(false), SendLogAction::DebugRepeat);
+        assert_eq!(test_outcome(false), SendLogAction::DebugRepeat);
 
-        // A send succeeds — one INFO reconnect log.
-        assert_eq!(
-            note_send_outcome(&flag, true),
-            SendLogAction::InfoReconnected
-        );
-        // Steady-state success afterward is silent.
-        assert_eq!(note_send_outcome(&flag, true), SendLogAction::Silent);
+        // Three consecutive successes required for INFO reconnect.
+        assert_eq!(test_outcome(true), SendLogAction::Silent); // success #1
+        assert_eq!(test_outcome(true), SendLogAction::Silent); // success #2
+        assert_eq!(test_outcome(true), SendLogAction::InfoReconnected); // success #3
+
+        // Steady-state success afterward is silent (saturates at 3, no wrap).
+        assert_eq!(test_outcome(true), SendLogAction::Silent);
+        assert_eq!(test_outcome(true), SendLogAction::Silent);
+
+        // Verify no spurious InfoReconnected after many successes (tests u8 wrap fix).
+        for _ in 0..300 {
+            assert_eq!(test_outcome(true), SendLogAction::Silent);
+        }
 
         // A fresh failure after recovering warns again (not DEBUG).
-        assert_eq!(note_send_outcome(&flag, false), SendLogAction::WarnFirst);
+        assert_eq!(test_outcome(false), SendLogAction::WarnFirst);
+    }
+
+    #[test]
+    fn osc_send_throttle_resists_udp_flap() {
+        let successes = AtomicU8::new(0);
+        let first_failure = AtomicBool::new(false);
+
+        let test_outcome = |ok: bool| -> SendLogAction {
+            let action = note_send_outcome(&successes, ok);
+
+            // Reset first_failure flag on sustained recovery.
+            if matches!(action, SendLogAction::InfoReconnected) {
+                first_failure.store(false, Ordering::Relaxed);
+            }
+
+            if !ok && !first_failure.swap(true, Ordering::Relaxed) {
+                SendLogAction::WarnFirst
+            } else {
+                action
+            }
+        };
+
+        // Simulate UDP connected-socket flap: ok/fail alternates every send.
+        // First failure — WARN (expected).
+        assert_eq!(test_outcome(false), SendLogAction::WarnFirst);
+
+        // Flap begins: ok, fail, ok, fail, ok, fail...
+        assert_eq!(test_outcome(true), SendLogAction::Silent);  // success #1
+        assert_eq!(test_outcome(false), SendLogAction::DebugRepeat); // resets to 0
+        assert_eq!(test_outcome(true), SendLogAction::Silent);  // success #1 again
+        assert_eq!(test_outcome(false), SendLogAction::DebugRepeat); // resets to 0
+        assert_eq!(test_outcome(true), SendLogAction::Silent);  // success #1 again
+        assert_eq!(test_outcome(false), SendLogAction::DebugRepeat); // resets to 0
+
+        // During sustained flap, we should see at most one WARN and zero INFO.
+        // No WarnFirst repeats, no InfoReconnected spam.
     }
 }
