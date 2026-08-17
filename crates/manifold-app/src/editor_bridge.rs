@@ -851,7 +851,11 @@ impl Application {
             .execute(&mut self.local_project);
         let target = target.clone();
         let pid = param_id.to_string();
-        self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
+        // The lean preview arm: this runs once per mouse-move, and a mapping
+        // reshape never touches the video library or the Ableton mapping
+        // table, so the full `MutateProject` maintenance was project-scale
+        // dead work on every tick. The commit (`Execute`) rebuilds listeners.
+        self.send_content_cmd(ContentCommand::MutateProjectPreview(Box::new(move |p| {
             build_mapping_command(&target, &pid, edit, seed_def).execute(p);
         })));
     }
