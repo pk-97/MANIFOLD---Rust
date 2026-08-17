@@ -210,6 +210,39 @@ impl BoundGraph {
         apply_inner_param_overrides(def, node_map, graph, &self.fused_retarget, prefix);
         self.cache.clear();
     }
+
+    /// Re-bake every binding's reshape from the live manifest spec
+    /// (min/max/curve/invert — the D4 authority, the same overlay the
+    /// generator build applies at construction for BUG-078) plus the
+    /// override def's `BindingDef` scale/offset when `def` carries one for
+    /// the binding id. This is the in-place answer to a mapping-spec edit,
+    /// which bumps only `graph_version` (no rebuild): without it the running
+    /// runtime keeps the reshape baked at build until the next structural
+    /// rebuild. The cache clear is load-bearing, same as in
+    /// [`apply_inner_overrides_prefixed`](Self::apply_inner_overrides_prefixed)
+    /// — the outer value hasn't moved, so without it the reshaped write
+    /// would be skipped as unchanged.
+    pub fn rebake_reshapes(&mut self, manifest: &ParamManifest, def: Option<&EffectGraphDef>) {
+        let scale_offset: AHashMap<&str, (f32, f32)> = def
+            .and_then(|d| d.preset_metadata.as_ref())
+            .map(|m| {
+                m.bindings
+                    .iter()
+                    .map(|b| (b.id.as_str(), (b.scale, b.offset)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for b in &mut self.bindings {
+            // Manifest-wins-per-id, mirroring the build-time overlay: a
+            // binding whose id the manifest doesn't carry keeps the reshape
+            // baked at build (from the def shadow).
+            let Some(entry) = manifest.get(b.id.as_ref()) else {
+                continue;
+            };
+            b.rebake_reshape(&entry.spec, scale_offset.get(b.id.as_ref()).copied());
+        }
+        self.cache.clear();
+    }
 }
 
 /// Every param `def` bakes onto a node that one of `bindings` owns, where the

@@ -142,6 +142,21 @@ pub enum ContentCommand {
     /// [`MutateProject`] instead so the caches stay in sync.
     MutateProjectLive(Box<dyn FnOnce(&mut Project) + Send>),
 
+    /// Lean [`MutateProject`] for the per-tick PREVIEW of an in-flight
+    /// mapping-drawer drag: the closure runs, the forked-preset overlay
+    /// refresh stays (fingerprint-gated, cheap — the drawer's recalibration
+    /// guarantee), and the compositor is marked dirty so the preview shows
+    /// while paused. The two project-scale arms are skipped:
+    ///
+    /// - Renderer re-notify (`on_project_loaded`) syncs the video library —
+    ///   a mapping reshape never touches it.
+    /// - Ableton `rebuild_listeners` caches each mapped param's range into
+    ///   its `WriteTarget`s. A range preview leaves that cache stale for the
+    ///   duration of the drag; the commit (`Execute`) rebuilds it. A sender
+    ///   whose mutation must take effect on listeners mid-gesture (the
+    ///   Ableton trim drags) must keep [`MutateProject`].
+    MutateProjectPreview(Box<dyn FnOnce(&mut Project) + Send>),
+
     // ── Percussion ─────────────────────────────────────────────────
     /// Run per-clip detection on an existing audio clip (audio-clip-detection).
     /// Analyzes the clip's file and places its triggers, owned by the clip.

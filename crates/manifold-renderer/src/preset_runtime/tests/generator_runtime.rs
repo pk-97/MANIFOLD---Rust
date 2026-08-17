@@ -693,6 +693,158 @@
         );
     }
 
+    /// The in-place channel for a spec-only mapping edit on a catalog-default
+    /// generator: `EditParamMappingCommand` writes only the manifest and bumps
+    /// `graph_version` (no override materialized, no rebuild), so the
+    /// generator_renderer sweep calls `apply_manifest_reshape` with the live
+    /// manifest and NO def. The baked reshape must follow the manifest — here
+    /// a curve engaging on `amt` — and the cache clear inside the re-bake must
+    /// re-write the same outer value through the new reshape immediately.
+    #[test]
+    fn apply_manifest_reshape_rebakes_curve_without_rebuild() {
+        let json = r#"{
+            "version": 1,
+            "name": "RebakeTest",
+            "presetMetadata": {
+                "id": "RebakeTest",
+                "displayName": "Rebake Test",
+                "category": "Generator",
+                "oscPrefix": "rebakeTest",
+                "params": [
+                    { "id": "amt", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 0.0 }
+                ],
+                "bindings": [
+                    { "id": "amt", "label": "Amount", "defaultValue": 0.0,
+                      "target": { "kind": "handleNode", "handle": "so", "param": "offset" },
+                      "convert": { "type": "Float" } }
+                ]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "node.scale_offset_image", "handle": "so" },
+                { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+
+        // Catalog-default build: no live manifest at construction, so the
+        // reshape bakes from the def's own spec (Linear — identity, no
+        // reshape). `from_json_str` is the no-manifest convenience path.
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("RebakeTest def loads");
+        let so_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "so")
+            .map(|(_, id)| id)
+            .expect("preset declares a `so` handle");
+        let offset_of = |g: &PresetRuntime| match g.graph.get_node(so_id).unwrap().params.get("offset")
+        {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+
+        let mut values = manifest(&[("amt", 0.5)]);
+        g.apply_param_values(&values);
+        assert!(
+            (offset_of(&g) - 0.5).abs() < 1e-5,
+            "identity reshape passes the raw value through, got {}",
+            offset_of(&g),
+        );
+
+        // The spec-only edit: `apply_to_manifest_spec` sets the curve on the
+        // manifest entry. Then the sweep's answer to the graph-version bump —
+        // `apply_manifest_reshape` with NO override def (none was
+        // materialized).
+        values.get_mut("amt").expect("amt entry").spec.curve =
+            manifold_core::macro_bank::MacroCurve::Exponential;
+        g.apply_manifest_reshape(&values, None);
+
+        // Re-apply the SAME outer value: only the re-bake's cache clear lets
+        // this write land. Exponential is n^2: 0.5 -> 0.25.
+        g.apply_param_values(&values);
+        assert!(
+            (offset_of(&g) - 0.25).abs() < 1e-5,
+            "the curved reshape must take effect in place (0.5 -> n^2 -> 0.25), got {}",
+            offset_of(&g),
+        );
+    }
+
+    /// The materialized-instance half of the same channel: when an override
+    /// def exists, its `BindingDef` carries the scale/offset half of a mapping
+    /// edit — the re-bake must pick THAT up together with the manifest's
+    /// curve, so a combined reshape lands without a rebuild.
+    #[test]
+    fn apply_manifest_reshape_reads_scale_offset_from_override_def() {
+        let json = r#"{
+            "version": 1,
+            "name": "RebakeScaleTest",
+            "presetMetadata": {
+                "id": "RebakeScaleTest",
+                "displayName": "Rebake Scale Test",
+                "category": "Generator",
+                "oscPrefix": "rebakeScaleTest",
+                "params": [
+                    { "id": "amt", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 0.0 }
+                ],
+                "bindings": [
+                    { "id": "amt", "label": "Amount", "defaultValue": 0.0,
+                      "target": { "kind": "handleNode", "handle": "so", "param": "offset" },
+                      "scale": 2.0, "offset": 0.1,
+                      "convert": { "type": "Float" } }
+                ]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "node.scale_offset_image", "handle": "so" },
+                { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_str(json).expect("parse RebakeScaleTest def");
+        let mut g = PresetRuntime::from_def(def.clone(), &PrimitiveRegistry::with_builtin(), None)
+            .expect("RebakeScaleTest def loads");
+        let so_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "so")
+            .map(|(_, id)| id)
+            .expect("preset declares a `so` handle");
+
+        let mut values = manifest(&[("amt", 0.5)]);
+        g.apply_param_values(&values);
+        // Affine only (no curve yet): 0.5 * 2.0 + 0.1 = 1.1.
+        let v = match g.graph.get_node(so_id).unwrap().params.get("offset") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+        assert!((v - 1.1).abs() < 1e-5, "affine bake sanity: 0.5*2+0.1 = 1.1, got {v}");
+
+        // Spec edit lands on the manifest; scale/offset ride the override def.
+        values.get_mut("amt").expect("amt entry").spec.curve =
+            manifold_core::macro_bank::MacroCurve::Exponential;
+        g.apply_manifest_reshape(&values, Some(&def));
+        g.apply_param_values(&values);
+        // Curve first (0.5 -> 0.25), then the def's affine: 0.25*2+0.1 = 0.6.
+        let v = match g.graph.get_node(so_id).unwrap().params.get("offset") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+        assert!(
+            (v - 0.6).abs() < 1e-5,
+            "curve + override affine must combine (0.5 -> 0.25 -> 0.25*2+0.1 = 0.6), got {v}",
+        );
+    }
+
     fn frame_time() -> FrameTime {
         FrameTime {
             beats: Beats(0.0),

@@ -62,8 +62,13 @@ struct LayerGeneratorState {
     /// `Layer::generator_graph_version` (the snapshot counter, bumped by every
     /// edit) last reflected into the live graph. When it advances without a
     /// structure change, the sweep pushes the new inner-node param values into
-    /// the running generator via `apply_inner_param_overrides` — no rebuild, so
-    /// sim/particle state survives. `None` mirrors no override present.
+    /// the running generator via `apply_inner_param_overrides` and re-bakes
+    /// the binding reshapes from the live manifest via
+    /// `apply_manifest_reshape` — no rebuild, so sim/particle state survives.
+    /// Keyed on `gen_params` presence (not the override graph's) so a
+    /// spec-only mapping edit on a catalog-default generator — which bumps
+    /// this counter without materializing an override — is seen here.
+    /// `None` when the layer had no generator params at construction.
     applied_param_version: Option<u32>,
     /// Cached string params from the layer's clips. When a clip provides a
     /// string param (e.g. fontFamily), it's stored here so that subsequent clips
@@ -420,7 +425,11 @@ impl GeneratorRenderer {
         // bundled-preset path from a v0 override.
         let current_override_version: Option<u32> =
             override_def.map(|_| override_version);
-        let current_param_version: Option<u32> = override_def.map(|_| param_version);
+        // Keyed on the manifest's presence (not the override's) so a
+        // spec-only mapping edit on a catalog-default generator — no
+        // override, just a `graph_version` bump — is visible to the sweep's
+        // value-only path, matching the sweep's own keying below.
+        let current_param_version: Option<u32> = manifest.map(|_| param_version);
         let is_watched_now = self.preview_layer.as_ref() == Some(&layer_id);
         let needs_create = self
             .layer_generators
@@ -586,8 +595,12 @@ impl GeneratorRenderer {
             let current_override_version: Option<u32> = layer
                 .generator_graph()
                 .map(|_| layer.generator_graph_structure_version());
+            // Keyed on `gen_params` (not the override graph): a spec-only
+            // mapping edit on a catalog-default generator bumps
+            // `graph_version` without materializing an override, and this
+            // counter is the only signal that edit produces.
             let current_param_version: Option<u32> =
-                layer.generator_graph().map(|_| layer.generator_graph_version());
+                layer.gen_params().map(|_| layer.generator_graph_version());
             // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5): compared
             // below alongside `override_version`/`built_watched` — see
             // `acquire_clip`'s doc comment on the same comparison.
@@ -621,6 +634,15 @@ impl GeneratorRenderer {
                 {
                     if let Some(def) = layer.generator_graph() {
                         ls.generator.apply_inner_param_overrides(def);
+                    }
+                    // Re-bake the binding reshapes from the live manifest so a
+                    // mapping-spec edit (curve/invert/range) reaches the inner
+                    // nodes in place. This is the ONLY channel for a spec-only
+                    // edit on a catalog-default generator — no override is
+                    // materialized, so no rebuild ever follows.
+                    if let Some(gp) = layer.gen_params() {
+                        ls.generator
+                            .apply_manifest_reshape(&gp.params, layer.generator_graph());
                     }
                     ls.applied_param_version = current_param_version;
                 }
@@ -798,14 +820,11 @@ impl GeneratorRenderer {
                         .generator
                         .set_string_params(Some(&layer_state.merged_string_params));
                 }
-                // Apply the layer's per-instance reshape notes before
-                // rendering. Version-gated inside the generator, so a
-                // note-free layer pays one integer compare per frame; a
-                // note edit rebuilds the affected reshapes + clears the
-                // apply-cache so it takes effect immediately. Downstream
-                // only — never touches the value slots modulation writes.
                 // The generator's id-keyed slider manifest drives the bindings
                 // by source_id; empty when the layer has no generator instance.
+                // Values only — the reshape half (range/curve/invert) is
+                // re-baked from this same manifest by the per-frame sweep above
+                // on a `graph_version` bump, not here.
                 let empty = ParamManifest::default();
                 let params = layer.gen_params().map(|gp| &gp.params).unwrap_or(&empty);
                 let relight_params = layer

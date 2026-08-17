@@ -513,6 +513,26 @@ impl ResolvedBinding {
         }
     }
 
+    /// Re-bake the card reshape from the live manifest spec (min/max/curve/
+    /// invert — the D4 authority) plus a scale/offset pair: the override
+    /// def's `BindingDef` pair when supplied, else the pair baked into the
+    /// current reshape (identity 1/0 when none). The in-place mirror of the
+    /// build-time bake for a mapping-spec edit, which bumps only
+    /// `graph_version` and never rebuilds — without this the running runtime
+    /// keeps the stale reshape until the next structural rebuild. Identity
+    /// inputs yield `None`, exactly like the build-time bake.
+    pub(crate) fn rebake_reshape(
+        &mut self,
+        spec: &manifold_core::effect_graph_def::ParamSpecDef,
+        scale_offset: Option<(f32, f32)>,
+    ) {
+        let (scale, offset) = scale_offset
+            .unwrap_or_else(|| self.reshape.map_or((1.0, 0.0), |r| (r.scale, r.offset)));
+        self.reshape = Reshape::from_preset_response(
+            spec.min, spec.max, spec.curve, spec.invert, scale, offset,
+        );
+    }
+
     /// The exact [`ParamValue`] this binding writes for outer value `value`:
     /// slider reshape, then the angle wrap, then the convert. Split out of
     /// [`Self::apply`] so a reader that needs to know what the binding WOULD

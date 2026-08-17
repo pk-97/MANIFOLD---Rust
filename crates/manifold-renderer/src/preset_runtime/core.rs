@@ -1937,6 +1937,28 @@ impl PresetRuntime {
         }
     }
 
+    /// Re-bake every binding's reshape from the live manifest — the in-place
+    /// answer to a mapping-spec edit (label/min/max/curve/invert), which
+    /// bumps only `graph_version` and so never rebuilds. Mirrors the
+    /// build-time manifest overlay (BUG-078) on the running runtime, the way
+    /// the effect chain's user-tail rehydrate re-reads the manifest on the
+    /// same version bump — without it a curve/range recalibration on a
+    /// catalog-default generator (which no longer materializes an override,
+    /// so no rebuild follows) would never reach the inner nodes. `def` is
+    /// the instance's per-instance override when one exists: its
+    /// `BindingDef`s carry the scale/offset half of a mapping edit (a
+    /// scale/offset edit on a catalog-default instance materializes the
+    /// override, so `None` always implies the baked pair still stands).
+    pub fn apply_manifest_reshape(
+        &mut self,
+        manifest: &ParamManifest,
+        def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    ) {
+        if let Some(seg) = self.effect_nodes.first_mut() {
+            seg.bound.rebake_reshapes(manifest, def);
+        }
+    }
+
     /// BUG-317/318/319/BUG-18l: a live param write changed some node's
     /// forced-output set (see [`Graph::forced_outputs_epoch`]). The
     /// in-place plan-recompile answer (BUG-317, then BUG-318's executor
