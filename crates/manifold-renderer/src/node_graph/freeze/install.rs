@@ -3463,14 +3463,13 @@ mod tests {
 
         // Clone the base def and modify a binding's cosmetic fields
         let mut def_with_metadata = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_metadata.preset_metadata.as_mut() {
-            if let Some(binding) = meta.bindings.first_mut() {
+        if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
                 binding.label = "DIFFERENT_LABEL".to_string();
                 binding.default_value = 999.0;
                 binding.scale = 2.0;
                 binding.offset = 1.0;
             }
-        }
 
         // Effect content key must be identical (metadata doesn't affect codegen)
         assert_eq!(
@@ -3498,14 +3497,13 @@ mod tests {
 
         // Clone and modify a binding's target
         let mut def_with_different_target = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_different_target.preset_metadata.as_mut() {
-            if let Some(binding) = meta.bindings.first_mut() {
+        if let Some(meta) = def_with_different_target.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
                 // Change target to point to a different param — this MUST change the key
                 if let manifold_core::effect_graph_def::BindingTarget::Node { param, .. } = &mut binding.target {
                     *param = "different_param".to_string();
                 }
             }
-        }
 
         assert_ne!(
             effect_def_content_key(&base.canonical_def),
@@ -3522,11 +3520,10 @@ mod tests {
             .expect("Plasma canonical view");
 
         let mut def_with_scale = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_scale.preset_metadata.as_mut() {
-            if let Some(binding) = meta.bindings.first_mut() {
+        if let Some(meta) = def_with_scale.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
                 binding.scale = 2.0;
             }
-        }
 
         assert_ne!(
             def_content_key(&base.canonical_def),
@@ -3545,14 +3542,13 @@ mod tests {
 
         // Clone and modify binding metadata
         let mut def_with_metadata = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_metadata.preset_metadata.as_mut() {
-            if let Some(binding) = meta.bindings.first_mut() {
+        if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
+            && let Some(binding) = meta.bindings.first_mut() {
                 binding.label = "DIFFERENT_LABEL".to_string();
                 binding.default_value = 999.0;
                 binding.scale = 2.0;
                 binding.offset = 1.0;
             }
-        }
 
         // Fuse both defs and extract WGSL
         let registry = PrimitiveRegistry::with_builtin();
