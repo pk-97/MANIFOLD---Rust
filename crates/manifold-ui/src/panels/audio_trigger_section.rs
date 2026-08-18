@@ -18,11 +18,11 @@
 //! surface, NOT the shared param-mod drawer: a clip trigger fires on the raw
 //! sensitivity-scaled signal against a fixed edge, so that drawer's
 //! Attack/Release/Invert rows would be knobs that do nothing here (the
-//! shaped envelope only conditions continuous modulation and the meter), and
-//! its 8×4 Feature×Band matrix is the wrong vocabulary for an onset. The
-//! drawer is four rows: Source (send), Listen (curated trigger-source
-//! chips — see `TRIGGER_SOURCE_CHIPS`), Sensitivity (with the live fire
-//! meter), Length.
+//! shaped envelope only conditions continuous modulation and the meter).
+//! The rows: Source (send), Listen (curated trigger-source chips — see
+//! `TRIGGER_SOURCE_CHIPS` — plus a "Custom" cell opening the full
+//! Feature×Band matrix, same as the param-mod drawer), Sensitivity (with
+//! the live fire meter), Length.
 //!
 //! This module owns its OWN click/drag dispatch (Source/chip/Length button
 //! clicks, the Sensitivity slider drag) — the same division of labor
@@ -32,10 +32,10 @@
 use crate::{AudioSetupAction, ScrubPhase, ScrubValue, ValueRef};
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
-    AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS, AUDIO_SENS_MAX,
-    AudioCardState, AudioRowState, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS, ParamModState,
-    ROW_HEIGHT,
-    audio_band_from_index, audio_kind_from_index, build_clip_trigger_drawer,
+    AUDIO_ATTACK_DEFAULT_MS, AUDIO_KIND_COUNT, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS,
+    AUDIO_SENS_MAX, AudioCardState, AudioRowState, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS,
+    ParamModState, ROW_HEIGHT,
+    audio_band_from_index, audio_band_labels, audio_kind_from_index, build_clip_trigger_drawer,
     clip_trigger_drawer_height, de_btn_style, toggle_btn_style, trigger_source_chips,
 };
 use super::{AudioShapeParam, PanelAction};
@@ -239,7 +239,8 @@ impl AudioTriggerSection {
         for i in 0..self.labels.len() {
             h += ROW_HEIGHT + ROW_SPACING;
             if self.expanded.get(i).copied().unwrap_or(false) {
-                h += clip_trigger_drawer_height() + DRAWER_BOTTOM_GAP + ROW_SPACING;
+                let matrix_open = self.mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
+                h += clip_trigger_drawer_height(matrix_open) + DRAWER_BOTTOM_GAP + ROW_SPACING;
             }
         }
         h + ADD_ROW_H
@@ -334,10 +335,12 @@ impl AudioTriggerSection {
                     col = col.child(row_line);
 
                     if expanded {
+                        let matrix_open =
+                            self.mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
                         col = col.child(
                             View::panel()
                                 .fill_w()
-                                .h(Sizing::Fixed(clip_trigger_drawer_height() + DRAWER_BOTTOM_GAP))
+                                .h(Sizing::Fixed(clip_trigger_drawer_height(matrix_open) + DRAWER_BOTTOM_GAP))
                                 .key(KEY_ROW_DRAWER_BASE + i as u64),
                         );
                     }
@@ -460,33 +463,61 @@ impl AudioTriggerSection {
         // Drawer button clicks. Flat index order matches exactly what
         // `build_clip_trigger_drawer` builds: send buttons, then the chips
         // `trigger_source_chips` returns for the row's current cell (five,
-        // or six with a truthful fallback chip), then Length.
+        // or six with a truthful fallback chip), then the "Custom" cell,
+        // then — only while the matrix is open — the Feature and Band rows,
+        // then Length.
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, send_count)) = cfg else { continue };
             let Some(flat) = dids.resolve_button(node_id) else { continue };
             let feature = self.current_feature(i);
-            if flat < *send_count {
-                // Source click: keep the row's feature, point it at this send.
-                let Some(send_id) = self.mod_state.audio_send_ids.get(flat).cloned() else {
-                    return vec![];
-                };
-                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id, i, send_id, feature))];
-            }
-            let f = flat - send_count;
             let chips = trigger_source_chips(feature);
-            if f < chips.len() {
-                // Chip click: keep the row's send, listen to the chip's cell.
-                let Some(send_id) = self.current_send_id(i) else { return vec![] };
-                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(
-                    layer_id,
-                    i,
-                    send_id,
-                    chips[f].feature,
-                ))];
-            }
-            let f = f - chips.len();
-            if f < LENGTH_OPTIONS.len() {
-                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetLength(layer_id, i, LENGTH_OPTIONS[f]))];
+            let matrix_open = self.mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
+            match resolve_clip_trigger_flat(flat, *send_count, chips.len(), matrix_open) {
+                Some(ClipTriggerClick::SelectSend(k)) => {
+                    // Source click: keep the row's feature, point it at this send.
+                    let Some(send_id) = self.mod_state.audio_send_ids.get(k).cloned() else {
+                        return vec![];
+                    };
+                    return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id, i, send_id, feature))];
+                }
+                Some(ClipTriggerClick::SelectChip(c)) => {
+                    // Chip click: keep the row's send, listen to the chip's cell.
+                    let Some(send_id) = self.current_send_id(i) else { return vec![] };
+                    return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(
+                        layer_id,
+                        i,
+                        send_id,
+                        chips[c].feature,
+                    ))];
+                }
+                Some(ClipTriggerClick::ToggleMatrix) => {
+                    // Session-only UI state — flips in place, no content
+                    // command (same as the param-mod drawer's ToggleMatrix).
+                    if let Some(open) = self.mod_state.audio_matrix_open.get_mut(i) {
+                        *open = !*open;
+                    }
+                    return Vec::new();
+                }
+                Some(ClipTriggerClick::SelectKind(k)) => {
+                    // Matrix Feature cell: new kind, keep the row's band.
+                    let Some(send_id) = self.current_send_id(i) else { return vec![] };
+                    let cell = AudioFeature::new(audio_kind_from_index(k), feature.band);
+                    return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(
+                        layer_id, i, send_id, cell,
+                    ))];
+                }
+                Some(ClipTriggerClick::SelectBand(b)) => {
+                    // Matrix Band cell: keep the row's kind, new band.
+                    let Some(send_id) = self.current_send_id(i) else { return vec![] };
+                    let cell = AudioFeature::new(feature.kind, audio_band_from_index(b));
+                    return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(
+                        layer_id, i, send_id, cell,
+                    ))];
+                }
+                Some(ClipTriggerClick::SelectLength(l)) => {
+                    return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetLength(layer_id, i, LENGTH_OPTIONS[l]))];
+                }
+                None => return Vec::new(),
             }
         }
         Vec::new()
@@ -627,6 +658,60 @@ impl AudioTriggerSection {
     }
 }
 
+/// What one clip-trigger drawer button click means, resolved from the flat
+/// button index. Pure index math (no tree) so the walk is unit-testable;
+/// `handle_click` maps the variants to actions. Layout must stay in lockstep
+/// with `build_clip_trigger_drawer`'s documented flat order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipTriggerClick {
+    SelectSend(usize),
+    SelectChip(usize),
+    ToggleMatrix,
+    SelectKind(usize),
+    SelectBand(usize),
+    SelectLength(usize),
+}
+
+/// Flat walk: sends → chips (`chip_count`, live — the truthful fallback chip
+/// makes it 6 on non-curated cells) → the "Custom" cell → while
+/// `matrix_open`, the Feature row cells then the Band row cells → Length
+/// options. Mirrors `resolve_audio_config_click`'s shape for the param-mod
+/// drawer.
+fn resolve_clip_trigger_flat(
+    flat: usize,
+    send_count: usize,
+    chip_count: usize,
+    matrix_open: bool,
+) -> Option<ClipTriggerClick> {
+    if flat < send_count {
+        return Some(ClipTriggerClick::SelectSend(flat));
+    }
+    let mut f = flat - send_count;
+    if f < chip_count {
+        return Some(ClipTriggerClick::SelectChip(f));
+    }
+    f -= chip_count;
+    if f == 0 {
+        return Some(ClipTriggerClick::ToggleMatrix);
+    }
+    f -= 1;
+    if matrix_open {
+        if f < AUDIO_KIND_COUNT {
+            return Some(ClipTriggerClick::SelectKind(f));
+        }
+        f -= AUDIO_KIND_COUNT;
+        let band_count = audio_band_labels().len();
+        if f < band_count {
+            return Some(ClipTriggerClick::SelectBand(f));
+        }
+        f -= band_count;
+    }
+    if f < LENGTH_OPTIONS.len() {
+        return Some(ClipTriggerClick::SelectLength(f));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,5 +815,38 @@ mod tests {
         section.expanded.truncate(2);
         section.expanded.resize(2, false);
         assert_eq!(section.expanded, vec![false, true]);
+    }
+
+    #[test]
+    fn clip_trigger_flat_walk_matrix_closed() {
+        // 2 sends, 5 chips (curated cell), matrix closed: sends, chips,
+        // Custom, then Length immediately.
+        let r = |flat| resolve_clip_trigger_flat(flat, 2, 5, false);
+        assert_eq!(r(0), Some(ClipTriggerClick::SelectSend(0)));
+        assert_eq!(r(1), Some(ClipTriggerClick::SelectSend(1)));
+        assert_eq!(r(2), Some(ClipTriggerClick::SelectChip(0)));
+        assert_eq!(r(6), Some(ClipTriggerClick::SelectChip(4)));
+        assert_eq!(r(7), Some(ClipTriggerClick::ToggleMatrix));
+        assert_eq!(r(8), Some(ClipTriggerClick::SelectLength(0)));
+        assert_eq!(r(8 + LENGTH_OPTIONS.len() - 1), Some(ClipTriggerClick::SelectLength(LENGTH_OPTIONS.len() - 1)));
+        assert_eq!(r(8 + LENGTH_OPTIONS.len()), None);
+    }
+
+    #[test]
+    fn clip_trigger_flat_walk_matrix_open_shifts_length() {
+        // 2 sends, 6 chips (truthful fallback on a non-curated cell), matrix
+        // open: Custom, then 8 Feature cells, then the Band cells, then
+        // Length.
+        let bands = audio_band_labels().len();
+        let r = |flat| resolve_clip_trigger_flat(flat, 2, 6, true);
+        assert_eq!(r(2), Some(ClipTriggerClick::SelectChip(0)));
+        assert_eq!(r(7), Some(ClipTriggerClick::SelectChip(5)));
+        assert_eq!(r(8), Some(ClipTriggerClick::ToggleMatrix));
+        assert_eq!(r(9), Some(ClipTriggerClick::SelectKind(0)));
+        assert_eq!(r(9 + AUDIO_KIND_COUNT - 1), Some(ClipTriggerClick::SelectKind(AUDIO_KIND_COUNT - 1)));
+        assert_eq!(r(9 + AUDIO_KIND_COUNT), Some(ClipTriggerClick::SelectBand(0)));
+        assert_eq!(r(9 + AUDIO_KIND_COUNT + bands - 1), Some(ClipTriggerClick::SelectBand(bands - 1)));
+        assert_eq!(r(9 + AUDIO_KIND_COUNT + bands), Some(ClipTriggerClick::SelectLength(0)));
+        assert_eq!(r(9 + AUDIO_KIND_COUNT + bands + LENGTH_OPTIONS.len()), None);
     }
 }

@@ -148,13 +148,15 @@ pub(crate) fn norm_to_step_amount(norm: f32, min: f32, max: f32) -> f32 {
 }
 
 
-/// Container height of a clip-trigger drawer: Source row, Listen (chips)
-/// row, Sensitivity slider, Length row — plus the Sensitivity meter strip.
+/// Container height of a clip-trigger drawer: Source row, Listen (chips +
+/// Custom) row, Sensitivity slider, Length row — plus the Feature/Band
+/// matrix rows while `matrix_open`, and the Sensitivity meter strip.
 ///
 /// Paired with [`build_clip_trigger_drawer`] so a caller reserving height
 /// (the AUDIO TRIGGERS section) can't drift from what's actually built.
-pub(crate) fn clip_trigger_drawer_height() -> f32 {
-    crate::panels::drawer::uniform_rows_height(4) + crate::panels::drawer::METER_STRIP_H
+pub(crate) fn clip_trigger_drawer_height(matrix_open: bool) -> f32 {
+    let rows = if matrix_open { 6 } else { 4 };
+    crate::panels::drawer::uniform_rows_height(rows) + crate::panels::drawer::METER_STRIP_H
 }
 
 
@@ -1032,18 +1034,23 @@ fn length_row(beats: f32) -> crate::panels::drawer::DrawerRow {
 
 /// The clip-trigger drawer (AUDIO TRIGGERS section, one per layer row):
 /// Source (send picker) → Listen (curated trigger-source chips, see
-/// [`TRIGGER_SOURCE_CHIPS`]) → Sensitivity slider with the live fire meter →
-/// Length. Deliberately NOT [`build_audio_mod_drawer`] with rows hidden: a
-/// clip trigger fires on the raw sensitivity-scaled signal against a fixed
-/// edge, so Attack/Release/Invert (which only shape the continuous
-/// envelope) would be knobs that do nothing, and the Feature×Band matrix is
-/// the wrong vocabulary for an onset — both are replaced by the chips.
+/// [`TRIGGER_SOURCE_CHIPS`], plus a trailing "Custom" cell) → while Custom is
+/// open, the Feature/Band matrix rows → Sensitivity slider with the live fire
+/// meter → Length. Deliberately NOT [`build_audio_mod_drawer`] with rows
+/// hidden: a clip trigger fires on the raw sensitivity-scaled signal against
+/// a fixed edge, so Attack/Release/Invert (which only shape the continuous
+/// envelope) would be knobs that do nothing. The matrix IS offered (Peter,
+/// 2026-08-18: the five onset chips weren't enough — he wanted Centroid and
+/// the other detector classes reachable from a clip trigger too); the runtime
+/// fires off any `AudioFeature`, so this is presentation only.
 ///
 /// Flat button order (what the section's click resolver walks): send buttons,
 /// then the chips [`trigger_source_chips`] returned for the current cell
-/// (five, or six when a truthful fallback chip is appended), then the Length
-/// options. `DrawerIds.sliders[0]` is Sensitivity; `DrawerIds.meters[0]` its
-/// fire meter. Returns the ids plus the send count, same contract as
+/// (five, or six when a truthful fallback chip is appended), then the
+/// "Custom" cell, then — only while the matrix is open — the Feature row
+/// cells then the Band row cells, then the Length options.
+/// `DrawerIds.sliders[0]` is Sensitivity; `DrawerIds.meters[0]` its fire
+/// meter. Returns the ids plus the send count, same contract as
 /// [`build_audio_mod_drawer`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_clip_trigger_drawer(
@@ -1065,12 +1072,17 @@ pub(crate) fn build_clip_trigger_drawer(
         audio_kind_from_index(mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize),
         audio_band_from_index(mod_state.audio_band_idx.get(i).copied().unwrap_or(0) as usize),
     );
-    let chip_buttons: Vec<DrawerButton> = trigger_source_chips(current)
+    // Same Listen-row shape as the param audio-mod drawer: curated chips plus
+    // a trailing "Custom" cell that opens the full Feature×Band matrix
+    // (session-only `ParamModState::audio_matrix_open`).
+    let matrix_open = mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
+    let mut chip_buttons: Vec<DrawerButton> = trigger_source_chips(current)
         .into_iter()
         .map(|c| DrawerButton::new(c.label, c.active))
         .collect();
+    chip_buttons.push(DrawerButton::new("Custom", matrix_open));
     let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(AUDIO_SENS_DEFAULT);
-    let rows = vec![
+    let mut rows = vec![
         DrawerRow::Buttons {
             buttons: audio_send_buttons(mod_state, i),
             width: ButtonWidth::Proportional,
@@ -1081,17 +1093,47 @@ pub(crate) fn build_clip_trigger_drawer(
             width: ButtonWidth::Proportional,
             label: Some("Listen".into()),
         },
-        DrawerRow::Slider {
-            label: "Sensitivity".to_string(),
-            norm: (sens / AUDIO_SENS_MAX).clamp(0.0, 1.0),
-            default_norm: (AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX).clamp(0.0, 1.0),
-            value_text: format!("{sens:.2}"),
-            label_w: AUDIO_SHAPE_LABEL_W,
-            reset: clip_trigger_shape_reset(layer_id, row, AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
-            show_meter: true,
-        },
-        length_row(length_beats),
     ];
+    if matrix_open {
+        rows.push(DrawerRow::Buttons {
+            buttons: audio_kind_labels()
+                .iter()
+                .enumerate()
+                .map(|(k, l)| {
+                    DrawerButton::new(
+                        *l,
+                        k as i32 == mod_state.audio_kind_idx.get(i).copied().unwrap_or(0),
+                    )
+                })
+                .collect(),
+            width: ButtonWidth::Uniform,
+            label: Some("Feature".into()),
+        });
+        rows.push(DrawerRow::Buttons {
+            buttons: audio_band_labels()
+                .iter()
+                .enumerate()
+                .map(|(b, l)| {
+                    DrawerButton::new(
+                        *l,
+                        b as i32 == mod_state.audio_band_idx.get(i).copied().unwrap_or(0),
+                    )
+                })
+                .collect(),
+            width: ButtonWidth::Uniform,
+            label: Some("Band".into()),
+        });
+    }
+    rows.push(DrawerRow::Slider {
+        label: "Sensitivity".to_string(),
+        norm: (sens / AUDIO_SENS_MAX).clamp(0.0, 1.0),
+        default_norm: (AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX).clamp(0.0, 1.0),
+        value_text: format!("{sens:.2}"),
+        label_w: AUDIO_SHAPE_LABEL_W,
+        reset: clip_trigger_shape_reset(layer_id, row, AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
+        show_meter: true,
+    });
+    rows.push(length_row(length_beats));
     let spec = DrawerSpec {
         rows,
         btn_font_size: config_font,
