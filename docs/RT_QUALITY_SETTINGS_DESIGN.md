@@ -1,6 +1,6 @@
 # RT Quality Settings — per-project quality tiers for raytraced terms, live and export
 
-**Status:** IN PROGRESS — P1 (core model + serialization + command), P2 (renderer wiring), P3 (settings panel UI) built 2026-08-17, gates green except gpu-proofs/noise-gate at landing · 2026-08-17 · k3 (lead), direction set with Peter in-session
+**Status:** IN PROGRESS — P1–P3 built; 2026-08-18: generator-renderer delivery fixed (settings reached only the compositor — GLB/generator scenes ignored them) + panel cells reworked to real dropdowns (cycle buttons dropped). Owed: gpu-proofs + noise-gate at landing, BUG-0ymi (embedded presets kill RT render) · 2026-08-18 · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
