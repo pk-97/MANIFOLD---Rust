@@ -125,9 +125,10 @@ pub struct ContentState {
     /// Analysed frequency range of the scope (Hz), for axis + band overlays.
     pub spectrogram_fmin: f32,
     pub spectrogram_fmax: f32,
-    /// Low/mid and mid/high crossover frequencies (Hz) — the editable band
-    /// dividers drawn on the spectrogram and used to position the per-band
-    /// meters. Mirror `project.audio_setup.{low_hz,mid_hz}`.
+    /// RT quality settings (realtime vs export columns) — mirrors
+    /// `project.settings.rt_quality`. Used by the RT quality panel to read
+    /// current values when dispatching changes.
+    pub rt_quality: manifold_core::settings::RtQualitySettings,
     pub spectrogram_low_hz: f32,
     pub spectrogram_mid_hz: f32,
     /// The tapped (scope-selected) send's latest features, for the spectrogram's
@@ -493,6 +494,7 @@ impl Default for ContentState {
             ableton_sync_status:
                 manifold_playback::transport_sync::TransportSyncStatus::Locked,
             osc_sync_mode: OscSyncMode::M4L,
+            rt_quality: manifold_core::settings::RtQualitySettings::default(),
             project_snapshot: None,
             modulation_snapshot: None,
             active_graph_snapshot: None,

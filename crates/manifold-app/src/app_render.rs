@@ -907,6 +907,13 @@ impl Application {
                         .set_audio_device_name(&mut self.ws.ui_root.tree, &display);
                     continue;
                 }
+                PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)) => {
+                    use manifold_editing::commands::settings::ChangeRtQualityCommand;
+                    let old_settings = self.content_state.rt_quality;
+                    let cmd = ChangeRtQualityCommand::new(old_settings, *new_settings);
+                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    continue;
+                }
                 PanelAction::Project(ProjectAction::ToggleMonitor) => {
                     self.pending_toggle_output = true;
                     continue;
