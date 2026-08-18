@@ -1839,8 +1839,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             } else {
                 project.settings.rt_quality.realtime
             };
+            eprintln!("RT quality dispatch: export_mode={}, shadows={:?} ({} spp), res={:?}",
+                export_mode, column.shadows, column.shadows.spp(), column.ray_resolution);
             self.compositor
                 .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
+        } else {
+            eprintln!("RT quality dispatch: NO PROJECT (engine.project() returned None)");
         }
 
         // Extract timing values before split borrow. Time/beat stay f64 from
