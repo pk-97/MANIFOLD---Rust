@@ -29,6 +29,7 @@ use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::readback_raw_halves;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_renderer::node_graph::RtQuality;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::render_target::RenderTarget;
@@ -174,7 +175,7 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
             let mut enc = device.create_encoder("perf-soak-import-warmup");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+                runtime.render(&mut gpu, &target.texture, &ctx, &manifest, RtQuality::default());
             }
             enc.commit_and_wait_completed();
         }
@@ -193,7 +194,7 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
             let mut enc = device.create_encoder("perf-soak-import-warmup");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+                runtime.render(&mut gpu, &target.texture, &ctx, &manifest, RtQuality::default());
             }
             enc.commit_and_wait_completed();
 
@@ -271,7 +272,7 @@ fn run_measured(
         let t0 = Instant::now();
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-            runtime.render(&mut gpu, &target.texture, &ctx, manifest);
+            runtime.render(&mut gpu, &target.texture, &ctx, manifest, RtQuality::default());
         }
         cpu_ms[i as usize] = t0.elapsed().as_secs_f64() * 1000.0;
         // No readback, no sleep here — the measured window is back-to-back
@@ -367,7 +368,7 @@ fn run_profiled(
         enc.enable_dispatch_profiling(sampler.clone(), device);
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-            runtime.render(&mut gpu, &target.texture, &ctx, manifest);
+            runtime.render(&mut gpu, &target.texture, &ctx, manifest, RtQuality::default());
         }
         let profile = enc.commit_and_wait_profiled(device);
         let cpu_profiles = runtime.take_step_profiles();

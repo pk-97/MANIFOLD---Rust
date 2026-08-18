@@ -279,6 +279,7 @@ mod tests {
                         &target.texture,
                         &ctx,
                         &manifold_core::params::ParamManifest::default(),
+                        crate::node_graph::RtQuality::default(),
                     );
                 }
                 native_enc.commit_and_wait_completed();

@@ -195,7 +195,7 @@ fn render_generator(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             // Thumbnails render every binding at its declared default — no card
             // overrides — so an empty manifest is exactly right.
-            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default(), crate::node_graph::RtQuality::default());
         }
         // Commit each frame so state-accumulating generators see the prior
         // frame's GPU writes before computing the next.

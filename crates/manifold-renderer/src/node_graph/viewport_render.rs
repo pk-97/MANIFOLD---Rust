@@ -176,7 +176,7 @@ pub fn render_viewport_frame(
             let mut gpu = GpuEncoder::new(&mut enc, &device);
             let mut ctx = *frame_ctx;
             ctx.frame_count = frame;
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default(), crate::node_graph::RtQuality::default());
         }
         enc.commit_and_wait_completed();
     }

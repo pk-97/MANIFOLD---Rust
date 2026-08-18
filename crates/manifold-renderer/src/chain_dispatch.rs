@@ -157,7 +157,11 @@ pub fn dispatch_chain<'a>(
     profiling: bool,
     rt_quality: crate::node_graph::RtQuality,
 ) -> Option<&'a GpuTexture> {
+    eprintln!("[DISPATCH_CHAIN_ENTRY] effects count={}, rt_quality shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+        effects.len(), rt_quality.shadow_spp, rt_quality.ao_spp, rt_quality.gi_spp, rt_quality.refl_spp,
+        rt_quality.ray_res_num, rt_quality.ray_res_den);
     if !effects.iter().any(|fx| fx.enabled) {
+        eprintln!("[DISPATCH_CHAIN_ENTRY] No enabled effects - returning None");
         return None;
     }
 
@@ -231,9 +235,12 @@ pub fn dispatch_chain<'a>(
     // D6 correction for rt_quality: same rationale as profiling above —
     // rebuild swaps the executor, so per-call re-application keeps the value
     // from going stale.
+    eprintln!("[DISPATCH_CHAIN] Calling cg.set_rt_quality with shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+        rt_quality.shadow_spp, rt_quality.ao_spp, rt_quality.gi_spp, rt_quality.refl_spp,
+        rt_quality.ray_res_num, rt_quality.ray_res_den);
     cg.set_rt_quality(rt_quality);
     let t0 = std::time::Instant::now();
-    let ran = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
+    let ran = cg.run(gpu, input_texture, effects, groups, ctx, rt_quality).is_some();
     if ran {
         CHAIN_GRAPH_RUN_COUNT.fetch_add(1, Ordering::Relaxed);
         CHAIN_GRAPH_RUN_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);

@@ -173,6 +173,8 @@ pub struct GeneratorRenderer {
     /// via [`Self::set_profiling`]. `false` costs one `bool` set per
     /// generator per call — zero GPU/CPU timing.
     profiling_enabled: bool,
+    /// Current RT quality settings (synced from project settings each frame).
+    rt_quality: crate::node_graph::RtQuality,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -216,7 +218,13 @@ impl GeneratorRenderer {
             last_data_version: u64::MAX, // force scan on first frame
             preview_layer: None,
             profiling_enabled: false,
+            rt_quality: crate::node_graph::RtQuality::default(),
         }
+    }
+
+    /// Set RT quality settings (synced from project settings each frame).
+    pub fn set_rt_quality(&mut self, rt_quality: crate::node_graph::RtQuality) {
+        self.rt_quality = rt_quality;
     }
 
     /// Enable/disable per-step attribution profiling on every generator this
@@ -839,6 +847,7 @@ impl GeneratorRenderer {
                     &active.render_target.texture,
                     &ctx,
                     params,
+                    self.rt_quality,
                 );
                 active.anim_progress = new_progress;
             }
@@ -1181,7 +1190,7 @@ impl GeneratorRenderer {
                 anim_progress: 0.0,
                 trigger_count: 0,
             };
-            t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params);
+            t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params, self.rt_quality);
         }
         Some(&t.rt.texture)
     }

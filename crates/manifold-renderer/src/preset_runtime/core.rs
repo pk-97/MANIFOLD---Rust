@@ -1594,7 +1594,14 @@ impl PresetRuntime {
         effects: &[PresetInstance],
         groups: &[EffectGroup],
         ctx: &PresetContext,
+        rt_quality: crate::node_graph::RtQuality,
     ) -> Option<&GpuTexture> {
+        // Apply RT quality settings to the executor (same discipline as dispatch_chain)
+        eprintln!("[PRESET_RUNTIME_RUN] Calling executor.set_rt_quality with shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            rt_quality.shadow_spp, rt_quality.ao_spp, rt_quality.gi_spp, rt_quality.refl_spp,
+            rt_quality.ray_res_num, rt_quality.ray_res_den);
+        self.executor.set_rt_quality(rt_quality);
+
         // Refresh Mix `amount` for every wet/dry group — picks up
         // live slider drags / modulation without rebuilding the graph.
         // `set_param_unchecked` skips the per-call linear scan over
@@ -2035,7 +2042,14 @@ impl PresetRuntime {
         target: &GpuTexture,
         ctx: &PresetContext,
         params: &ParamManifest,
+        rt_quality: crate::node_graph::RtQuality,
     ) -> f32 {
+        // Apply RT quality settings to the executor before running
+        eprintln!("[PRESET_RUNTIME_RENDER] Calling executor.set_rt_quality with shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            rt_quality.shadow_spp, rt_quality.ao_spp, rt_quality.gi_spp, rt_quality.refl_spp,
+            rt_quality.ray_res_num, rt_quality.ray_res_den);
+        self.executor.set_rt_quality(rt_quality);
+
         // 1. Push per-frame timing into the generator_input node's params.
         self.set_frame_context(FrameContextInputs {
             time: ctx.time as f32,

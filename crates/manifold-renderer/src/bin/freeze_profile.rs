@@ -318,9 +318,9 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
         let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
         let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0 };
         let params = ParamManifest::default();
-        for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0), &params); } enc.commit_and_wait_completed(); }
+        for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0), , &params);params, crate::node_graph::RtQuality::default()); } enc.commit_and_wait_completed(); }
         let mut secs = 0.0;
-        for i in 0..30u32 { let mut enc = device.create_encoder("rec-prod-timed"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(30+i)/60.0), &params); } secs += enc.commit_and_wait_completed_timed(); }
+        for i in 0..30u32 { let mut enc = device.create_encoder("rec-prod-timed"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(30+i)/60.0), , &params);params, crate::node_graph::RtQuality::default()); } secs += enc.commit_and_wait_completed_timed(); }
         println!("PresetRuntime::render: {:.4} ms/frame", secs * 1000.0 / 30.0);
     }
 }
@@ -713,7 +713,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                     anim_progress: 0.0,
                     trigger_count: 0,
                 };
-                generator.render(&mut gpu, &target.texture, &ctx, params);
+                generator.render(&mut gpu, &target.texture, &ctx, params, crate::node_graph::RtQuality::default());
             }
             enc.commit_and_wait_completed();
         };
@@ -804,7 +804,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                     let mut enc = device.create_encoder("scene-warmup");
                     {
                         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                        generator.render(&mut gpu, &target.texture, &mk(warm_frames), &params);
+                        generator.render(&mut gpu, &target.texture, &mk(warm_frames), , &params);params, crate::node_graph::RtQuality::default());
                     }
                     enc.commit_and_wait_completed();
                     warm_frames += 1;
@@ -1152,13 +1152,13 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
         let output = RenderTarget::new(device, w, h, FORMAT, "cg-fused-output");
         for _ in 0..WARMUP {
             let mut enc = device.create_encoder("cg-fused-warmup");
-            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, &params);
+            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, , &params);params, crate::node_graph::RtQuality::default());
             enc.commit_and_wait_completed();
         }
         let mut f_secs = 0.0_f64;
         for _ in 0..FRAMES {
             let mut enc = device.create_encoder("cg-fused-timed");
-            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, &params);
+            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, , &params);params, crate::node_graph::RtQuality::default());
             f_secs += enc.commit_and_wait_completed_timed();
         }
         let fused_ms = f_secs * 1000.0 / f64::from(FRAMES);
@@ -1571,7 +1571,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                     let mut enc = device.create_encoder("freeze-profile-gen-warmup");
                     {
                         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                        generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), &ParamManifest::default());
+                        generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), , &ParamManifest::default());ParamManifest::default(), crate::node_graph::RtQuality::default());
                     }
                     enc.commit_and_wait_completed();
                 }
@@ -1692,7 +1692,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::s
                 let mut enc = device.create_encoder("fluidsweep-warmup");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                    generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), &ParamManifest::default());
+                    generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), , &ParamManifest::default());ParamManifest::default(), crate::node_graph::RtQuality::default());
                 }
                 enc.commit_and_wait_completed();
             }

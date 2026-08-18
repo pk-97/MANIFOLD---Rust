@@ -714,6 +714,15 @@ impl LayerCompositor {
             .insert(group_id.clone(), self.frame_counter);
     }
 
+    /// Apply the current RT quality settings to a chain if it exists.
+    /// This ensures chains always have the latest RT quality, fixing the
+    /// timing issue where set_rt_quality is called before chains exist.
+    fn apply_rt_quality_to_chain(chain: &mut Option<PresetRuntime>, rt_quality: crate::node_graph::RtQuality) {
+        if let Some(cg) = chain.as_mut() {
+            cg.set_rt_quality(rt_quality);
+        }
+    }
+
     /// Ensure a group scratch buffer exists for the given group's `LayerId`,
     /// allocating at the current main compositor resolution if missing.
     fn ensure_group_buf(
