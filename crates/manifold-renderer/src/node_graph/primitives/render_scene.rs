@@ -4102,6 +4102,8 @@ impl EffectNode for RenderScene {
         // Copied out of ctx here — the dispatch code below runs after
         // gpu_encoder() mutable borrows, where ctx is unreadable.
         let rtq = ctx.rt_quality;
+        eprintln!("render_scene rtq: shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            rtq.shadow_spp, rtq.ao_spp, rtq.gi_spp, rtq.refl_spp, rtq.ray_res_num, rtq.ray_res_den);
         // Trace dispatch dims (D4): one ray-resolution fraction for both
         // dispatches, truncating u64 math per output_canvas_scale discipline.
         let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
