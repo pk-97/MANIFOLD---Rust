@@ -28,6 +28,8 @@ it is potentially not all that correct" — its lessons are prior evidence, not 
 | UI render gate (CVDisplayLink) | `crates/manifold-app/src/app.rs:3062` (`vsync_ready()` → `tick_and_render` :3068) | UI paints at display cadence, independent of content rate. Extend, don't redesign. |
 | UI drawable acquire | `crates/manifold-gpu/src/metal/surface.rs:192` (`allowsNextDrawableTimeout`), `:224` (`next_drawable` → `Option`); skip-on-None at `crates/manifold-app/src/frame/present.rs:721` | Never blocks forever, but can stall the main thread up to the ~1s timeout when the pool starves. |
 | Monolithic frame encoders | `crates/manifold-app/src/content_pipeline.rs:2039` ("Generators", commit :2192/:2195), `:2214` ("Compositor", commit :3042/:3045) | Two command buffers per frame hold all generator + compositor work. This is the chunking target. |
+| Compositor parallel path | `crates/manifold-renderer/src/layer_compositor.rs:2306` (`composite_parallel`, per-layer command buffers + GpuEvent, chosen when ≥2 active layers and not `force_serial`) | Already chunks the compositor for multi-layer frames. A single heavy layer — the RT case — falls to `composite_serial`, one buffer. Chunking must reach *inside* the layer's work. |
+| RT scene node dispatches | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` (8890 lines; mask / lighting / translucent-trace / IBL / denoise dispatches, all one encoder) | The 10fps wall for a single RT layer lives here: several large dispatches in one node, one buffer. Per-layer checkpoints alone would not split it. |
 | Generator encode loop | `crates/manifold-app/src/content_pipeline.rs:2073` (`gen_renderer.render_all(&mut gpu_gen, …)`) | All layers' generators encode into the one "Generators" buffer via the `GpuEncoder` wrapper (`crates/manifold-renderer/src/gpu_encoder.rs:7`). |
 | Command drain under load | `crates/manifold-app/src/content_thread.rs:478` (`wait_for_surface_draining_commands`), main drain :371–431 | Commands are already processed promptly while the GPU is behind. Latency is in *publish*, not apply. |
 | Snapshot publish | `crates/manifold-app/src/content_thread.rs:1112` (`data_version` check), build :1241, `state_tx.send` :1403 — all inside `tick_frame` (:589) | Publish is welded to rendering. `last_data_version` field already exists (:80). |
@@ -59,12 +61,25 @@ it is potentially not all that correct" — its lessons are prior evidence, not 
   continuation buffer (Vulkan does not carry memory dependencies across submits). The API name
   and semantics are backend-neutral; the barrier lives inside the future Vulkan backend.
   Enforcement until then: none — the Vulkan backend doesn't exist (`docs/VULKAN_BACKEND_DESIGN.md`).
-- **D4 — Checkpoint placement is fixed, not adaptive.** Call sites: between layers inside
-  `GeneratorRenderer::render_all` (via a `checkpoint()` method on the renderer-side `GpuEncoder`
-  wrapper, which owns both the native encoder and the device ref) and between compositor passes
-  in `content_pipeline.rs:2214–3042`. Rejected: GPU-time-budget-driven adaptive chunking —
+- **D4 — Checkpoint placement is fixed, not adaptive.** Call sites: (a) between clips in
+  `GeneratorRenderer::render_all`'s dispatch loop (`generator_renderer.rs:710`); (b) between the
+  heavy dispatches inside `render_scene.rs` (mask / lighting / translucent-trace / IBL / denoise)
+  — required, because a single RT layer is the motivating case and per-layer splits never reach
+  it; (c) in `composite_serial` between its phases (`generate_layers` / `fold_groups` /
+  `blend_layers`, `layer_compositor.rs:1726`). `composite_parallel` already chunks per layer.
+  Rejected: GPU-time-budget-driven adaptive chunking —
   needs completion-timestamp feedback, tunable only with data we don't have yet. Deferred with a
   revival trigger (section 8, Deferred).
+- **D4a — Chunking changes the execution-overlap contract, and that's the real risk.** A
+  monolithic buffer means nothing executes on the GPU until the whole frame is encoded. With
+  checkpoints, chunk N executes while the CPU is still encoding chunk N+1. Any CPU-side mutation
+  of a GPU-readable shared buffer *after* the dispatch that consumes it has been encoded becomes
+  a race that cannot exist today. Metal's hazard tracking covers GPU-side texture dependencies;
+  it does not cover CPU writes into `MTLStorageModeShared` memory. Known-safe patterns: the
+  uniform arena (reset once per frame, append-only within it,
+  `generator_renderer.rs:544`); per-dispatch params buffers (render_scene's D16a split already
+  gives mask and lighting their own). P2 includes an explicit audit of the chunked paths for
+  post-encode shared-buffer writes; any hit is an escalation, not a fix-in-flight.
 - **D5 — Profiling frames stay monolithic.** When dispatch profiling is enabled on an encoder
   (`content_pipeline.rs:2044`), chunk call sites are skipped for that frame (a
   `chunking_enabled` flag on the pipeline, `false` while `profiling_enabled`). Profiled runs
@@ -137,17 +152,21 @@ The wrapper gains a `chunking_enabled: bool` (set at frame start from the pipeli
 
 Checkpoint call sites (re-derive at execution; the count is the gate):
 
-- `GeneratorRenderer::render_all` — one `checkpoint()` between layer cards.
+- `GeneratorRenderer::render_all` — one `checkpoint()` per dispatched clip, top of the loop
+  body after the skip checks (`generator_renderer.rs:710`).
   Re-derive: `rg -n 'fn render_all' crates/manifold-renderer/src/generator_renderer.rs`.
-- Compositor phase (`content_pipeline.rs:2214–3042`) — between per-layer/per-pass encode groups.
-  Re-derive: `rg -n 'create_encoder' crates/manifold-app/src/content_pipeline.rs` → expect 4
-  sites (Generators, Compositor, PQ Encode, Still Readback); only the first two chunk.
+- `render_scene.rs` — between the heavy dispatch groups: mask / lighting / translucent-trace /
+  IBL convolution / denoise / upscale. Re-derive:
+  `rg -n 'dispatch_compute|draw_instanced_depth' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`.
+  Precondition: the D4a shared-buffer audit of this file comes first.
+- `composite_serial` (`layer_compositor.rs:1726`) — between `generate_layers`, `fold_groups`,
+  `blend_layers`. `composite_parallel` needs nothing (already per-layer buffers).
 
 Not chunked: PQ Encode, Still Readback, preview captures (`content_pipeline.rs:2090` stays in
 whatever chunk precedes it — it reads the generator output, which Metal orders automatically).
 
-Intra-node chunking (splitting one RT node's bounce loop) is NOT in this phase — see section 8
-(Deferred).
+Intra-kernel chunking (splitting ONE dispatch, e.g. tiling the lighting trace) is NOT in this
+phase — see section 8 (Deferred).
 
 Honest cost: per-commit CPU overhead per chunk (tens of microseconds) and weaker overlap at
 boundaries; expected <1–2% at layer granularity. The failure mode to watch is not cost but
@@ -171,6 +190,12 @@ build both, verify after).
 - **I4 — No new shared state, no new threads/channels.** Enforcement: negative gate —
   `rg 'Arc<Mutex|Arc<RwLock' crates/manifold-app/src/content_thread.rs crates/manifold-renderer/src/gpu_encoder.rs crates/manifold-gpu/src/metal/encoder.rs`
   shows only pre-existing hits (diff against main at landing).
+- **I5 — No CPU mutation of GPU-readable shared memory after its consuming dispatch is encoded
+  on a chunked path (D4a).** Enforcement: the P2 audit deliverable — a written inventory of
+  every shared-mode buffer write in `render_scene.rs`, `generator_renderer.rs`'s dispatch loop,
+  and `composite_serial`, each classified append-only-this-frame (safe) or rewrite (escalate).
+  Plus `scripts/rt_noise_gate.py` within ceilings — the RT accumulation path is exactly where a
+  stale-read race would show as frame-to-frame noise.
 
 ## 6. Phasing
 
@@ -202,11 +227,14 @@ build both, verify after).
   `rg -n 'fn create_encoder' crates/manifold-gpu/src/metal/device.rs`,
   `rg -n 'fn render_all' crates/manifold-renderer/src/generator_renderer.rs`. A moved anchor is
   an escalation.
-- **Read-back:** D2–D6, `encoder.rs:92–108` (struct) and `:2298–2354` (commit family),
-  `device.rs:1111–1126` (what a fresh encoder needs), `gpu_encoder.rs:1–60` (wrapper).
-  Restate: never blocks; profiling frames stay monolithic; no fences between chunks.
+- **Read-back:** D2–D6 and D4a, `encoder.rs:92–108` (struct) and `:2298–2354` (commit family),
+  `device.rs:1111–1126` (what a fresh encoder needs), `gpu_encoder.rs:1–60` (wrapper),
+  `layer_compositor.rs:1726–1750` (serial phases) and `:2294–2313` (serial/parallel choice).
+  Restate: never blocks; profiling frames stay monolithic; no fences between chunks; a
+  shared-buffer rewrite after encode is an escalation, not a fix-in-flight.
 - **Deliverables:** `commit_and_continue` + `debug_assert!(profile.is_none())`; wrapper
-  `checkpoint()` + `chunking_enabled` flag; checkpoint call sites per section 4
+  `checkpoint()` + `chunking_enabled` flag; the I5 shared-buffer audit (written inventory,
+  committed as a phase-notes section in the landing report); checkpoint call sites per section 4
   (commit-and-continue + checkpoints); unit test
   `commit_and_continue_preserves_order` (manifold-gpu): three chunks write ordered values to one
   buffer, readback proves commit order; completed-handler count == 3.
@@ -237,8 +265,9 @@ build both, verify after).
 
 ## 8. Deferred
 
-- **Intra-node chunking** (splitting one RT node's bounce/sample loop across commits). Revival
-  trigger: post-P2 profiler capture shows a single chunk still exceeding ~16ms GPU.
+- **Intra-kernel chunking** (splitting ONE dispatch across commits, e.g. tiling the lighting
+  trace). Revival trigger: post-P2 profiler capture shows a single dispatch still exceeding
+  ~16ms GPU.
 - **Adaptive chunk sizing** from completion-timestamp feedback. Revival trigger: fixed
   chunking measurably helps but boundary overhead shows in `MANIFOLD_RENDER_TRACE`.
 - **Adaptive resolution / quality scaling** — owned by `RT_QUALITY_SETTINGS_DESIGN.md`, the
