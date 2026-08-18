@@ -59,6 +59,14 @@ pub trait ClipRenderer: Any + Send {
     /// No-op for renderers without async decode.
     fn flush_pending_decodes(&mut self) {}
 
+    /// Per-frame RT quality column (RT_QUALITY_SETTINGS_DESIGN.md D5). The
+    /// content pipeline resolves the active column (realtime vs export) once
+    /// per frame and fans it out to every renderer; renderers without RT
+    /// graphs ignore it. The column stays a foundation value type so this
+    /// trait doesn't name renderer types — `GeneratorRenderer` converts via
+    /// `RtQuality::from_column`.
+    fn set_rt_quality(&mut self, _column: &manifold_core::settings::RtQualityColumn) {}
+
     /// Downcast support for typed renderer access from app layer.
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
