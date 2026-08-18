@@ -123,9 +123,10 @@ def check():
         need(f"{row})" in statusline, f"statusline.sh: no `{row})` case arm")
         need(seat["account"] in statusline, f"statusline.sh: display name {seat['account']!r} missing")
         need(f'"{row}"' in identity, f"seat-identity.py: seat {row!r} not mentioned")
-        if seat.get("role") == "executor":
-            need(f'"{row}"' in TIER_GUARD_CCFLEET.read_text(),
-                 f"cc-fleet-tier-guard.py: executor seat {row!r} not in EXECUTOR_PROVIDERS")
+
+    # No per-role assertions against cc-fleet-tier-guard.py: since 4d0d6baa6
+    # (2026-08-02) that guard denies every spawn verb for every tier and names
+    # no provider seats, so the old EXECUTOR_PROVIDERS check could never pass.
 
     need(f"cc-fleet run {lead}" in ZSHRC.read_text(),
          f".zshrc: lead launcher `cc-fleet run {lead}` (k3m alias) missing")
