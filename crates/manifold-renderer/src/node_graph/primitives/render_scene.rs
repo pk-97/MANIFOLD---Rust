@@ -4104,12 +4104,39 @@ impl EffectNode for RenderScene {
         let rtq = ctx.rt_quality;
         eprintln!("render_scene rtq: shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
             rtq.shadow_spp, rtq.ao_spp, rtq.gi_spp, rtq.refl_spp, rtq.ray_res_num, rtq.ray_res_den);
+
+        // DIAGNOSTIC: Write RT quality state to file for debugging
+        if let Ok(_) = std::fs::write("/tmp/rt_quality_debug.json", format!("{{
+  \"shadow_spp\": {},
+  \"ao_spp\": {},
+  \"gi_spp\": {},
+  \"refl_spp\": {},
+  \"ray_res_num\": {},
+  \"ray_res_den\": {},
+  \"canvas_width\": {},
+  \"canvas_height\": {}
+}}", rtq.shadow_spp, rtq.ao_spp, rtq.gi_spp, rtq.refl_spp, rtq.ray_res_num, rtq.ray_res_den, width, height)) {
+            // File write succeeded - state captured for diagnosis
+        }
         // Trace dispatch dims (D4): one ray-resolution fraction for both
         // dispatches, truncating u64 math per output_canvas_scale discipline.
         let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
         let rt_trace_h = ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
         eprintln!("RT trace dims: canvas={}x{}, ray_res={}/{}, trace={}x{}",
             width, height, rtq.ray_res_num, rtq.ray_res_den, rt_trace_w, rt_trace_h);
+
+        // DIAGNOSTIC: Write computed trace dimensions to file
+        let _ = std::fs::write("/tmp/rt_trace_dims_debug.json", format!("{{
+  \"canvas_width\": {},
+  \"canvas_height\": {},
+  \"ray_res_num\": {},
+  \"ray_res_den\": {},
+  \"trace_width\": {},
+  \"trace_height\": {},
+  \"resolution_fraction\": \"{}/{}\",
+  \"percentage\": \"{}%\"
+}}", width, height, rtq.ray_res_num, rtq.ray_res_den, rt_trace_w, rt_trace_h, rtq.ray_res_num, rtq.ray_res_den,
+        (rt_trace_w as f64 / width as f64 * 100.0) as i32));
         // Detect toggle flips: any term that was on last frame and is now off
         // (or vice versa) needs history reset so the old signal doesn't
         // trail. Routed through rt_irr_needs_reset — the ONE existing path
