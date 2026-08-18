@@ -570,6 +570,12 @@ impl Executor {
     /// frame before `execute_frame_*` with the resolved values from the active
     /// project column (realtime vs export). Cheap — stores by value, no allocation.
     pub fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+        eprintln!("[EXECUTOR_RT_QUALITY] Before: shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            self.rt_quality.shadow_spp, self.rt_quality.ao_spp, self.rt_quality.gi_spp, self.rt_quality.refl_spp,
+            self.rt_quality.ray_res_num, self.rt_quality.ray_res_den);
+        eprintln!("[EXECUTOR_RT_QUALITY] After:  shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            q.shadow_spp, q.ao_spp, q.gi_spp, q.refl_spp,
+            q.ray_res_num, q.ray_res_den);
         self.rt_quality = q;
     }
 
