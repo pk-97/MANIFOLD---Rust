@@ -356,6 +356,8 @@ impl PresetRuntime {
     /// frame before run() with the resolved values from the active project
     /// column (realtime vs export). Forwards to the executor.
     pub fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+        eprintln!("[CHAIN_RT_QUALITY] Calling executor.set_rt_quality with shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            q.shadow_spp, q.ao_spp, q.gi_spp, q.refl_spp, q.ray_res_num, q.ray_res_den);
         self.executor.set_rt_quality(q);
     }
 

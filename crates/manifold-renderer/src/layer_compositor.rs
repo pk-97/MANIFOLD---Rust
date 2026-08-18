@@ -2609,21 +2609,32 @@ impl Compositor for LayerCompositor {
     }
 
     fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+        eprintln!("[LAYER_COMPOSITOR_RT] Before: shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            self.rt_quality.shadow_spp, self.rt_quality.ao_spp, self.rt_quality.gi_spp, self.rt_quality.refl_spp,
+            self.rt_quality.ray_res_num, self.rt_quality.ray_res_den);
+        eprintln!("[LAYER_COMPOSITOR_RT] After:  shadow_spp={} ao_spp={} gi_spp={} refl_spp={} ray_res={}/{}",
+            q.shadow_spp, q.ao_spp, q.gi_spp, q.refl_spp,
+            q.ray_res_num, q.ray_res_den);
         // RT_QUALITY_SETTINGS_DESIGN.md D5: forward to all chains, same sweep as set_profiling
         self.rt_quality = q;
         // Forward to all chains — same sweep as set_profiling
+        eprintln!("[LAYER_COMPOSITOR_RT] effect_chains count={}, group_effect_chains count={}, led_group_effect_chains count={}",
+            self.effect_chains.len(), self.group_effect_chains.len(), self.led_group_effect_chains.len());
         for (_id, chain) in self.effect_chains.iter_mut() {
             if let Some(cg) = chain.as_mut() {
+                eprintln!("[LAYER_COMPOSITOR_RT] Calling set_rt_quality on effect chain {}", _id);
                 cg.set_rt_quality(q);
             }
         }
         for (_id, chain) in self.group_effect_chains.iter_mut() {
             if let Some(cg) = chain.as_mut() {
+                eprintln!("[LAYER_COMPOSITOR_RT] Calling set_rt_quality on group effect chain {}", _id);
                 cg.set_rt_quality(q);
             }
         }
         for (_id, chain) in self.led_group_effect_chains.iter_mut() {
             if let Some(cg) = chain.as_mut() {
+                eprintln!("[LAYER_COMPOSITOR_RT] Calling set_rt_quality on LED group effect chain {}", _id);
                 cg.set_rt_quality(q);
             }
         }
