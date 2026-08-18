@@ -1267,6 +1267,12 @@ impl ContentThread {
                 .engine
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator),
+            rt_quality: self
+                .engine
+                .project()
+                .map_or(manifold_core::settings::RtQualitySettings::default(), |p| {
+                    p.settings.rt_quality
+                }),
             link_enabled: self
                 .transport_controller
                 .link_sync
