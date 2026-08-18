@@ -4083,6 +4083,12 @@ impl EffectNode for RenderScene {
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
         let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        eprintln!("[RT_ENABLED] rt_enabled={}, rt_reflections={}, rt_shadows={}, rt_ao={}, rt_gi={}",
+            rt_enabled,
+            rt_enabled && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true))),
+            rt_enabled && matches!(ctx.params.get("rt_shadows"), Some(ParamValue::Bool(true))),
+            rt_enabled && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true))),
+            rt_enabled && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true))));
         // RAYTRACING_DESIGN.md section 9 RD9 (T4): per-scene reflection toggle,
         // gated on rt_enabled — inert when RT is off entirely. Default ON
         // (Q3). T5 fine-tunes the spp/roughness-band constants.
