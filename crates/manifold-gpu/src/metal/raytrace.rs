@@ -5330,6 +5330,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     ) {
         params_buffer.upload(bytemuck_bytes(params));
         let groups = dispatch_groups_2d(params.trace_size, SHADOW_WORKGROUP);
+        eprintln!("[RT_DISPATCH] trace_size={}x{} workgroup={}x{} groups={}x{} total_threads={}",
+            params.trace_size[0], params.trace_size[1],
+            SHADOW_WORKGROUP[0], SHADOW_WORKGROUP[1],
+            groups[0], groups[1],
+            groups[0] * groups[1] * SHADOW_WORKGROUP[0] * SHADOW_WORKGROUP[1]);
         let mut bindings = vec![
             GpuBinding::Buffer {
                 binding: 1,
