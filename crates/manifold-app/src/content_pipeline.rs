@@ -1851,9 +1851,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // Also update generator renderer RT quality (render_scene uses this path)
             let (renderers, _) = engine.split_renderer_project();
-            if let Some(gen_renderer) = renderers.get_mut(1).and_then(|r| r.as_any_mut().downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()) {
-                gen_renderer.set_rt_quality(rt_quality.clone());
-                eprintln!("RT quality dispatch: updated generator renderer RT quality");
+            for renderer in renderers.iter_mut() {
+                if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>() {
+                    gen_renderer.set_rt_quality(rt_quality.clone());
+                    eprintln!("RT quality dispatch: updated generator renderer RT quality");
+                    break;
+                }
             }
         } else {
             eprintln!("RT quality dispatch: NO PROJECT (engine.project() returned None)");
