@@ -5841,6 +5841,15 @@ impl EffectNode for RenderScene {
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
 
+                // DIAGNOSTIC: Log actual texture dimensions being bound
+                eprintln!("[RT_TEXTURES] mask_half={}x{} mask_full={}x{} irr_half={}x{} irr_full={}x{} normal_half={}x{} normal_full={}x{}",
+                    mask_half.width, mask_half.height,
+                    mask_full.width, mask_full.height,
+                    irr_half.width, irr_half.height,
+                    irr_full.width, irr_full.height,
+                    normal_half.width, normal_half.height,
+                    normal_full.width, normal_full.height);
+
                 // RT-A3a D16a fuse rule: split dispatch ONLY when mask trace
                 // size differs from lighting (shadow native while lighting
                 // stays half). Otherwise one fused dispatch at lighting's
