@@ -908,8 +908,12 @@ impl Application {
                     continue;
                 }
                 PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)) => {
+                    eprintln!("UI received ChangeRtQuality: shadows={:?} ({} spp), res={:?}",
+                        new_settings.realtime.shadows, new_settings.realtime.shadows.spp(), new_settings.realtime.ray_resolution);
                     use manifold_editing::commands::settings::ChangeRtQualityCommand;
                     let old_settings = self.content_state.rt_quality;
+                    eprintln!("UI old settings: shadows={:?} ({} spp), res={:?}",
+                        old_settings.realtime.shadows, old_settings.realtime.shadows.spp(), old_settings.realtime.ray_resolution);
                     let cmd = ChangeRtQualityCommand::new(old_settings, *new_settings);
                     self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     continue;
