@@ -8,7 +8,7 @@
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Ultra Low (1 spp)", "type": "Button" } },
+      "selector": { "Query": { "text": "Ultra Low (1 spp)", "type": "Button", "nth": 0 } },
       "check": "Exists"
     }
   },
@@ -20,7 +20,19 @@
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Low (2 spp)", "type": "Button" } },
+      "selector": { "Query": { "text": "Ultra (32 spp)", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Ultra (32 spp)", "type": "Button", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Ultra (32 spp)", "type": "Button" } },
       "check": "Exists"
     }
   },
@@ -31,8 +43,14 @@
     }
   },
   {
+    "Pointer": {
+      "target": { "Query": { "text": "25% (quarter)", "type": "Button", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
     "Assert": {
-      "selector": { "Query": { "text": "75% (three-quarter)", "type": "Button" } },
+      "selector": { "Query": { "text": "25% (quarter)", "type": "Button" } },
       "check": "Exists"
     }
   },

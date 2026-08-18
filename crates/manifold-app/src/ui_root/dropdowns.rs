@@ -333,6 +333,46 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
+            PanelAction::Root(RootAction::OpenRtQualityTierDropdown { field, realtime, anchor }) => {
+                use manifold_core::settings::RtQualityTier;
+                // Items are built from the panel's synced snapshot — selecting
+                // one writes the whole settings struct with just this field
+                // changed, so rapid successive edits never compose on a stale
+                // base (the cycle-button multi-click bug class).
+                let settings = self.rt_quality_panel.current_settings();
+                let current = field.get(if *realtime { &settings.realtime } else { &settings.export });
+                let items: Vec<DropdownItem> = RtQualityTier::ALL
+                    .iter()
+                    .map(|t| {
+                        let mut new_settings = settings;
+                        let col = if *realtime { &mut new_settings.realtime } else { &mut new_settings.export };
+                        field.set(col, *t);
+                        DropdownItem::new(t.label())
+                            .with_check(*t == current)
+                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)))
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, *anchor);
+                true
+            }
+            PanelAction::Root(RootAction::OpenRtQualityResDropdown { realtime, anchor }) => {
+                use manifold_core::settings::RtRayResolution;
+                let settings = self.rt_quality_panel.current_settings();
+                let current = if *realtime { settings.realtime.ray_resolution } else { settings.export.ray_resolution };
+                let items: Vec<DropdownItem> = RtRayResolution::ALL
+                    .iter()
+                    .map(|r| {
+                        let mut new_settings = settings;
+                        let col = if *realtime { &mut new_settings.realtime } else { &mut new_settings.export };
+                        col.ray_resolution = *r;
+                        DropdownItem::new(r.label())
+                            .with_check(*r == current)
+                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)))
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, *anchor);
+                true
+            }
             PanelAction::Clip(ClipAction::ClipDetectQuantizeClicked) => {
                 // Typed (2b.11): each grid option carries its quantize step.
                 let items: Vec<DropdownItem> =

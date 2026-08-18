@@ -7,19 +7,22 @@
 //! dispatches `RootAction::OpenRtQuality`.
 //!
 //! Self-contained like [`super::settings_popup`]: builds `UITree` nodes and maps
-//! clicked node ids back to [`PanelAction`] (the `ChangeRtQuality` action), already
-//! routed through `ui_bridge`. Current state is pushed in via `configure` each sync
-//! so dropdowns highlight the active tier.
+//! clicked node ids back to [`PanelAction`]. Value cells are dropdown triggers —
+//! a click emits `RootAction::OpenRtQuality{Tier,Res}Dropdown` and the app opens
+//! the shared dropdown overlay with items built from its own current snapshot.
+//! Current state is pushed in via `configure` each sync so the triggers show the
+//! active tier.
 
-use crate::ProjectAction;
+use crate::chrome::components::dropdown_trigger_style;
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
-use manifold_foundation::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution};
+use manifold_foundation::settings::{RtQualitySettings, RtTierField};
 
 use super::PanelAction;
+use super::RootAction;
 use super::overlay::{
     Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
 };
@@ -41,24 +44,6 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 
 /// Number of setting rows (shadows, AO, GI, reflections, ray resolution).
 const ROW_COUNT: f32 = 5.0;
-
-/// Quality tiers for dropdown options, in UI order (worst to best).
-const TIERS: [RtQualityTier; 6] = [
-    RtQualityTier::UltraLow,
-    RtQualityTier::Low,
-    RtQualityTier::Medium,
-    RtQualityTier::High,
-    RtQualityTier::ExtraHigh,
-    RtQualityTier::Ultra,
-];
-
-/// Ray resolution options, in UI order (lowest to highest quality).
-const RESOLUTIONS: [RtRayResolution; 4] = [
-    RtRayResolution::Quarter,
-    RtRayResolution::Half,
-    RtRayResolution::ThreeQuarter,
-    RtRayResolution::Native,
-];
 
 pub struct RtQualityPanel {
     open: bool,
@@ -119,6 +104,12 @@ impl RtQualityPanel {
     // ── State setter (fed each sync from the project snapshot) ──
     pub fn configure(&mut self, settings: RtQualitySettings) {
         self.settings = settings;
+    }
+
+    /// The last snapshot pushed by `configure` — the app reads this to build
+    /// dropdown items against the current values (never a stale base).
+    pub fn current_settings(&self) -> RtQualitySettings {
+        self.settings
     }
 
     fn body_height(&self) -> f32 {
@@ -220,18 +211,22 @@ impl RtQualityPanel {
         cy += SECTION_H;
 
         // Build rows: Shadows, AO, GI, Reflections, Ray Resolution
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Shadows", TierField::Shadows);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Shadows", RtTierField::Shadows);
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "AO", TierField::Ao);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "AO", RtTierField::Ao);
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "GI", TierField::Gi);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "GI", RtTierField::Gi);
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Reflections", TierField::Reflections);
+        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Reflections", RtTierField::Reflections);
         cy += ROW_H + ROW_GAP;
         self.build_resolution_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w);
     }
 
-    /// Build one tier row (shadows/AO/GI/reflections) with two dropdown columns.
+    /// Build one tier row (shadows/AO/GI/reflections) with two dropdown
+    /// trigger columns. A click asks the app to open the shared dropdown
+    /// overlay (`RootAction::OpenRtQualityTierDropdown`) — the app builds
+    /// the items from its own current snapshot, so a selection can never
+    /// edit a stale base (the cycle-button multi-click bug class).
     fn build_tier_row(
         &mut self,
         tree: &mut UITree,
@@ -242,7 +237,7 @@ impl RtQualityPanel {
         export_x: f32,
         export_w: f32,
         label: &str,
-        field: TierField,
+        field: RtTierField,
     ) {
         // Row label
         tree.add_label(
@@ -255,35 +250,46 @@ impl RtQualityPanel {
             label_style(),
         );
 
-        // Real-time dropdown
-        let realtime_tier = field.get(&self.settings.realtime);
+        // Real-time dropdown trigger
         let realtime_id = tree.add_button(
             Some(self.bg_id),
             realtime_x,
             y,
             realtime_w,
             ROW_H,
-            dropdown_btn_style(BTN_FONT),
-            realtime_tier.label(),
+            dropdown_trigger_style(BTN_FONT),
+            field.get(&self.settings.realtime).label(),
         );
-        self.actions.push((realtime_id, build_tier_action(true, self.settings, field)));
+        self.actions.push((
+            realtime_id,
+            PanelAction::Root(RootAction::OpenRtQualityTierDropdown {
+                field,
+                realtime: true,
+                anchor: Rect::new(realtime_x, y, realtime_w, ROW_H),
+            }),
+        ));
 
-        // Export dropdown
-        let export_tier = field.get(&self.settings.export);
-        let export_label = export_tier.label();
+        // Export dropdown trigger
         let export_id = tree.add_button(
             Some(self.bg_id),
             export_x,
             y,
             export_w,
             ROW_H,
-            dropdown_btn_style(BTN_FONT),
-            export_label,
+            dropdown_trigger_style(BTN_FONT),
+            field.get(&self.settings.export).label(),
         );
-        self.actions.push((export_id, build_tier_action(false, self.settings, field)));
+        self.actions.push((
+            export_id,
+            PanelAction::Root(RootAction::OpenRtQualityTierDropdown {
+                field,
+                realtime: false,
+                anchor: Rect::new(export_x, y, export_w, ROW_H),
+            }),
+        ));
     }
 
-    /// Build the ray resolution row with fraction labels ("50% (half)", etc.).
+    /// Build the ray resolution row with two dropdown trigger columns.
     fn build_resolution_row(
         &mut self,
         tree: &mut UITree,
@@ -305,33 +311,39 @@ impl RtQualityPanel {
             label_style(),
         );
 
-        // Real-time resolution dropdown
-        let realtime_res = self.settings.realtime.ray_resolution;
-        let realtime_label = resolution_label(realtime_res);
         let realtime_id = tree.add_button(
             Some(self.bg_id),
             realtime_x,
             y,
             realtime_w,
             ROW_H,
-            dropdown_btn_style(BTN_FONT),
-            realtime_label,
+            dropdown_trigger_style(BTN_FONT),
+            self.settings.realtime.ray_resolution.label(),
         );
-        self.actions.push((realtime_id, build_resolution_action(true, self.settings, realtime_res)));
+        self.actions.push((
+            realtime_id,
+            PanelAction::Root(RootAction::OpenRtQualityResDropdown {
+                realtime: true,
+                anchor: Rect::new(realtime_x, y, realtime_w, ROW_H),
+            }),
+        ));
 
-        // Export resolution dropdown
-        let export_res = self.settings.export.ray_resolution;
-        let export_label = resolution_label(export_res);
         let export_id = tree.add_button(
             Some(self.bg_id),
             export_x,
             y,
             export_w,
             ROW_H,
-            dropdown_btn_style(BTN_FONT),
-            export_label,
+            dropdown_trigger_style(BTN_FONT),
+            self.settings.export.ray_resolution.label(),
         );
-        self.actions.push((export_id, build_resolution_action(false, self.settings, export_res)));
+        self.actions.push((
+            export_id,
+            PanelAction::Root(RootAction::OpenRtQualityResDropdown {
+                realtime: false,
+                anchor: Rect::new(export_x, y, export_w, ROW_H),
+            }),
+        ));
     }
 
     fn action_for(&self, id: NodeId) -> Option<PanelAction> {
@@ -433,99 +445,5 @@ fn btn_style(active: bool) -> UIStyle {
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
-    }
-}
-
-fn dropdown_btn_style(font: u16) -> UIStyle {
-    UIStyle {
-        text_color: Color32::new(200, 200, 205, 255), // design-token-exempt: dropdown text color matches settings_popup precedent
-        font_size: font,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
-}
-
-// ── Action builders (cycle through tiers/resolutions) ──
-
-/// Which tier row a click targets — by identity, never by matching the
-/// current value (two rows sharing a tier would misroute the click).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TierField {
-    Shadows,
-    Ao,
-    Gi,
-    Reflections,
-}
-
-impl TierField {
-    fn get(self, col: &RtQualityColumn) -> RtQualityTier {
-        match self {
-            TierField::Shadows => col.shadows,
-            TierField::Ao => col.ao,
-            TierField::Gi => col.gi,
-            TierField::Reflections => col.reflections,
-        }
-    }
-
-    fn set(self, col: &mut RtQualityColumn, tier: RtQualityTier) {
-        match self {
-            TierField::Shadows => col.shadows = tier,
-            TierField::Ao => col.ao = tier,
-            TierField::Gi => col.gi = tier,
-            TierField::Reflections => col.reflections = tier,
-        }
-    }
-}
-
-/// Build a PanelAction that cycles the given tier field to the next tier in
-/// UI order. The dropdown shows the current tier; clicking cycles.
-fn build_tier_action(
-    is_realtime: bool,
-    current_settings: RtQualitySettings,
-    field: TierField,
-) -> PanelAction {
-    let current = field.get(if is_realtime {
-        &current_settings.realtime
-    } else {
-        &current_settings.export
-    });
-    let current_idx = TIERS.iter().position(|&t| t == current).unwrap_or(0);
-    let next_tier = TIERS[(current_idx + 1) % TIERS.len()];
-
-    let mut new_settings = current_settings;
-    let column = if is_realtime {
-        &mut new_settings.realtime
-    } else {
-        &mut new_settings.export
-    };
-    field.set(column, next_tier);
-
-    PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings))
-}
-
-/// Build a PanelAction that cycles the ray resolution for the given column.
-fn build_resolution_action(is_realtime: bool, current_settings: RtQualitySettings, current: RtRayResolution) -> PanelAction {
-    let current_idx = RESOLUTIONS.iter().position(|&r| r == current).unwrap_or(0);
-    let next_idx = (current_idx + 1) % RESOLUTIONS.len();
-    let next_res = RESOLUTIONS[next_idx];
-
-    let mut new_settings = current_settings;
-    let target_column = if is_realtime {
-        &mut new_settings.realtime
-    } else {
-        &mut new_settings.export
-    };
-    target_column.ray_resolution = next_res;
-
-    PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings))
-}
-
-/// Get the display label for a ray resolution variant.
-fn resolution_label(res: RtRayResolution) -> &'static str {
-    match res {
-        RtRayResolution::Quarter => "25% (quarter)",
-        RtRayResolution::Half => "50% (half)",
-        RtRayResolution::ThreeQuarter => "75% (three-quarter)",
-        RtRayResolution::Native => "100% (native)",
     }
 }

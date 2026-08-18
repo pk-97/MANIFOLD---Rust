@@ -1841,6 +1841,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             };
             self.compositor
                 .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
+            // Same column to every clip renderer — generators render
+            // `render_scene` through their own PresetRuntimes, which the
+            // compositor fan-out never reaches (the split-brain behind the
+            // 2026-08-18 "settings do nothing" report).
+            let (renderers, _) = engine.split_renderer_project();
+            for renderer in renderers.iter_mut() {
+                renderer.set_rt_quality(&column);
+            }
         }
 
         // Extract timing values before split borrow. Time/beat stay f64 from

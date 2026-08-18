@@ -72,6 +72,7 @@ fn main() -> ExitCode {
         "tempo" => run_tempo(rest),
         "clip" => run_clip(rest),
         "scene" => run_scene(rest),
+        "settings" => run_settings(rest),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -100,7 +101,10 @@ USAGE:
   project_tool tempo at <file.manifold> <beat> [<beat>...]
   project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
       --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
-  project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]"
+  project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]
+  project_tool settings set-rt-quality <file.manifold> <realtime|export> <field> <value>
+      field: shadows|ao|gi|reflections  value: ultra_low|low|medium|high|extra_high|ultra
+      field: ray_resolution             value: quarter|half|three_quarter|native"
     );
 }
 
@@ -398,6 +402,76 @@ fn tempo_at(rest: &[String]) -> ExitCode {
         println!("beat {beat} = {:.6}s", seconds.0);
     }
     ExitCode::SUCCESS
+}
+
+// ── settings ────────────────────────────────────────────────────────────
+
+fn run_settings(rest: &[String]) -> ExitCode {
+    let Some((sub, rest)) = rest.split_first() else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    match sub.as_str() {
+        "set-rt-quality" => settings_set_rt_quality(rest),
+        other => {
+            eprintln!("error: unknown settings subcommand '{other}'\n");
+            print_usage();
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `settings set-rt-quality <file> <realtime|export> <field> <value>` —
+/// surgical edit of `/settings/rtQuality`. Projects saved before the
+/// setting existed have no `rtQuality` key (serde default fills it), so the
+/// column object is created from the typed defaults when missing — never
+/// partial (an absent column would silently load as defaults).
+fn settings_set_rt_quality(rest: &[String]) -> ExitCode {
+    let [path, column, field, value] = rest else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    if column != "realtime" && column != "export" {
+        eprintln!("error: column must be 'realtime' or 'export', got '{column}'");
+        return ExitCode::from(2);
+    }
+    const TIER_FIELDS: [&str; 4] = ["shadows", "ao", "gi", "reflections"];
+    const TIERS: [&str; 6] = ["ultra_low", "low", "medium", "high", "extra_high", "ultra"];
+    const RESOLUTIONS: [&str; 4] = ["quarter", "half", "three_quarter", "native"];
+    let valid = if TIER_FIELDS.contains(&field.as_str()) {
+        TIERS.contains(&value.as_str())
+    } else if field == "ray_resolution" {
+        RESOLUTIONS.contains(&value.as_str())
+    } else {
+        eprintln!("error: unknown field '{field}'");
+        return ExitCode::from(2);
+    };
+    if !valid {
+        eprintln!("error: '{value}' is not a valid value for {field}");
+        return ExitCode::from(2);
+    }
+
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // Build from the typed defaults so a fresh rtQuality block is complete.
+    let defaults = serde_json::to_value(manifold_core::settings::RtQualitySettings::default())
+        .map_err(|e| format!("serialize defaults failed: {e}"));
+    let Ok(defaults) = defaults else {
+        eprintln!("error: serialize defaults failed");
+        return ExitCode::from(2);
+    };
+    let settings = &mut root["settings"];
+    if settings.get("rtQuality").is_none() {
+        settings["rtQuality"] = defaults;
+    }
+    settings["rtQuality"][column][field] = serde_json::Value::String(value.clone());
+    println!("rt_quality.{column}.{field} = {value}");
+    validate_and_save(&root, path)
 }
 
 // ── clip ────────────────────────────────────────────────────────────────

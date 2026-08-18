@@ -251,6 +251,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::SceneSetupBeginNumericTextInput { .. }
             | RootAction::SceneSetupEnumClicked { .. }
             | RootAction::ParamEnumDropdown { .. }
+            | RootAction::OpenRtQualityTierDropdown { .. }
+            | RootAction::OpenRtQualityResDropdown { .. }
             | RootAction::SceneSetupAddModifierClicked(..)
             | RootAction::AudioSendGainBeginTextInput(..)
             | RootAction::CopyOscAddress(_)

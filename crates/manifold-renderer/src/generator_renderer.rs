@@ -173,6 +173,12 @@ pub struct GeneratorRenderer {
     /// via [`Self::set_profiling`]. `false` costs one `bool` set per
     /// generator per call — zero GPU/CPU timing.
     profiling_enabled: bool,
+    /// Per-frame RT quality, pushed from project settings via the
+    /// `ClipRenderer::set_rt_quality` fan-out. Applied to each generator's
+    /// `PresetRuntime` at render time (same D6-correction discipline as
+    /// `dispatch_chain`) so runtimes installed after the last push still
+    /// render at the current quality.
+    rt_quality: crate::node_graph::RtQuality,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -216,6 +222,7 @@ impl GeneratorRenderer {
             last_data_version: u64::MAX, // force scan on first frame
             preview_layer: None,
             profiling_enabled: false,
+            rt_quality: crate::node_graph::RtQuality::default(),
         }
     }
 
@@ -834,6 +841,7 @@ impl GeneratorRenderer {
                 layer_state
                     .generator
                     .set_relight_params(&relight_params);
+                layer_state.generator.set_rt_quality(self.rt_quality);
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -1210,6 +1218,10 @@ impl GeneratorRenderer {
 // =====================================================================
 
 impl ClipRenderer for GeneratorRenderer {
+    fn set_rt_quality(&mut self, column: &manifold_core::settings::RtQualityColumn) {
+        self.rt_quality = crate::node_graph::RtQuality::from_column(column);
+    }
+
     fn can_handle(&self, clip: &TimelineClip) -> bool {
         // A generator clip carries no media source. Image and audio clips
         // also have an empty `video_clip_id`, so they must be excluded
