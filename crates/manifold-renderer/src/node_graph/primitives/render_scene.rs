@@ -2444,14 +2444,19 @@ impl RenderScene {
     /// Resolution of the mask dispatch (shadow visibility only). Trace-class sized (trace_w/h),
     /// full-class sized (full_w/h) — trace dims change per D4 resolution settings.
     fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) {
+        eprintln!("ensure_rt_masks: trace_w={} trace_h={} full_w={} full_h={} (current: {}x{} trace:{}x{})",
+            trace_w, trace_h, full_w, full_h,
+            self.rt_mask_width, self.rt_mask_height, self.rt_mask_trace_w, self.rt_mask_trace_h);
         if self.rt_mask_width == full_w
             && self.rt_mask_height == full_h
             && self.rt_mask_trace_w == trace_w
             && self.rt_mask_trace_h == trace_h
             && self.rt_mask_full.is_some()
         {
+            eprintln!("ensure_rt_masks: SKIP - dimensions match");
             return;
         }
+        eprintln!("ensure_rt_masks: REALLOCATING textures");
 
         let make = |w: u32, h: u32, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -2498,14 +2503,19 @@ impl RenderScene {
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
     fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) -> bool {
+        eprintln!("ensure_rt_irradiance: trace_w={} trace_h={} full_w={} full_h={} (current: {}x{} trace:{}x{})",
+            trace_w, trace_h, full_w, full_h,
+            self.rt_irr_width, self.rt_irr_height, self.rt_irr_trace_w, self.rt_irr_trace_h);
         if self.rt_irr_width == full_w
             && self.rt_irr_height == full_h
             && self.rt_irr_trace_w == trace_w
             && self.rt_irr_trace_h == trace_h
             && self.rt_irr_history[0].is_some()
         {
+            eprintln!("ensure_rt_irradiance: SKIP - dimensions match");
             return false;
         }
+        eprintln!("ensure_rt_irradiance: REALLOCATING textures");
 
         let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -4096,6 +4106,8 @@ impl EffectNode for RenderScene {
         // dispatches, truncating u64 math per output_canvas_scale discipline.
         let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
         let rt_trace_h = ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
+        eprintln!("RT trace dims: canvas={}x{}, ray_res={}/{}, trace={}x{}",
+            width, height, rtq.ray_res_num, rtq.ray_res_den, rt_trace_w, rt_trace_h);
         // Detect toggle flips: any term that was on last frame and is now off
         // (or vice versa) needs history reset so the old signal doesn't
         // trail. Routed through rt_irr_needs_reset — the ONE existing path
@@ -5655,6 +5667,7 @@ impl EffectNode for RenderScene {
                 // lighting dispatch). Gated on rt_shadows_enabled: if shadows
                 // are off, this dispatch is skipped entirely.
                 let mask_shadow_spp: u32 = if rt_shadows_enabled { rtq.shadow_spp } else { 0 };
+                eprintln!("mask_params: mask_half_w={} mask_half_h={} shadow_spp={}", mask_half_w, mask_half_h, mask_shadow_spp);
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     mask_shadow_spp,
@@ -5689,6 +5702,8 @@ impl EffectNode for RenderScene {
                 // (kernel skips the gather). I2: a tier is never 0.
                 let ao_spp = if rt_ao_enabled { rtq.ao_spp } else { 0 };
                 let gi_spp = if rt_gi_enabled { rtq.gi_spp } else { 0 };
+                eprintln!("lighting_params: light_half_w={} light_half_h={} shadow_spp={} ao_spp={} gi_spp={}",
+                    light_half_w, light_half_h, lighting_shadow_spp, ao_spp, gi_spp);
                 let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     lighting_shadow_spp,
