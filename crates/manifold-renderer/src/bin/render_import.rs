@@ -532,7 +532,8 @@ fn main() {
         let mut enc = device.create_encoder("anim-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &seq_manifest);
+            let rt_quality = manifold_renderer::node_graph::RtQuality::default();
+            runtime.render(&mut gpu, &target.texture, &ctx, &seq_manifest, rt_quality);
         }
         enc.commit_and_wait_completed();
 
@@ -634,7 +635,8 @@ fn render_single_frame(
         let mut enc = device.create_encoder("render-import-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-            runtime.render(&mut gpu, &target.texture, &ctx, manifest);
+            let rt_quality = manifold_renderer::node_graph::RtQuality::default();
+            runtime.render(&mut gpu, &target.texture, &ctx, manifest, rt_quality);
         }
         enc.commit_and_wait_completed();
 

@@ -1847,7 +1847,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             eprintln!("RT quality dispatch: computed RtQuality: shadow_spp={}, ao_spp={}, gi_spp={}, refl_spp={}, ray_res={}/{}",
                 rt_quality.shadow_spp, rt_quality.ao_spp, rt_quality.gi_spp, rt_quality.refl_spp, rt_quality.ray_res_num, rt_quality.ray_res_den);
             self.compositor
-                .set_rt_quality(rt_quality);
+                .set_rt_quality(rt_quality.clone());
+
+            // Also update generator renderer RT quality (render_scene uses this path)
+            let (renderers, _) = engine.split_renderer_project();
+            if let Some(gen_renderer) = renderers.get_mut(1).and_then(|r| r.as_any_mut().downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()) {
+                gen_renderer.set_rt_quality(rt_quality.clone());
+                eprintln!("RT quality dispatch: updated generator renderer RT quality");
+            }
         } else {
             eprintln!("RT quality dispatch: NO PROJECT (engine.project() returned None)");
         }

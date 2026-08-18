@@ -188,7 +188,8 @@ fn main() {
         let mut enc = device.create_encoder("look-dev-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+            let rt_quality = manifold_renderer::node_graph::RtQuality::default();
+            runtime.render(&mut gpu, &target.texture, &ctx, &manifest, rt_quality);
         }
         enc.commit_and_wait_completed();
 

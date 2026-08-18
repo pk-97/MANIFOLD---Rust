@@ -423,11 +423,13 @@ mod tests {
             let mut enc = device.create_encoder("dump-warmup");
             {
                 let mut gpu = RGpuEncoder::new(&mut enc, &device);
+                let rt_quality = manifold_renderer::node_graph::RtQuality::default();
                 generator.render(
                     &mut gpu,
                     &target.texture,
                     &mk_ctx(f64::from(i) / 60.0),
                     &params,
+                    rt_quality,
                 );
             }
             enc.commit_and_wait_completed();
@@ -439,7 +441,8 @@ mod tests {
             let mut enc = device.create_encoder("dump-frame");
             {
                 let mut gpu = RGpuEncoder::new(&mut enc, &device);
-                generator.render(&mut gpu, &target.texture, &mk_ctx(90.0 / 60.0), &params);
+                let rt_quality = manifold_renderer::node_graph::RtQuality::default();
+                generator.render(&mut gpu, &target.texture, &mk_ctx(90.0 / 60.0), &params, rt_quality);
             }
             enc.commit_and_wait_completed();
         }
@@ -572,11 +575,13 @@ mod tests {
                 let mut enc = device.create_encoder("sweep");
                 {
                     let mut gpu = RGpuEncoder::new(&mut enc, &device);
+                    let rt_quality = manifold_renderer::node_graph::RtQuality::default();
                     generator.render(
                         &mut gpu,
                         &target.texture,
                         &mk(f64::from(i) / 60.0),
                         &params,
+                        rt_quality,
                     );
                 }
                 enc.commit_and_wait_completed();
