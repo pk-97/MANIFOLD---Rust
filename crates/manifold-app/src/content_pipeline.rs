@@ -1839,10 +1839,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             } else {
                 project.settings.rt_quality.realtime
             };
-            eprintln!("RT quality dispatch: export_mode={}, shadows={:?} ({} spp), res={:?}",
-                export_mode, column.shadows, column.shadows.spp(), column.ray_resolution);
+            let (num, den) = column.ray_resolution.fraction();
+            eprintln!("RT quality dispatch: export_mode={}, shadows={:?} ({} spp), res={:?} ({}/{}), ao={:?} ({} spp), gi={:?} ({} spp), refl={:?} ({} spp)",
+                export_mode, column.shadows, column.shadows.spp(), column.ray_resolution, num, den,
+                column.ao, column.ao.spp(), column.gi, column.gi.spp(), column.reflections, column.reflections.spp());
+            let rt_quality = manifold_renderer::node_graph::RtQuality::from_column(&column);
+            eprintln!("RT quality dispatch: computed RtQuality: shadow_spp={}, ao_spp={}, gi_spp={}, refl_spp={}, ray_res={}/{}",
+                rt_quality.shadow_spp, rt_quality.ao_spp, rt_quality.gi_spp, rt_quality.refl_spp, rt_quality.ray_res_num, rt_quality.ray_res_den);
             self.compositor
-                .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
+                .set_rt_quality(rt_quality);
         } else {
             eprintln!("RT quality dispatch: NO PROJECT (engine.project() returned None)");
         }
