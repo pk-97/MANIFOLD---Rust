@@ -74,3 +74,6 @@ tests/fixtures/gltf/drogon__game_of_thrones_dragon/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Session-resume state written next to .manifold files (machine-local)
+*.breadcrumb
