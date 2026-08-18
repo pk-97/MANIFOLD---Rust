@@ -702,6 +702,19 @@ pub enum RootAction {
         current_index: u32,
         cell_node_id: crate::node::NodeId,
     },
+    /// RT quality panel: click on a tier cell (shadows/AO/GI/reflections)
+    /// opens the shared `panels::dropdown` overlay — items = the six spp
+    /// tiers anchored at the clicked cell, checked at the current tier, each
+    /// carrying its own `ChangeRtQuality` action built from the app's current
+    /// snapshot (never the panel's possibly-stale one).
+    OpenRtQualityTierDropdown {
+        field: manifold_foundation::settings::RtTierField,
+        realtime: bool,
+        anchor: Rect,
+    },
+    /// RT quality panel: click on a ray-resolution cell — same mechanics as
+    /// [`RootAction::OpenRtQualityTierDropdown`], items = the four fractions.
+    OpenRtQualityResDropdown { realtime: bool, anchor: Rect },
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the

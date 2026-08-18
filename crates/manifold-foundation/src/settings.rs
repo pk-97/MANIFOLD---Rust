@@ -39,6 +39,16 @@ impl RtQualityTier {
             RtQualityTier::Ultra => "Ultra (32 spp)",
         }
     }
+
+    /// UI order (worst to best).
+    pub const ALL: [RtQualityTier; 6] = [
+        RtQualityTier::UltraLow,
+        RtQualityTier::Low,
+        RtQualityTier::Medium,
+        RtQualityTier::High,
+        RtQualityTier::ExtraHigh,
+        RtQualityTier::Ultra,
+    ];
 }
 
 /// RT dispatch resolution relative to native canvas (RT_QUALITY_SETTINGS_DESIGN.md D4).
@@ -61,6 +71,55 @@ impl RtRayResolution {
             RtRayResolution::Half => (1, 2),
             RtRayResolution::ThreeQuarter => (3, 4),
             RtRayResolution::Native => (1, 1),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RtRayResolution::Quarter => "25% (quarter)",
+            RtRayResolution::Half => "50% (half)",
+            RtRayResolution::ThreeQuarter => "75% (three-quarter)",
+            RtRayResolution::Native => "100% (native)",
+        }
+    }
+
+    /// UI order (lowest to highest quality).
+    pub const ALL: [RtRayResolution; 4] = [
+        RtRayResolution::Quarter,
+        RtRayResolution::Half,
+        RtRayResolution::ThreeQuarter,
+        RtRayResolution::Native,
+    ];
+}
+
+/// Which spp-tier row a quality control targets — by identity, never by
+/// matching the current value (two rows sharing a tier would misroute the
+/// edit). Shared by the RT quality panel (manifold-ui) and the dropdown
+/// builder (manifold-app), so it lives here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtTierField {
+    Shadows,
+    Ao,
+    Gi,
+    Reflections,
+}
+
+impl RtTierField {
+    pub fn get(self, col: &RtQualityColumn) -> RtQualityTier {
+        match self {
+            RtTierField::Shadows => col.shadows,
+            RtTierField::Ao => col.ao,
+            RtTierField::Gi => col.gi,
+            RtTierField::Reflections => col.reflections,
+        }
+    }
+
+    pub fn set(self, col: &mut RtQualityColumn, tier: RtQualityTier) {
+        match self {
+            RtTierField::Shadows => col.shadows = tier,
+            RtTierField::Ao => col.ao = tier,
+            RtTierField::Gi => col.gi = tier,
+            RtTierField::Reflections => col.reflections = tier,
         }
     }
 }
