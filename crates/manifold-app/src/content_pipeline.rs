@@ -2052,6 +2052,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     GpuEncoder::new(&mut gen_enc, native_device)
                 };
+                gpu_gen.chunking_enabled = !self.profiling_enabled;
 
                 for renderer in renderers.iter_mut() {
                     if let Some(gen_renderer) =
@@ -2350,6 +2351,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             } else {
                 GpuEncoder::new(&mut native_enc, native_device)
             };
+            gpu_comp.chunking_enabled = !self.profiling_enabled;
 
             // Forward the authoring-time node-output preview request so the
             // chain holding the watched effect preserves the selected node's

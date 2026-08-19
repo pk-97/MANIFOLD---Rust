@@ -2302,6 +2302,29 @@ impl GpuEncoder {
         self.cmd_buf.commit();
     }
 
+    /// Commit the current command buffer to the GPU queue and continue
+    /// encoding into a fresh command buffer from the same queue. Submission
+    /// order is preserved; Metal's automatic hazard tracking covers cross-chunk
+    /// resource dependencies. Never blocks (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
+    ///
+    /// Dispatch profiling is incompatible with mid-encode splits (D5), so the
+    /// call panics in dev builds if profiling is enabled.
+    pub fn commit_and_continue(&mut self, device: &GpuDevice) {
+        debug_assert!(self.profile.is_none(), "commit_and_continue: dispatch profiling is incompatible with mid-encode chunking (UI_RESPONSIVENESS_UNDER_LOAD D5)");
+        self.end_current();
+        self.register_fault_handler();
+        self.cmd_buf.commit();
+
+        let label = unsafe { self.cmd_buf.label() }
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| String::from("(unlabeled)"));
+        self.cmd_buf = device.new_command_buffer(&label);
+        self.state = EncoderState::None;
+        self.compute_cache.clear();
+        self.render_cache.clear();
+        self.scopes.clear();
+    }
+
     /// Commit and block until the GPU has scheduled (not completed) the work.
     pub fn commit_and_wait_scheduled(mut self) {
         self.end_current();
@@ -2387,6 +2410,87 @@ fn new_render_pass_descriptor() -> Retained<MTLRenderPassDescriptor> {
     unsafe {
         use objc2::AnyThread;
         MTLRenderPassDescriptor::init(MTLRenderPassDescriptor::alloc())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use block2::RcBlock;
+    use objc2::runtime::ProtocolObject;
+    use objc2_metal::MTLCommandBuffer;
+
+    use super::*;
+
+    /// commit_and_continue must preserve in-order execution: three chunks
+    /// write successive values to the same buffer slot; the final value and
+    /// the number of completed handlers prove all three ran in order.
+    #[test]
+    fn commit_and_continue_preserves_order() {
+        let device = GpuDevice::new();
+        let mut encoder = device.create_encoder("test commit_and_continue");
+
+        let wgsl = r#"
+            @group(0) @binding(0) var<storage, read_write> out: array<u32>;
+            struct Push { value: u32 };
+            @group(0) @binding(1) var<uniform> push: Push;
+            @compute @workgroup_size(1)
+            fn cs_main() {
+                out[0] = push.value;
+            }
+        "#;
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "test pipeline");
+
+        let buffer = device.create_buffer_shared(std::mem::size_of::<u32>() as u64);
+        let values = [10u32, 20u32, 30u32];
+        // Pre-seed with the final value so we can tell if no write happened.
+        unsafe {
+            buffer.write(0, &values[2].to_ne_bytes());
+        }
+
+        let completed = Arc::new(AtomicUsize::new(0));
+        for value in values {
+            let completed_inner = Arc::clone(&completed);
+            let block = RcBlock::new(
+                move |_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    completed_inner.fetch_add(1, Ordering::SeqCst);
+                },
+            );
+            unsafe {
+                encoder.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
+            }
+
+            let push_bytes = value.to_ne_bytes();
+            encoder.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 1,
+                        data: &push_bytes,
+                    },
+                ],
+                [1, 1, 1],
+                "test chunk",
+            );
+            encoder.commit_and_continue(&device);
+        }
+
+        encoder.commit_and_wait_completed();
+
+        let final_value: u32 = unsafe {
+            let ptr = buffer.mapped_ptr().expect("shared buffer must be CPU-mapped");
+            *(ptr as *const u32)
+        };
+        assert_eq!(final_value, 30, "chunks must execute in order");
+        assert_eq!(completed.load(Ordering::SeqCst), 3, "expected 3 completed handlers");
     }
 }
 

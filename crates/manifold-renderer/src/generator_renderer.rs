@@ -746,6 +746,8 @@ impl GeneratorRenderer {
                 continue;
             }
 
+            gpu.checkpoint();
+
             let ctx = PresetContext {
                 time,
                 beat,
