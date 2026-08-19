@@ -1100,14 +1100,6 @@ impl GpuDevice {
         })
     }
 
-    /// Create a new command encoder for one frame's GPU work.
-    ///
-    /// Every encoder registers its error-logging completion handler at
-    /// commit time, moving the recorded scopes (`note_scope`) into the
-    /// closure. Error logging is universal, never opt-in per call site:
-    /// a GPU fault on an unlogged buffer surfaces only as "innocent
-    /// victim" discards on OTHER buffers, hiding the culprit (BUG-665r's
-    /// diagnosis gap).
     /// Create a fresh command buffer from the same queue. Used by
     /// [`GpuEncoder::commit_and_continue`] to keep encoding across submits
     /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
@@ -1120,6 +1112,14 @@ impl GpuDevice {
         cmd_buf
     }
 
+    /// Create a new command encoder for one frame's GPU work.
+    ///
+    /// Every encoder registers its error-logging completion handler at
+    /// commit time, moving the recorded scopes (`note_scope`) into the
+    /// closure. Error logging is universal, never opt-in per call site:
+    /// a GPU fault on an unlogged buffer surfaces only as "innocent
+    /// victim" discards on OTHER buffers, hiding the culprit (BUG-665r's
+    /// diagnosis gap).
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
         let cmd_buf = self.new_command_buffer(label);
         GpuEncoder {
