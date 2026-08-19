@@ -1,7 +1,9 @@
 ---
 name: ui-headless-png-verification
-description: The custom Metal UI renders headlessly to a PNG you can Read — visual UI changes are self-verifiable without the running app. Invoke to verify any visual UI change.
+description: The custom Metal UI renders headlessly to a PNG you can Read — visual UI changes are self-verifiable without the running app. Invoke to verify any visual UI change. LEAD SEAT ONLY — lanes never run this (docs/AGENT_ROUTING.md, lead token economy).
 ---
+**Seat rule (Peter, 2026-08-19): lead only.** Lanes never run PNG verification — it is evidence the lead acts on and a lane grinding a render loop burns its window. Lane briefs name the expected visual outcome; the lead renders and looks post-commit.
+
 The "renderer is custom, can't screenshot here, must ask Peter to eyeball" assumption — stated repeatedly in `docs/UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md` — is **outdated**. Visual UI changes CAN be self-verified headlessly: `GpuDevice::new()` runs windowless, `UIRenderer` rasterizes a `UITree` (or immediate `draw_rect`/`draw_text` calls) to a `GpuTexture`, readback → `image::save_buffer` PNG, then `Read` the PNG.
 
 **Primary tool = the `ui-snap` harness** (`crates/manifold-app/src/ui_snapshot/`, feature `ui-snapshot`, run `cargo run -p manifold-app --features ui-snapshot -- ui-snap <scene>` or the `cargo xtask ui-snap` alias). It drives the REAL `UIRoot`/`state_sync` path → PNG in `target/ui-snapshots/<scene>/`. Scenes (2026-07-01):
