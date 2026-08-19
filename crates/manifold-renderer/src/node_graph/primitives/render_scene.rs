@@ -4984,6 +4984,7 @@ impl EffectNode for RenderScene {
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
             self.run_ibl_convolution(gpu, &sampler, envmap_wired, envmap_generation, rebuild_epoch);
+            gpu.checkpoint();
         }
 
         // ---- Shadow depth pre-passes. One depth-only pass per caster
@@ -5824,6 +5825,7 @@ impl EffectNode for RenderScene {
                         "node.render_scene RT-A3a mask dispatch (shadow visibility)",
                     );
                 }
+                gpu.checkpoint();
 
                 // RT-A3a: lighting dispatch — AO + GI + reflection + normal.
                 // D16a: when fused (mask_sizes_differ=false), shadow_spp=1
@@ -5860,6 +5862,7 @@ impl EffectNode for RenderScene {
                     self.rt_has_translucency,
                     "node.render_scene RT-A3a lighting dispatch (AO+GI+reflection+normal)",
                 );
+                gpu.checkpoint();
                 tracer.upsample_shadow(
                     gpu.native_enc,
                     params_buffer,
@@ -6146,6 +6149,7 @@ impl EffectNode for RenderScene {
                 );
                 self.rt_history_ping = write_idx;
                 self.rt_moments_valid = true;
+                gpu.checkpoint();
 
                 // RAYTRACING_DESIGN.md section 5.2 P3 (D5, "emissive-colored
                 // volumetric glow"): every emissive object becomes an

@@ -429,6 +429,7 @@ impl ContentThread {
                 log::info!("[ContentThread] shutdown received");
                 return;
             }
+            self.publish_snapshot_if_dirty(&state_tx);
 
             // 1b. Wait for GPU surface, draining commands while waiting.
             // In the common case (99%+) this returns immediately — the GPU
@@ -438,7 +439,7 @@ impl ContentThread {
             #[cfg(target_os = "macos")]
             {
                 let fence_start = std::time::Instant::now();
-                if self.wait_for_surface_draining_commands(&cmd_tx, &cmd_rx) {
+                if self.wait_for_surface_draining_commands(&cmd_tx, &cmd_rx, &state_tx) {
                     log::info!("[ContentThread] shutdown received during surface wait");
                     return;
                 }
@@ -479,6 +480,7 @@ impl ContentThread {
         &mut self,
         cmd_tx: &crossbeam_channel::Sender<ContentCommand>,
         cmd_rx: &crossbeam_channel::Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
     ) -> bool {
         // Fast path: surface already ready (99%+ of frames).
         if self.content_pipeline.is_surface_ready() {
@@ -559,6 +561,7 @@ impl ContentThread {
                             }
                         }
                     }
+                    self.publish_snapshot_if_dirty(state_tx);
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                     // 5-second deadline expired — GPU hung.
@@ -576,6 +579,7 @@ impl ContentThread {
         {
             return true;
         }
+        self.publish_snapshot_if_dirty(state_tx);
         false
     }
 
@@ -1109,6 +1113,14 @@ impl ContentThread {
         }
 
         // 8. Push state to UI
+        self.engine.reclaim_tick_result(tick_result);
+        self.send_state(state_tx);
+    }
+
+    /// Build and send a `ContentState` snapshot to the UI. Gated by
+    /// `data_version` for the heavy `Arc<Project>` clone; lightweight
+    /// modulation/transport fields are sent every call.
+    fn send_state(&mut self, state_tx: &Sender<ContentState>) {
         let version = self.editing_service.data_version();
         let version_changed = version != self.last_data_version;
         if version_changed {
@@ -1118,10 +1130,6 @@ impl ContentThread {
         // Value-only writers (LFO/envelope/Ableton/OSC/automation) never bump
         // data_version — those ride the ModulationSnapshot, which is now sent
         // EVERY tick (see below), so no writer class can leave the UI stale.
-
-        // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse
-        // on the next tick — avoids per-frame Vec allocation.
-        self.engine.reclaim_tick_result(tick_result);
 
         // Arc<Project> snapshot: only deep-clone when data_version changes.
         // Per-frame param values ride the lightweight ModulationSnapshot
@@ -1402,6 +1410,15 @@ impl ContentThread {
         // Send state to UI. Unbounded channel — never drops snapshots.
         if let Err(e) = state_tx.send(state) {
             log::error!("[ContentThread] State channel disconnected: {e}");
+        }
+    }
+
+    /// Send a `ContentState` snapshot only if the project has mutated since
+    /// the last publish. Used outside the render tick so the UI confirms
+    /// edits while the GPU is behind. Coalesces: one publish per drain pass.
+    fn publish_snapshot_if_dirty(&mut self, state_tx: &Sender<ContentState>) {
+        if self.editing_service.data_version() != self.last_data_version {
+            self.send_state(state_tx);
         }
     }
 
@@ -1999,6 +2016,49 @@ impl ContentThread {
                 &get_source_at_beat,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use manifold_core::project::Project;
+
+    use crate::content_command::ContentCommand;
+    use crate::content_state::ContentState;
+    use crate::headless_harness::headless_content_thread;
+
+    #[test]
+    fn paused_mutation_publishes_snapshot() {
+        let mut thread = headless_content_thread(Project::default(), 1280, 720);
+        thread.rendering_paused = true;
+
+        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(64);
+        let (state_tx, state_rx) = crossbeam_channel::bounded(4);
+
+        let cmd_tx_for_test = cmd_tx.clone();
+        let handle = std::thread::spawn(move || {
+            thread.run(cmd_tx, cmd_rx, state_tx);
+        });
+
+        // A mutating command that bumps EditingService::data_version.
+        cmd_tx_for_test
+            .send(ContentCommand::SetProject)
+            .expect("command channel open");
+
+        let state: ContentState = state_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("snapshot published while paused");
+
+        assert!(
+            state.data_version > 0,
+            "expected data_version to bump, got {}",
+            state.data_version
+        );
+
+        let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
+        handle.join().expect("content thread joined");
     }
 }
 

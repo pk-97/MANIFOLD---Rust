@@ -1100,6 +1100,18 @@ impl GpuDevice {
         })
     }
 
+    /// Create a fresh command buffer from the same queue. Used by
+    /// [`GpuEncoder::commit_and_continue`] to keep encoding across submits
+    /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
+    pub(crate) fn new_command_buffer(&self, label: &str) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
+        let cmd_buf = self
+            .queue
+            .commandBuffer()
+            .expect("Failed to acquire command buffer");
+        unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
+        cmd_buf
+    }
+
     /// Create a new command encoder for one frame's GPU work.
     ///
     /// Every encoder registers its error-logging completion handler at
@@ -1109,11 +1121,7 @@ impl GpuDevice {
     /// victim" discards on OTHER buffers, hiding the culprit (BUG-665r's
     /// diagnosis gap).
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
-        let cmd_buf = self
-            .queue
-            .commandBuffer()
-            .expect("Failed to acquire command buffer");
-        unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
+        let cmd_buf = self.new_command_buffer(label);
         GpuEncoder {
             cmd_buf,
             state: EncoderState::None,
