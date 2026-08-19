@@ -72,47 +72,118 @@ fn apply_envelope_offset(value: &mut f32, min: f32, max: f32, target_norm: f32, 
     }
 }
 
-/// Apply every decay envelope carried by one instance against the active-clip
-/// timing of the container it lives in. Returns true if any envelope wrote a
-/// value this frame.
+/// Advance a stepped value by `amount` within `[lo, hi]`, mirroring the audio-mod
+/// Step arm (`ParameterAudioMod::Step`) exactly — same wrap-mode semantics and
+/// discrete-param integer adjustment. `dir` is updated in place for Bounce.
+fn advance_step(
+    current: f32,
+    amount: f32,
+    wrap: WrapMode,
+    dir: &mut f32,
+    lo: f32,
+    hi: f32,
+    whole_numbers: bool,
+) -> f32 {
+    let wrap_max = if whole_numbers && matches!(wrap, WrapMode::Wrap) {
+        hi + 1.0
+    } else {
+        hi
+    };
+    let (mut next, new_dir) = wrap.advance(current, amount, *dir, lo, wrap_max);
+    if whole_numbers {
+        next = next.round();
+    }
+    *dir = new_dir;
+    next.clamp(lo, hi)
+}
+
+/// Compute a deterministic pseudo-random next value in `[lo, hi]`, never repeating
+/// the current discrete position. `fire_count` is the monotonic ordinal; it is
+/// incremented here so it matches the audio-mod Random path.
+fn advance_random(
+    fire_count: &mut u32,
+    lo: f32,
+    hi: f32,
+    whole_numbers: bool,
+    current: f32,
+) -> f32 {
+    *fire_count = fire_count.wrapping_add(1);
+    let discrete_count = whole_numbers.then(|| ((hi - lo).round().max(0.0) as u32) + 1);
+    let current_index = discrete_count
+        .map(|n| ((current - lo).round().max(0.0) as u32).min(n.saturating_sub(1)))
+        .unwrap_or(0);
+    random_step_value(*fire_count, lo, hi, discrete_count, current_index).clamp(lo, hi)
+}
+
+/// Apply every envelope carried by one instance against the active-clip timing of
+/// the container it lives in. Returns true if any envelope wrote a value this frame.
 ///
-/// Since envelope-home unification this is the single envelope walk for both
-/// kinds: an envelope lives on its owning `PresetInstance` and resolves its
-/// target param directly against that instance's manifest (id-keyed, range +
-/// integral-ness self-contained on each `Param.spec`) — so effects and
-/// generators share one walk with no registry consultation. The level is a pure
-/// function of `active_elapsed`, so the walk reads envelopes immutably and only
-/// mutates the manifest — no per-frame envelope bookkeeping.
+/// Envelope-home unification: an envelope lives on its owning `PresetInstance`
+/// and resolves its target param directly against that instance's manifest.
+/// Continuous envelopes apply the existing additive decay offset. Step/Random
+/// envelopes advance a runtime shadow on a clip rising edge (including a loop
+/// restart where `active_elapsed` resets while the clip stays active); the shadow
+/// is written to `p.value` by [`apply_envelope_step_values`] before this walk,
+/// exactly like audio-mod stepped values.
 fn apply_instance_envelopes(
     inst: &mut PresetInstance,
     active_elapsed: Beats,
 ) -> bool {
-    if active_elapsed < Beats::ZERO {
-        return false; // no active clip → no trigger
+    let Some(envelopes) = inst.envelopes.as_mut() else {
+        return false;
+    };
+    if envelopes.is_empty() {
+        return false;
     }
-    let env_count = inst.envelopes.as_ref().map_or(0, |e| e.len());
-    let mut any_modulated = false;
+    let active = active_elapsed >= Beats::ZERO;
 
-    for ei in 0..env_count {
-        let (enabled, param_id, target_norm, decay_beats) = {
-            let env = &inst.envelopes.as_ref().unwrap()[ei];
-            (
-                env.enabled,
-                env.param_id.clone(),
-                env.target_normalized,
-                env.decay_beats,
-            )
-        };
-        if !enabled {
+    let mut any_modulated = false;
+    // Disjoint mutable borrows: envelopes and params are separate fields of
+    // `PresetInstance`, so we can update envelope state and the manifest in one
+    // loop without per-frame scratch allocations.
+    let params = &mut inst.params;
+    for env in envelopes.iter_mut() {
+        let was_active = env.was_clip_active;
+        let prev_elapsed = env.prev_active_elapsed;
+        env.was_clip_active = active;
+        env.prev_active_elapsed = active_elapsed;
+        if !active {
             continue;
         }
-        let Some(p) = inst.params.get_mut(param_id.as_ref()) else {
+        if !env.enabled {
+            continue;
+        }
+        let Some(p) = params.get_mut(env.param_id.as_ref()) else {
             continue;
         };
-        let (min, max) = (p.spec.min, p.spec.max);
-        let level = ParamEnvelope::decay_level(active_elapsed, decay_beats);
-        if apply_envelope_offset(&mut p.value, min, max, target_norm, level) {
-            any_modulated = true;
+        let (min, max, whole_numbers) = (p.spec.min, p.spec.max, p.spec.whole_numbers);
+        let rising = !was_active || active_elapsed < prev_elapsed;
+
+        match env.action {
+            TriggerAction::Continuous => {
+                let level = ParamEnvelope::decay_level(active_elapsed, env.decay_beats);
+                if apply_envelope_offset(&mut p.value, min, max, env.target_normalized, level) {
+                    any_modulated = true;
+                }
+            }
+            TriggerAction::Step { amount, wrap } => {
+                if rising {
+                    let lo = min;
+                    let hi = max;
+                    let current = env.step_value.unwrap_or(p.base).clamp(lo, hi);
+                    let next = advance_step(current, amount, wrap, &mut env.step_dir, lo, hi, whole_numbers);
+                    env.step_value = Some(next);
+                }
+            }
+            TriggerAction::Random => {
+                if rising {
+                    let lo = min;
+                    let hi = max;
+                    let current = env.step_value.unwrap_or(p.base).clamp(lo, hi);
+                    let next = advance_random(&mut env.fire_count, lo, hi, whole_numbers, current);
+                    env.step_value = Some(next);
+                }
+            }
         }
     }
 
@@ -148,6 +219,59 @@ pub fn reset_all_effectives(project: &mut Project) {
     for fx in project.settings.master_effects.iter_mut() {
         fx.reset_param_effectives();
     }
+}
+
+/// Phase 1.6: Apply any armed Step/Random envelope shadow values.
+/// Mirrors [`apply_step_values`] for audio mods — a stepped envelope owns the
+/// base value for this tick; drivers, continuous audio mods, and continuous
+/// envelopes stack on top of it unchanged.
+pub fn apply_envelope_step_values(project: &mut Project) -> bool {
+    fn apply_instance(inst: &mut PresetInstance) -> bool {
+        let Some(envelopes) = inst.envelopes.as_ref() else {
+            return false;
+        };
+        if envelopes.is_empty() {
+            return false;
+        }
+        let mut any = false;
+        for env in envelopes.iter() {
+            if !env.enabled {
+                continue;
+            }
+            if matches!(env.action, TriggerAction::Continuous) {
+                continue;
+            }
+            if let Some(v) = env.step_value
+                && let Some(p) = inst.params.get_mut(env.param_id.as_ref())
+            {
+                p.value = v;
+                any = true;
+            }
+        }
+        any
+    }
+
+    let mut any = false;
+    for fx in project.settings.master_effects.iter_mut() {
+        if apply_instance(fx) {
+            any = true;
+        }
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                if apply_instance(fx) {
+                    any = true;
+                }
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut()
+            && apply_instance(gp)
+        {
+            any = true;
+        }
+    }
+    any
 }
 
 // =====================================================================
@@ -310,6 +434,11 @@ pub fn evaluate_modulation(
     // just fire this same tick").
     let any_stepped = apply_step_values(project);
 
+    // Phase 1.6: Apply any armed Step/Random envelope shadow values.
+    // Mirrors `apply_step_values`: the stepped envelope owns the base for
+    // this tick; continuous envelopes, drivers, and audio mods stack on top.
+    let any_envelope_stepped = apply_envelope_step_values(project);
+
     // Phase 2: Evaluate LFO drivers
     let any_driven = evaluate_all_drivers(project, current_beat);
 
@@ -337,7 +466,7 @@ pub fn evaluate_modulation(
     // instance — see evaluate_all_envelopes.
     let any_enveloped = evaluate_all_envelopes(project, timing_scratch);
 
-    any_stepped || any_driven || any_audio || any_enveloped
+    any_stepped || any_envelope_stepped || any_driven || any_audio || any_enveloped
 }
 
 // =====================================================================
@@ -773,6 +902,15 @@ pub fn clear_all_trigger_edges(project: &mut Project) {
                 m.step_dir = 1.0;
             }
         }
+        if let Some(envs) = fx.envelopes.as_mut() {
+            for e in envs.iter_mut() {
+                e.was_clip_active = false;
+                e.prev_active_elapsed = Beats(-1.0);
+                e.fire_count = 0;
+                e.step_value = None;
+                e.step_dir = 1.0;
+            }
+        }
     }
 
     for fx in project.settings.master_effects.iter_mut() {
@@ -1106,6 +1244,131 @@ mod tests {
         let mut project = project_with(layer);
         let timing = vec![(Beats(0.0), Beats(8.0))];
         assert!(!evaluate_all_envelopes(&mut project, &timing));
+    }
+
+    // ── envelope Step/Random actions (PARAM_STEP_ACTIONS D8) ─────────────
+
+    use manifold_core::audio_mod::{TriggerAction, WrapMode};
+
+    fn step_env(param: &'static str, amount: f32, wrap: WrapMode) -> ParamEnvelope {
+        let mut env = ParamEnvelope::new(param);
+        env.action = TriggerAction::Step { amount, wrap };
+        env
+    }
+
+    fn random_env(param: &'static str) -> ParamEnvelope {
+        let mut env = ParamEnvelope::new(param);
+        env.action = TriggerAction::Random;
+        env
+    }
+
+    #[test]
+    fn envelope_step_fires_once_per_rising_edge() {
+        let mut env = step_env("amount", 0.3, WrapMode::Clamp);
+        env.target_normalized = 0.0; // target handle is ignored for Step
+        let layer = effect_layer_with_env(env);
+        let mut project = project_with(layer);
+
+        // First rising edge advances the shadow.
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let step_value = fx.envelopes.as_ref().unwrap()[0].step_value;
+        assert!(
+            step_value.is_some_and(|v| (v - 0.3).abs() < 1e-6),
+            "first clip edge steps amount by 0.3, got {:?}",
+            step_value
+        );
+
+        // Same edge (elapsed still > 0, no reset) does not advance again.
+        evaluate_all_envelopes(&mut project, &[(Beats(0.5), Beats(8.0))]);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert!(
+            fx.envelopes.as_ref().unwrap()[0].step_value == step_value,
+            "no second fire on the same clip"
+        );
+    }
+
+    #[test]
+    fn envelope_step_wrap_bounce_clamp_at_rails() {
+        // Wrap: 0.0 + 0.6 + 0.6 wraps to 0.2 in 0..1.
+        let mut project = project_with(effect_layer_with_env(step_env("amount", 0.6, WrapMode::Wrap)));
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(-1.0), Beats(8.0))]); // no clip, reset edge state
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let v = fx.envelopes.as_ref().unwrap()[0].step_value.unwrap();
+        assert!(
+            (v - 0.2).abs() < 1e-6,
+            "Wrap: 0.0 + 0.6 + 0.6 wraps to 0.2 in 0..1, got {v}"
+        );
+
+        // Bounce: ping-pong at the rails. 0.0 + 0.6 → 0.6, next bounces back to 0.0.
+        let mut project = project_with(effect_layer_with_env(step_env("amount", 0.6, WrapMode::Bounce)));
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(-1.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let v = fx.envelopes.as_ref().unwrap()[0].step_value.unwrap();
+        assert!(
+            (v - 0.8).abs() < 1e-6,
+            "Bounce: 0.0 → 0.6, next bounces off 1.0 to 0.8, got {v}"
+        );
+
+        // Clamp: saturates at the high rail.
+        let mut project = project_with(effect_layer_with_env(step_env("amount", 0.8, WrapMode::Clamp)));
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(-1.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(-1.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let v = fx.envelopes.as_ref().unwrap()[0].step_value.unwrap();
+        assert!(
+            (v - 1.0).abs() < 1e-6,
+            "Clamp: repeated steps saturate at 1.0, got {v}"
+        );
+    }
+
+    #[test]
+    fn envelope_random_is_deterministic_by_ordinal() {
+        let mut project = project_with(effect_layer_with_env(random_env("amount")));
+
+        // Two identical rising edges produce the same pseudo-random value
+        // because `fire_count` advances monotonically and deterministically.
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        let first = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .envelopes.as_ref().unwrap()[0]
+            .step_value;
+
+        let mut project2 = project_with(effect_layer_with_env(random_env("amount")));
+        evaluate_all_envelopes(&mut project2, &[(Beats(0.0), Beats(8.0))]);
+        let second = project2.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .envelopes.as_ref().unwrap()[0]
+            .step_value;
+
+        assert!(
+            first == second,
+            "Random action must be deterministic by ordinal: {first:?} vs {second:?}"
+        );
+    }
+
+    #[test]
+    fn envelope_step_loop_restart_refires() {
+        let mut project = project_with(effect_layer_with_env(step_env("amount", 0.25, WrapMode::Clamp)));
+
+        // First rising edge.
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        // Reset edge state with an inactive frame, then "loop restart": the
+        // next active frame has a smaller elapsed than the previous active one,
+        // so it counts as a new rising edge.
+        evaluate_all_envelopes(&mut project, &[(Beats(-1.0), Beats(8.0))]);
+        evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let v = fx.envelopes.as_ref().unwrap()[0].step_value.unwrap();
+        assert!(
+            (v - 0.5).abs() < 1e-6,
+            "loop restart re-fires the Step envelope, got {v}"
+        );
     }
 
     // ── audio modulation ─────────────────────────────────────────────────

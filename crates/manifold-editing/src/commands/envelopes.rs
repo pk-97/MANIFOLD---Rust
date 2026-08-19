@@ -8,6 +8,7 @@
 
 use crate::command::Command;
 use manifold_core::GraphTarget;
+use manifold_core::audio_mod::TriggerAction;
 use manifold_core::effects::ParamEnvelope;
 use manifold_core::project::Project;
 
@@ -223,5 +224,56 @@ impl Command for ChangeEnvelopeTargetCommand {
 
     fn description(&self) -> &str {
         "Change Envelope Target"
+    }
+}
+
+/// PARAM_STEP_ACTIONS D8: change an envelope's fire ACTION (Continuous/Step/
+/// Random) — the T drawer's Action/Amount/Wrap rows. `TriggerAction::Step`
+/// bundles `amount` + `wrap` in one Rust field, so one command covers all
+/// three drawer controls (Action segment, Amount drag, Wrap segment), mirroring
+/// `SetAudioModActionCommand`.
+#[derive(Debug)]
+pub struct SetEnvelopeActionCommand {
+    target: GraphTarget,
+    env_index: usize,
+    old_action: TriggerAction,
+    new_action: TriggerAction,
+}
+
+impl SetEnvelopeActionCommand {
+    pub fn new(
+        target: GraphTarget,
+        env_index: usize,
+        old_action: TriggerAction,
+        new_action: TriggerAction,
+    ) -> Self {
+        Self {
+            target,
+            env_index,
+            old_action,
+            new_action,
+        }
+    }
+
+    fn apply(project: &mut Project, target: &GraphTarget, idx: usize, action: TriggerAction) {
+        project.with_preset_graph_mut(target, |inst| {
+            if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(idx)) {
+                env.action = action;
+            }
+        });
+    }
+}
+
+impl Command for SetEnvelopeActionCommand {
+    fn execute(&mut self, project: &mut Project) {
+        Self::apply(project, &self.target, self.env_index, self.new_action);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        Self::apply(project, &self.target, self.env_index, self.old_action);
+    }
+
+    fn description(&self) -> &str {
+        "Set Envelope Action"
     }
 }

@@ -1,6 +1,6 @@
 # Param Step Actions — triggers step, randomize, and sequence any param
 
-**Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written. The full feature (Continuous/Step/Random on any param, audio- and clip-fired, drawer UI) is live and usable on every preset without P4; P4 is cleanup on one preset's leftover graph wiring. See `docs/landings/2026-07-08-param-step-actions.md` for gate output and the click-script.
+**Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); T drawer now owns clip-edge Step/Random (Action/Amount/Wrap + orange target hidden), A drawer deduped to audio-fired Step/Random only with Mode row on `is_trigger_gate` cards, and saved ClipEdge/Both Step/Random audio mods migrate to `ParamEnvelope` on load — completed 2026-08-19. P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written.
 **Prerequisites:** LIVE_AUDIO_TRIGGERS section 9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -175,18 +175,24 @@ mostly wiring; the audit is why.
   Rejected: `thread_rng`/time-seeded randomness — breaks export reproducibility
   and the resume contract; this is the named temptation, see F4.
 
-- **D8 — UI home: the same audio drawer, one Action row group.** On any
-  non-toggle, non-trigger param card, the standard audio-mod drawer
-  (section 9 U2) gains: Segmented **Action** (Cont / Step / Rand); when Step —
-  stepper **Amount** (signed, snapped for whole-number params) + Segmented
-  **Wrap** (Wrap/Bounce/Clamp); when Step or Rand — the Mode row (Clip/Audio/
-  Both) that gate cards already render. Collapsed
-  card row shows the action as a badge (the section 8 "silent mode trap" rule).
-  Commands: one new `EditingService` command per field, shaped like
-  `SetAudioModTriggerModeCommand` (the smallest member of the existing
-  audio-mod command family, section 9.2 U-P2) — whole-old/new capture, one undo step.
-  Trigger-gate cards (`is_trigger_gate`) and fire-buttons (`is_trigger`) do
-  NOT get an Action row: their fire semantics are the count, by design.
+- **D8 — UI home split: clip-edge stepping moves to the envelope (T) drawer;
+  audio-fired stepping stays in the audio-mod (A) drawer.** On any non-toggle,
+  non-trigger param card, the envelope drawer gains: Segmented **Action**
+  (Cont / Step / Rand); when Step — stepper **Amount** (signed, snapped for
+  whole-number params) + Segmented **Wrap** (Wrap/Bounce/Clamp). The orange
+  target handle is hidden for Step/Rand because they advance the base value,
+  not pull toward a depth. The audio-mod drawer keeps Action/Amount/Wrap for
+  audio-fired Step/Rand on non-gate params; the trailing **Mode** row
+  (Clip/Audio/Both) now renders only on `is_trigger_gate` cards. Trigger-gate
+  cards (`is_trigger_gate`) and fire-buttons (`is_trigger`) do NOT get an
+  Action row in either drawer: their fire semantics are the count, by design.
+  Commands: `SetEnvelopeActionCommand` mirrors `SetAudioModActionCommand`; the
+  amount scrub rides `ValueRef::EnvelopeStepAmount`.
+- **D8a — Load migration.** Saved audio mods with action Step/Random and mode
+  `ClipEdge` are removed and replaced by an enabled `ParamEnvelope` on the same
+  instance+param carrying the same action; mode `Both` narrows the mod to
+  `Transient` and creates the parallel envelope. Continuous and Transient-only
+  mods are untouched.
 
 - **D9 — Multi-param = one mod per param, no grouping infra.** "Choose
   multiple params" (Peter) is: add a step mod on each param, same send/band/
@@ -221,10 +227,10 @@ tick:
   evaluate_all_audio_mods            — per mod, by action:
         Continuous       → overwrite value                         (unchanged)
         gate / is_trigger → pulse / fire_count                     (unchanged)
-        Step / Random    → edge-detect (audio) + layer clip edge
-                           (engine, D5) →
-                           advance step_value (D4), snap+wrap (D2)
-  evaluate_all_envelopes             — additive                    (unchanged)
+        Step / Random    → edge-detect (audio) → advance step_value
+                           (D4), snap+wrap (D2)
+  evaluate_all_envelopes             — additive; Step/Random on
+        clip rising edge (incl. loop restart) → advance step_value
 ```
 
 The step arm lives in `evaluate_instance_audio_mods` as a fourth branch beside
@@ -296,10 +302,11 @@ channel, no new thread, no shared state.
   family better — executor's call inside the committed family shape);
   PanelAction + dispatch + state_sync; UI seeding of `amount` defaults (D2).
 - **Gate:** ui + app focused tests; workspace clippy; **round-trip gate** —
-  configure a step mod, save, reload, fire, verify stepping resumes from
+  configure a step envelope, save, reload, fire, verify stepping resumes from
   committed base (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) rule: modulate *after* reload); headless PNG of the
-  drawer open with Action=Step on a whole-numbers param (Plasma `pattern`) and
-  on a continuous param (Bloom amount).
+  envelope (T) drawer open with Action=Step on a whole-numbers param and on a
+  continuous param, and of the audio-mod (A) drawer with Action=Step/Random
+  still showing Amount+Wrap.
 - **Acceptance demo (L3):** a `scripts/ui-flows/` flow that opens the drawer,
   sets Action=Step, and asserts the badge — plus the P1 determinism test rerun.
   **Performer gesture:** "point the Kick send at BasicShapes' `variant`, set

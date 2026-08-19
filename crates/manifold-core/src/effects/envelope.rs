@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
+use crate::audio_mod::TriggerAction;
 use crate::units::Beats;
 use super::ParamId;
 use super::{default_one, default_true};
@@ -41,7 +42,8 @@ pub struct ParamEnvelope {
     pub enabled: bool,
     /// The envelope's target (the orange handle on the slider track): the
     /// normalized 0-1 position the parameter is pulled toward on a clip's rising
-    /// edge.
+    /// edge. Meaningful only in `Continuous` mode — step/random actions hide the
+    /// handle because they advance the base value on each rising edge instead.
     pub target_normalized: f32,
     /// Decay time in beats — how long the value takes to fall back to its base
     /// after a trigger. The single ADSR stage kept (attack/sustain/release were
@@ -52,10 +54,30 @@ pub struct ParamEnvelope {
     /// [`ParameterDriver::legacy_param_index`] for the recovery
     /// invariant — same contract here.
     pub legacy_param_index: Option<i32>,
+    /// PARAM_STEP_ACTIONS D8: what a clip rising edge does to the target param.
+    /// `Continuous` (default) is the existing decay-envelope behavior; `Step` moves
+    /// the param by `amount` with a `WrapMode`; `Random` jumps to a deterministic
+    /// pseudo-random value in the param's range. Serialized only when non-default
+    /// so old projects stay byte-identical.
+    pub action: TriggerAction,
     /// Cached decay output (0-1) for UI display. Not serialized.
     pub current_level: f32,
     /// Rising edge detection: was a clip active on the previous frame?
     pub was_clip_active: bool,
+    /// Rising edge detection: the elapsed-into-clip value on the previous frame,
+    /// so a loop restart (elapsed resets while the clip stays active) is detected
+    /// as a new trigger. Not serialized.
+    pub prev_active_elapsed: Beats,
+    /// PARAM_STEP_ACTIONS D4: monotonic fire counter for `Random` — the value
+    /// sequence is deterministic by this ordinal so export reproduces identically.
+    /// Not serialized; reset on load/transport stop.
+    pub fire_count: u32,
+    /// PARAM_STEP_ACTIONS D4: the stepped/randomized value that *replaces* the
+    /// param's base for this tick. `None` until the first fire; dropped on
+    /// transport stop so the param falls back to its committed base. Not serialized.
+    pub step_value: Option<f32>,
+    /// `WrapMode::Bounce`'s running ping-pong sign (±1, D2). Not serialized.
+    pub step_dir: f32,
 }
 
 impl Serialize for ParamEnvelope {
@@ -67,11 +89,15 @@ impl Serialize for ParamEnvelope {
 
         let emit_param_id = !self.param_id.is_empty();
         let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
+        let emit_action = !is_continuous_action(&self.action);
 
         // 3 base fields (enabled, targetNormalized, decayBeats) + addressing
-        // field (paramId XOR targetParamIndex).
+        // field (paramId XOR targetParamIndex) + action field when non-default.
         let mut field_count = 3;
         if emit_param_id || emit_legacy_index {
+            field_count += 1;
+        }
+        if emit_action {
             field_count += 1;
         }
 
@@ -84,6 +110,9 @@ impl Serialize for ParamEnvelope {
         s.serialize_field("enabled", &self.enabled)?;
         s.serialize_field("targetNormalized", &self.target_normalized)?;
         s.serialize_field("decayBeats", &self.decay_beats)?;
+        if emit_action {
+            s.serialize_field("action", &self.action)?;
+        }
         s.end()
     }
 }
@@ -100,8 +129,13 @@ impl ParamEnvelope {
             target_normalized: 1.0,
             decay_beats: DEFAULT_ENVELOPE_DECAY_BEATS,
             legacy_param_index: None,
+            action: TriggerAction::Continuous,
             current_level: 0.0,
             was_clip_active: false,
+            prev_active_elapsed: Beats(-1.0),
+            fire_count: 0,
+            step_value: None,
+            step_dir: 1.0,
         }
     }
 
@@ -147,6 +181,8 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             target_normalized: f32,
             #[serde(default = "default_decay_beats")]
             decay_beats: f32,
+            #[serde(default)]
+            action: TriggerAction,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -161,8 +197,13 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             target_normalized: raw.target_normalized,
             decay_beats: raw.decay_beats,
             legacy_param_index,
+            action: raw.action,
             current_level: 0.0,
             was_clip_active: false,
+            prev_active_elapsed: Beats(-1.0),
+            fire_count: 0,
+            step_value: None,
+            step_dir: 1.0,
         })
     }
 }
@@ -171,9 +212,14 @@ fn default_decay_beats() -> f32 {
     DEFAULT_ENVELOPE_DECAY_BEATS
 }
 
+fn is_continuous_action(action: &TriggerAction) -> bool {
+    matches!(action, TriggerAction::Continuous)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_mod::WrapMode;
 
     // ── ParamEnvelope backward-compat Deserialize (step 9) ──────
 
@@ -248,6 +294,50 @@ mod tests {
         let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.param_id, env.param_id);
         assert_eq!(back.legacy_param_index, None);
+        assert_eq!(back.action, TriggerAction::Continuous);
+    }
+
+    #[test]
+    fn envelope_serialize_skips_action_when_continuous() {
+        let env = ParamEnvelope::new("amount");
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            !json.contains("\"action\""),
+            "Continuous action must stay off the wire; got: {json}"
+        );
+    }
+
+    #[test]
+    fn envelope_action_round_trips_step_and_random() {
+        for action in [
+            TriggerAction::Step { amount: 2.0, wrap: WrapMode::Bounce },
+            TriggerAction::Random,
+        ] {
+            let mut env = ParamEnvelope::new("amount");
+            env.action = action;
+            let json = serde_json::to_string(&env).unwrap();
+            assert!(json.contains("\"action\""), "non-Continuous action must serialize; got: {json}");
+            let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.action, action, "action round-trip failed for {action:?}");
+            // Runtime-only stepping state must never round-trip.
+            assert_eq!(back.step_value, None);
+            assert_eq!(back.step_dir, 1.0);
+            assert_eq!(back.fire_count, 0);
+        }
+    }
+
+    #[test]
+    fn envelope_old_project_without_action_loads_as_continuous() {
+        let json = r#"{
+            "paramId": "amount",
+            "enabled": true,
+            "targetNormalized": 0.8,
+            "decayBeats": 0.5
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(e.action, TriggerAction::Continuous);
+        assert!((e.target_normalized - 0.8).abs() < 1e-6);
+        assert!((e.decay_beats - 0.5).abs() < 1e-6);
     }
 
 }

@@ -123,9 +123,9 @@ pub(crate) const AUDIO_WRAP_COUNT: usize = 3;
 pub(crate) const LENGTH_OPTIONS: [f32; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 
 // Arming the envelope shows two controls: the orange target handle on the
-// parameter's own track (the value it's pulled toward) and a single "Decay"
-// slider in a one-row drawer (how fast it falls back).
-pub(crate) const ENV_CONFIG_HEIGHT: f32 = 30.0;
+// parameter's own track (the value it's pulled toward) and a "Decay"
+// slider in the drawer (how fast it falls back). Height is now dynamic via
+// `envelope_config_height`.
 pub(crate) const ENV_DECAY_LABEL_W: f32 = 50.0;
 /// Decay slider full-scale, in beats (0 → this).
 pub(crate) const ENV_DECAY_MAX: f32 = 8.0;

@@ -75,6 +75,26 @@ pub(crate) fn audio_config_height(info: &ParamRow, mod_state: &ParamModState, i:
 }
 
 
+/// Height of the envelope (T) drawer for param `i`: the Decay slider always,
+/// plus the Action row for non-toggle/non-trigger params, plus the Amount
+/// slider + Wrap row while armed to Step. Mirrors `audio_config_height`.
+pub(crate) fn envelope_config_height(info: &ParamRow, mod_state: &ParamModState, i: usize) -> f32 {
+    let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
+    let action_idx = mod_state.envelope_action_idx.get(i).copied().unwrap_or(0);
+    let mut n = 0;
+    if !show_action || action_idx == 0 {
+        n += 1; // Decay (Continuous only — Step/Random has no decay to tune)
+    }
+    if show_action {
+        n += 1; // Action
+        if action_idx == 1 {
+            n += 2; // Step Amount + Wrap
+        }
+    }
+    crate::panels::drawer::uniform_rows_height(n)
+}
+
+
 /// Action-row button labels, index-parallel to core's `TriggerAction`
 /// (`Continuous`/`Step`/`Random`).
 pub(crate) fn audio_action_labels() -> [&'static str; AUDIO_ACTION_COUNT] {
@@ -409,9 +429,13 @@ pub(crate) fn build_envelope_target(
 }
 
 
-/// The envelope drawer: a single "Decay" slider (`decay_beats`, 0..ENV_DECAY_MAX
-/// beats). The one ADSR stage kept — how fast the value falls back after a
-/// trigger. Depth is the orange target handle on the track above.
+/// The envelope (T) drawer: for non-toggle/non-trigger params an Action row
+/// (Continuous/Step/Random); the Decay slider shows only in Continuous (a Step/
+/// Random envelope has no decay to tune — a dead slider is a silent-control
+/// trap), and while armed to Step an Amount slider + Wrap row appear. Mirrors
+/// `build_audio_mod_drawer`'s D8 construction (lines ~1300). The orange target
+/// handle above is hidden for Step/Random because those actions advance the
+/// base value, not pull toward a depth target.
 pub(crate) fn build_envelope_config(
     tree: &mut UITree,
     parent: Option<NodeId>,
@@ -420,11 +444,16 @@ pub(crate) fn build_envelope_config(
     w: f32,
     mod_state: &ParamModState,
     param_idx: usize,
+    info: &ParamRow,
     target: GraphParamTarget,
     pid: manifold_foundation::ParamId,
     key: Option<u64>,
 ) -> EnvelopeConfigIds {
-    use crate::panels::drawer::{self, DrawerRow, DrawerSpec};
+    use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+
+    let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
+    let action_idx = mod_state.envelope_action_idx.get(param_idx).copied().unwrap_or(0);
+    let show_decay = !show_action || action_idx == 0;
 
     let decay = mod_state
         .env_decay
@@ -435,39 +464,133 @@ pub(crate) fn build_envelope_config(
     // before (`DrawerRow::Slider::reset` is now required) — wired here using
     // the same `EnvDecay` scrub gesture the drag path already emits, reset to
     // `DEFAULT_ENV_DECAY`.
-    let reset = PanelAction::slider_reset(
+    let decay_reset = PanelAction::slider_reset(
         PanelAction::Scrub(ValueRef::EnvDecay(target.clone(), pid.clone()), ScrubPhase::Begin),
         PanelAction::Scrub(
             ValueRef::EnvDecay(target.clone(), pid.clone()),
             ScrubPhase::Move(ScrubValue::Scalar(DEFAULT_ENV_DECAY)),
         ),
-        PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Commit),
+        PanelAction::Scrub(ValueRef::EnvDecay(target.clone(), pid.clone()), ScrubPhase::Commit),
     );
-    let spec = DrawerSpec {
-        rows: vec![DrawerRow::Slider {
+
+    let mut rows: Vec<DrawerRow> = Vec::new();
+    if show_decay {
+        rows.push(DrawerRow::Slider {
             label: "Decay".into(),
             norm: (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
             default_norm: (DEFAULT_ENV_DECAY / ENV_DECAY_MAX).clamp(0.0, 1.0),
             value_text: format!("{decay:.2}"),
             label_w: ENV_DECAY_LABEL_W,
-            reset: reset.clone(),
+            reset: decay_reset.clone(),
             show_meter: false,
-        }],
+        });
+    }
+
+    let mut action_btn_ids: Option<[NodeId; AUDIO_ACTION_COUNT]> = None;
+    let mut step_slider: Option<SliderNodeIds> = None;
+    let mut step_reset: Option<PanelAction> = None;
+    let mut wrap_btn_ids: Option<[NodeId; AUDIO_WRAP_COUNT]> = None;
+
+    if show_action {
+        let action_buttons: Vec<DrawerButton> = audio_action_labels()
+            .iter()
+            .enumerate()
+            .map(|(k, l)| DrawerButton::new(*l, k as i32 == action_idx))
+            .collect();
+        rows.push(DrawerRow::Buttons {
+            buttons: action_buttons,
+            width: ButtonWidth::Uniform,
+            label: Some("Action".into()),
+        });
+        if action_idx == 1 {
+            let default_amount = default_step_amount(info.spec.min, info.spec.max, info.spec.whole_numbers);
+            let amount = mod_state
+                .envelope_step_amount
+                .get(param_idx)
+                .copied()
+                .unwrap_or(default_amount);
+            let value_text = if info.spec.whole_numbers {
+                format!("{amount:.0}")
+            } else {
+                format!("{amount:.2}")
+            };
+            let sr = PanelAction::slider_reset(
+                PanelAction::Scrub(ValueRef::EnvelopeStepAmount(target.clone(), pid.clone()), ScrubPhase::Begin),
+                PanelAction::Scrub(
+                    ValueRef::EnvelopeStepAmount(target.clone(), pid.clone()),
+                    ScrubPhase::Move(ScrubValue::Scalar(default_amount)),
+                ),
+                PanelAction::Scrub(ValueRef::EnvelopeStepAmount(target.clone(), pid.clone()), ScrubPhase::Commit),
+            );
+            rows.push(DrawerRow::Slider {
+                label: "Step".into(),
+                norm: step_amount_to_norm(amount, info.spec.min, info.spec.max),
+                default_norm: step_amount_to_norm(default_amount, info.spec.min, info.spec.max),
+                value_text,
+                label_w: ENV_DECAY_LABEL_W,
+                reset: sr.clone(),
+                show_meter: false,
+            });
+            step_reset = Some(sr);
+            let wrap_sel = mod_state.envelope_wrap_idx.get(param_idx).copied().unwrap_or(0);
+            let wrap_buttons: Vec<DrawerButton> = audio_wrap_labels()
+                .iter()
+                .enumerate()
+                .map(|(k, l)| DrawerButton::new(*l, k as i32 == wrap_sel))
+                .collect();
+            rows.push(DrawerRow::Buttons {
+                buttons: wrap_buttons,
+                width: ButtonWidth::Uniform,
+                label: Some("Wrap".into()),
+            });
+        }
+    }
+
+    let spec = DrawerSpec {
+        rows,
         btn_font_size: FONT_SIZE,
         slider_font_size: FONT_SIZE,
         theme: Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32).tinted(),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec, key);
-    let decay_slider = dids
-        .sliders
-        .into_iter()
-        .next()
-        .expect("envelope drawer has one slider row");
+
+    // Slider rows are [Decay?] then [Step Amount?] — Decay only in Continuous.
+    let decay_slider = if show_decay {
+        Some(
+            *dids.sliders
+                .first()
+                .expect("Continuous envelope drawer has a Decay slider row"),
+        )
+    } else {
+        None
+    };
+
+    if show_action {
+        let btns = dids.button_ids();
+        let mut action_arr = [NodeId::PLACEHOLDER; AUDIO_ACTION_COUNT];
+        for (k, id) in btns.iter().take(AUDIO_ACTION_COUNT).enumerate() {
+            action_arr[k] = *id;
+        }
+        action_btn_ids = Some(action_arr);
+        if action_idx == 1 {
+            step_slider = dids.sliders.get(usize::from(show_decay)).cloned();
+            let wrap_offset = AUDIO_ACTION_COUNT;
+            let mut wrap_arr = [NodeId::PLACEHOLDER; AUDIO_WRAP_COUNT];
+            for (k, id) in btns.iter().skip(wrap_offset).take(AUDIO_WRAP_COUNT).enumerate() {
+                wrap_arr[k] = *id;
+            }
+            wrap_btn_ids = Some(wrap_arr);
+        }
+    }
 
     EnvelopeConfigIds {
         _container_id: dids.container,
         decay_slider,
-        decay_reset: reset,
+        decay_reset: show_decay.then_some(decay_reset),
+        action_btn_ids,
+        step_slider,
+        step_reset,
+        wrap_btn_ids,
     }
 }
 
@@ -713,7 +836,7 @@ pub(crate) fn mod_config_height(
     i: usize,
 ) -> f32 {
     match tab {
-        ModTab::Envelope => ENV_CONFIG_HEIGHT,
+        ModTab::Envelope => envelope_config_height(info, mod_state, i),
         ModTab::Driver => driver_config_height(),
         ModTab::Audio => audio_config_height(info, mod_state, i),
         ModTab::Ableton => ABL_CONFIG_HEIGHT,
@@ -1357,10 +1480,10 @@ pub(crate) fn build_audio_mod_drawer(
         }
     }
     // section 9 U2/D3: the trailing Mode row (Clip/Audio/Both). An `is_trigger_gate`
-    // row always shows it; a slider row shows it once armed to Step or
-    // Random — a step/random mod fires from the same clip-edge/audio-edge
-    // sources a gate does, gated the same way (D3).
-    let show_mode = info.spec.is_trigger_gate || (show_action && action_idx != 0);
+    // row always shows it; non-gate Step/Random mods fire from audio transients
+    // only, so the Mode row is no longer shown there (the clip-edge half moved to
+    // the T envelope drawer).
+    let show_mode = info.spec.is_trigger_gate;
     if show_mode {
         let mode_sel = mod_state.audio_mode_idx.get(i).copied().unwrap_or(0);
         let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
@@ -1854,9 +1977,12 @@ pub(crate) fn build_param_row(
         ));
     }
 
-    // Envelope target handle on the slider track (when the envelope is armed) —
-    // the orange grab bar that sets the depth in the parameter's own range.
-    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+    // Envelope target handle on the slider track (when the envelope is armed AND
+    // its action is Continuous) — the orange grab bar that sets the depth in the
+    // parameter's own range. Step/Random actions advance the base value on each
+    // rising edge, so the depth target has no meaning there and is hidden.
+    let envelope_action_idx = mod_state.envelope_action_idx.get(i).copied().unwrap_or(0);
+    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) && envelope_action_idx == 0 {
         ids.target = Some(build_envelope_target(
             tree,
             slider.track,
@@ -2036,14 +2162,14 @@ pub(crate) fn build_param_row(
         cy += MOD_TAB_STRIP_H;
     }
 
-    // Envelope drawer — a single "Decay" slider. Depth is the orange target
-    // handle on the track above; this is how fast the value falls back.
+    // Envelope drawer — the Decay slider plus, for non-toggle/non-trigger
+    // params, the Action row and (while Step) the Amount slider + Wrap row.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target.clone(), info.id.clone(),
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, info, target.clone(), info.id.clone(),
             row_key_base.map(|b| b | ROW_ROLE_ENVELOPE_CONFIG),
         ));
-        cy += ENV_CONFIG_HEIGHT;
+        cy += envelope_config_height(info, mod_state, i);
     }
 
     // Driver config drawer.

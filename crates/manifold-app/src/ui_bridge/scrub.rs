@@ -36,7 +36,9 @@ use manifold_editing::commands::audio_setup::{SetAudioCrossoversCommand, SetAudi
 use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
-use manifold_editing::commands::envelopes::{ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand};
+use manifold_editing::commands::envelopes::{
+    ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand, SetEnvelopeActionCommand,
+};
 use manifold_editing::commands::layer::SetLayerClipTriggerCommand;
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
@@ -184,6 +186,17 @@ pub enum ResolvedScrub {
     /// wrap from the store, matching the retired
     /// `ActiveInspectorDrag::AudioModStepAmount`.
     AudioModStepAmount {
+        target: GraphTarget,
+        param_id: ParamId,
+        baseline: TriggerAction,
+        live_amount: f32,
+    },
+    /// An envelope Step-action amount slider. The undo `baseline` is the WHOLE
+    /// pre-drag `TriggerAction` (the commit emits `SetEnvelopeActionCommand`
+    /// old→new), while the restore path only needs `live_amount`: it re-stamps
+    /// `TriggerAction::Step { amount: live_amount, wrap }` reading the current
+    /// wrap from the envelope, mirroring `AudioModStepAmount` for the T drawer.
+    EnvelopeStepAmount {
         target: GraphTarget,
         param_id: ParamId,
         baseline: TriggerAction,
@@ -441,6 +454,29 @@ impl ResolvedScrub {
                             _ => manifold_core::audio_mod::WrapMode::Wrap,
                         };
                         m.action = TriggerAction::Step {
+                            amount: *live_amount,
+                            wrap,
+                        };
+                    }
+                });
+            }
+            ResolvedScrub::EnvelopeStepAmount {
+                target,
+                param_id,
+                live_amount,
+                ..
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(e) = inst
+                        .envelopes
+                        .as_mut()
+                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
+                    {
+                        let wrap = match e.action {
+                            TriggerAction::Step { wrap, .. } => wrap,
+                            _ => manifold_core::audio_mod::WrapMode::Wrap,
+                        };
+                        e.action = TriggerAction::Step {
                             amount: *live_amount,
                             wrap,
                         };
@@ -1690,6 +1726,116 @@ pub(crate) fn dispatch_scrub(
                             Box::new(SetAudioModActionCommand::new(
                                 DriverTarget::from(&target),
                                 param_id.clone(),
+                                old_action,
+                                new_action,
+                            ));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::EnvelopeStepAmount(gpt, param_id) => match phase {
+            ScrubPhase::Begin => {
+                if let Some(target) = resolve_graph_target(
+                    gpt,
+                    ctx.editor_target,
+                    effective_tab,
+                    active_layer,
+                    ctx.selection,
+                    ctx.project,
+                ) {
+                    let baseline = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                                .map(|e| e.action)
+                        })
+                        .flatten();
+                    if let Some(baseline) = baseline {
+                        let live_amount = match baseline {
+                            TriggerAction::Step { amount, .. } => amount,
+                            _ => 0.0,
+                        };
+                        ctx.scrub.active = Some(ResolvedScrub::EnvelopeStepAmount {
+                            target,
+                            param_id: param_id.clone(),
+                            baseline,
+                            live_amount,
+                        });
+                    }
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let (Some(v), Some(target)) = (
+                    sv.scalar(),
+                    resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ),
+                ) {
+                    if let Some(ResolvedScrub::EnvelopeStepAmount { live_amount, .. }) =
+                        &mut ctx.scrub.active
+                    {
+                        *live_amount = v;
+                    }
+                    graph_env_dual_edit(
+                        ctx.project,
+                        ctx.content_tx,
+                        &target,
+                        param_id.clone(),
+                        move |env| {
+                            let wrap = match env.action {
+                                TriggerAction::Step { wrap, .. } => wrap,
+                                _ => manifold_core::audio_mod::WrapMode::Wrap,
+                            };
+                            env.action = TriggerAction::Step { amount: v, wrap };
+                        },
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                let old_action = match &ctx.scrub.active {
+                    Some(ResolvedScrub::EnvelopeStepAmount { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some(old_action) = old_action
+                    && let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    )
+                {
+                    let info = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                                .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].action))
+                        })
+                        .flatten();
+                    if let Some((env_idx, new_action)) = info
+                        && new_action != old_action
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetEnvelopeActionCommand::new(
+                                target,
+                                env_idx,
                                 old_action,
                                 new_action,
                             ));

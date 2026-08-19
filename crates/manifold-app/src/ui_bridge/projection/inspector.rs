@@ -1244,6 +1244,19 @@ pub(crate) fn build_card_modulation(
             row.envelope_active = true;
             row.target_norm = env.target_normalized;
             row.env_decay = env.decay_beats;
+            row.envelope_action_idx = match env.action {
+                manifold_core::audio_mod::TriggerAction::Continuous => 0,
+                manifold_core::audio_mod::TriggerAction::Step { .. } => 1,
+                manifold_core::audio_mod::TriggerAction::Random => 2,
+            };
+            if let manifold_core::audio_mod::TriggerAction::Step { amount, wrap } = env.action {
+                row.envelope_step_amount = amount;
+                row.envelope_wrap_idx = match wrap {
+                    manifold_core::audio_mod::WrapMode::Wrap => 0,
+                    manifold_core::audio_mod::WrapMode::Bounce => 1,
+                    manifold_core::audio_mod::WrapMode::Clamp => 2,
+                };
+            }
         }
     }
     if let Some(ref lanes) = inst.automation_lanes {
@@ -1439,6 +1452,9 @@ pub(crate) fn row_modulation_for_id(
         envelope_active: row.envelope_active,
         target_norm: row.target_norm,
         env_decay: row.env_decay,
+        envelope_action_idx: row.envelope_action_idx,
+        envelope_step_amount: row.envelope_step_amount,
+        envelope_wrap_idx: row.envelope_wrap_idx,
         automation_active: row.automation_active,
         automation_overridden: row.automation_overridden,
         audio_active: audio_row.active,

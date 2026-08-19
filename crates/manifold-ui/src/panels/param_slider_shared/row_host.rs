@@ -189,10 +189,29 @@ impl RowHost {
             }
         }
         if let Some(c) = &self.envelope_config_ids[i] {
-            self.row_index.insert(tree.widget_of(c.decay_slider.track), i, RowRole::EnvelopeConfig);
-            self.row_index.insert(tree.widget_of(c.decay_slider.value_text), i, RowRole::EnvelopeConfig);
-            if let Some(l) = c.decay_slider.label {
-                self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
+            if let Some(ds) = &c.decay_slider {
+                self.row_index.insert(tree.widget_of(ds.track), i, RowRole::EnvelopeConfig);
+                self.row_index.insert(tree.widget_of(ds.value_text), i, RowRole::EnvelopeConfig);
+                if let Some(l) = ds.label {
+                    self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
+                }
+            }
+            if let Some(action_btn_ids) = &c.action_btn_ids {
+                for &b in action_btn_ids {
+                    self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
+                }
+            }
+            if let Some(step_slider) = &c.step_slider {
+                self.row_index.insert(tree.widget_of(step_slider.track), i, RowRole::EnvelopeConfig);
+                self.row_index.insert(tree.widget_of(step_slider.value_text), i, RowRole::EnvelopeConfig);
+                if let Some(l) = step_slider.label {
+                    self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
+                }
+            }
+            if let Some(wrap_btn_ids) = &c.wrap_btn_ids {
+                for &b in wrap_btn_ids {
+                    self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
+                }
             }
         }
         if let Some(c) = &self.ableton_config_ids[i] {
@@ -264,7 +283,12 @@ impl RowHost {
             }
         }
         for cfg in self.envelope_config_ids.iter().flatten() {
-            BitmapSlider::register_track_reset(&cfg.decay_slider, &cfg.decay_reset, intents);
+            if let Some((ds, dr)) = cfg.decay_slider.as_ref().zip(cfg.decay_reset.as_ref()) {
+                BitmapSlider::register_track_reset(ds, dr, intents);
+            }
+            if let Some((step_slider, step_reset)) = cfg.step_slider.as_ref().zip(cfg.step_reset.as_ref()) {
+                BitmapSlider::register_track_reset(step_slider, step_reset, intents);
+            }
         }
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
@@ -565,10 +589,26 @@ impl RowHost {
                     None => Vec::new(),
                 }
             }
-            // The Decay slider's own click (drag start / value-cell type-in)
+            // The Decay/Step slider's own click (drag start / value-cell type-in)
             // carries no left-click action — matches the old gauntlet, which
-            // never checked envelope-config nodes in `handle_click`.
-            RowRole::EnvelopeConfig => Vec::new(),
+            // never checked envelope-config nodes in `handle_click`. Action/Wrap
+            // button clicks are resolved below.
+            RowRole::EnvelopeConfig => {
+                let Some(cfg) = &self.envelope_config_ids[row] else {
+                    return Vec::new();
+                };
+                let Some(click) = resolve_envelope_config_click(cfg, node) else {
+                    return Vec::new();
+                };
+                match click {
+                    EnvelopeConfigClick::SelectAction(k) => {
+                        vec![PanelAction::Modulation(ModulationAction::EnvelopeSetActionKind(target, rows[row].id.clone(), k))]
+                    }
+                    EnvelopeConfigClick::SelectWrap(w) => {
+                        vec![PanelAction::Modulation(ModulationAction::EnvelopeSetWrap(target, rows[row].id.clone(), w))]
+                    }
+                }
+            }
             RowRole::AudioConfig => {
                 let Some((dids, send_count)) = self.audio_configs[row].as_ref() else {
                     return Vec::new();
