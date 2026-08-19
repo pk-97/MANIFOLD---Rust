@@ -1,6 +1,6 @@
 # UI Responsiveness Under Load — keep the instrument playable when the render craters
 
-**Status:** APPROVED design, not built · 2026-08-19 · k3 (lead)
+**Status:** IN PROGRESS — P1+P2 built on `feat/ui-responsiveness-under-load` 2026-08-19, all gates green (nextest 340, gpu-proofs 1924, RT noise within ceilings). Owed: post-build profiler numbers (`present.next_drawable` p95 under RT load) + Peter's L4 click-script, then land.
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
