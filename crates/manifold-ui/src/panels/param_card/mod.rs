@@ -2241,6 +2241,59 @@ mod tests {
     }
 
     #[test]
+    fn custom_matrix_open_survives_per_frame_reconfigure() {
+        // The Listen row's "Custom" cell flips the session-only
+        // `audio_matrix_open` flag; the next frame's `configure` used to
+        // re-allocate `ParamCardState` wholesale and wipe it, so the matrix
+        // never opened. This is that wipe, replayed.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_audio_shape_armed());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let (custom_id, closed_count) = {
+            let (dids, send_count) = panel.row_host.audio_configs[0].as_ref().unwrap();
+            let ms = &panel.state.mod_state;
+            let current = crate::types::AudioFeature::new(
+                audio_kind_from_index(ms.audio_kind_idx.first().copied().unwrap_or(0) as usize),
+                audio_band_from_index(ms.audio_band_idx.first().copied().unwrap_or(0) as usize),
+            );
+            let chip_count = trigger_source_chips(current).len();
+            (dids.button_ids()[*send_count + chip_count], dids.button_count())
+        };
+        // The button is hittable at its own center (not shadowed by the card).
+        let r = tree.get_bounds(custom_id);
+        assert_eq!(
+            tree.hit_test(Vec2::new(r.x + r.width * 0.5, r.y + r.height * 0.5)),
+            Some(custom_id),
+            "Custom cell must win the hit test at its center"
+        );
+
+        let actions = panel.handle_click(custom_id, &tree);
+        assert!(
+            panel.state.mod_state.audio_matrix_open[0],
+            "Custom click opens the matrix; actions={actions:?}"
+        );
+
+        // The per-frame reconfigure must preserve the flag...
+        panel.configure(&effect_config_with_audio_shape_armed());
+        assert!(
+            panel.state.mod_state.audio_matrix_open[0],
+            "configure must not wipe the session-only matrix flag"
+        );
+        // ...and the rebuilt drawer carries the Feature/Band matrix rows:
+        // 8 kind buttons + 4 band buttons more than the closed drawer.
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let open_count = panel.row_host.audio_configs[0].as_ref().unwrap().0.button_count();
+        assert_eq!(
+            open_count,
+            closed_count + 12,
+            "open matrix adds the 8 Feature + 4 Band buttons"
+        );
+    }
+
+    #[test]
     fn pinning_step_amount_drag_begin_track_end() {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();

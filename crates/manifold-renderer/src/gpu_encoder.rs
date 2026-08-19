@@ -15,6 +15,10 @@ pub struct GpuEncoder<'a> {
     /// Shared-memory uniform arena for generator uniform data.
     /// Owned by GeneratorRenderer, set during render_all().
     pub uniform_arena: Option<*mut crate::uniform_arena::UniformArena>,
+    /// When true, the pipeline may split its command buffer mid-encode with
+    /// [`Self::checkpoint`]. Always false for profiled frames so per-buffer
+    /// dispatch timestamps stay monolithic (UI_RESPONSIVENESS_UNDER_LOAD D5).
+    pub chunking_enabled: bool,
 }
 
 // Safety: GpuEncoder is only used within a single frame on the content thread.
@@ -30,6 +34,7 @@ impl<'a> GpuEncoder<'a> {
             device,
             pool: None,
             uniform_arena: None,
+            chunking_enabled: false,
         }
     }
 
@@ -44,6 +49,15 @@ impl<'a> GpuEncoder<'a> {
             device,
             pool: Some(pool),
             uniform_arena: None,
+            chunking_enabled: false,
+        }
+    }
+
+    /// Split the underlying Metal command buffer if chunking is enabled this
+    /// frame. No-op otherwise (UI_RESPONSIVENESS_UNDER_LOAD D4).
+    pub fn checkpoint(&mut self) {
+        if self.chunking_enabled {
+            self.native_enc.commit_and_continue(self.device);
         }
     }
 

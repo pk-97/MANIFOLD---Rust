@@ -1726,6 +1726,7 @@ impl LayerCompositor {
     fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame, any_solo: bool) {
         self.uniform_arena.reset();
         self.generate_layers(gpu, frame, any_solo);
+        gpu.checkpoint();
         // Route LED-flagged layers BEFORE folding groups so child layers inside
         // a group route via their own blit_to_led flag (the group's flag controls
         // only the screen-output blend, not LED routing).
@@ -1737,6 +1738,7 @@ impl LayerCompositor {
         self.blend_layers_to_led(gpu, pre_fold_outputs, frame);
 
         self.fold_groups(gpu, frame);
+        gpu.checkpoint();
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
         // by effect chains, layer bufs, or clip render targets — all valid for
         // the frame duration. Using a raw pointer avoids a split-borrow conflict

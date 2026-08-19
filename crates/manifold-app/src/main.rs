@@ -42,10 +42,9 @@ mod graph_dump;
 // mode) AND the `perf-soak` xtask binary path (a real, non-test caller), so
 // it lives outside `#[cfg(test)]` itself. Gated so a plain non-test build
 // with only `journey-proofs` on doesn't compile a module with zero callers
-// (dead_code) — `perf-soak` always wants it; `journey-proofs` only wants it
-// under `cfg(test)`, matching where its own callers (`journey_proof.rs`,
-// `bug035_verify.rs`, `bug037_verify.rs`) actually live.
-#[cfg(all(target_os = "macos", any(feature = "perf-soak", all(feature = "journey-proofs", test))))]
+// (dead_code) — `perf-soak` always wants it; tests and `journey-proofs`
+// want it under `cfg(test)`.
+#[cfg(all(target_os = "macos", any(feature = "perf-soak", test)))]
 pub(crate) mod headless_harness;
 mod import_responsiveness_verify;
 mod import_worker;
