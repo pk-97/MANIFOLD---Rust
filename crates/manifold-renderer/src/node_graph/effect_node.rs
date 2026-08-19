@@ -1255,6 +1255,17 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Input port names whose unwired fallback in `run()` reads the frame clock
+    /// (`ctx.time`). When a fusable atom declares a port here, the freeze
+    /// compiler treats the corresponding uniform member as frame-derived IF the
+    /// port is unwired in a given def, so the fused kernel recomputes it every
+    /// frame instead of baking the param default. A wired port is a normal
+    /// uniform member (wire wins). Default empty; the macro forwards
+    /// `P::FRAME_TIME_INPUTS`.
+    fn frame_time_inputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Output port names written via `atomicAdd` (scatter accumulators) rather
     /// than a coincident `out[idx] = body(...)` element write. The buffer fusion
     /// finder keeps these atoms boundaries (the multi-atom codegen threads

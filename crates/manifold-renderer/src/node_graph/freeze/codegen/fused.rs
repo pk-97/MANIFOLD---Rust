@@ -19,6 +19,16 @@ struct FnBlock {
     text: String,
 }
 
+/// Whether a derived-uniform entry is ALSO a declared param of this region
+/// member (the frame-time-input case). Such values live in the param block at
+/// their original struct position and are passed to the body at their param
+/// position, so the trailing derived-field/derived-arg emission must skip
+/// them (the derived marker still covers the field, so the generic pack skips
+/// it and the recompute refreshes it).
+fn is_param_derived(node: &RegionNode<'_>, derived_name: &str) -> bool {
+    node.params.iter().any(|p| p.name.as_ref() == derived_name)
+}
+
 /// Split a body fragment into its top-level declaration *prelude* (any `const` /
 /// `struct` / `alias` / `override` the body declares before its first function)
 /// and its `fn` blocks (helpers + `fn body`). The standalone path emits a body
@@ -343,6 +353,13 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     for (i, node) in region.nodes.iter().enumerate() {
         for d in node.derived_uniforms {
             let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            // A frame-time input that is ALSO a declared param is emitted in the
+            // param block at its original position; emitting it again here would
+            // duplicate the struct field. The derived-uniform marker still covers
+            // it so the generic pack skips it and the recompute refreshes it.
+            if node.params.iter().any(|p| p.name.as_ref() == dname) {
+                continue;
+            }
             if dty == "vec3" {
                 // A vec3 derived field expands to three f32 fields, matching the
                 // standalone packing (a camera-basis atom, e.g. a future
@@ -607,6 +624,12 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         // standalone path uses); a vec3 is reassembled from its three f32 fields.
         for d in node.derived_uniforms {
             let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            // A frame-time input that is ALSO a declared param is passed at its
+            // param position above; pushing it again here would duplicate the
+            // body arg (the derived marker still refreshes the shared field).
+            if is_param_derived(node, dname) {
+                continue;
+            }
             if dty == "vec3" {
                 args.push(format!(
                     "vec3<f32>(params.n{i}_{dname}_x, params.n{i}_{dname}_y, params.n{i}_{dname}_z)"
@@ -859,6 +882,13 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     for (i, node) in region.nodes.iter().enumerate() {
         for d in node.derived_uniforms {
             let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            // A frame-time input that is ALSO a declared param is emitted in the
+            // param block at its original position; emitting it again here would
+            // duplicate the struct field. The derived-uniform marker still covers
+            // it so the generic pack skips it and the recompute refreshes it.
+            if node.params.iter().any(|p| p.name.as_ref() == dname) {
+                continue;
+            }
             if dty == "vec3" {
                 writeln!(struct_body, "    n{i}_{dname}_x: f32,").unwrap();
                 writeln!(struct_body, "    n{i}_{dname}_y: f32,").unwrap();
@@ -1300,6 +1330,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         // keeping `params.n{i}_<name>` refreshed every frame.
         for d in node.derived_uniforms {
             let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            // A frame-time input that is ALSO a declared param is passed at its
+            // param position above; pushing it again here would duplicate the
+            // body arg (the derived marker still refreshes the shared field).
+            if is_param_derived(node, dname) {
+                continue;
+            }
             if dty == "vec3" {
                 args.push(format!(
                     "vec3<f32>(params.n{i}_{dname}_x, params.n{i}_{dname}_y, params.n{i}_{dname}_z)"

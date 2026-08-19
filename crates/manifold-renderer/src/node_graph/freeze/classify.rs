@@ -712,4 +712,75 @@ mod tests {
         use super::InputAccess;
         assert!(InputAccess::BufferIndex.is_gather());
     }
+
+    /// BUG-z3l6 fail-closed source scan: any fusable primitive whose `run()` reads
+    /// `ctx.time` must declare either `derived_uniforms` (frame-derived uniforms)
+    /// or `frame_time_inputs` (ports whose unwired fallback is the frame clock).
+    /// Without the declaration, the fused kernel silently bakes the param default
+    /// and the effect freezes in performance mode.
+    #[test]
+    fn every_fusable_time_reading_atom_declares_frame_time_or_derived() {
+        use crate::node_graph::PrimitiveRegistry;
+        use std::fs::{read_dir, read_to_string};
+        use std::path::Path;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut violations: Vec<String> = Vec::new();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+
+        for entry in read_dir(dir).expect("read primitives dir") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = read_to_string(&path).expect("read source");
+            let Some(type_id) = extract_primitive_type_id(&source) else {
+                continue;
+            };
+            if type_id.starts_with("node.__") {
+                continue;
+            }
+            let Some(run_start) = source.find("fn run(&mut self") else {
+                continue;
+            };
+            let run_end = source[run_start..]
+                .find("#[cfg(test)]")
+                .map(|i| run_start + i)
+                .unwrap_or(source.len());
+            let run_body = &source[run_start..run_end];
+            if !run_body.contains("ctx.time") {
+                continue;
+            }
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            if !node.fusion_kind().is_fusable() {
+                continue;
+            }
+            if node.derived_uniforms().is_empty() && node.frame_time_inputs().is_empty() {
+                violations.push(format!(
+                    "{type_id} ({}) reads ctx.time in run(), is fusable, \
+                     but declares neither derived_uniforms nor frame_time_inputs",
+                    path.display()
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "frame-time fusion contract violations:\n  {}",
+            violations.join("\n  ")
+        );
+    }
+
+    fn extract_primitive_type_id(source: &str) -> Option<&str> {
+        let idx = source.find("type_id:")? + "type_id:".len();
+        let rest = source[idx..].trim_start();
+        if !rest.starts_with('"') {
+            return None;
+        }
+        let rest = &rest[1..];
+        let end = rest.find('"')?;
+        Some(&rest[..end])
+    }
 }

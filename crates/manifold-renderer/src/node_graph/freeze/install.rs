@@ -1702,6 +1702,7 @@ pub(crate) fn fuse_canonical_def_masked(
         struct BuiltMember {
             body: std::borrow::Cow<'static, str>,
             derived_camera_ext: Option<usize>,
+            effective_derived: Vec<&'static str>,
         }
         let mut node_keepalive: Vec<Box<dyn crate::node_graph::effect_node::EffectNode>> =
             Vec::with_capacity(all_members.len());
@@ -1716,12 +1717,29 @@ pub(crate) fn fuse_canonical_def_masked(
             // a per-fuse-formatted `String`) — own it, no leak needed.
             let body = crate::node_graph::freeze::region::substituted_body(node.as_ref(), doc_node)?;
             let derived = node.derived_uniforms();
+            // D7/P0 amendment: an input port whose unwired fallback is the frame
+            // clock must be recomputed every frame in the fused kernel, exactly
+            // like a `derived_uniforms()` field. If it is wired in this def,
+            // it stays a normal uniform member (wire wins, matching `run()`).
+            let mut effective_derived: Vec<&'static str> = derived.to_vec();
+            for &ft_name in node.frame_time_inputs() {
+                // def.wires is the flattened wiring, so a group-interface wire
+                // lands here with to_node == the inner doc id (the same lookup
+                // the control-wire re-anchoring below uses).
+                let wired = def
+                    .wires
+                    .iter()
+                    .any(|w| w.to_node == member.doc_id && w.to_port == ft_name);
+                if !wired {
+                    effective_derived.push(ft_name);
+                }
+            }
             // D7/P0: a member with declared derived uniforms must have a
             // registered recompute or the whole region bails to unfused — the
             // fail-closed contract the deleted install-time name whitelist had
             // (an unrecognized name used to `return None`; an unregistered
             // type_id does the same now, data-driven instead of name-matched).
-            if !derived.is_empty()
+            if !effective_derived.is_empty()
                 && !crate::node_graph::freeze::derived_uniform_registry::has_recompute(
                     &doc_node.type_id,
                 )
@@ -1733,7 +1751,7 @@ pub(crate) fn fuse_canonical_def_masked(
             // across members feeding the same producer wire). A member with
             // derived_uniforms but no wired Camera port (the whole time-family)
             // needs no camera routing — `derived_camera_ext` stays `None`.
-            let derived_camera_ext = if derived.is_empty() {
+            let derived_camera_ext = if effective_derived.is_empty() {
                 None
             } else {
                 let camera_wire = node
@@ -1760,7 +1778,7 @@ pub(crate) fn fuse_canonical_def_masked(
                     None => None,
                 }
             };
-            built.push(BuiltMember { body, derived_camera_ext });
+            built.push(BuiltMember { body, derived_camera_ext, effective_derived });
             node_keepalive.push(node);
         }
         // Pass 2: `node_keepalive` has every member's node, fully populated —
@@ -1792,7 +1810,7 @@ pub(crate) fn fuse_canonical_def_masked(
                 node_inputs: node.inputs(),
                 node_outputs: node.outputs(),
                 node_includes: node.wgsl_includes(),
-                derived_uniforms: node.derived_uniforms(),
+                derived_uniforms: built[idx].effective_derived.as_slice(),
                 type_id: doc_node.type_id.clone(),
                 derived_camera_ext: built[idx].derived_camera_ext,
                 output_storage: resolve_output_storage(doc_node, node.as_ref()),
@@ -1883,6 +1901,15 @@ pub(crate) fn fuse_canonical_def_masked(
             let stable = resolve_node_id(doc_node);
             for p in node.parameters() {
                 let field = format!("n{idx}_{}", p.name);
+
+                // Frame-derived inputs (e.g. unwired `time` whose fallback is the
+                // frame clock) are not seeded as normal params: the fused kernel
+                // has a derived-uniform field instead, refreshed every frame. A
+                // WIRED declared frame-time input never reaches this branch because
+                // `effective_derived` excluded it.
+                if built[idx].effective_derived.iter().any(|d| *d == p.name.as_ref()) {
+                    continue;
+                }
 
                 // Vec3/Vec4/Color (P5/D4 lift): the codegen field is split into
                 // 3/4 namespaced scalar sub-fields (`field_x`/`_y`/`_z`[`_w`]) —
@@ -2032,12 +2059,29 @@ pub(crate) fn fuse_canonical_def_masked(
                 .filter(|(doc, ..)| *doc == fused_doc)
                 .map(|(.., field)| field.as_str())
                 .collect();
+            // Frame-time inputs are always dynamic, even when unwired (the fused
+            // kernel recomputes them from the frame clock). Never bake them into
+            // a specialized const variant.
+            let frame_time_fields: AHashSet<String> = all_members
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, _member)| {
+                    let node = &node_keepalive[idx];
+                    node.frame_time_inputs().iter().map(move |&name| {
+                        format!("n{idx}_{name}")
+                    })
+                })
+                .collect();
             let mut markers = String::new();
             for field in fused_params.keys() {
                 // Skip in-graph control-wired fields AND outer-card binding
                 // targets: both are dynamic, so baking either thrashes the
                 // pipeline cache on every value change (the slider-drag stutter).
-                if !controlled.contains(field.as_str()) && !bound_fields.contains(field.as_str()) {
+                // Also skip frame-time fields — they are always live.
+                if !controlled.contains(field.as_str())
+                    && !bound_fields.contains(field.as_str())
+                    && !frame_time_fields.contains(field)
+                {
                     markers.push_str(&Marker::StaticParam { field: field.clone() }.emit());
                     markers.push('\n');
                 }

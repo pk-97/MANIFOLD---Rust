@@ -192,6 +192,14 @@ pub trait PrimitiveSpec: Send {
     /// the macro's `derived_uniforms:` field.
     const DERIVED_UNIFORMS: &'static [&'static str] = &[];
 
+    /// Input ports whose unwired fallback in `run()` is the frame clock
+    /// (`ctx.time`). When this primitive fuses and the port is unwired, the
+    /// freeze compiler promotes the corresponding uniform member to a derived
+    /// uniform recomputed every frame; a wired port stays a normal uniform
+    /// member (wire wins). Default empty. Set via the macro's
+    /// `frame_time_inputs:` field.
+    const FRAME_TIME_INPUTS: &'static [&'static str] = &[];
+
     /// Shared WGSL library source the generated kernel must prepend before the
     /// `wgsl_body` (e.g. `noise_common.wgsl`'s `simplex3d`). Each entry is the
     /// full source text (typically `include_str!`). The buffer standalone codegen
@@ -786,6 +794,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn derived_uniforms(&self) -> &'static [&'static str] {
         P::DERIVED_UNIFORMS
     }
+    fn frame_time_inputs(&self) -> &'static [&'static str] {
+        P::FRAME_TIME_INPUTS
+    }
     fn atomic_outputs(&self) -> &'static [&'static str] {
         P::ATOMIC_OUTPUTS
     }
@@ -906,6 +917,7 @@ macro_rules! primitive {
         $( stencil_fetch: $stencil:literal, )?
         $( wgsl_specialization: [ $(($tok:literal, $tok_param:literal)),* $(,)? ], )?
         $( derived_uniforms: [ $($derived:literal),* $(,)? ], )?
+        $( frame_time_inputs: [ $($fti:literal),* $(,)? ], )?
         $( wgsl_includes: [ $($inc:expr),* $(,)? ], )?
         $( atomic_outputs: [ $($atomic_out:literal),* $(,)? ], )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
@@ -972,6 +984,7 @@ macro_rules! primitive {
             $( const WGSL_SPECIALIZATION: &'static [(&'static str, &'static str)] =
                 &[ $(($tok, $tok_param)),* ]; )?
             $( const DERIVED_UNIFORMS: &'static [&'static str] = &[ $($derived),* ]; )?
+            $( const FRAME_TIME_INPUTS: &'static [&'static str] = &[ $($fti),* ]; )?
             $( const WGSL_INCLUDES: &'static [&'static str] = &[ $($inc),* ]; )?
             $( const ATOMIC_OUTPUTS: &'static [&'static str] = &[ $($atomic_out),* ]; )?
 

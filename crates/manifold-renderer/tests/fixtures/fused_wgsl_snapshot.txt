@@ -794,7 +794,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 === effect:DigitalDrift node:18 ===
 // @static_param: n0_motion
 // @static_param: n0_scanline
-// @static_param: n0_time
 // @static_param: n1_lacunarity
 // @static_param: n1_octaves
 // @static_param: n1_persistence
@@ -851,6 +850,7 @@ struct Params {
     _pad1: u32,
 }
 
+// @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -1585,8 +1585,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 === effect:Glitch node:15 ===
 // @static_param: n0_bands
 // @static_param: n0_motion
-// @static_param: n0_time
-// @static_param: n1_time
 // @static_param: n2_amount
 // @static_param: n2_mode
 // @static_param: n3_mode
@@ -1617,6 +1615,8 @@ struct Params {
     _pad2: u32,
 }
 
+// @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
+// @derived_uniform_member: n1_time words=1 node.block_displace_field
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -2987,7 +2987,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 === effect:Watercolor node:18 ===
 // @static_param: n0_resolution
-// @static_param: n0_time
 // @static_param: n0_warp_scale
 // @static_param: n0_z_scale
 // @static_param: n1_offset
@@ -3003,6 +3002,7 @@ struct Params {
     _pad1: u32,
 }
 
+// @derived_uniform_member: n0_time words=1 node.flow_field_noise
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var dst_0: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var dst_1: texture_storage_2d<rgba16float, write>;
