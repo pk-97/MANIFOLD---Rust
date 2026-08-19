@@ -166,7 +166,38 @@ pub(crate) enum AudioConfigClick {
 }
 
 
-/// Resolve a clicked node against ONE row's audio-mod drawer. Flat index
+/// A click inside ONE row's envelope (T) drawer: the Action segmented row
+/// (Continuous/Step/Random) and, while Step is armed, the Wrap row.
+pub(crate) enum EnvelopeConfigClick {
+    SelectAction(usize),
+    SelectWrap(usize),
+}
+
+
+/// Resolve a clicked node against ONE row's envelope drawer. The drawer holds
+/// typed id bundles, so this is a direct membership test rather than a flat
+/// index walk. Mirrors `AudioConfigClick`'s shape for `PanelAction`'s
+/// `EnvelopeSetActionKind` / `EnvelopeSetWrap` family.
+pub(crate) fn resolve_envelope_config_click(
+    cfg: &crate::panels::param_slider_shared::EnvelopeConfigIds,
+    node_id: NodeId,
+) -> Option<EnvelopeConfigClick> {
+    if let Some(action_btn_ids) = &cfg.action_btn_ids {
+        for (k, &id) in action_btn_ids.iter().enumerate() {
+            if id == node_id {
+                return Some(EnvelopeConfigClick::SelectAction(k));
+            }
+        }
+    }
+    if let Some(wrap_btn_ids) = &cfg.wrap_btn_ids {
+        for (k, &id) in wrap_btn_ids.iter().enumerate() {
+            if id == node_id {
+                return Some(EnvelopeConfigClick::SelectWrap(k));
+            }
+        }
+    }
+    None
+}
 /// layout: sends, the Listen chips (`trigger_source_chips(current)` + the
 /// trailing "Custom" cell), then — only while the matrix is open — the
 /// Feature and Band rows, then — only where shaping is offered (every target

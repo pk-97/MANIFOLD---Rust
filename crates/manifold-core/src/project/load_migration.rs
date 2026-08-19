@@ -55,6 +55,15 @@ impl Project {
         // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2.
         self.clear_legacy_rate_on_flags();
 
+        // PARAM_STEP_ACTIONS migration: per-instance `ParameterAudioMod`s whose
+        // action is Step/Random and whose trigger-mode counts the clip edge
+        // (`ClipEdge` or `Both`) move that clip-edge half onto a new
+        // `ParamEnvelope` on the same instance+param. `Both` becomes `Transient`
+        // on the mod (audio transients only) and a parallel envelope (clip edges
+        // only). Continuous is untouched. See `docs/AUDIO_MODULATION_DESIGN.md`
+        // section 9 U2/D3.
+        self.migrate_step_random_audio_mods_to_envelopes();
+
         // Validate tempo map data
         self.tempo_map.ensure_valid();
         self.tempo_map
@@ -226,7 +235,71 @@ impl Project {
         }
     }
 
-    /// Stamp `node_id == handle` on every graph-override node whose id is
+    /// PARAM_STEP_ACTIONS load migration: any `ParameterAudioMod` armed to
+    /// Step/Random whose `trigger_mode` counts clip edges gets its clip-edge
+    /// half moved onto a new `ParamEnvelope`. `ClipEdge` removes the mod;
+    /// `Both` narrows the mod to `Transient` only and creates the envelope.
+    /// Continuous audio mods are untouched. Idempotent: post-migration files
+    /// have no `ClipEdge` Step/Random mods to migrate.
+    fn migrate_step_random_audio_mods_to_envelopes(&mut self) {
+        let mut migrated = 0usize;
+        self.for_each_preset_instance_mut(|fx| {
+            let Some(mods) = fx.audio_mods.as_mut() else { return };
+            let existing_env_params: std::collections::HashSet<_> = fx
+                .envelopes
+                .iter()
+                .flat_map(|es| es.iter().map(|e| e.param_id.clone()))
+                .collect();
+            #[derive(Clone)]
+            struct Move {
+                param_id: crate::effects::ParamId,
+                enabled: bool,
+                action: crate::audio_mod::TriggerAction,
+                keep_mod_as_transient: bool,
+            }
+            let mut moves: Vec<Move> = Vec::new();
+            mods.retain(|m| {
+                let wants_clip = m
+                    .trigger_mode
+                    .is_some_and(|mode| mode.wants_clip_edge());
+                let step_random = !matches!(m.action, crate::audio_mod::TriggerAction::Continuous);
+                if !wants_clip || !step_random {
+                    return true;
+                }
+                let keep = m.trigger_mode == Some(crate::audio_trigger::TriggerFireMode::Both);
+                moves.push(Move {
+                    param_id: m.param_id.clone(),
+                    enabled: m.enabled,
+                    action: m.action,
+                    keep_mod_as_transient: keep,
+                });
+                migrated += 1;
+                keep
+            });
+            for mv in &moves {
+                if existing_env_params.contains(&mv.param_id) {
+                    continue;
+                }
+                let mut env = crate::effects::ParamEnvelope::new(mv.param_id.clone());
+                env.enabled = mv.enabled;
+                env.action = mv.action;
+                fx.envelopes.get_or_insert_with(Vec::new).push(env);
+            }
+            // If we kept the mod (Both), narrow its trigger mode to Transient.
+            for m in mods.iter_mut() {
+                if moves.iter().any(|mv| mv.param_id == m.param_id && mv.keep_mod_as_transient) {
+                    m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::Transient);
+                }
+            }
+        });
+        if migrated > 0 {
+            eprintln!(
+                "[Migration] moved clip-edge Step/Random audio-mod firing to envelopes on \
+                 {migrated} config(s) (PARAM_STEP_ACTIONS)"
+            );
+        }
+    }
+
     /// empty (a pre-node-id document). Walks `PresetInstance.graph` on
     /// master / layer / clip effects and each layer's `generator_graph`,
     /// recursing into group bodies.
@@ -872,8 +945,13 @@ mod tests {
             target_normalized: 1.0,
             decay_beats: 1.0,
             legacy_param_index: Some(0),
+            action: crate::audio_mod::TriggerAction::Continuous,
             current_level: 0.0,
             was_clip_active: false,
+            prev_active_elapsed: crate::Beats(-1.0),
+            fire_count: 0,
+            step_value: None,
+            step_dir: 1.0,
         }]);
         layer.effects = Some(vec![fx]);
         p.timeline.layers.push(layer);
@@ -1271,5 +1349,112 @@ mod tests {
             !reloaded.timeline.layers[0].clip_triggers[0].shape.rate_of_change,
             "round trip must not resurrect rate_of_change"
         );
+    }
+
+    #[test]
+    fn migrate_step_random_clip_edge_mod_to_envelope() {
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut m = crate::audio_mod::ParameterAudioMod::new(
+            "amount".into(),
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        );
+        m.action = crate::audio_mod::TriggerAction::Step { amount: 0.25, wrap: crate::audio_mod::WrapMode::Clamp };
+        m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::ClipEdge);
+        fx.audio_mods = Some(vec![m]);
+        p.settings.master_effects.push(fx);
+
+        p.migrate_step_random_audio_mods_to_envelopes();
+
+        let fx = &p.settings.master_effects[0];
+        assert!(fx.audio_mods.as_ref().unwrap().is_empty(), "ClipEdge-only mod is removed");
+        let envs = fx.envelopes.as_ref().unwrap();
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].param_id, "amount");
+        assert!(envs[0].enabled);
+        assert!(
+            matches!(envs[0].action, crate::audio_mod::TriggerAction::Step { amount: 0.25, wrap: crate::audio_mod::WrapMode::Clamp }),
+            "envelope carries the mod's action over"
+        );
+    }
+
+    #[test]
+    fn migrate_step_random_both_mod_splits_to_transient_mod_and_envelope() {
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut m = crate::audio_mod::ParameterAudioMod::new(
+            "amount".into(),
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        );
+        m.action = crate::audio_mod::TriggerAction::Random;
+        m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::Both);
+        fx.audio_mods = Some(vec![m]);
+        p.settings.master_effects.push(fx);
+
+        p.migrate_step_random_audio_mods_to_envelopes();
+
+        let fx = &p.settings.master_effects[0];
+        let mods = fx.audio_mods.as_ref().unwrap();
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].trigger_mode, Some(crate::audio_trigger::TriggerFireMode::Transient), "Both narrows to Transient");
+        let envs = fx.envelopes.as_ref().unwrap();
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].param_id, "amount");
+        assert!(matches!(envs[0].action, crate::audio_mod::TriggerAction::Random));
+    }
+
+    #[test]
+    fn migrate_step_random_transient_mod_untouched() {
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut m = crate::audio_mod::ParameterAudioMod::new(
+            "amount".into(),
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        );
+        m.action = crate::audio_mod::TriggerAction::Step { amount: 0.25, wrap: crate::audio_mod::WrapMode::Clamp };
+        m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::Transient);
+        fx.audio_mods = Some(vec![m]);
+        p.settings.master_effects.push(fx);
+
+        p.migrate_step_random_audio_mods_to_envelopes();
+
+        let fx = &p.settings.master_effects[0];
+        assert_eq!(fx.audio_mods.as_ref().unwrap().len(), 1, "Transient-only mod stays");
+        assert!(fx.envelopes.is_none() || fx.envelopes.as_ref().unwrap().is_empty(), "no envelope created");
+    }
+
+    #[test]
+    fn migrate_step_random_ignores_continuous_mod() {
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut m = crate::audio_mod::ParameterAudioMod::new(
+            "amount".into(),
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        );
+        m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::ClipEdge);
+        fx.audio_mods = Some(vec![m]);
+        p.settings.master_effects.push(fx);
+
+        p.migrate_step_random_audio_mods_to_envelopes();
+
+        let fx = &p.settings.master_effects[0];
+        assert_eq!(fx.audio_mods.as_ref().unwrap().len(), 1, "Continuous mod stays");
+        assert!(fx.envelopes.is_none() || fx.envelopes.as_ref().unwrap().is_empty(), "no envelope created for Continuous");
     }
 }

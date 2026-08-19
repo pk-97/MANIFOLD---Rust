@@ -21,7 +21,9 @@ use manifold_editing::commands::audio_mod::{
     SetAudioModSourceCommand, SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
 };
 use manifold_editing::commands::effect_target::DriverTarget;
-use manifold_editing::commands::envelopes::{AddEnvelopeCommand, ToggleEnvelopeEnabledCommand};
+use manifold_editing::commands::envelopes::{
+    AddEnvelopeCommand, SetEnvelopeActionCommand, ToggleEnvelopeEnabledCommand,
+};
 use manifold_ui::{DriverConfigAction, InspectorTab, ModulationAction};
 
 use super::super::DispatchResult;
@@ -372,6 +374,99 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                             Box::new(SetAudioModActionCommand::new(
                                 DriverTarget::from(&target),
                                 param_id.clone(),
+                                old_action,
+                                new_action,
+                            ));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        // PARAM_STEP_ACTIONS D8: the envelope (T) drawer's Action/Amount/Wrap
+        // rows. Entering Step seeds `amount`/`wrap` from the param's own spec.
+        ModulationAction::EnvelopeSetActionKind(gpt, param_id, kind_idx) => {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
+            ) {
+                let param_id = &param_id;
+                let Some((env_info, min, max, whole_numbers)) = ctx.project
+                    .with_preset_graph_mut(&target, |inst| {
+                        let env = inst.envelopes.as_ref().and_then(|es| {
+                            es.iter().position(|e| e.param_id == *param_id)
+                                .map(|idx| (idx, es[idx].action))
+                        });
+                        let spec = inst.params.get(param_id.as_ref());
+                        (
+                            env,
+                            spec.map(|p| p.spec.min).unwrap_or(0.0),
+                            spec.map(|p| p.spec.max).unwrap_or(1.0),
+                            spec.map(|p| p.whole_numbers()).unwrap_or(false),
+                        )
+                    })
+                else {
+                    return DispatchResult::structural();
+                };
+                if let Some((env_idx, old_action)) = env_info {
+                    let new_action = match kind_idx {
+                        1 => match old_action {
+                            manifold_core::audio_mod::TriggerAction::Step { .. } => old_action,
+                            _ => manifold_core::audio_mod::TriggerAction::Step {
+                                amount: manifold_core::audio_mod::default_step_amount(min, max, whole_numbers),
+                                wrap: manifold_core::audio_mod::WrapMode::Wrap,
+                            },
+                        },
+                        2 => manifold_core::audio_mod::TriggerAction::Random,
+                        _ => manifold_core::audio_mod::TriggerAction::Continuous,
+                    };
+                    if new_action != old_action {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetEnvelopeActionCommand::new(
+                                target,
+                                env_idx,
+                                old_action,
+                                new_action,
+                            ));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        // The envelope drawer's Wrap row — only meaningful while Action=Step.
+        ModulationAction::EnvelopeSetWrap(gpt, param_id, wrap_idx) => {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
+            ) {
+                let param_id = &param_id;
+                let env_info = ctx.project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes.as_ref().and_then(|es| {
+                            es.iter()
+                                .position(|e| e.param_id == *param_id)
+                                .map(|idx| (idx, es[idx].action))
+                        })
+                    })
+                    .flatten();
+                if let Some((env_idx, manifold_core::audio_mod::TriggerAction::Step { amount, wrap: old_wrap })) = env_info {
+                    let wrap = match wrap_idx {
+                        1 => manifold_core::audio_mod::WrapMode::Bounce,
+                        2 => manifold_core::audio_mod::WrapMode::Clamp,
+                        _ => manifold_core::audio_mod::WrapMode::Wrap,
+                    };
+                    let new_action = manifold_core::audio_mod::TriggerAction::Step { amount, wrap };
+                    let old_action = manifold_core::audio_mod::TriggerAction::Step { amount, wrap: old_wrap };
+                    if new_action != old_action {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetEnvelopeActionCommand::new(
+                                target,
+                                env_idx,
                                 old_action,
                                 new_action,
                             ));

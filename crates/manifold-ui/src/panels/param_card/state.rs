@@ -159,6 +159,14 @@ pub struct RowMod {
     pub target_norm: f32,
     /// Envelope decay time in beats. Default 1.0.
     pub env_decay: f32,
+    /// Envelope fire ACTION index (`ParamEnvelope.action`, D8), into
+    /// `[Continuous, Step, Random]`.
+    pub envelope_action_idx: i32,
+    /// The Step action's `amount` (D8). Meaningful only while
+    /// `envelope_action_idx == 1`.
+    pub envelope_step_amount: f32,
+    /// The Step action's wrap-mode index (D8), into `[Wrap, Bounce, Clamp]`.
+    pub envelope_wrap_idx: i32,
     /// Driver beat division button index (0-10). -1 if no driver.
     pub driver_beat_div_idx: i32,
     /// Driver waveform index (0-4). -1 if no driver.
@@ -188,6 +196,9 @@ impl Default for RowMod {
             trim_max: 1.0,
             target_norm: 1.0,
             env_decay: 1.0,
+            envelope_action_idx: 0,
+            envelope_step_amount: 1.0,
+            envelope_wrap_idx: 0,
             driver_beat_div_idx: -1,
             driver_waveform_idx: -1,
             driver_reversed: false,

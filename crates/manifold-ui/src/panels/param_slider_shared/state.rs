@@ -29,14 +29,21 @@ pub(crate) struct EnvelopeTargetIds {
 }
 
 
-/// The envelope drawer — a single "Decay" slider (`decay_beats`).
+/// The envelope drawer — the Decay slider plus, for non-toggle/non-trigger
+/// params, the Action row and (while Step) the Amount slider + Wrap row.
 pub(crate) struct EnvelopeConfigIds {
     pub(crate) _container_id: NodeId,
     pub(crate) decay_slider: SliderNodeIds,
-    /// Right-click reset for the Decay slider (the `EnvDecay*` trio) —
-    /// BUG-070 follow-through; this drawer previously had no reset gesture
-    /// at all (`DrawerRow::Slider`'s `reset` field is now required).
+    /// Right-click reset for the Decay slider (the `EnvDecay*` trio).
     pub(crate) decay_reset: PanelAction,
+    /// Action-row button ids (`[Continuous, Step, Random]`), if the row is built.
+    pub(crate) action_btn_ids: Option<[NodeId; AUDIO_ACTION_COUNT]>,
+    /// Amount slider for the Step action, only while Action=Step.
+    pub(crate) step_slider: Option<SliderNodeIds>,
+    /// Right-click reset for the Amount slider.
+    pub(crate) step_reset: Option<PanelAction>,
+    /// Wrap-row button ids (`[Wrap, Bounce, Clamp]`), if the row is built.
+    pub(crate) wrap_btn_ids: Option<[NodeId; AUDIO_WRAP_COUNT]>,
 }
 
 
@@ -86,6 +93,15 @@ pub struct ParamModState {
     pub target_norm: Vec<f32>,
     /// Envelope decay time in beats.
     pub env_decay: Vec<f32>,
+    /// Per-param: envelope action index into `[Continuous, Step, Random]`
+    /// (D8), read off `ParamEnvelope.action`. The T drawer shows the Action row
+    /// (and Amount/Wrap while Step) from this.
+    pub envelope_action_idx: Vec<i32>,
+    /// Per-param: envelope Step action's `amount` (signed, param units).
+    pub envelope_step_amount: Vec<f32>,
+    /// Per-param: envelope Step action's wrap-mode index into `[Wrap, Bounce,
+    /// Clamp]`.
+    pub envelope_wrap_idx: Vec<i32>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -391,6 +407,9 @@ impl ParamModState {
             trim_max: vec![1.0; param_count],
             target_norm: vec![0.5; param_count],
             env_decay: vec![DEFAULT_ENV_DECAY; param_count],
+            envelope_action_idx: vec![0; param_count],
+            envelope_step_amount: vec![1.0; param_count],
+            envelope_wrap_idx: vec![0; param_count],
             driver_beat_div_idx: vec![-1; param_count],
             driver_waveform_idx: vec![-1; param_count],
             driver_reversed: vec![false; param_count],
@@ -467,6 +486,9 @@ impl ParamModState {
             self.trim_max[i] = row.trim_max;
             self.target_norm[i] = row.target_norm;
             self.env_decay[i] = row.env_decay;
+            self.envelope_action_idx[i] = row.envelope_action_idx;
+            self.envelope_step_amount[i] = row.envelope_step_amount;
+            self.envelope_wrap_idx[i] = row.envelope_wrap_idx;
             self.driver_beat_div_idx[i] = row.driver_beat_div_idx;
             self.driver_waveform_idx[i] = row.driver_waveform_idx;
             self.driver_reversed[i] = row.driver_reversed;

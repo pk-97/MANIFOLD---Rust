@@ -489,6 +489,14 @@ pub enum ModulationAction {
     /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
     /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
     AudioModSetWrap(GraphParamTarget, ParamId, usize),
+    /// Set an envelope's fire ACTION (Continuous/Step/Random, D8) — the T
+    /// drawer's Action/Amount/Wrap rows. Index: 0=Continuous, 1=Step, 2=Random.
+    /// Entering Step from a non-Step action seeds `amount`/`wrap` to their D2
+    /// defaults at the dispatch boundary.
+    EnvelopeSetActionKind(GraphParamTarget, ParamId, usize),
+    /// Set an envelope Step action's wrap mode — index into `[Wrap, Bounce,
+    /// Clamp]` (D2), shown only while Action=Step.
+    EnvelopeSetWrap(GraphParamTarget, ParamId, usize),
     // Trim-range, envelope-target, and envelope-decay scrub trios migrated to
     // `PanelAction::Scrub` (`ValueRef::{Trim, EnvelopeTarget, EnvDecay}`,
     // P-I / D4).

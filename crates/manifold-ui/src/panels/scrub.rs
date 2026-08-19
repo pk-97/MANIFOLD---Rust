@@ -110,6 +110,11 @@ pub enum ValueRef {
     /// An envelope decay slider (`decay_beats`) — was
     /// `EnvDecay{Snapshot,Changed,Commit}`.
     EnvDecay(GraphParamTarget, ParamId),
+    /// An envelope Step-action amount slider — the T drawer's Amount row, shown
+    /// only while the envelope is armed to Step. The dragged `amount` rides
+    /// `ScrubValue::Scalar`; the undo baseline is the whole pre-drag
+    /// `TriggerAction`, preserving the current wrap.
+    EnvelopeStepAmount(GraphParamTarget, ParamId),
     /// An audio-mod drawer shaping slider (sensitivity / attack / release) — was
     /// `AudioModShape{Snapshot,ParamChanged,Commit}`. The `AudioShapeParam`
     /// names which of the three scalars this gesture drags; the value rides
