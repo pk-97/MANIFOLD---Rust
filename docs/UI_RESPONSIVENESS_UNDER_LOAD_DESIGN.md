@@ -1,6 +1,6 @@
 # UI Responsiveness Under Load — keep the instrument playable when the render craters
 
-**Status:** IN PROGRESS — P1+P2 built on `feat/ui-responsiveness-under-load` 2026-08-19, all gates green (nextest 340, gpu-proofs 1924, RT noise within ceilings). Owed: post-build profiler numbers (`present.next_drawable` p95 under RT load) + Peter's L4 click-script, then land.
+**Status:** SHIPPED 2026-08-19 — P1 (snapshot publish decoupling) + P2 (commit-and-continue chunking) landed; L4 verified by Peter on a 4K native-RT project at ~10fps: UI stays usable under saturation. Post-build profiler numbers (`present.next_drawable` p95) not captured — superseded by the L4 pass; capture them if chunking's benefit is ever in doubt. Deferred items (section 8, Deferred) unchanged.
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
