@@ -65,6 +65,10 @@ pub struct SharedTextureBridge {
     // the bridge-probe because a later read's retirement covered an earlier
     // read of the same slot.
     reads_in_flight: [AtomicU64; SURFACE_COUNT],
+    /// Content-thread frame of the last `publish_front`. Bridges whose
+    /// publisher can pause (graph-editor previews) use this to stop gating
+    /// once every surface they hold is stale — see `is_reusable_ephemeral`.
+    last_publish_frame: AtomicU64,
 }
 
 /// A UI-side claim on a bridge slot: `slot` was the published front when the
@@ -176,6 +180,16 @@ fn create_rgba16f_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
     }
 }
 
+/// The slot-reuse condition, pure so the gate logic is testable without an
+/// IOSurface. A slot may be overwritten when no new read can start on it
+/// (never published, front moved off, or `quiet_bypass` — the bridge stopped
+/// publishing and every surface it holds is stale) AND no claimed read is
+/// still in flight on the GPU. Reads always gate: only the front-pin is
+/// bypassable.
+fn slot_reusable(published: bool, front_is_slot: bool, reads_in_flight: u64, quiet_bypass: bool) -> bool {
+    (quiet_bypass || !published || !front_is_slot) && reads_in_flight == 0
+}
+
 impl SharedTextureBridge {
     /// Create a new triple-buffered IOSurface bridge at the given dimensions.
     pub fn new(width: u32, height: u32) -> Self {
@@ -199,6 +213,7 @@ impl SharedTextureBridge {
             published: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
             generation: AtomicU64::new(0),
             reads_in_flight: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
+            last_publish_frame: AtomicU64::new(0),
         }
     }
 
@@ -282,9 +297,12 @@ impl SharedTextureBridge {
 
     /// Publish a completed surface as the new front buffer.
     /// Called by the content thread after confirming the GPU finished
-    /// writing to this surface (fence ready).
-    pub fn publish_front(&self, index: u32) {
+    /// writing to this surface (fence ready). `frame` is the content-thread
+    /// frame counter — it stamps `last_publish_frame` for the quiet-bridge
+    /// bypass in `is_reusable_ephemeral`.
+    pub fn publish_front(&self, index: u32, frame: u64) {
         self.published[index as usize].store(true, Ordering::Release);
+        self.last_publish_frame.store(frame, Ordering::Release);
         self.front_index.store(index, Ordering::Release);
     }
 
@@ -325,9 +343,33 @@ impl SharedTextureBridge {
     /// saturation it paces down rather than sampling-and-writing the same
     /// surface on two devices at once.
     pub fn is_reusable(&self, slot: usize) -> bool {
-        let slot_free = !self.published[slot].load(Ordering::Acquire)
-            || self.front_index() as usize != slot;
-        slot_free && self.reads_in_flight[slot].load(Ordering::Acquire) == 0
+        slot_reusable(
+            self.published[slot].load(Ordering::Acquire),
+            self.front_index() as usize == slot,
+            self.reads_in_flight[slot].load(Ordering::Acquire),
+            false,
+        )
+    }
+
+    /// Reuse check for a bridge whose publisher can pause or stop — the
+    /// graph-editor previews (node preview, thumbnail atlas). Unlike the
+    /// main preview they don't publish every frame: the atlas skips frames
+    /// whose dump is empty, and both go silent when the editor closes or the
+    /// watched chain stops running. A pinned front must not gate forever in
+    /// that state — once a full rotation passes with no publish, every
+    /// surface the bridge holds is stale and blocking the show output
+    /// protects nothing (wedged the whole pipeline when the editor closed
+    /// with front on the upcoming write slot). In-flight UI reads still
+    /// gate: a quiet bridge can have a live reader, never a live writer.
+    pub fn is_reusable_ephemeral(&self, slot: usize, frame: u64) -> bool {
+        let quiet = frame.saturating_sub(self.last_publish_frame.load(Ordering::Acquire))
+            >= SURFACE_COUNT as u64;
+        slot_reusable(
+            self.published[slot].load(Ordering::Acquire),
+            self.front_index() as usize == slot,
+            self.reads_in_flight[slot].load(Ordering::Acquire),
+            quiet,
+        )
     }
 
     /// Slot-state dump for the surface-timeout diagnostic (BUG-j8gy): when the
@@ -436,5 +478,38 @@ impl SharedAtlasSurface {
                 manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slot_reusable;
+
+    #[test]
+    fn unpublished_slot_is_reusable_with_front_pinned() {
+        // Startup: front_index starts at 0 before any publish — slot 0 must
+        // not deadlock the first frame.
+        assert!(slot_reusable(false, true, 0, false));
+    }
+
+    #[test]
+    fn published_front_slot_gates_until_front_moves() {
+        assert!(!slot_reusable(true, true, 0, false));
+        assert!(slot_reusable(true, false, 0, false));
+    }
+
+    #[test]
+    fn in_flight_reads_always_gate() {
+        // Even with front moved off — and even on a quiet bridge — a claimed
+        // read not yet retired on the GPU blocks the overwrite.
+        assert!(!slot_reusable(true, false, 1, false));
+        assert!(!slot_reusable(true, true, 1, true));
+    }
+
+    #[test]
+    fn quiet_bridge_front_pin_is_bypassed() {
+        // The editor-closed wedge: published front pinned on the write slot,
+        // no reads in flight, publisher gone — the slot must free up.
+        assert!(slot_reusable(true, true, 0, true));
     }
 }

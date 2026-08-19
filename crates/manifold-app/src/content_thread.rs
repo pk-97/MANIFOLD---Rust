@@ -483,7 +483,7 @@ impl ContentThread {
         state_tx: &Sender<ContentState>,
     ) -> bool {
         // Fast path: surface already ready (99%+ of frames).
-        if self.content_pipeline.is_surface_ready() {
+        if self.content_pipeline.is_surface_ready(self.frame_count) {
             return false;
         }
 
@@ -495,7 +495,7 @@ impl ContentThread {
         // still be in flight even when the content queue's own write is
         // long done. Those retire with a SurfaceReady wake of their own.
         if !self.content_pipeline.register_surface_notify(cmd_tx)
-            && self.content_pipeline.is_surface_ready()
+            && self.content_pipeline.is_surface_ready(self.frame_count)
         {
             return false; // became ready between check and register
         }
@@ -510,7 +510,7 @@ impl ContentThread {
 
         loop {
             // Check if GPU finished.
-            if self.content_pipeline.is_surface_ready() {
+            if self.content_pipeline.is_surface_ready(self.frame_count) {
                 break;
             }
 
