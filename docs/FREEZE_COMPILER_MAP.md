@@ -160,6 +160,23 @@ camera-consuming `flatten_to_camera_plane.rs`). A member whose type_id has no
 registered recompute still fails the region closed, same fail-safe contract
 the old whitelist had.
 
+**Frame-time fallback inputs (`frame_time_inputs`, BUG-z3l6 (glitch-fused-time-freeze)):**
+an atom whose `run()` resolves an unwired scalar input from the frame clock
+(the port-shadow `time` pattern — `block_displace_field`,
+`scanline_jitter_field`, `flow_field_noise`) declares that port in the
+`primitive!`'s `frame_time_inputs:` list and registers a frame-seconds
+recompute. At install, a declared port that is UNWIRED in the def joins the
+member's effective `derived_uniforms` for that region (derived marker →
+generic pack skips it → recompute refreshes it every frame); a WIRED declared
+port stays a normal uniform member (wire wins, matching `run()`). The uniform
+field is emitted at the param's original struct position and passed to the
+body at its param position — never duplicated by the trailing
+derived-field/arg emission, never baked by static-param specialization.
+Without the declaration the fused kernel freezes the value at the param
+default (the Glitch freeze); the classify.rs source scan
+(`every_fusable_time_reading_atom_declares_frame_time_or_derived`) fails CI on
+any fusable atom whose `run()` reads `ctx.time` undeclared.
+
 **Union gates (`partition_regions`):** an edge unions two eligible nodes only
 if: same domain (texture wire, but never *into* a buffer atom — that's a
 gather); coincident-consumed (a gather-consumed wire NEVER unions — the

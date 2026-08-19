@@ -26,7 +26,7 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitives::Gain;
 use crate::node_graph::{
     EffectGraphDefExt, Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId,
-    PrimitiveRegistry, Source,
+    PrimitiveRegistry, Source, StateStore,
 };
 use crate::render_target::RenderTarget;
 use half::f16;
@@ -152,6 +152,55 @@ fn render_graph(
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         exec.execute_frame_with_gpu(graph, plan, frame_time(), &mut gpu);
+    }
+    enc.commit_and_wait_completed();
+
+    let result = RenderTarget::new(device, w, h, FMT, "freeze-graph-result");
+    let out_tex = exec
+        .backend()
+        .texture_2d(out_slot)
+        .expect("graph output texture retained");
+    {
+        let mut e = device.create_encoder("freeze-graph-copy");
+        e.copy_texture_to_texture(out_tex, &result.texture, w, h, 1);
+        e.commit_and_wait_completed();
+    }
+    result
+}
+
+/// Like [`render_graph`], but run the graph at a specific [`FrameTime`] so
+/// tests can prove a fused kernel is NOT freezing its frame-derived inputs.
+fn render_graph_at_time(
+    device: &std::sync::Arc<GpuDevice>,
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    source_res: ResourceId,
+    input: &GpuTexture,
+    output_res: ResourceId,
+    ft: FrameTime,
+) -> RenderTarget {
+    let (w, h) = (input.width, input.height);
+
+    let src_rt = RenderTarget::new(device, w, h, FMT, "freeze-src");
+    {
+        let mut e = device.create_encoder("freeze-src-fill");
+        e.copy_texture_to_texture(input, &src_rt.texture, w, h, 1);
+        e.commit_and_wait_completed();
+    }
+    let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-graph-out");
+
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
+    backend.pre_bind_texture_2d(source_res, src_rt);
+    let out_slot = backend.pre_bind_texture_2d(output_res, out_rt);
+
+    let mut enc = device.create_encoder("freeze-graph-exec");
+    let mut exec = Executor::new(Box::new(backend));
+    // StateStore-aware dispatch: defs carrying a stateful node (Watercolor's
+    // temporal feedback) refuse the plain execute path.
+    let mut state = StateStore::new();
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+        exec.execute_frame_with_state(graph, plan, ft, &mut gpu, &mut state, 0);
     }
     enc.commit_and_wait_completed();
 
@@ -2514,6 +2563,438 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
         r.over_count,
         r.total,
         r.over_fraction()
+    );
+}
+
+/// BUG-z3l6: the fused Glitch kernel must NOT freeze `time`. Render the auto-
+/// fused def at two different frame-clock seconds; the two outputs must differ.
+/// Fails on the buggy path because unwired `time` resolves to the static param
+/// default (0.0) in the fused kernel.
+#[test]
+fn glitch_fused_kernel_animates_over_time() {
+    use super::install::FusedDef;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input(&device, w, h);
+
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Glitch"))
+        .expect("Glitch is a bundled preset");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
+
+    let FusedDef { def: fused_def, retarget, .. } =
+        super::install::fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
+    let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+
+    // Crank the master amount so the effect is visible.
+    let (amount_node, amount_field) = match retarget.get(&("amount_value".to_string(), "value".to_string())) {
+        Some((target_node_id, field)) => (
+            fused_graph
+                .instance_by_node_id(target_node_id)
+                .unwrap_or_else(|| panic!("fused graph missing retargeted amount node")),
+            field.as_str(),
+        ),
+        None => (
+            fused_graph
+                .node_id_by_handle("amount_value")
+                .unwrap_or_else(|| panic!("amount_value must survive if not retargeted")),
+            "value",
+        ),
+    };
+    fused_graph
+        .set_param(amount_node, amount_field, ParamValue::Float(1.0))
+        .unwrap_or_else(|e| panic!("set fused amount: {e:?}"));
+
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let fo_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "system.final_output")
+        .expect("fused def has a final_output")
+        .id;
+    let out_wire = fused_def
+        .wires
+        .iter()
+        .find(|w| w.to_node == fo_doc)
+        .expect("final_output has a producer wire");
+    let producer_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.id == out_wire.from_node)
+        .expect("producer node exists in fused def");
+    let f_out_node = fused_graph
+        .instance_by_node_id(&producer_doc.node_id)
+        .unwrap_or_else(|| panic!("fused graph missing producer instance for final_output"));
+    let f_out = resource_for_output(&fused_plan, f_out_node, &out_wire.from_port);
+
+    let at_0 = render_graph_at_time(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+        FrameTime {
+            seconds: Seconds(0.0),
+            beats: Beats(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        },
+    );
+    let at_1 = render_graph_at_time(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+        FrameTime {
+            seconds: Seconds(1.0),
+            beats: Beats(2.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 60,
+        },
+    );
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &at_0.texture, &at_1.texture, 0.0, 0.0);
+    assert!(
+        r.max_abs > 0.0 || r.over_count > 0,
+        "BUG-z3l6: fused Glitch output is frozen across time (time uniform not recomputed)"
+    );
+}
+
+/// BUG-z3l6: with live `time`, the fused Glitch kernel must respond to a speed
+/// binding. At the same frame clock, speed 1.0 and speed 10.0 must produce
+/// different outputs. Fails on the buggy path because speed*0 == 0 regardless.
+#[test]
+fn glitch_fused_kernel_speed_binding_scales_time() {
+    use super::install::FusedDef;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input(&device, w, h);
+
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Glitch"))
+        .expect("Glitch is a bundled preset");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
+
+    let FusedDef { def: fused_def, retarget, .. } =
+        super::install::fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
+
+    // `speed_value.value` retargets onto a fused field like `amount_value.value`
+    // does; the binding id is "speed" but the retarget key is the TARGET param.
+    let set_speed = |fused_graph: &mut Graph, speed: f32| {
+        let (speed_node, speed_field) = match retarget.get(&("speed_value".to_string(), "value".to_string())) {
+            Some((target_node_id, field)) => (
+                fused_graph
+                    .instance_by_node_id(target_node_id)
+                    .unwrap_or_else(|| panic!("fused graph missing retargeted speed node")),
+                field.as_str(),
+            ),
+            None => (
+                fused_graph
+                    .node_id_by_handle("speed_value")
+                    .unwrap_or_else(|| panic!("speed_value must survive if not retargeted")),
+                "value",
+            ),
+        };
+        fused_graph
+            .set_param(speed_node, speed_field, ParamValue::Float(speed))
+            .unwrap_or_else(|e| panic!("set fused speed: {e:?}"));
+    };
+
+    let make_graph = || {
+        let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+        let (amount_node, amount_field) = match retarget.get(&("amount_value".to_string(), "value".to_string())) {
+            Some((target_node_id, field)) => (
+                fused_graph
+                    .instance_by_node_id(target_node_id)
+                    .unwrap_or_else(|| panic!("fused graph missing retargeted amount node")),
+                field.as_str(),
+            ),
+            None => (
+                fused_graph
+                    .node_id_by_handle("amount_value")
+                    .unwrap_or_else(|| panic!("amount_value must survive if not retargeted")),
+                "value",
+            ),
+        };
+        fused_graph
+            .set_param(amount_node, amount_field, ParamValue::Float(1.0))
+            .unwrap_or_else(|e| panic!("set fused amount: {e:?}"));
+        fused_graph
+    };
+
+    let fused_plan = compile(&make_graph()).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&make_graph(), "system.source"), "out");
+    let fo_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "system.final_output")
+        .expect("fused def has a final_output")
+        .id;
+    let out_wire = fused_def
+        .wires
+        .iter()
+        .find(|w| w.to_node == fo_doc)
+        .expect("final_output has a producer wire");
+    let producer_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.id == out_wire.from_node)
+        .expect("producer node exists in fused def");
+
+    let render_with_speed = |speed: f32| -> RenderTarget {
+        let mut fused_graph = make_graph();
+        set_speed(&mut fused_graph, speed);
+        let fused_plan = compile(&fused_graph).expect("compile fused");
+        let f_out_node = fused_graph
+            .instance_by_node_id(&producer_doc.node_id)
+            .unwrap_or_else(|| panic!("fused graph missing producer instance for final_output"));
+        let f_out = resource_for_output(&fused_plan, f_out_node, &out_wire.from_port);
+        render_graph_at_time(
+            &device.arc(),
+            &mut fused_graph,
+            &fused_plan,
+            f_src,
+            &input,
+            f_out,
+            FrameTime {
+                seconds: Seconds(1.0),
+                beats: Beats(2.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: 60,
+            },
+        )
+    };
+
+    let slow = render_with_speed(1.0);
+    let fast = render_with_speed(10.0);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &slow.texture, &fast.texture, 0.0, 0.0);
+    assert!(
+        r.max_abs > 0.0 || r.over_count > 0,
+        "BUG-z3l6: fused Glitch ignores the speed binding (time uniform not live)"
+    );
+}
+
+/// BUG-z3l6, second shipped victim: Watercolor's `node.flow_field_noise` has an
+/// unwired `time` port and the preset has no `system.generator_input`, so the
+/// fused kernel must supply the frame clock itself. Render the auto-fused def
+/// at two frame-clock seconds; the outputs must differ. Defaults are safe here:
+/// a frozen clock can only make the outputs identical (red), never vacuously
+/// green.
+#[test]
+fn watercolor_fused_kernel_animates_over_time() {
+    use super::install::FusedDef;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input(&device, w, h);
+
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Watercolor"))
+        .expect("Watercolor is a bundled preset");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Watercolor.json");
+
+    let FusedDef { def: fused_def, .. } =
+        super::install::fuse_canonical_def(&def, &registry).expect("Watercolor is fusable once flattened");
+    let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let fo_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "system.final_output")
+        .expect("fused def has a final_output")
+        .id;
+    let out_wire = fused_def
+        .wires
+        .iter()
+        .find(|w| w.to_node == fo_doc)
+        .expect("final_output has a producer wire");
+    let producer_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.id == out_wire.from_node)
+        .expect("producer node exists in fused def");
+    let f_out_node = fused_graph
+        .instance_by_node_id(&producer_doc.node_id)
+        .unwrap_or_else(|| panic!("fused graph missing producer instance for final_output"));
+    let f_out = resource_for_output(&fused_plan, f_out_node, &out_wire.from_port);
+
+    let frame = |t: f64, n: i64| FrameTime {
+        seconds: Seconds(t),
+        beats: Beats(t * 2.0),
+        delta: Seconds(1.0 / 60.0),
+        frame_count: n,
+    };
+    let at_0 = render_graph_at_time(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+        frame(0.0, 0),
+    );
+    let at_1 = render_graph_at_time(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+        frame(1.0, 60),
+    );
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &at_0.texture, &at_1.texture, 0.0, 0.0);
+    assert!(
+        r.max_abs > 0.0 || r.over_count > 0,
+        "BUG-z3l6: fused Watercolor output is frozen across time (flow_field_noise time not recomputed)"
+    );
+}
+
+/// Minimal generator def exercising `node.flow_field_noise` with unwired `time`:
+/// the fused region must recompute `time` every frame. Render at t=0 and t=2;
+/// the outputs must differ. A single Source atom would not form a region, so we
+/// add a downstream pointwise node to meet MIN_REGION_LEN.
+#[test]
+fn flow_field_noise_fused_region_animates_over_time() {
+    use super::install::fuse_generator_def;
+    use crate::node_graph::primitives::{FlowFieldNoise, Gain};
+    use crate::preset_context::PresetContext;
+    use crate::preset_runtime::PresetRuntime;
+    use crate::node_graph::primitive::PrimitiveSpec;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (128u32, 128u32);
+
+    let def = EffectGraphDef {
+        version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_METADATA,
+        name: Some("flow-time".to_string()),
+        description: None,
+        preset_metadata: Default::default(),
+        nodes: vec![
+            manifold_core::effect_graph_def::EffectGraphNode {
+                id: 0,
+                node_id: manifold_core::NodeId::new("gen_in"),
+                type_id: "system.generator_input".to_string(),
+                handle: Some("gen_in".to_string()),
+                params: Default::default(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: Default::default(),
+                output_canvas_scales: Default::default(),
+                group: None,
+            },
+            manifold_core::effect_graph_def::EffectGraphNode {
+                id: 1,
+                node_id: manifold_core::NodeId::new("flow"),
+                type_id: FlowFieldNoise::TYPE_ID.to_string(),
+                handle: Some("flow".to_string()),
+                params: Default::default(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: Default::default(),
+                output_canvas_scales: Default::default(),
+                group: None,
+            },
+            manifold_core::effect_graph_def::EffectGraphNode {
+                id: 2,
+                node_id: manifold_core::NodeId::new("gain"),
+                type_id: Gain::TYPE_ID.to_string(),
+                handle: Some("gain".to_string()),
+                params: Default::default(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: Default::default(),
+                output_canvas_scales: Default::default(),
+                group: None,
+            },
+            manifold_core::effect_graph_def::EffectGraphNode {
+                id: 3,
+                node_id: manifold_core::NodeId::new("final"),
+                type_id: "system.final_output".to_string(),
+                handle: Some("final".to_string()),
+                params: Default::default(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: Default::default(),
+                output_canvas_scales: Default::default(),
+                group: None,
+            },
+        ],
+        wires: vec![
+            manifold_core::effect_graph_def::EffectGraphWire {
+                from_node: 1,
+                from_port: "flow".to_string(),
+                to_node: 2,
+                to_port: "in".to_string(),
+            },
+            manifold_core::effect_graph_def::EffectGraphWire {
+                from_node: 2,
+                from_port: "out".to_string(),
+                to_node: 3,
+                to_port: "in".to_string(),
+            },
+        ],
+    };
+
+    let fused_def = fuse_generator_def(&def, &registry).expect("flow_field_noise + gain fuses");
+
+    let render = |t: f64| -> RenderTarget {
+        let mut g = PresetRuntime::from_def_with_device(fused_def.clone(), &registry, device.arc(), w, h, FMT, None)
+            .expect("generator builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "flow-time-out");
+        let ctx = PresetContext {
+            time: t,
+            beat: t * 2.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: w as f32 / h as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = device.create_encoder("flow-time");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            g.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+        target
+    };
+
+    let at_0 = render(0.0);
+    let at_2 = render(2.0);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &at_0.texture, &at_2.texture, 0.0, 0.0);
+    assert!(
+        r.max_abs > 0.0 || r.over_count > 0,
+        "BUG-z3l6: fused flow_field_noise region is frozen across time"
     );
 }
 

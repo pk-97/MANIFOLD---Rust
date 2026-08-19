@@ -360,7 +360,7 @@ pub struct RegionNode<'a> {
     /// [`Self::derived_camera_ext`] for how `node.wgsl_compute` recomputes their
     /// VALUES every frame — D7/P0, `docs/CINEMATIC_POST_DESIGN.md`). Empty for
     /// atoms with no frame-derived uniforms.
-    pub derived_uniforms: &'static [&'static str],
+    pub derived_uniforms: &'a [&'a str],
     /// This member's own `type_id` (e.g. `"node.euler_step_particles"`) — the
     /// registry key `derived_uniform_registry::recompute` uses every frame to
     /// refresh [`Self::derived_uniforms`]'s uniform fields. Only meaningful when

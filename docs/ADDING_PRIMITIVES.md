@@ -275,6 +275,7 @@ primitive! {
     fusion_kind: <Pointwise|Source|MultiInputCoincident|Boundary>,  // REQUIRED for per-element GPU atoms (freeze/classify.rs)
     wgsl_body: include_str!("shaders/<name>_body.wgsl"),            // the fusable body fragment — REQUIRED with fusion_kind
     input_access: [<Coincident|CoincidentTexel|BufferGather|...>],  // per-input; omit = Coincident. BufferGather when the body reads other indices
+    frame_time_inputs: ["<port>", ...],  // scalar inputs whose UNWIRED fallback in run() is the frame clock (ctx.time) — fused kernel recomputes them per frame
     extra_fields: {
         <field>: <type> = <init expr>,  // additional struct fields beyond pipeline/sampler
         ...
@@ -295,6 +296,7 @@ primitive! {
   - `Channels[permissive]` — opt-in for generic transform operators (`node.rename_channel`, `node.reorder_channels`, etc.) whose input port accepts any Channels producer regardless of signature. The `pub const PERMISSIVE_PRIMITIVE_ALLOWLIST` in `validation.rs` gates which primitives may legitimately use this — see `docs/CHANNEL_TYPE_SYSTEM.md` section 11.4. (Per-port match-mode discipline)
 - Inputs default to `required`; mark optional with the `optional` keyword.
 - **Port-shadows-param convention.** If you declare a scalar input port with the same name as a `ParamDef` (e.g. `gain` in both `inputs:` and `params:`), the wire wins when present, the param is the fallback. Standard pattern for any control-rate modulation. The graph editor disables the expose checkbox + value cell on wire-driven rows automatically.
+- **Frame-clock fallbacks must be declared.** If `run()` resolves an unwired scalar input from `ctx.time` (e.g. `time` defaults to `FrameTime.seconds`), list that port in `frame_time_inputs:` and register a frame-seconds recompute next to the macro (see `block_displace_field.rs`). Unwired, the fused kernel then recomputes the value every frame; wired, the wire wins — same contract as `run()`. Without the declaration the fused kernel silently freezes the value at the param default (BUG-z3l6 (glitch-fused-time-freeze)); the `every_fusable_time_reading_atom_declares_frame_time_or_derived` source scan in `freeze/classify.rs` fails the build on any fusable atom that reads `ctx.time` undeclared.
 - `picker: { label, category }` declares how the palette and effect-card UI surface this primitive. Categories used today: `Color`, `Spatial`, `Stylize`, `Filmic`, `Driver` (texture→scalar bridges), `Math` (scalar arithmetic / LFO / BeatGate), `Source` (constants / generators), `Diagnostic`.
 - `composition_notes`, `examples`, `picker`, and `extra_fields` are optional. Omit the keyword entirely if you don't need it.
 

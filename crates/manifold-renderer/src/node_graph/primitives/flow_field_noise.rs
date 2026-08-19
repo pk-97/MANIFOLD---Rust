@@ -99,6 +99,16 @@ crate::primitive! {
     aliases: ["flow field", "noise flow", "velocity", "curl"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/flow_field_noise_body.wgsl"),
+    frame_time_inputs: ["time"],
+}
+
+// D7/P0: per-frame recompute for a FUSED region's `time` field — `run()` packs
+// `ctx.time.seconds.0` into the `time` uniform when the input is unwired.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.flow_field_noise",
+        recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
+    }
 }
 
 impl Primitive for FlowFieldNoise {

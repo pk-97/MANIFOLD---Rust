@@ -102,6 +102,16 @@ crate::primitive! {
     aliases: ["block displace", "datamosh", "glitch blocks"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/block_displace_field_body.wgsl"),
+    frame_time_inputs: ["time"],
+}
+
+// D7/P0: per-frame recompute for a FUSED region's `time` field, IN DECLARATION
+// ORDER — `run()` resolves an unwired `time` input from `ctx.time.seconds.0`.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.block_displace_field",
+        recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
+    }
 }
 
 impl Primitive for BlockDisplaceField {
