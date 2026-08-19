@@ -223,7 +223,13 @@ impl AudioTriggerSection {
             send_labels: config.send_labels.clone(),
             send_ids: config.send_ids.clone(),
         };
+        // `audio_matrix_open` is session-only (the drawer's "Custom" cell) —
+        // carry it across this re-allocate (the same per-frame wipe the param
+        // card's configure has) or the matrix closes a frame after every
+        // click. `sync_audio` resizes it to `n`.
+        let matrix_open = std::mem::take(&mut self.mod_state.audio_matrix_open);
         self.mod_state = ParamModState::allocate(n);
+        self.mod_state.audio_matrix_open = matrix_open;
         self.mod_state.sync_audio(n, &audio);
     }
 
@@ -801,6 +807,34 @@ mod tests {
         assert_eq!(chips[5].label, "Flux\u{00B7}Mid");
         assert!(chips[5].active);
         assert_eq!(chips.iter().filter(|c| c.active).count(), 1);
+    }
+
+    #[test]
+    fn matrix_open_survives_per_frame_reconfigure() {
+        // configure() re-allocates `ParamModState` every frame; the
+        // session-only `audio_matrix_open` flag must be carried across or the
+        // drawer's "Custom" matrix closes a frame after every click.
+        let config = AudioTriggerSectionConfig {
+            rows: vec![AudioTriggerRowConfig {
+                enabled: true,
+                label: "Low → Kick".into(),
+                kind_idx: 5,
+                band_idx: 1,
+                sensitivity: 1.0,
+                send_id: Some(manifold_foundation::AudioSendId::new("send-1")),
+                one_shot_beats: 1.0,
+            }],
+            send_labels: vec!["Kick".into()],
+            send_ids: vec![manifold_foundation::AudioSendId::new("send-1")],
+        };
+        let mut section = AudioTriggerSection::new();
+        section.configure(Some(LayerId::new("layer-1")), &config);
+        section.mod_state.audio_matrix_open[0] = true;
+        section.configure(Some(LayerId::new("layer-1")), &config);
+        assert!(
+            section.mod_state.audio_matrix_open[0],
+            "configure must not wipe the session-only matrix flag"
+        );
     }
 
     #[test]

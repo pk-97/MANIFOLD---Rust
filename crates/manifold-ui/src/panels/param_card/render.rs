@@ -129,7 +129,13 @@ impl ParamCardPanel {
             );
         }
         self.row_value_synced = vec![false; n];
+        // `audio_matrix_open` is session-only UI state (the Listen row's
+        // "Custom" cell) with no model field to sync from — carry it across
+        // this per-frame state rebuild or the matrix closes a frame after
+        // every click. `sync_audio` below resizes it to `n`.
+        let matrix_open = std::mem::take(&mut self.state.mod_state.audio_matrix_open);
         self.state = ParamCardState::new(n);
+        self.state.mod_state.audio_matrix_open = matrix_open;
         self.state.has_drv = config.has_drv();
         self.state.has_env = config.has_env();
         self.state.has_abl = config.has_abl();
