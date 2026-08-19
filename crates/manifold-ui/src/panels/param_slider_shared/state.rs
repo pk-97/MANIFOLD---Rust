@@ -29,13 +29,16 @@ pub(crate) struct EnvelopeTargetIds {
 }
 
 
-/// The envelope drawer — the Decay slider plus, for non-toggle/non-trigger
-/// params, the Action row and (while Step) the Amount slider + Wrap row.
+/// The envelope drawer — for non-toggle/non-trigger params an Action row,
+/// the Decay slider only in Continuous (Step/Random has no decay to tune),
+/// and while Step the Amount slider + Wrap row.
 pub(crate) struct EnvelopeConfigIds {
     pub(crate) _container_id: NodeId,
-    pub(crate) decay_slider: SliderNodeIds,
+    /// The Decay slider — `Some` only while Action=Continuous (or on
+    /// toggle/trigger rows, which are always Continuous).
+    pub(crate) decay_slider: Option<SliderNodeIds>,
     /// Right-click reset for the Decay slider (the `EnvDecay*` trio).
-    pub(crate) decay_reset: PanelAction,
+    pub(crate) decay_reset: Option<PanelAction>,
     /// Action-row button ids (`[Continuous, Step, Random]`), if the row is built.
     pub(crate) action_btn_ids: Option<[NodeId; AUDIO_ACTION_COUNT]>,
     /// Amount slider for the Step action, only while Action=Step.

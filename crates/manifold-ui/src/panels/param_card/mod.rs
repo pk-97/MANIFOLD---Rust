@@ -2160,8 +2160,8 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         let cfg = panel.row_host.envelope_config_ids[0].as_ref().expect("envelope config built");
-        let decay_track = cfg.decay_slider.track;
-        let decay_rect = tree.get_bounds(cfg.decay_slider.track);
+        let decay_track = cfg.decay_slider.expect("decay slider in Continuous").track;
+        let decay_rect = tree.get_bounds(decay_track);
 
         let down = panel.handle_pointer_down(decay_track, Vec2::new(decay_rect.x, decay_rect.y), &tree);
         assert!(

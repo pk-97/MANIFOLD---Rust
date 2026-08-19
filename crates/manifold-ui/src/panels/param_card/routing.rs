@@ -194,11 +194,12 @@ impl ParamCardPanel {
             match role {
                 RowRole::EnvelopeConfig => {
                     if let Some(c) = &self.row_host.envelope_config_ids[row]
-                        && node_id == c.decay_slider.track
+                        && let Some(ds) = &c.decay_slider
+                        && node_id == ds.track
                     {
                         self.drag.begin(ParamDragTarget::EnvDecay { index: row }, pos);
                         let norm = BitmapSlider::x_to_normalized(
-                            TrackSpan::of(tree.get_bounds(c.decay_slider.track)),
+                            TrackSpan::of(tree.get_bounds(ds.track)),
                             pos.x,
                         );
                         let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
@@ -413,9 +414,10 @@ impl ParamCardPanel {
         // dispatch the decay change (in beats).
         if let Some(pi) = self.drag.env_decay_index()
             && let Some(cfg) = self.row_host.envelope_config_ids.get(pi).and_then(|c| c.as_ref())
+            && let Some(ds) = &cfg.decay_slider
         {
             let norm = BitmapSlider::x_to_normalized(
-                TrackSpan::of(tree.get_bounds(cfg.decay_slider.track)),
+                TrackSpan::of(tree.get_bounds(ds.track)),
                 pos.x,
             )
             .clamp(0.0, 1.0);
@@ -423,7 +425,7 @@ impl ParamCardPanel {
             if let Some(v) = self.state.mod_state.env_decay.get_mut(pi) {
                 *v = decay;
             }
-            BitmapSlider::update_value(tree, &cfg.decay_slider, norm, &format!("{decay:.2}"));
+            BitmapSlider::update_value(tree, ds, norm, &format!("{decay:.2}"));
             let pid = self.rows[pi].id.clone();
             return match self.kind {
                 ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],

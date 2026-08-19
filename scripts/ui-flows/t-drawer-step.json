@@ -1,0 +1,54 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Cont", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Wrap", "type": "Button" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Decay", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Step", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Wrap", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Bounce", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Clamp", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Decay", "type": "Label" } },
+      "check": { "Count": 0 }
+    }
+  }
+]
