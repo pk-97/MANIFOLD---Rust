@@ -1473,6 +1473,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// the content thread overwrote a surface the UI's composite was still
     /// sampling — the preview tear Peter saw at 60fps under RT load.
     ///
+    /// The main preview bridge publishes every frame, so its front-pin is
+    /// always load-bearing. The graph-editor bridges (node preview, thumbnail
+    /// atlas) publish conditionally and go silent when the editor closes or
+    /// the watched chain pauses — gating on their pinned front then wedges
+    /// the whole pipeline (Peter's editor-close soft lock, one frame per 5s
+    /// timeout cycle). They use the ephemeral check: a full rotation with no
+    /// publish lifts the front-pin, in-flight reads still gate.
+    ///
     /// Load-bearing beyond presentation (BUG-0ou6, TexturePool encode-pacing
     /// coupling): this wait is what paces encode to <= frames_in_flight
     /// ahead of GPU completion, and TexturePool's frame-stamp recycling
@@ -1480,7 +1488,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// under that pacing. Weakening this wait silently breaks the pool's
     /// recycle safety.
     #[cfg(target_os = "macos")]
-    pub fn is_surface_ready(&self) -> bool {
+    pub fn is_surface_ready(&self, frame: u64) -> bool {
         let pending = self.surface_signal_values[self.write_surface_index];
         let write_done = pending == 0
             || self
@@ -1491,12 +1499,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             return false;
         }
         let slot = self.write_surface_index;
-        let bridge_ok = |b: &Option<Arc<crate::shared_texture::SharedTextureBridge>>| {
-            b.as_ref().is_none_or(|b| b.is_reusable(slot))
+        let preview_ok = self
+            .preview_bridge
+            .as_ref()
+            .is_none_or(|b| b.is_reusable(slot));
+        let editor_ok = |b: &Option<Arc<crate::shared_texture::SharedTextureBridge>>| {
+            b.as_ref()
+                .is_none_or(|b| b.is_reusable_ephemeral(slot, frame))
         };
-        bridge_ok(&self.preview_bridge)
-            && bridge_ok(&self.node_preview_bridge)
-            && bridge_ok(&self.node_atlas_bridge)
+        preview_ok && editor_ok(&self.node_preview_bridge) && editor_ok(&self.node_atlas_bridge)
     }
 
     /// Register a GPU notification for when the current surface becomes
@@ -3004,13 +3015,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // `clip_atlas_pending_layout` promotion in `render_content`.
             native_enc.add_completed_handler(move || {
                 if let Some(ref b) = preview {
-                    b.publish_front(write_idx);
+                    b.publish_front(write_idx, frame_count);
                 }
                 if let Some(ref b) = node_preview {
-                    b.publish_front(write_idx);
+                    b.publish_front(write_idx, frame_count);
                 }
                 if let Some(ref b) = node_atlas {
-                    b.publish_front(write_idx);
+                    b.publish_front(write_idx, frame_count);
                 }
                 // Signal recording thread that the GPU blit is complete.
                 if let Some(ref fence) = recording_fence {

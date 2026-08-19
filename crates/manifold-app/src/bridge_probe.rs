@@ -305,7 +305,7 @@ pub fn run(args: &[String]) -> ! {
                     let write_done = write_done.clone();
                     enc.add_completed_handler(move || {
                         // Publish-then-flag, mirroring production's handler.
-                        bridge.publish_front(slot as u32);
+                        bridge.publish_front(slot as u32, i);
                         write_done[slot].store(i, Ordering::Release);
                     });
                     enc.commit();
