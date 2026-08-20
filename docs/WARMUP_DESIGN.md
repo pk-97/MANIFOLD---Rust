@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** SHIPPED — P1–P4 on main 2026-08-20 (core pre-roll, chains/image/LED/edit-time, disk caches, consolidation + cold-touch gate) · k3 (lead). Kept as the cited policy contract: the cold-touch gate and every warmup seam point here.
+**Status:** IN PROGRESS — P1–P4 + wall-clock budget fix on main 2026-08-20; P5 (clip-active pre-roll + fusion quiescence) designed from the first real-project probe, not built · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
@@ -369,10 +369,25 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
   (watched/graph-editor layer builds render unfused — check before deleting);
   removing the startup atom sweep.
 
+### P5 — Clip-active pre-roll + fusion quiescence (one session; designed from the first real-project probe, 2026-08-20)
+
+The Corrosion Music Video probe (rt-capture + cold-touch counter, `MANIFOLD_LOG_REBUILD_REASON=1`) proved P1–P4 insufficient on a real 3D/RT show: 65 cold touches during playback (39 pipeline compiles, 26 chain constructions), all on the first playback frames. Two root causes, both visible in the log:
+
+- **RC1 — chains are topology-keyed on clip-active state, and warmup never activates a clip.** Playback rebuilds carry different effect sets than the load-time warm saw: an active clip's post-fx joins the layer's chain, so the chain the P2a warm built (bare layer, scratch input) is not the chain the first live frame needs. `dispatch_chain`'s `needs_rebuild` (`chain_dispatch.rs:197`) fires on `!is_compatible(effects, …)`.
+- **RC2 — fused-kernel swap-in lands on stage.** The fusion segment prewarm is enqueue-only on a background worker; chains built during warmup build unfused, and when a segment finishes mid-playback the chain rebuilds to swap it in (`awaiting_fused_swap()` in the same `needs_rebuild`) — construction + compiles during playback even when every layer warmed "successfully." The warmup pass never waits for the fusion queue to drain.
+
+Also in scope: one Corrosion layer (`cc0__oomurasaki_azalea…` a3a572d0) fails `install_layer_generator` during warmup and the failure surfaces as a misleading `BudgetExhausted{PerLayerFrames, 0.0ns}` log — diagnose the install failure (it presumably succeeds at first play, so something about the warmup context differs) and give install failure its own `WarmupOutcome` variant so it can never masquerade as a budget trip.
+
+- **Deliverables:** D11 — pre-roll activates each layer's first clip through the production `acquire_clip`/`start_clip` path before rendering (clip post-fx enters the warmed topology), then `stop_clip` after; the existing post-pass trigger-state re-clear covers the latch pollution. D12 — the warmup pass waits for the fusion segment queue to drain (find or add a pending-count query on the prewarm worker; escalate rather than add shared state) BEFORE the per-layer loop pre-rolls chains, so swap-in rebuilds happen inside the warm. The `WarmupOutcome::InstallFailed` variant + the azalea install-failure diagnosis.
+- **Gate:** the Corrosion probe is the acceptance — `RUST_LOG=info ./target/debug/manifold rt-capture '<Corrosion path>' --frames 360` reports `cold touches during playback: 0` (a named, explained residue is an escalation, not a pass); existing warmup tests stay green; landing_gate green.
+- **Acceptance demo:** the probe log — L2.
+- **Forbidden moves:** warming a parallel "clip-like" context instead of the production clip-activation path; making the fusion wait a fixed sleep instead of a queue query; deleting the synthetic-context warm (a layer with zero clips still warms bare).
+
 Phasing-completeness: every intro/audit claim maps to a phase — generator pre-build +
 pre-roll + progress + UI bar + detector (P1), post-fx chains + image/LED + edit-time
-adds (P2), disk caches (P3), consolidation + CI gate (P4). GPU clock ramp: no
-deliverable — pre-roll provides it incidentally. Video: D8, no phase.
+adds (P2), disk caches (P3), consolidation + CI gate (P4), clip-active pre-roll +
+fusion quiescence (P5). GPU clock ramp: no deliverable — pre-roll provides it
+incidentally. Video: D8, no phase.
 
 ## 6. Decided — do not reopen
 
