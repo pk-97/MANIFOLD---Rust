@@ -1,6 +1,6 @@
 # Desired-State Reconciliation — one reconcile, one visibility predicate, edges as outputs
 
-**Status:** IN PROGRESS — P1 built 2026-08-20 (reconcile every tick, `sync_dirty` deleted; gate green); P2–P4 not built · k3 (lead)
+**Status:** IN PROGRESS — P1+P2 built 2026-08-20 (reconcile every tick; hot mute, one visibility predicate; gates green); P3–P4 not built · k3 (lead)
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
