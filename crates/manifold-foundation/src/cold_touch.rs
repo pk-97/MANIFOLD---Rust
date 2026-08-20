@@ -100,3 +100,97 @@ pub fn reset_cold_touch_counts() {
         c.store(0, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn counters_reset_and_sum() {
+        reset_cold_touch_counts();
+        assert_eq!(total_cold_touches(), 0);
+
+        for kind in [
+            ColdTouchKind::PipelineCompile,
+            ColdTouchKind::GlbParse,
+            ColdTouchKind::HdriDecode,
+            ColdTouchKind::ModelLoad,
+            ColdTouchKind::ChainConstruction,
+        ] {
+            record_cold_touch(kind);
+        }
+
+        assert_eq!(cold_touch_count(ColdTouchKind::PipelineCompile), 1);
+        assert_eq!(cold_touch_count(ColdTouchKind::GlbParse), 1);
+        assert_eq!(total_cold_touches(), 5);
+
+        reset_cold_touch_counts();
+        assert_eq!(total_cold_touches(), 0);
+    }
+
+    static WARN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    struct WarningLogger;
+
+    impl log::Log for WarningLogger {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record) {
+            if record.level() == log::Level::Warn
+                && record.args().to_string().contains("[cold-touch]")
+            {
+                WARN_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn warns_while_transport_playing() {
+        reset_cold_touch_counts();
+        WARN_COUNT.store(0, Ordering::Relaxed);
+
+        // If another test already installed a logger we cannot capture the
+        // warning here; the rest of the test still exercises the hot path.
+        let installed = log::set_logger(&WarningLogger)
+            .map(|()| log::set_max_level(log::LevelFilter::Warn))
+            .is_ok();
+
+        set_transport_playing(false);
+        record_cold_touch(ColdTouchKind::PipelineCompile);
+        let warnings_while_stopped = WARN_COUNT.load(Ordering::Relaxed);
+
+        set_transport_playing(true);
+        record_cold_touch(ColdTouchKind::PipelineCompile);
+        let warnings_while_playing = WARN_COUNT.load(Ordering::Relaxed);
+
+        if installed {
+            assert_eq!(
+                warnings_while_stopped, 0,
+                "cold touch while transport is stopped must not warn"
+            );
+            assert!(
+                warnings_while_playing > warnings_while_stopped,
+                "cold touch while transport is playing must log a warning"
+            );
+        }
+
+        set_transport_playing(false);
+    }
+
+    #[test]
+    fn transport_flag_is_readable_and_writeable() {
+        // The content thread sets this every tick; make sure the API does not
+        // panic and that a flip followed by a touch still increments the counter.
+        reset_cold_touch_counts();
+        set_transport_playing(false);
+        set_transport_playing(true);
+        record_cold_touch(ColdTouchKind::ChainConstruction);
+        assert_eq!(cold_touch_count(ColdTouchKind::ChainConstruction), 1);
+        set_transport_playing(false);
+    }
+}

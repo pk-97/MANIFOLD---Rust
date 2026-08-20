@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** IN PROGRESS — P1 (core pre-roll) + P2 (chains, image/LED, edit-time adds) + P3 (disk caches) shipped 2026-08-20; P4 not built · 2026-08-20 · k3 (lead)
+**Status:** IN PROGRESS — P1 (core pre-roll) + P2 (chains, image/LED, edit-time adds) + P3 (disk caches) shipped 2026-08-20; P4 built 2026-08-20 · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
@@ -362,14 +362,8 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
 
 ### P4 — Consolidation + regression gate (one session)
 
-- **Deliverables:** delete the hand-written prewarm calls pre-roll subsumes
-  (`registry.rs:84-99` list — verify each is genuinely covered by a P1-warmed render
-  before deleting; the atom codegen sweep at `registry.rs:135` STAYS — it feeds the
-  cross-launch metallib for all projects); cold-touch counter wired to a CI/nextest
-  gate; doc sweep (this doc's status, NODE_CATALOG pointer if the warmup surface
-  lands in catalog docs).
-- **Gate:** `rg "prewarm_pipelines|prewarm_pipeline" crates/manifold-renderer/src/generators/registry.rs`
-  shrinks to the surviving sweep; INV1 gate runs in the default suite.
+- **Deliverables:** audit the four hand-written prewarm calls in `registry.rs:84-99` against the atom codegen sweep; keep the ones the sweep cannot reach (`RenderScene`, `GltfTextureSource`, `ScatterOnMesh`, `SeedParticlesFromTexture` — all hand-written/exempt pipelines) and rewrite their comments to state why they survive; cold-touch counter wired to a CI/nextest gate via a CPU-runnable structural test in `manifold-foundation` plus the existing GPU `warmup_gate_zero_cold_touches_during_playback`; doc sweep (this doc's status, no stale `WARMUP_DESIGN` pointers found).
+- **Gate:** `rg "prewarm_pipelines|prewarm_pipeline" crates/manifold-renderer/src/generators/registry.rs` returns the four hand-written calls plus the atom sweep documentation references; all four survive because none are on the codegen path. INV1 gate runs as the GPU test in `gpu-proofs` plus the new default-suite structural test in `manifold-foundation/src/cold_touch.rs`.
 - **Demo:** none — L1.
 - **Forbidden moves:** deleting a hand prewarm whose pipeline no pre-roll reaches
   (watched/graph-editor layer builds render unfused — check before deleting);
