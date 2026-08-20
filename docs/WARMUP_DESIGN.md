@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** IN PROGRESS — P1 (core pre-roll) shipped 2026-08-20; P2–P4 not built · 2026-08-20 · k3 (lead)
+**Status:** IN PROGRESS — P1 (core pre-roll) + P2 (chains, image/LED, edit-time adds) shipped 2026-08-20; P3–P4 not built · 2026-08-20 · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
@@ -392,6 +392,13 @@ deliverable — pre-roll provides it incidentally. Video: D8, no phase.
 8. Cold-touch detector is the policy's enforcement (D9).
 
 ## 7. Deferred
+
+- **Group/master chain warmup** — scoped out at P2a execution (2026-08-20): both use
+  the same lazy `dispatch_chain` pattern as per-layer chains, but warming them
+  correctly needs active-clip/child context that doesn't exist at load, and no
+  warmup-only construction path was acceptable. They first-touch once per project on
+  stage (chain construction is a D9 counted site, so it's visible). Revive if the
+  cold-touch log shows them firing in real shows.
 
 - **Readiness as a separate post-open surface** — superseded by blocking open.
   Revive if load times prove unacceptable in rehearsal and a "rehearsal fast-open"
