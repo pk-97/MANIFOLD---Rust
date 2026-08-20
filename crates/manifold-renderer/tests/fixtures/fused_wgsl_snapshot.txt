@@ -6946,7 +6946,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== generator:OilyFluid node:50 ===
+=== generator:OilyFluid node:52 ===
 // @static_param: n0_offset_x
 // @static_param: n0_offset_y
 // @static_param: n0_output_channel
@@ -7382,7 +7382,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r16);
 }
 
-=== generator:OilyFluid node:51 ===
+=== generator:OilyFluid node:53 ===
 // @static_param: n0_aspect
 // @static_param: n0_coord_space
 // @static_param: n1_color_x_high_w
@@ -7640,7 +7640,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r5);
 }
 
-=== generator:OilyFluid node:52 ===
+=== generator:OilyFluid node:54 ===
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 struct Params {
@@ -7684,7 +7684,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r1);
 }
 
-=== generator:OilyFluid node:53 ===
+=== generator:OilyFluid node:55 ===
 // @static_param: n0_aspect
 // @static_param: n0_coord_space
 // @static_param: n0_z_scale
@@ -7757,7 +7757,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r1);
 }
 
-=== generator:OilyFluid node:54 ===
+=== generator:OilyFluid node:56 ===
 // @static_param: n0_dt
 // @static_param: n0_steps
 // @static_param: n1_high
@@ -7832,7 +7832,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r1);
 }
 
-=== generator:OilyFluid node:55 ===
+=== generator:OilyFluid node:57 ===
 // @static_param: n2_saturation
 // @static_param: n2_value
 // @static_param: n4_max

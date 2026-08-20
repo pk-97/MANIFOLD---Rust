@@ -1943,7 +1943,7 @@ mod warmup_tests {
 
         let clip = &layer.clips[0];
         assert!(
-            renderer.start_clip(clip, Seconds(0.0), &project.timeline.layers, 0),
+            renderer.start_clip(clip, Seconds(0.0), &project.timeline.layers, 0, true),
             "first launch of the warmed layer must acquire its existing generator"
         );
         render_frames(&mut renderer, &project.timeline.layers, 60);
@@ -2017,7 +2017,7 @@ mod warmup_tests {
 
         let clip = &layer.clips[0];
         assert!(
-            renderer.start_clip(clip, Seconds(0.0), &project.timeline.layers, 0),
+            renderer.start_clip(clip, Seconds(0.0), &project.timeline.layers, 0, true),
             "first launch must acquire the warmed generator"
         );
         render_frames(&mut renderer, &project.timeline.layers, 1);

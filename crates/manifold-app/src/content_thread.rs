@@ -394,11 +394,11 @@ impl ContentThread {
                     }
                     Ok(ContentCommand::LoadProject(project)) => {
                         // Flush any pending seek before the load.
-                        if let Some(seek) = pending_seek.take() {
-                            if self.handle_command(seek) {
-                                log::info!("[ContentThread] shutdown received");
-                                return;
-                            }
+                        if let Some(seek) = pending_seek.take()
+                            && self.handle_command(seek)
+                        {
+                            log::info!("[ContentThread] shutdown received");
+                            return;
                         }
                         if self.handle_command(ContentCommand::LoadProject(project)) {
                             log::info!("[ContentThread] shutdown received");
