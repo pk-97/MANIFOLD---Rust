@@ -123,6 +123,10 @@ pub struct PlaybackEngine {
     // Active clip tracking
     active_clip_renderers: AHashMap<ClipId, usize>, // clip_id → renderer index
     active_clip_ids: AHashSet<ClipId>,
+    /// clip_id → the layer the clip was started on (the realized half of the
+    /// binding identity, P3). The reconcile compares it against the clip's
+    /// project layer and heals a mismatch with an edge-suppressed stop+start.
+    active_clip_layers: AHashMap<ClipId, LayerId>,
     preparing_clips: AHashSet<ClipId>,
     pending_pauses: AHashMap<ClipId, f64>, // clip_id → pause deadline
     looping_clip_ids: AHashSet<ClipId>,
@@ -194,6 +198,8 @@ pub struct PlaybackEngine {
     session_wrap_restart_scratch: Vec<ClipId>,
     /// Pre-allocated scratch for clips to start during sync (avoids per-sync Vec allocation).
     sync_start_scratch: Vec<ActiveClipRef>,
+    /// Scratch for layer-mismatch heals in `sync_clips_to_time` (P3).
+    sync_heal_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
     modulation_timing_scratch: Vec<(Beats, Beats)>,
     /// section 8 param triggers: which instances' own `audio_trigger` config fired
@@ -298,6 +304,7 @@ impl PlaybackEngine {
             renderers,
             active_clip_renderers: AHashMap::with_capacity(32),
             active_clip_ids: AHashSet::with_capacity(32),
+            active_clip_layers: AHashMap::with_capacity(32),
             preparing_clips: AHashSet::with_capacity(8),
             pending_pauses: AHashMap::with_capacity(8),
             looping_clip_ids: AHashSet::with_capacity(16),
@@ -326,6 +333,7 @@ impl PlaybackEngine {
             session_refs_scratch: Vec::with_capacity(8),
             session_wrap_restart_scratch: Vec::with_capacity(4),
             sync_start_scratch: Vec::with_capacity(4),
+            sync_heal_scratch: Vec::with_capacity(2),
             modulation_timing_scratch: Vec::with_capacity(64),
             pending_trigger_pulses: Vec::new(),
             last_active_clip_id: AHashMap::with_capacity(32),
@@ -459,6 +467,23 @@ impl PlaybackEngine {
     /// gate has cleared the entry (`filter_ready_clips`'s retain).
     pub fn recently_started_time(&self, clip_id: &str) -> Option<f64> {
         self.recently_started_times.get(clip_id).copied()
+    }
+    /// Test instrumentation (P3): the clip-edge pushes not yet consumed by a
+    /// tick's modulation step. Read after a direct `sync_clips_to_time` call.
+    #[doc(hidden)]
+    pub fn pending_clip_edge_layers(&self) -> &[i32] {
+        &self.clip_edge_layers
+    }
+    /// Test instrumentation (P3): the last clip the engine believes was
+    /// started on a layer (the edge-diff state, including silent heal updates).
+    #[doc(hidden)]
+    pub fn last_active_clip_id_for(&self, layer_index: i32) -> Option<&ClipId> {
+        self.last_active_clip_id.get(&layer_index)
+    }
+    /// Read access to the renderers (tests downcast to `StubRenderer`).
+    #[doc(hidden)]
+    pub fn renderers(&self) -> &[Box<dyn ClipRenderer>] {
+        &self.renderers
     }
 
     // ─── Renderer access ───
@@ -1095,6 +1120,7 @@ impl PlaybackEngine {
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
                         is_muted: clip.is_muted,
+                        layer_id: layer.layer_id.clone(),
                     });
                 }
             }
@@ -1105,6 +1131,19 @@ impl PlaybackEngine {
     // ─── Clip lifecycle ───
 
     pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: Seconds, layer_index: i32) {
+        self.start_clip_with_edge(clip, realtime_now, layer_index, true);
+    }
+
+    /// `fire_clip_edge=false` starts the clip without firing a clip edge
+    /// (P3 heal: a layer-drag rebind must not bump the destination
+    /// generator's `clip_count` or fire param-step actions).
+    fn start_clip_with_edge(
+        &mut self,
+        clip: &TimelineClip,
+        realtime_now: Seconds,
+        layer_index: i32,
+        fire_clip_edge: bool,
+    ) {
         // Fix 6: Never start clips on group layers
         if let Some(project) = &self.project
             && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
@@ -1121,11 +1160,23 @@ impl PlaybackEngine {
                 .project
                 .as_ref()
                 .map_or(&[] as &[_], |p| &p.timeline.layers);
-            let success =
-                self.renderers[idx].start_clip(clip, self.current_time, layers, layer_index);
+            let success = self.renderers[idx].start_clip(
+                clip,
+                self.current_time,
+                layers,
+                layer_index,
+                fire_clip_edge,
+            );
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
+                // The realized layer is the layer the clip was started ON
+                // (authoritative container), never `clip.layer_id` — a dragged
+                // clip's own field is exactly what may be stale (P3).
+                if let Some(layer) = layers.get(layer_index as usize) {
+                    self.active_clip_layers
+                        .insert(clip.id.clone(), layer.layer_id.clone());
+                }
                 self.recently_started_times
                     .insert(clip.id.clone(), realtime_now.0);
 
@@ -1149,6 +1200,7 @@ impl PlaybackEngine {
             self.renderers[renderer_idx].stop_clip(clip_id);
         }
         self.active_clip_ids.remove(clip_id);
+        self.active_clip_layers.remove(clip_id);
         self.preparing_clips.remove(clip_id);
         self.pending_pauses.remove(clip_id);
         self.looping_clip_ids.remove(clip_id);
@@ -1175,6 +1227,7 @@ impl PlaybackEngine {
         self.stopped_this_tick
             .extend(self.stop_buffer.iter().cloned());
         self.active_clip_ids.clear();
+        self.active_clip_layers.clear();
         self.preparing_clips.clear();
         self.pending_pauses.clear();
         self.looping_clip_ids.clear();
@@ -1372,6 +1425,27 @@ impl PlaybackEngine {
             || !sync_result.to_stop.is_empty()
             || !sync_result.to_start.is_empty();
 
+        // P3 (layer-aware binding identity): the compute_sync diff keys on
+        // clip_id alone, so an active clip dragged to another layer produces
+        // no stop/start — but its start-edge binding (renderer, generator
+        // instance, render target) belongs to the OLD layer. Heal each
+        // mismatch with a stop+start through the existing lifecycle. Heals
+        // suppress the clip edge (D5): no param-step actions, no generator
+        // clip_count bump — a drag is not a trigger.
+        let mut heals = std::mem::take(&mut self.sync_heal_scratch);
+        heals.clear();
+        for entry in &sync_result.should_be_active {
+            if self.active_clip_ids.contains(&entry.clip_id)
+                && self.active_clip_layers.get(&entry.clip_id) != Some(&entry.layer_id)
+            {
+                heals.push(entry.clone());
+            }
+        }
+        membership_changed = membership_changed || !heals.is_empty();
+        for entry in &heals {
+            self.stop_clip(&entry.clip_id);
+        }
+
         // F4: `start_clip` below is stamped with `self.last_realtime_now`, not
         // a zero epoch. `sync_clips_to_time` is called from outside `tick()`
         // (play/seek/session commands), but `last_realtime_now` is still the
@@ -1392,7 +1466,17 @@ impl PlaybackEngine {
         let mut starts = std::mem::take(&mut self.sync_start_scratch);
         starts.clear();
         starts.extend(sync_result.to_start.iter().cloned());
+        starts.extend(heals.iter().cloned());
+        self.sync_heal_scratch = heals;
         for entry in &starts {
+            // A heal is not a trigger (D5): no edge push, no param-step
+            // actions, no generator clip_count bump — but the destination
+            // layer's `last_active_clip_id` still updates silently so a later
+            // real edge on that layer diffs correctly.
+            let is_heal = self
+                .sync_heal_scratch
+                .iter()
+                .any(|h| h.clip_id == entry.clip_id);
             // PARAM_STEP_ACTIONS D5: record the clip-edge at scheduler-decision
             // time — the engine's own notion of "this layer just started a
             // clip" — never gated on whether a renderer later accepts it
@@ -1402,7 +1486,8 @@ impl PlaybackEngine {
             // below is almost always true; it's kept explicit (rather than
             // pushing unconditionally) so `last_active_clip_id` is a genuine
             // before/after diff, not just a to_start mirror.
-            if self.last_active_clip_id.get(&entry.layer_index) != Some(&entry.clip_id) {
+            if !is_heal && self.last_active_clip_id.get(&entry.layer_index) != Some(&entry.clip_id)
+            {
                 self.clip_edge_layers.push(entry.layer_index);
             }
             self.last_active_clip_id
@@ -1423,7 +1508,12 @@ impl PlaybackEngine {
                     .cloned()
             };
             if let Some(ref clip) = clip {
-                self.start_clip(clip, Seconds(self.last_realtime_now), entry.layer_index);
+                self.start_clip_with_edge(
+                    clip,
+                    Seconds(self.last_realtime_now),
+                    entry.layer_index,
+                    !is_heal,
+                );
             }
         }
         self.sync_start_scratch = starts;

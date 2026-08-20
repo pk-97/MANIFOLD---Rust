@@ -60,6 +60,132 @@ fn project_with_clip_at_beat_zero() -> manifold_core::project::Project {
     project
 }
 
+/// P3 helper: layer 0 has one generator clip at beats 0..4; layer 1 is empty.
+/// The clip starts on layer 0 and the test drags it to layer 1.
+fn project_with_draggable_clip() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer0 = manifold_core::layer::Layer::new(
+        "Layer 0".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer0.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+    ));
+    project.timeline.layers.push(layer0);
+    project.timeline.layers.push(manifold_core::layer::Layer::new(
+        "Layer 1".to_string(),
+        manifold_core::types::LayerType::Video,
+        1,
+    ));
+    project
+}
+
+/// P3 helper: move layer 0's first clip into layer 1 (a drag across layers),
+/// keeping the clip id. Returns the clip id.
+fn drag_clip_to_layer_1(engine: &mut PlaybackEngine) -> manifold_core::ClipId {
+    let project = engine.project_mut().expect("project");
+    let mut clip = project.timeline.layers[0].clips.remove(0);
+    clip.layer_id = project.timeline.layers[1].layer_id.clone();
+    let id = clip.id.clone();
+    project.timeline.layers[1].clips.push(clip);
+    id
+}
+
+fn stub_gen(engine: &PlaybackEngine) -> &StubRenderer {
+    engine.renderers()[0]
+        .as_any()
+        .downcast_ref::<StubRenderer>()
+        .expect("renderer 0 is the generator stub")
+}
+
+fn tick_once(engine: &mut PlaybackEngine, realtime: f64, frame: u64) {
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(realtime),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: frame,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let _ = engine.tick(ctx);
+}
+
+/// P3 (BUG-2z07 (layer-drag staleness)): an active clip dragged to another
+/// layer is healed by an edge-suppressed stop+start in the same reconcile —
+/// the destination layer sees a rebind, never a trigger. Stopped transport.
+#[test]
+fn drag_active_clip_across_layers_rebinds() {
+    let engine = &mut create_engine();
+    engine.initialize(project_with_draggable_clip());
+    tick_once(engine, 0.0, 0);
+    let clip_id = drag_clip_to_layer_1(engine);
+
+    // The drag produces no stop/start from the clip_id diff alone — the heal
+    // must fire inside the reconcile.
+    let healed = engine.sync_clips_to_time();
+
+    assert!(healed, "a layer drag is a membership change");
+    assert_eq!(
+        stub_gen(engine).start_count_for(&clip_id),
+        2,
+        "the clip must be stopped and restarted (rebound to layer 1)"
+    );
+    assert_eq!(
+        stub_gen(engine).last_edge_flag_for(&clip_id),
+        Some(false),
+        "the heal start carries fire_clip_edge=false — a drag is not a trigger"
+    );
+    assert!(
+        engine.pending_clip_edge_layers().is_empty(),
+        "heals emit no clip-edge for modulation"
+    );
+    assert_eq!(
+        engine.last_active_clip_id_for(1).cloned().as_deref(),
+        Some(clip_id.as_str()),
+        "the destination layer's edge-diff state updates silently"
+    );
+}
+
+/// P3: same heal while playing — the mechanism is transport-independent.
+#[test]
+fn drag_active_clip_across_layers_rebinds_while_playing() {
+    let engine = &mut create_engine();
+    engine.initialize(project_with_draggable_clip());
+    engine.play();
+    tick_once(engine, 0.0, 0);
+    tick_once(engine, 1.0 / 60.0, 1);
+    let clip_id = drag_clip_to_layer_1(engine);
+    tick_once(engine, 2.0 / 60.0, 2);
+
+    assert_eq!(stub_gen(engine).start_count_for(&clip_id), 2);
+    assert_eq!(
+        stub_gen(engine).last_edge_flag_for(&clip_id),
+        Some(false)
+    );
+}
+
+/// P3: an undragged active clip never heals — the reconcile stays a no-op.
+#[test]
+fn active_clip_without_layer_change_does_not_heal() {
+    let engine = &mut create_engine();
+    engine.initialize(project_with_draggable_clip());
+    tick_once(engine, 0.0, 0);
+    let clip_id = engine
+        .project()
+        .unwrap()
+        .timeline
+        .layers[0]
+        .clips[0]
+        .id
+        .clone();
+
+    let changed = engine.sync_clips_to_time();
+
+    assert!(!changed, "no drag, no membership change");
+    assert_eq!(stub_gen(engine).start_count_for(&clip_id), 1);
+}
+
 /// A fixture-free project with one video layer owning one enabled, maximally
 /// sensitive clip trigger reading a single send's Full-band transient —
 /// BUG-109's regression tests don't need a real fixture, just the minimal
