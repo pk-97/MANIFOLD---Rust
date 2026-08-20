@@ -12,8 +12,10 @@ pub struct CompositeLayerDescriptor<'a> {
     pub layer_id: &'a LayerId,
     pub blend_mode: BlendMode,
     pub opacity: f32,
-    pub is_muted: bool,
-    pub is_solo: bool,
+    /// True when this layer is hidden from the visual composite by mute/solo.
+    /// Computed once per frame by the content pipeline; the compositor reads
+    /// this flag directly and never re-derives solo logic.
+    pub hidden: bool,
     pub blit_to_led: bool,
     pub effects: &'a [PresetInstance],
     pub effect_groups: &'a [EffectGroup],

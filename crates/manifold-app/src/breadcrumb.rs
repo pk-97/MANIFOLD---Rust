@@ -380,9 +380,10 @@ impl Application {
         is_playing: bool,
     ) -> BreadcrumbData {
         let mut active_pairs: Vec<(usize, usize)> = Vec::new();
+        let mut active_indices: Vec<usize> = Vec::new();
         self.local_project
             .timeline
-            .get_active_clips_at_beat(beat, &mut active_pairs);
+            .get_active_clips_at_beat(beat, &mut active_pairs, &mut active_indices);
 
         let mut active_type_ids: Vec<String> = Vec::new();
         let mut active_clip_ids: Vec<String> = Vec::new();

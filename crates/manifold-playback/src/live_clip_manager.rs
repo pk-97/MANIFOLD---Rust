@@ -143,6 +143,7 @@ impl LiveClipManager {
                 duration_beats: clip.duration_beats,
                 is_looping: clip.is_looping,
                 is_video: !clip.video_clip_id.is_empty(),
+                is_muted: false,
             });
         }
     }

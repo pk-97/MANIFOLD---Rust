@@ -392,55 +392,40 @@ impl Timeline {
         }
     }
 
-    /// Get active clips at a given beat (respecting mute/solo with group hierarchy).
+    /// Get active clips at a given beat (group layers excluded; mute/solo are
+    /// presentational, not membership, so muted clips remain in the result).
     /// Ensures sort caches are up-to-date, then queries into caller-provided buffer.
     /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
-    pub fn get_active_clips_at_beat(&mut self, beat: Beats, results: &mut Vec<(usize, usize)>) {
+    pub fn get_active_clips_at_beat(
+        &mut self,
+        beat: Beats,
+        results: &mut Vec<(usize, usize)>,
+        active_indices: &mut Vec<usize>,
+    ) {
         self.ensure_layers_sorted();
-        self.get_active_clips_at_beat_ref(beat, results);
+        self.get_active_clips_at_beat_ref(beat, results, active_indices);
     }
 
     /// Get active clips at a given beat into caller-provided buffer.
     /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
     /// before calling this. Use `get_active_clips_at_beat()` if unsure.
-    /// Zero per-frame allocation — uses caller's pre-allocated buffer.
-    pub fn get_active_clips_at_beat_ref(&self, beat: Beats, results: &mut Vec<(usize, usize)>) {
-        let any_solo = self.layers.iter().any(|l| l.is_solo);
+    /// Zero per-frame allocation — uses caller's pre-allocated buffers.
+    pub fn get_active_clips_at_beat_ref(
+        &self,
+        beat: Beats,
+        results: &mut Vec<(usize, usize)>,
+        active_indices: &mut Vec<usize>,
+    ) {
         results.clear();
-        let mut active_indices = Vec::new();
-
         for li in 0..self.layers.len() {
             if self.layers[li].is_group() {
                 continue;
             }
 
-            if self.layers[li].is_muted {
-                continue;
-            }
-
-            if self.layers[li].parent_layer_id.is_some() {
-                let parent = self.find_group_parent(li);
-                let parent_muted = parent.map(|(_, p)| p.is_muted).unwrap_or(false);
-                if parent_muted {
-                    continue;
-                }
-
-                if any_solo
-                    && !self.layers[li].is_solo
-                    && !parent.map(|(_, p)| p.is_solo).unwrap_or(false)
-                {
-                    continue;
-                }
-            } else if any_solo && !self.layers[li].is_solo {
-                continue;
-            }
-
             active_indices.clear();
-            self.layers[li].collect_active_clips_at_beat(beat, &mut active_indices);
-            for ci in &active_indices {
-                if !self.layers[li].clips[*ci].is_muted {
-                    results.push((li, *ci));
-                }
+            self.layers[li].collect_active_clips_at_beat(beat, active_indices);
+            for ci in active_indices.iter().copied() {
+                results.push((li, ci));
             }
         }
     }

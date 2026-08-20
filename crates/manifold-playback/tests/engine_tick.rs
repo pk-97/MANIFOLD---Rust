@@ -396,3 +396,170 @@ fn engine_waypoints_stress_test() {
         "WAYPOINTS should have active clips in the first 8 seconds"
     );
 }
+
+/// P2 helper: two video layers, each with a generator clip spanning beats 0..4.
+/// Layer 0 is the top layer (index 0), layer 1 is below it (index 1).
+fn project_with_two_video_layers() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+    for i in 0..2 {
+        let mut layer = manifold_core::layer::Layer::new(
+            format!("Layer {i}"),
+            manifold_core::types::LayerType::Video,
+            i,
+        );
+        layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(4.0),
+        ));
+        project.timeline.layers.push(layer);
+    }
+    project
+}
+
+/// P2 helper: one audio layer + one video layer, each with a clip at beat 0.
+fn project_with_audio_and_video_layers() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+
+    let mut audio = manifold_core::layer::Layer::new_audio("Audio".into(), 0);
+    audio.clips.push(manifold_core::clip::TimelineClip::new_audio(
+        "dummy.wav".to_string(),
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+        manifold_core::Seconds::ZERO,
+        manifold_core::Seconds(4.0),
+    ));
+    project.timeline.layers.push(audio);
+
+    let mut video = manifold_core::layer::Layer::new(
+        "Video".into(),
+        manifold_core::types::LayerType::Video,
+        1,
+    );
+    video.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+    ));
+    project.timeline.layers.push(video);
+
+    project
+}
+
+/// P2: muting a layer removes it from the composite but keeps the clip active
+/// in the engine (hot mute). Before P2 the timeline query filtered muted clips.
+#[test]
+fn muted_layer_clip_stays_active() {
+    let mut project = project_with_two_video_layers();
+    project.timeline.layers[0].is_muted = true;
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let _ = engine.tick(ctx);
+
+    assert!(
+        engine.active_clip_count() > 0,
+        "muted layer's clip must stay active (hot mute)"
+    );
+}
+
+/// P2: clip-level mute leaves the clip active in the engine but the clip is
+/// marked muted in the ready list for the compositor.
+#[test]
+fn clip_muted_stays_active_hidden() {
+    let mut project = project_with_two_video_layers();
+    project.timeline.layers[0].clips[0].is_muted = true;
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    assert!(
+        engine.active_clip_count() > 0,
+        "muted clip must stay active (hot mute)"
+    );
+    assert!(
+        result.ready_clips.iter().any(|c| c.is_muted),
+        "ready list must carry the muted clip's is_muted flag"
+    );
+}
+
+/// P2c: soloing an audio layer must not suppress video layer membership.
+/// Before P2 the timeline query's `any_solo` spanned all layers.
+#[test]
+fn audio_solo_does_not_suppress_video() {
+    let mut project = project_with_audio_and_video_layers();
+    project.timeline.layers[0].is_solo = true; // audio layer soloed
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    let video_layer_index = result
+        .ready_clips
+        .iter()
+        .find(|c| c.layer_index == 1)
+        .map(|c| c.layer_index);
+    assert_eq!(
+        video_layer_index,
+        Some(1),
+        "video clip must stay active when only an audio layer is soloed"
+    );
+}
+
+/// D7a: a fully-muted paused rig idles — compositor_dirty becomes false after
+/// the dirty deadline expires.
+#[test]
+fn all_muted_paused_rig_idles() {
+    let mut project = project_with_two_video_layers();
+    for layer in &mut project.timeline.layers {
+        layer.is_muted = true;
+    }
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.pause();
+
+    let dt = 1.0 / 60.0;
+    // Tick long enough for the compositor dirty deadline to expire.
+    // Start realtime past zero so a few frames clear COMPOSITOR_DIRTY_TIME (0.05s).
+    let start_rt = 1.0;
+    for i in 0..10 {
+        let ctx = TickContext {
+            dt_seconds: Seconds(dt),
+            realtime_now: Seconds(start_rt + i as f64 * dt),
+            pre_render_dt: Seconds(dt),
+            frame_count: i as u64,
+            export_fixed_dt: Seconds(0.0),
+        };
+        let result = engine.tick(ctx);
+        if i >= 5 {
+            assert!(
+                !result.compositor_dirty,
+                "fully-muted paused rig should idle after deadline, frame {i}"
+            );
+        }
+    }
+}

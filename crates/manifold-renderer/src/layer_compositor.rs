@@ -23,6 +23,9 @@ pub struct CompositeClipDescriptor<'a> {
     pub layer_index: i32,
     pub blend_mode: BlendMode,
     pub opacity: f32,
+    /// True when this clip is muted. Mute is presentational (P2): the clip
+    /// stays scheduled and modulating but contributes no pixels.
+    pub is_muted: bool,
     pub effects: &'a [PresetInstance],
     pub effect_groups: &'a [EffectGroup],
 }
@@ -248,23 +251,27 @@ fn group_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
     (hasher.finish() | (1 << 62)) as i64
 }
 
-/// Count active (non-muted, non-solo-hidden) layers in the frame.
-fn count_active_layers(frame: &CompositorFrame, any_solo: bool) -> usize {
+/// Count active (visible, non-transparent, with at least one unmuted clip) layers in the frame.
+fn count_active_layers(frame: &CompositorFrame) -> usize {
     let clips = frame.clips;
     let mut count = 0;
     let mut i = 0;
     while i < clips.len() {
         let layer_idx = clips[i].layer_index;
+        let start = i;
         let layer_desc = frame.find_layer(layer_idx);
         while i < clips.len() && clips[i].layer_index == layer_idx {
             i += 1;
         }
         if let Some(ld) = layer_desc
-            && (ld.is_muted || (any_solo && !ld.is_solo) || ld.opacity <= 0.0)
+            && (ld.hidden || ld.opacity <= 0.0)
         {
             continue;
         }
-        count += 1;
+        let has_visible_clip = clips[start..i].iter().any(|c| !c.is_muted);
+        if has_visible_clip {
+            count += 1;
+        }
     }
     count
 }
@@ -958,7 +965,7 @@ impl LayerCompositor {
     ///
     /// Each layer uses its own effect chain (no shared state between layers).
     /// Populates `self.layer_outputs_scratch` for the blend pass.
-    fn generate_layers(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame, any_solo: bool) {
+    fn generate_layers(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
@@ -1005,9 +1012,7 @@ impl LayerCompositor {
                 while ci < clips.len() && clips[ci].layer_index == layer_idx {
                     ci += 1;
                 }
-                if let Some(ld) = layer_desc
-                    && (ld.is_muted || (any_solo && !ld.is_solo))
-                {
+                if let Some(ld) = layer_desc && ld.hidden {
                     continue;
                 }
                 let clip_count = ci - start;
@@ -1054,10 +1059,8 @@ impl LayerCompositor {
             // Find layer descriptor
             let layer_desc = frame.find_layer(layer_idx);
 
-            // Check mute/solo
-            if let Some(ld) = layer_desc
-                && (ld.is_muted || (any_solo && !ld.is_solo))
-            {
+            // Check hidden
+            if let Some(ld) = layer_desc && ld.hidden {
                 while i < clips.len() && clips[i].layer_index == layer_idx {
                     i += 1;
                 }
@@ -1097,6 +1100,12 @@ impl LayerCompositor {
                 // No chain access needed.
                 let clip = &group[0];
 
+                // Clip-level mute is presentational: the clip stays active
+                // (scheduled, modulating) but contributes no pixels.
+                if clip.is_muted {
+                    continue;
+                }
+
                 self.layer_outputs_scratch.push(LayerOutput {
                     texture: clip.texture,
                     blend_mode: layer_blend,
@@ -1125,8 +1134,13 @@ impl LayerCompositor {
                 // Clear layer buffer to transparent
                 layer_buf.clear_source(gpu, false);
 
-                // Composite each clip into layer buffer with Normal blend
+                // Composite each clip into layer buffer with Normal blend.
+                // Clip-level mute is presentational: skip the muted clip but
+                // keep the layer (and its effects) active for unmuted clips.
                 for clip in group {
+                    if clip.is_muted {
+                        continue;
+                    }
                     let uniforms = BlendUniforms {
                         blend_mode: BlendMode::Normal as u32,
                         opacity: clip.opacity,
@@ -1723,9 +1737,9 @@ impl LayerCompositor {
 
     /// Serial composite path: single encoder for all work.
     /// Used when only 1 active layer (no parallel benefit).
-    fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame, any_solo: bool) {
+    fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         self.uniform_arena.reset();
-        self.generate_layers(gpu, frame, any_solo);
+        self.generate_layers(gpu, frame);
         gpu.checkpoint();
         // Route LED-flagged layers BEFORE folding groups so child layers inside
         // a group route via their own blit_to_led flag (the group's flag controls
@@ -1766,7 +1780,6 @@ impl LayerCompositor {
         &mut self,
         compositor_gpu: &mut GpuEncoder,
         frame: &CompositorFrame,
-        any_solo: bool,
     ) {
         let clips = frame.clips;
         let width = self.main.width();
@@ -1804,9 +1817,7 @@ impl LayerCompositor {
                 while ci < clips.len() && clips[ci].layer_index == layer_idx {
                     ci += 1;
                 }
-                if let Some(ld) = layer_desc
-                    && (ld.is_muted || (any_solo && !ld.is_solo))
-                {
+                if let Some(ld) = layer_desc && ld.hidden {
                     continue;
                 }
                 let clip_count = ci - start;
@@ -1846,10 +1857,8 @@ impl LayerCompositor {
             let layer_idx = clips[i].layer_index;
             let layer_desc = frame.find_layer(layer_idx);
 
-            // Check mute/solo
-            if let Some(ld) = layer_desc
-                && (ld.is_muted || (any_solo && !ld.is_solo))
-            {
+            // Check hidden
+            if let Some(ld) = layer_desc && ld.hidden {
                 while i < clips.len() && clips[i].layer_index == layer_idx {
                     i += 1;
                 }
@@ -2297,22 +2306,21 @@ impl Compositor for LayerCompositor {
         // Parallel path creates per-layer command buffers for GPU-concurrent
         // generation. Only activated with 2+ active layers (no overhead for
         // single-layer frames).
-        let any_solo = frame.layers.iter().any(|l| l.is_solo);
         #[cfg(target_os = "macos")]
         {
-            let active_layers = count_active_layers(frame, any_solo);
+            let active_layers = count_active_layers(frame);
             // D6 correction: profiled mode forces serial so there is one
             // compositor command buffer to attach the dispatch sampler to —
             // composite_parallel gives each layer its own command buffer,
             // which the sampler can't span.
             if active_layers >= 2 && !self.force_serial {
-                self.composite_parallel(gpu, frame, any_solo);
+                self.composite_parallel(gpu, frame);
             } else {
-                self.composite_serial(gpu, frame, any_solo);
+                self.composite_serial(gpu, frame);
             }
         }
         #[cfg(not(target_os = "macos"))]
-        self.composite_serial(gpu, frame, any_solo);
+        self.composite_serial(gpu, frame);
 
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before
@@ -2687,8 +2695,7 @@ mod chain_pool_tests {
             layer_id,
             blend_mode: BlendMode::Normal,
             opacity: 1.0,
-            is_muted: false,
-            is_solo: false,
+            hidden: false,
             blit_to_led: false,
             effects: &[],
             effect_groups: &[],
