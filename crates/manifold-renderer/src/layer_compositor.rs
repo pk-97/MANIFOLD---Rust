@@ -8,8 +8,8 @@ use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
-use manifold_core::effects::{EffectGroup, PresetInstance};
-use manifold_core::{BlendMode, EffectId, PresetTypeId, LayerId, NodeId};
+use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
+use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupBudget, WarmupOutcome};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -779,6 +779,111 @@ impl LayerCompositor {
             .or_default();
         self.led_group_chain_last_used_frame
             .insert(group_id.clone(), self.frame_counter);
+    }
+
+    /// Warm up the per-layer post-fx chain for `layer`. Builds the chain via
+    /// the production `dispatch_chain` path against a cleared scratch input,
+    /// then pumps frames until `warmup_pending()` reports quiescent or the
+    /// per-layer frame budget is exhausted.
+    ///
+    /// Mirrors `GeneratorRenderer::prewarm_layer`: the chain slot is inserted
+    /// into `effect_chains`, rendered offscreen, and left resident so the
+    /// first active frame hits the cached `PresetRuntime` instead of building
+    /// it on stage.
+    pub fn prewarm_layer_chains(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        let effects = layer.effects();
+        if !has_enabled_effects(effects) {
+            return WarmupOutcome::Quiescent;
+        }
+
+        // Pre-insert the chain slot and mark it used so the first render's
+        // `trim_excess_buffers` / `clear_idle_chain_state` doesn't evict the
+        // freshly warmed runtime before it can be exercised.
+        self.effect_chains
+            .entry(layer.layer_id.clone())
+            .or_default();
+        self.chain_last_used_frame
+            .insert(layer.layer_id.clone(), self.frame_counter);
+
+        let width = self.main.width();
+        let height = self.main.height();
+        let mut scratch = RenderTarget::new(
+            device,
+            width,
+            height,
+            GpuTextureFormat::Rgba16Float,
+            "warmup chain scratch",
+        );
+
+        const DT: f64 = 1.0 / 60.0;
+        let mut outcome = WarmupOutcome::BudgetExhausted;
+        let group_id = layer.layer_id.clone();
+        for frame in 0..budget.per_layer_frames {
+            self.uniform_arena.reset();
+            let mut native_enc = device.create_encoder("warmup chain");
+            {
+                let mut gpu = GpuEncoder::new(&mut native_enc, device);
+                gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
+                gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
+                let ctx = PresetContext {
+                    time: frame as f64 * DT,
+                    beat: 0.0,
+                    dt: DT as f32,
+                    width,
+                    height,
+                    output_width: width,
+                    output_height: height,
+                    aspect: if height > 0 {
+                        width as f32 / height as f32
+                    } else {
+                        1.0
+                    },
+                    owner_key: layer_id_owner_key(&group_id),
+                    is_clip_level: false,
+                    frame_count: frame as i64,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                let scope = fx_scope(&group_id);
+                let chain = self
+                    .effect_chains
+                    .get_mut(&group_id)
+                    .expect("chain slot inserted above");
+                Self::apply_effects(
+                    chain,
+                    &mut gpu,
+                    &scratch.texture,
+                    effects,
+                    layer.effect_groups(),
+                    &ctx,
+                    None,
+                    &scope,
+                    false,
+                    crate::node_graph::RtQuality::default(),
+                );
+            }
+            native_enc.commit_and_wait_completed();
+            self.uniform_arena.flush(device);
+
+            if let Some(chain) = self.effect_chains.get(&group_id)
+                && let Some(cg) = chain.as_ref()
+                && !cg.warmup_pending()
+            {
+                outcome = WarmupOutcome::Quiescent;
+                break;
+            }
+        }
+
+        // Recycle the scratch target at the current canvas size.
+        scratch.resize(device, width, height);
+        // A warmed chain's output target is owned by the cached PresetRuntime;
+        // the scratch is only an input stand-in.
+        outcome
     }
 
     /// Hybrid pool eviction policy:
@@ -2266,6 +2371,15 @@ impl Compositor for LayerCompositor {
         Vec::new()
     }
 
+    fn prewarm_layer_chains(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        self.prewarm_layer_chains(layer, budget, device)
+    }
+
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
         // Aim the authoring-time output preview at the watched node (or clear)
         // before any chain runs, so a freshly rebuilt chain re-acquires it.
@@ -2921,5 +3035,152 @@ mod chain_pool_tests {
             initial_ptr,
             "chain instance must survive layer-idle periods well below grace window",
         );
+    }
+
+    /// P2 chain warmup: a layer with enabled post-fx effects must have its
+    /// `PresetRuntime` built at load time, and the first playback frames must
+    /// not record any chain-construction cold touches.
+    #[test]
+    fn warmup_builds_layer_post_fx_chain_and_zero_cold_touches_on_play() {
+        use crate::compositor::{Compositor, CompositorFrame};
+        use crate::render_target::RenderTarget;
+        use manifold_core::effect_graph_def::ParamSpecDef;
+        use manifold_core::effects::PresetInstance;
+        use manifold_core::layer::Layer;
+        use manifold_core::params::{Param, ParamManifest};
+        use manifold_core::types::LayerType;
+        use manifold_foundation::cold_touch::{
+            reset_cold_touch_counts, set_transport_playing, total_cold_touches,
+        };
+
+        fn slot(id: &str, value: f32) -> Param {
+            let mut p = Param::bundled(ParamSpecDef {
+                id: id.into(),
+                name: id.into(),
+                min: 0.0,
+                max: 1.0,
+                default_value: value,
+                whole_numbers: false,
+                is_toggle: false,
+                is_trigger: false,
+                value_labels: vec![],
+                format_string: None,
+                osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
+                is_angle: false,
+                is_trigger_gate: false,
+                wraps: false,
+                section: None,
+                card_visible: true,
+            });
+            p.value = value;
+            p.base = value;
+            p.exposed = true;
+            p
+        }
+
+        let (device, mut comp) = make_compositor();
+        let mut layer = Layer::new("fx-layer".to_string(), LayerType::Video, 0);
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Invert"));
+        fx.params = ParamManifest::from_params(vec![slot("amount", 1.0)]);
+        layer.effects_mut().push(fx);
+
+        // Warmup should build the per-layer chain.
+        let outcome = comp.prewarm_layer_chains(
+            &layer,
+            manifold_core::WarmupBudget::default(),
+            &device,
+        );
+        assert_eq!(
+            outcome,
+            manifold_core::WarmupOutcome::Quiescent,
+            "Invert chain must quiesce within default budget"
+        );
+        let chain = comp
+            .effect_chains
+            .get(&layer.layer_id)
+            .expect("chain slot must exist after warmup")
+            .as_ref()
+            .expect("chain runtime must be built after warmup");
+        assert!(
+            !chain.warmup_pending(),
+            "warmed chain must report no pending work"
+        );
+
+        // Simulate a first playback frame: one clip on the layer, with layer FX.
+        let clip_tex = RenderTarget::new(
+            &device,
+            64,
+            64,
+            GpuTextureFormat::Rgba16Float,
+            "warmup test clip",
+        );
+        let clip = CompositeClipDescriptor {
+            clip_id: "clip-1",
+            texture: &clip_tex.texture,
+            layer_index: layer.index,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            is_muted: false,
+            effects: &[],
+            effect_groups: &[],
+        };
+        let layer_desc = CompositeLayerDescriptor {
+            layer_index: layer.index,
+            layer_id: &layer.layer_id,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            hidden: false,
+            blit_to_led: false,
+            effects: layer.effects(),
+            effect_groups: layer.effect_groups(),
+            parent_layer_id: None,
+            is_group: false,
+            trigger_count: 0,
+        };
+        let frame = CompositorFrame {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            frame_count: 0,
+            compositor_dirty: true,
+            clips: std::slice::from_ref(&clip),
+            layers: std::slice::from_ref(&layer_desc),
+            master_effects: &[],
+            master_effect_groups: &[],
+            master_trigger_count: 0,
+            tonemap: crate::tonemap::TonemapSettings::default(),
+            led_exit_index: -1,
+            led_composite_size: (1, 1),
+            output_width: 64,
+            output_height: 64,
+            occluded_layers: &[],
+            render_skip: &[],
+        };
+
+        // One render to ensure the cached chain is exercised, then reset and
+        // sample the cold-touch counter over 60 frames.
+        let mut enc = device.create_encoder("warmup play");
+        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+        let _ = comp.render(&mut gpu, &frame);
+        enc.commit_and_wait_completed();
+
+        reset_cold_touch_counts();
+        set_transport_playing(true);
+        for f in 0..60 {
+            let mut enc = device.create_encoder("warmup play");
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+            let _ = comp.render(&mut gpu, &frame);
+            enc.commit_and_wait_completed();
+            // Silence unused warning in release builds.
+            let _ = f;
+        }
+        assert_eq!(
+            total_cold_touches(),
+            0,
+            "no chain construction (or other first-touch work) during playback after warmup"
+        );
+        set_transport_playing(false);
     }
 }
