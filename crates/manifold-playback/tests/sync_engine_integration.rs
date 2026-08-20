@@ -263,7 +263,7 @@ fn clip_start_anchors_recently_started_gate_on_real_clock_not_zero_epoch() {
         frame_count: 0,
         export_fixed_dt: Seconds(0.0),
     };
-    engine.tick(ctx);
+    let _ = engine.tick(ctx);
 
     let stamped = engine
         .recently_started_time(&clip_id)
