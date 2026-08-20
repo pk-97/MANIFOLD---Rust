@@ -653,6 +653,7 @@ fn node_instance_transforms(
 }
 
 /// Which geometry to extract from a parsed glTF document.
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum GltfMeshSelector {
     /// Walk the default scene's node tree, world-transforming every
     /// node's mesh primitives and combining them into one buffer. The

@@ -31,11 +31,10 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
-
 use half::f16;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
+use crate::node_graph::decode_cache::cached_load_hdri;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -60,7 +59,7 @@ struct HdriBlitUniforms {
 /// linear, full stop." Output is packed RGBA16Float bytes (alpha = 1.0,
 /// EXRs carry no alpha channel in the equirect-environment convention this
 /// primitive targets) ready for `GpuEncoder::upload_texture`.
-fn load_hdri(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn load_hdri(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     let img = image::open(path).map_err(|e| {
         let raw = e.to_string();
         // BUG-182: the `image` crate's OpenEXR decoder only reads a flat,
@@ -245,8 +244,7 @@ impl Primitive for HdriSource {
                 let path_buf = PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    record_cold_touch(ColdTouchKind::HdriDecode);
-                    let _ = tx.send(load_hdri(&path_buf));
+                    let _ = tx.send(cached_load_hdri(&path_buf));
                 });
                 self.pending_load = Some(rx);
             }
