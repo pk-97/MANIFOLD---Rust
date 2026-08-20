@@ -119,6 +119,9 @@ impl ContentThread {
             match cmd_rx.try_recv() {
                 Ok(ContentCommand::Shutdown) => {
                     log::info!("[ContentThread] Shutdown during warmup, aborting");
+                    // Re-queue — consuming it here would swallow the quit:
+                    // the main loop must still see it after load unwinds.
+                    let _ = cmd_tx.send(ContentCommand::Shutdown);
                     return;
                 }
                 Ok(cmd) => {
