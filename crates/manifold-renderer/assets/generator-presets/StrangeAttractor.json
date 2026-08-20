@@ -317,9 +317,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "paramAliases": [
       {
         "old": "snap",

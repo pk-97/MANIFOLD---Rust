@@ -271,9 +271,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "paramAliases": [
       {
         "old": "slice_axis",

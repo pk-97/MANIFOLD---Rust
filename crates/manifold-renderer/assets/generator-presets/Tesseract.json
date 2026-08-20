@@ -189,8 +189,7 @@
       { "id": "dimension", "label": "Dimension", "defaultValue": 4.0,
         "target": { "kind": "node", "nodeId": "shape", "param": "dimension" },
         "convert": { "type": "Float" } }
-    ],
-    "skipMode": { "kind": "never" }
+    ]
   },
   "nodes": [
     { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },

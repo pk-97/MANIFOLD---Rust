@@ -60,11 +60,7 @@
           "type": "Float"
         }
       }
-    ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "intensity"
-    }
+    ]
   },
   "nodes": [
     {

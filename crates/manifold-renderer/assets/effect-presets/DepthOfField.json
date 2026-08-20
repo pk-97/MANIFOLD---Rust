@@ -299,10 +299,7 @@
           "type": "EnumRound"
         }
       }
-    ],
-    "skipMode": {
-      "kind": "never"
-    }
+    ]
   },
   "nodes": [
     {

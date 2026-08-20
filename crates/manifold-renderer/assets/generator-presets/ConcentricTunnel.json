@@ -223,9 +223,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "paramAliases": [
       {
         "old": "scale",

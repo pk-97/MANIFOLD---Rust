@@ -499,10 +499,7 @@
           "type": "BoolThreshold"
         }
       }
-    ],
-    "skipMode": {
-      "kind": "never"
-    }
+    ]
   },
   "nodes": [
     {

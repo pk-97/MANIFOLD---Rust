@@ -221,9 +221,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "paramAliases": [
       {
         "old": "wire_res",

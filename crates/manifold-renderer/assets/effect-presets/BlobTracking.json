@@ -138,9 +138,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "paramAliases": [
       {
         "old": "thresh",

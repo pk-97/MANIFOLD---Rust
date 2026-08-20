@@ -128,11 +128,7 @@
           "type": "BoolThreshold"
         }
       }
-    ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    }
+    ]
   },
   "nodes": [
     {

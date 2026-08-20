@@ -84,10 +84,7 @@
           "type": "Float"
         }
       }
-    ],
-    "skipMode": {
-      "kind": "never"
-    }
+    ]
   },
   "nodes": [
     {

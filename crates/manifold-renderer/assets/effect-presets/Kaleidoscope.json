@@ -62,10 +62,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    },
     "paramAliases": [
       {
         "old": "segs",

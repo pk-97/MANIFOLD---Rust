@@ -103,10 +103,6 @@
         "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    },
     "paramAliases": [
       { "old": "block", "new": "block_size" }
     ]

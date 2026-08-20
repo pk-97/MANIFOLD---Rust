@@ -37,11 +37,7 @@
           "type": "Float"
         }
       }
-    ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    }
+    ]
   },
   "nodes": [
     {
