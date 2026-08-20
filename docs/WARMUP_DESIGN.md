@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** IN PROGRESS — P1–P4 + wall-clock budget fix on main 2026-08-20; P5 (clip-active pre-roll + fusion quiescence) designed from the first real-project probe, not built · k3 (lead)
+**Status:** IN PROGRESS — P1–P5 + budget fix on main 2026-08-20; residual cold touches from skip-mode topology divergence tracked in BUG-p8oe (warmup-p5-residue-cold-touches), decision with Peter · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
