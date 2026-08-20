@@ -4,7 +4,8 @@ use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, PresetInstance};
-use manifold_core::{EffectId, NodeId};
+use manifold_core::{EffectId, NodeId, WarmupBudget, WarmupOutcome};
+use manifold_core::layer::Layer;
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
@@ -289,6 +290,18 @@ pub trait Compositor: Send {
     /// sampler to, and `composite_parallel` gives each layer its own command
     /// buffer. Default no-op for compositors without a parallel path.
     fn set_force_serial(&mut self, _on: bool) {}
+
+    /// Warm up the per-layer post-fx chain for `layer` so its first active
+    /// frame does not pay the `PresetRuntime` construction cost on stage.
+    /// Default no-op for compositors without effect chains.
+    fn prewarm_layer_chains(
+        &mut self,
+        _layer: &Layer,
+        _budget: WarmupBudget,
+        _device: &manifold_gpu::GpuDevice,
+    ) -> WarmupOutcome {
+        WarmupOutcome::Quiescent
+    }
 
     /// Drain every owned chain's per-step CPU profiles recorded on the last
     /// profiled frame (PERF_BUDGET_GATE_DESIGN P2). Default empty.

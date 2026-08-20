@@ -180,6 +180,28 @@ impl ContentThread {
                 );
                 any_budget_exhausted = true;
             }
+
+            // P2: warm the layer's post-fx chain via the same production
+            // construction path the first active frame would use. Skip if the
+            // generator pre-roll already ate the whole layer budget or the
+            // total load budget is gone.
+            if start.elapsed() < budget.total
+                && let Some(layer) = self
+                    .engine
+                    .project()
+                    .and_then(|p| p.timeline.layers.get(*layer_index))
+            {
+                let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
+                if chain_outcome == manifold_core::WarmupOutcome::BudgetExhausted {
+                    log::warn!(
+                        "[ContentThread] Warmup chain budget exhausted for layer '{}' ({}); \
+                         chain may first-touch once at play",
+                        layer_name.as_str(),
+                        _layer_id.as_str()
+                    );
+                    any_budget_exhausted = true;
+                }
+            }
         }
 
         // Clear progress and re-clear trigger latches so warmup frames don't

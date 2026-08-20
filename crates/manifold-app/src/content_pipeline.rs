@@ -3512,6 +3512,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.compositor.clear_all_effect_state();
     }
 
+    /// Warm up the per-layer post-fx chain for `layer` so the first active
+    /// frame does not pay chain-construction cost on stage. Delegates to the
+    /// compositor; no-op for compositors without effect chains.
+    pub fn prewarm_layer_chains(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        budget: manifold_core::WarmupBudget,
+    ) -> manifold_core::WarmupOutcome {
+        let device = self
+            .native_device
+            .as_ref()
+            .expect("native device required for chain warmup");
+        self.compositor.prewarm_layer_chains(layer, budget, device)
+    }
+
     /// Block until all in-flight background work in effect processors completes.
     /// Called after each export frame so async pipelines (GPU readback → CPU worker
     /// → result) resolve deterministically before the frame is encoded.
