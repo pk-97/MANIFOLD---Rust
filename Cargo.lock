@@ -2346,6 +2346,7 @@ name = "manifold-foundation"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "log",
  "serde",
  "serde_json",
 ]
@@ -2357,6 +2358,7 @@ dependencies = [
  "ash",
  "block2 0.6.2",
  "log",
+ "manifold-foundation",
  "naga",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",

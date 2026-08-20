@@ -18,6 +18,8 @@ vulkan = ["dep:ash"]
 gpu-proofs = []
 
 [dependencies]
+# Shared vocabulary (cold-touch detector only — no project model).
+manifold-foundation = { path = "../manifold-foundation" }
 # WGSL parsing + validation + MSL output + SPIR-V output
 naga = { version = "28", features = ["wgsl-in", "msl-out", "spv-out"] }
 log = "0.4"

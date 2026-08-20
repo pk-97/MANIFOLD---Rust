@@ -1331,6 +1331,136 @@ impl ClipRenderer for GeneratorRenderer {
         acquired
     }
 
+    fn prewarm_layer(
+        &mut self,
+        layer: &Layer,
+        budget: manifold_core::WarmupBudget,
+    ) -> manifold_core::WarmupOutcome {
+        let layer_id = layer.layer_id.clone();
+        let gen_type = layer.generator_type().clone();
+        if gen_type.is_none() {
+            return manifold_core::WarmupOutcome::Quiescent;
+        }
+
+        // Collect layer-level string defaults from every clip, matching
+        // `start_clip`'s first-touch behavior so the warm generator sees the
+        // same params as the first live clip launch.
+        let mut layer_string_defaults = std::collections::BTreeMap::new();
+        for c in &layer.clips {
+            if let Some(map) = &c.string_params {
+                for (k, v) in map {
+                    if !v.is_empty() {
+                        layer_string_defaults.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+
+        let override_def = layer.generator_graph();
+        let override_version = layer.generator_graph_structure_version();
+        let param_version = layer.generator_graph_version();
+        let current_override_version: Option<u32> = override_def.map(|_| override_version);
+        let (relight, relight_params) = layer
+            .gen_params()
+            .map(|gp| (gp.relight_active(), gp.relight_params))
+            .unwrap_or_default();
+        let manifest = layer.gen_params().map(|gp| &gp.params);
+        let current_param_version: Option<u32> = manifest.map(|_| param_version);
+
+        if !self.install_layer_generator(
+            layer_id.clone(),
+            gen_type,
+            override_def,
+            current_override_version,
+            current_param_version,
+            0,
+            0,
+            layer_string_defaults.clone(),
+            manifest,
+            relight,
+            relight_params,
+        ) {
+            return manifold_core::WarmupOutcome::BudgetExhausted;
+        }
+
+        // Pre-build the merged string-params cache so `render()` sees the same
+        // map the per-frame sweep would build for an active clip.
+        let first_clip_params = layer
+            .clips
+            .first()
+            .and_then(|c| c.string_params.as_ref());
+        if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
+            ls.merged_string_params.clone_from(&ls.layer_string_defaults);
+            if let Some(map) = first_clip_params {
+                for (k, v) in map {
+                    ls.merged_string_params.insert(k.clone(), v.clone());
+                }
+            }
+            ls.string_params_dirty = false;
+        }
+
+        let device = Arc::clone(&self.device);
+        let mut scratch = RenderTarget::new(
+            &device,
+            self.width,
+            self.height,
+            self.format,
+            "warmup scratch",
+        );
+
+        const DT: f64 = 1.0 / 60.0;
+        let default_manifest = ParamManifest::default();
+        let mut outcome = manifold_core::WarmupOutcome::BudgetExhausted;
+        for frame in 0..budget.per_layer_frames {
+            self.uniform_arena.reset();
+            let mut native_enc = device.create_encoder("warmup");
+            {
+                let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+                gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
+                if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
+                    let params = layer
+                        .gen_params()
+                        .map(|gp| &gp.params)
+                        .unwrap_or(&default_manifest);
+                    ls.generator.set_string_params(Some(&ls.merged_string_params));
+                    ls.generator.set_relight_params(&relight_params);
+                    ls.generator.set_rt_quality(self.rt_quality);
+                    let ctx = PresetContext {
+                        time: frame as f64 * DT,
+                        beat: 0.0,
+                        dt: DT as f32,
+                        width: self.width,
+                        height: self.height,
+                        output_width: self.width,
+                        output_height: self.height,
+                        aspect: self.width as f32 / self.height as f32,
+                        owner_key: 0,
+                        is_clip_level: false,
+                        frame_count: frame as i64,
+                        anim_progress: 0.0,
+                        trigger_count: 0,
+                    };
+                    gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
+                    ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
+                }
+            }
+            native_enc.commit_and_wait_completed();
+            self.uniform_arena.flush(&device);
+
+            if let Some(ls) = self.layer_generators.get(&layer_id)
+                && !ls.generator.warmup_pending()
+            {
+                outcome = manifold_core::WarmupOutcome::Quiescent;
+                break;
+            }
+        }
+
+        // Recycle the scratch target at the current canvas size.
+        scratch.resize(&device, self.width, self.height);
+        self.available_rts.push(scratch);
+        outcome
+    }
+
     fn stop_clip(&mut self, clip_id: &str) {
         if let Some(active) = self.active_clips.remove(clip_id) {
             // Return RT to the pool for reuse on the next clip start.
@@ -1355,6 +1485,10 @@ impl ClipRenderer for GeneratorRenderer {
         // counters, both of which collide across template-derived projects,
         // so keeping it would serve the previous project's generators.
         self.layer_generators.clear();
+        // A stale preview layer across projects can keep a layer unfused and
+        // force a rebuild on first launch — clear it with the rest of the
+        // project-derived state.
+        self.preview_layer = None;
         // Parked-clip thumbnails are keyed by `ClipId` — same collision
         // class as `layer_generators`, so they must not survive either.
         self.thumb_gens.clear();
@@ -1716,5 +1850,192 @@ mod tests {
             renderer.effective_trigger_count_for_layer(&LayerId::new("no-such-layer")),
             0,
         );
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod warmup_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+    use manifold_core::{Beats, LayerType, PresetTypeId, Seconds};
+    use manifold_foundation::cold_touch::{
+        reset_cold_touch_counts, set_transport_playing, total_cold_touches,
+    };
+    use manifold_gpu::GpuTextureFormat;
+    use manifold_playback::renderer::ClipRenderer;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    const CANVAS_W: u32 = 640;
+    const CANVAS_H: u32 = 360;
+
+    fn apricot_fixture_path() -> PathBuf {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("../tests/fixtures/rt/apricot_tl05.glb");
+        path
+    }
+
+    fn apricot_weather_layer(model_path: &str) -> Layer {
+        let mut layer = Layer::new("Apricot".to_string(), LayerType::Generator, 0);
+        layer.change_generator_type(PresetTypeId::new("ApricotWeather"));
+        let mut clip = TimelineClip::new_generator(Beats(0.0), Beats(8.0));
+        let mut strings = BTreeMap::new();
+        strings.insert("modelPath".to_string(), model_path.to_string());
+        clip.string_params = Some(strings);
+        layer.clips.push(clip);
+        layer
+    }
+
+    fn project_with_apricot_scene() -> Project {
+        let mut project = Project::default();
+        project.settings.output_width = CANVAS_W as i32;
+        project.settings.output_height = CANVAS_H as i32;
+        project
+            .timeline
+            .layers
+            .push(apricot_weather_layer(&apricot_fixture_path().to_string_lossy()));
+        project
+    }
+
+    fn render_frames(renderer: &mut GeneratorRenderer, layers: &[Layer], frames: usize) {
+        let device = renderer.device.clone();
+        const DT: f32 = 1.0 / 60.0;
+        for f in 0..frames {
+            let mut native_enc = device.create_encoder("warmup_test");
+            let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+            let time = f as f64 * DT as f64;
+            renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[]);
+            native_enc.commit_and_wait_completed();
+            renderer.uniform_arena.flush(&device);
+        }
+    }
+
+    /// INV1 — after the warmup pass, playing the scene must not trigger any
+    /// cold-touch counter site (pipeline compile, GLB parse, HDRI decode,
+    /// model load, chain construction).
+    #[test]
+    fn warmup_gate_zero_cold_touches_during_playback() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        let project = project_with_apricot_scene();
+        let layer = &project.timeline.layers[0];
+
+        // Warmup is where first-touch costs are expected and logged.
+        let outcome = renderer.prewarm_layer(layer, manifold_core::WarmupBudget::default());
+        assert!(
+            matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
+            "fixture scene must warm within default budget; got {:?}",
+            outcome
+        );
+
+        // From here on we are "on stage": any cold touch is a policy breach.
+        reset_cold_touch_counts();
+        set_transport_playing(true);
+
+        let clip = &layer.clips[0];
+        assert!(
+            renderer.start_clip(clip, Seconds(0.0), &project.timeline.layers, 0, true),
+            "first launch of the warmed layer must acquire its existing generator"
+        );
+        render_frames(&mut renderer, &project.timeline.layers, 60);
+
+        assert_eq!(
+            total_cold_touches(),
+            0,
+            "zero cold touches during 60 frames of playback after warmup"
+        );
+        set_transport_playing(false);
+    }
+
+    /// INV2 — a layer whose async warmup work never finishes within the
+    /// per-layer frame budget must terminate with `BudgetExhausted` rather than
+    /// blocking open indefinitely. We use the real ApricotWeather scene with a
+    /// one-frame budget: the background GLB parse cannot complete that fast.
+    #[test]
+    fn warmup_inv2_budget_terminates_never_quiescent() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        let project = project_with_apricot_scene();
+        let layer = &project.timeline.layers[0];
+
+        let tight_budget = manifold_core::WarmupBudget {
+            per_layer_frames: 1,
+            total: std::time::Duration::from_secs(60),
+        };
+        let outcome = renderer.prewarm_layer(layer, tight_budget);
+        assert_eq!(
+            outcome,
+            manifold_core::WarmupOutcome::BudgetExhausted,
+            "one-frame budget must exhaust before the GLB parse quiesces"
+        );
+    }
+
+    /// INV3 — after warmup, the first live clip launch must hit the existing
+    /// per-layer generator entry instead of rebuilding it.
+    #[test]
+    fn warmup_inv3_acquire_clip_hits_installed_generator() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        let project = project_with_apricot_scene();
+        let layer = &project.timeline.layers[0];
+        let layer_id = layer.layer_id.clone();
+
+        let outcome = renderer.prewarm_layer(layer, manifold_core::WarmupBudget::default());
+        assert!(
+            matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
+            "fixture scene must warm within default budget; got {:?}",
+            outcome
+        );
+        assert!(
+            renderer.layer_generators.contains_key(&layer_id),
+            "warmup must leave a generator installed for the layer"
+        );
+
+        reset_cold_touch_counts();
+        set_transport_playing(true);
+
+        let clip = &layer.clips[0];
+        assert!(
+            renderer.start_clip(clip, Seconds(0.0), &project.timeline.layers, 0, true),
+            "first launch must acquire the warmed generator"
+        );
+        render_frames(&mut renderer, &project.timeline.layers, 1);
+
+        assert!(
+            renderer.layer_generators.contains_key(&layer_id),
+            "first launch must not tear down the warmed generator"
+        );
+        assert_eq!(
+            renderer.active_count(),
+            1,
+            "first launch must create exactly one active clip"
+        );
+        assert_eq!(
+            total_cold_touches(),
+            0,
+            "no construction work during the cache-hit launch"
+        );
+        set_transport_playing(false);
     }
 }

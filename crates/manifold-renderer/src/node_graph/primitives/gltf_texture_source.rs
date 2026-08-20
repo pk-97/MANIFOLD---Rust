@@ -177,6 +177,11 @@ impl Primitive for GltfTextureSource {
         self.pending_load.is_some() || self.pending_upload.is_some()
     }
 
+    fn warmup_pending(&self) -> bool {
+        // Same lifetime as `io_pending` for this IoBridge source.
+        self.io_pending()
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // 1. Params.
         let path = match ctx.params.get("path") {

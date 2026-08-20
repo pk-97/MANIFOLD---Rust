@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -73,6 +74,8 @@ struct FlowState {
     /// scalar output port can re-emit it every frame, including on
     /// frames when no new inference completed.
     cut_score: f32,
+    /// True once the worker has returned its first successful flow inference.
+    first_response_delivered: bool,
 }
 
 crate::primitive! {
@@ -188,7 +191,9 @@ impl OpticalFlowEstimate {
                 }
             })
         });
-        if self.flow_worker.is_none() {
+        if self.flow_worker.is_some() {
+            record_cold_touch(ColdTouchKind::ModelLoad);
+        } else {
             log::warn!(
                 "[node.optical_flow] Native flow plugin unavailable — output will be black"
             );
@@ -257,6 +262,7 @@ impl OpticalFlowEstimate {
             last_request_frame: -1024,
             frame_counter: 0,
             cut_score: 0.0,
+            first_response_delivered: false,
         });
     }
 }
@@ -283,6 +289,12 @@ fn pack_f32x4_to_rgba16f_bytes(src: &[f32], pixel_count: usize) -> Vec<u8> {
 }
 
 impl Primitive for OpticalFlowEstimate {
+    fn warmup_pending(&self) -> bool {
+        self.flow_state
+            .as_ref()
+            .is_some_and(|s| !s.first_response_delivered)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // Always emit cut_score on its scalar port — zero before the
         // first inference completes, latest worker value after. Done
@@ -341,6 +353,7 @@ impl Primitive for OpticalFlowEstimate {
                     fs.flow_buffer = buf;
                     fs.has_flow = true;
                     fs.flow_dirty = true;
+                    fs.first_response_delivered = true;
                     // DIAGNOSTIC: confirm Farneback is producing real motion.
                     // Flow drives mesh advection ("sticking"); all-zero flow
                     // leaves the mesh on identity UVs → grid never tracks the

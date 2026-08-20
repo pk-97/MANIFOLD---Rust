@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** PROPOSED design, not built · 2026-08-20 · k3 (lead)
+**Status:** IN PROGRESS — P1 (core pre-roll) shipped 2026-08-20; P2–P4 not built · 2026-08-20 · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 

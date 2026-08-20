@@ -180,6 +180,10 @@ pub struct ContentState {
     /// Set once when export finishes (success or failure).
     pub export_finished: Option<ExportFinishedEvent>,
 
+    // ── Warmup ────────────────────────────────────────────────────
+    /// Load-time warmup progress. `None` when no warmup is running.
+    pub warmup: Option<manifold_core::WarmupProgress>,
+
     // ── Undo/redo ─────────────────────────────────────────────────
     /// Set on the tick an undo/redo actually happened; `None` every other
     /// tick. D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — see
@@ -487,6 +491,7 @@ impl Default for ContentState {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            warmup: None,
             undo_redo_event: None,
             ableton_session: None,
             ableton_connected: false,

@@ -71,6 +71,17 @@ pub trait ClipRenderer: Any + Send {
     /// `RtQuality::from_column`.
     fn set_rt_quality(&mut self, _column: &manifold_core::settings::RtQualityColumn) {}
 
+    /// Load-time warmup for one layer's renderer. Default no-op.
+    /// Implementations that hold async state (generators with GLB/RT/DNN
+    /// atoms) render the layer offscreen until quiescent or budget.
+    fn prewarm_layer(
+        &mut self,
+        _layer: &Layer,
+        _budget: manifold_core::WarmupBudget,
+    ) -> manifold_core::WarmupOutcome {
+        manifold_core::WarmupOutcome::Quiescent
+    }
+
     /// Downcast support for typed renderer access from app layer.
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;

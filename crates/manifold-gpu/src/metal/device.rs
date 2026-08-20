@@ -4,6 +4,8 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
+
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{Encoding, RefEncode};
@@ -450,6 +452,7 @@ impl GpuDevice {
         if let Some(cached) = self.compute_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
 
         // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross)
         let (slot_map, msl_source, msl_entry_name, workgroup_size) = {
@@ -723,6 +726,7 @@ impl GpuDevice {
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
@@ -899,6 +903,7 @@ impl GpuDevice {
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
@@ -1283,6 +1288,7 @@ impl GpuDevice {
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
@@ -1480,6 +1486,7 @@ impl GpuDevice {
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();

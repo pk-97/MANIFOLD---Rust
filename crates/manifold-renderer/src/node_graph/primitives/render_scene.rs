@@ -3722,6 +3722,18 @@ impl EffectNode for RenderScene {
         &RENDER_SCENE_OUTPUTS
     }
 
+    fn warmup_pending(&self) -> bool {
+        // RT accel builds asynchronously. Once `rt_accel` exists we keep
+        // warming until `ready` flips true; before that first evaluate
+        // creates/enqueues it. The per-frame `rt_accel_built` latch is
+        // intentionally not used here — we want to observe the accel's own
+        // readiness so the pre-roll doesn't stop early while a refit is
+        // still in flight.
+        self.rt_accel
+            .as_ref()
+            .is_some_and(|a| !a.ready.load(std::sync::atomic::Ordering::Acquire))
+    }
+
     /// A rasterizer's outputs are screen-space: always canvas-sized.
     /// Its texture INPUTS (envmap, per-object base-color maps) are scene
     /// resources whose dims say nothing about the render target — without
