@@ -28,7 +28,6 @@ pub trait LiveClipHost {
     fn get_beat_snapped_beat(&self) -> Beats;
     fn get_current_absolute_tick(&self) -> i32;
     fn stop_clip(&mut self, clip_id: &str);
-    fn mark_sync_dirty(&mut self);
     fn mark_compositor_dirty(&mut self);
     fn invalidate_lookahead_prewarm(&mut self);
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip);
@@ -144,6 +143,8 @@ impl LiveClipManager {
                 duration_beats: clip.duration_beats,
                 is_looping: clip.is_looping,
                 is_video: !clip.video_clip_id.is_empty(),
+                is_muted: false,
+                layer_id: clip.layer_id.clone(),
             });
         }
     }
@@ -840,7 +841,6 @@ impl LiveClipManager {
             self.remove_recording_clip_start(&live_clip_id);
         }
 
-        host.mark_sync_dirty();
         host.mark_compositor_dirty();
     }
 

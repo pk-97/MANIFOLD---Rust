@@ -43,6 +43,149 @@ fn create_engine() -> PlaybackEngine {
     PlaybackEngine::new(renderers)
 }
 
+/// A fixture-free project with one video layer owning one generator clip at beat 0.
+/// Used by the stopped-engine reconciliation cure-test.
+fn project_with_clip_at_beat_zero() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer = manifold_core::layer::Layer::new(
+        "Test".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+    ));
+    project.timeline.layers.push(layer);
+    project
+}
+
+/// P3 helper: layer 0 has one generator clip at beats 0..4; layer 1 is empty.
+/// The clip starts on layer 0 and the test drags it to layer 1.
+fn project_with_draggable_clip() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer0 = manifold_core::layer::Layer::new(
+        "Layer 0".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer0.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+    ));
+    project.timeline.layers.push(layer0);
+    project.timeline.layers.push(manifold_core::layer::Layer::new(
+        "Layer 1".to_string(),
+        manifold_core::types::LayerType::Video,
+        1,
+    ));
+    project
+}
+
+/// P3 helper: move layer 0's first clip into layer 1 (a drag across layers),
+/// keeping the clip id. Returns the clip id.
+fn drag_clip_to_layer_1(engine: &mut PlaybackEngine) -> manifold_core::ClipId {
+    let project = engine.project_mut().expect("project");
+    let mut clip = project.timeline.layers[0].clips.remove(0);
+    clip.layer_id = project.timeline.layers[1].layer_id.clone();
+    let id = clip.id.clone();
+    project.timeline.layers[1].clips.push(clip);
+    id
+}
+
+fn stub_gen(engine: &PlaybackEngine) -> &StubRenderer {
+    engine.renderers()[0]
+        .as_any()
+        .downcast_ref::<StubRenderer>()
+        .expect("renderer 0 is the generator stub")
+}
+
+fn tick_once(engine: &mut PlaybackEngine, realtime: f64, frame: u64) {
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(realtime),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: frame,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let _ = engine.tick(ctx);
+}
+
+/// P3 (BUG-2z07 (layer-drag staleness)): an active clip dragged to another
+/// layer is healed by an edge-suppressed stop+start in the same reconcile —
+/// the destination layer sees a rebind, never a trigger. Stopped transport.
+#[test]
+fn drag_active_clip_across_layers_rebinds() {
+    let engine = &mut create_engine();
+    engine.initialize(project_with_draggable_clip());
+    tick_once(engine, 0.0, 0);
+    let clip_id = drag_clip_to_layer_1(engine);
+
+    // The drag produces no stop/start from the clip_id diff alone — the heal
+    // must fire inside the reconcile.
+    let healed = engine.sync_clips_to_time();
+
+    assert!(healed, "a layer drag is a membership change");
+    assert_eq!(
+        stub_gen(engine).start_count_for(&clip_id),
+        2,
+        "the clip must be stopped and restarted (rebound to layer 1)"
+    );
+    assert_eq!(
+        stub_gen(engine).last_edge_flag_for(&clip_id),
+        Some(false),
+        "the heal start carries fire_clip_edge=false — a drag is not a trigger"
+    );
+    assert!(
+        engine.pending_clip_edge_layers().is_empty(),
+        "heals emit no clip-edge for modulation"
+    );
+    assert_eq!(
+        engine.last_active_clip_id_for(1).cloned().as_deref(),
+        Some(clip_id.as_str()),
+        "the destination layer's edge-diff state updates silently"
+    );
+}
+
+/// P3: same heal while playing — the mechanism is transport-independent.
+#[test]
+fn drag_active_clip_across_layers_rebinds_while_playing() {
+    let engine = &mut create_engine();
+    engine.initialize(project_with_draggable_clip());
+    engine.play();
+    tick_once(engine, 0.0, 0);
+    tick_once(engine, 1.0 / 60.0, 1);
+    let clip_id = drag_clip_to_layer_1(engine);
+    tick_once(engine, 2.0 / 60.0, 2);
+
+    assert_eq!(stub_gen(engine).start_count_for(&clip_id), 2);
+    assert_eq!(
+        stub_gen(engine).last_edge_flag_for(&clip_id),
+        Some(false)
+    );
+}
+
+/// P3: an undragged active clip never heals — the reconcile stays a no-op.
+#[test]
+fn active_clip_without_layer_change_does_not_heal() {
+    let engine = &mut create_engine();
+    engine.initialize(project_with_draggable_clip());
+    tick_once(engine, 0.0, 0);
+    let clip_id = engine
+        .project()
+        .unwrap()
+        .timeline
+        .layers[0]
+        .clips[0]
+        .id
+        .clone();
+
+    let changed = engine.sync_clips_to_time();
+
+    assert!(!changed, "no drag, no membership change");
+    assert_eq!(stub_gen(engine).start_count_for(&clip_id), 1);
+}
+
 /// A fixture-free project with one video layer owning one enabled, maximally
 /// sensitive clip trigger reading a single send's Full-band transient —
 /// BUG-109's regression tests don't need a real fixture, just the minimal
@@ -176,8 +319,8 @@ fn engine_initializes_with_project() {
 }
 
 #[test]
-fn engine_tick_while_stopped_has_no_active_clips() {
-    let project = load_project("Burn V5.manifold");
+fn stopped_engine_activates_clip_under_playhead() {
+    let project = project_with_clip_at_beat_zero();
     let mut engine = create_engine();
     engine.initialize(project);
 
@@ -191,8 +334,8 @@ fn engine_tick_while_stopped_has_no_active_clips() {
 
     let result = engine.tick(ctx);
     assert!(
-        result.ready_clips.is_empty(),
-        "No clips should be ready when stopped at beat 0"
+        !result.ready_clips.is_empty() || engine.active_clip_count() > 0,
+        "A stopped engine must reconcile every tick: the clip under the playhead should become active"
     );
 }
 
@@ -378,4 +521,171 @@ fn engine_waypoints_stress_test() {
         total_ready > 0,
         "WAYPOINTS should have active clips in the first 8 seconds"
     );
+}
+
+/// P2 helper: two video layers, each with a generator clip spanning beats 0..4.
+/// Layer 0 is the top layer (index 0), layer 1 is below it (index 1).
+fn project_with_two_video_layers() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+    for i in 0..2 {
+        let mut layer = manifold_core::layer::Layer::new(
+            format!("Layer {i}"),
+            manifold_core::types::LayerType::Video,
+            i,
+        );
+        layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(4.0),
+        ));
+        project.timeline.layers.push(layer);
+    }
+    project
+}
+
+/// P2 helper: one audio layer + one video layer, each with a clip at beat 0.
+fn project_with_audio_and_video_layers() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+
+    let mut audio = manifold_core::layer::Layer::new_audio("Audio".into(), 0);
+    audio.clips.push(manifold_core::clip::TimelineClip::new_audio(
+        "dummy.wav".to_string(),
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+        manifold_core::Seconds::ZERO,
+        manifold_core::Seconds(4.0),
+    ));
+    project.timeline.layers.push(audio);
+
+    let mut video = manifold_core::layer::Layer::new(
+        "Video".into(),
+        manifold_core::types::LayerType::Video,
+        1,
+    );
+    video.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+    ));
+    project.timeline.layers.push(video);
+
+    project
+}
+
+/// P2: muting a layer removes it from the composite but keeps the clip active
+/// in the engine (hot mute). Before P2 the timeline query filtered muted clips.
+#[test]
+fn muted_layer_clip_stays_active() {
+    let mut project = project_with_two_video_layers();
+    project.timeline.layers[0].is_muted = true;
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let _ = engine.tick(ctx);
+
+    assert!(
+        engine.active_clip_count() > 0,
+        "muted layer's clip must stay active (hot mute)"
+    );
+}
+
+/// P2: clip-level mute leaves the clip active in the engine but the clip is
+/// marked muted in the ready list for the compositor.
+#[test]
+fn clip_muted_stays_active_hidden() {
+    let mut project = project_with_two_video_layers();
+    project.timeline.layers[0].clips[0].is_muted = true;
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    assert!(
+        engine.active_clip_count() > 0,
+        "muted clip must stay active (hot mute)"
+    );
+    assert!(
+        result.ready_clips.iter().any(|c| c.is_muted),
+        "ready list must carry the muted clip's is_muted flag"
+    );
+}
+
+/// P2c: soloing an audio layer must not suppress video layer membership.
+/// Before P2 the timeline query's `any_solo` spanned all layers.
+#[test]
+fn audio_solo_does_not_suppress_video() {
+    let mut project = project_with_audio_and_video_layers();
+    project.timeline.layers[0].is_solo = true; // audio layer soloed
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    let video_layer_index = result
+        .ready_clips
+        .iter()
+        .find(|c| c.layer_index == 1)
+        .map(|c| c.layer_index);
+    assert_eq!(
+        video_layer_index,
+        Some(1),
+        "video clip must stay active when only an audio layer is soloed"
+    );
+}
+
+/// D7a: a fully-muted paused rig idles — compositor_dirty becomes false after
+/// the dirty deadline expires.
+#[test]
+fn all_muted_paused_rig_idles() {
+    let mut project = project_with_two_video_layers();
+    for layer in &mut project.timeline.layers {
+        layer.is_muted = true;
+    }
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.pause();
+
+    let dt = 1.0 / 60.0;
+    // Tick long enough for the compositor dirty deadline to expire.
+    // Start realtime past zero so a few frames clear COMPOSITOR_DIRTY_TIME (0.05s).
+    let start_rt = 1.0;
+    for i in 0..10 {
+        let ctx = TickContext {
+            dt_seconds: Seconds(dt),
+            realtime_now: Seconds(start_rt + i as f64 * dt),
+            pre_render_dt: Seconds(dt),
+            frame_count: i as u64,
+            export_fixed_dt: Seconds(0.0),
+        };
+        let result = engine.tick(ctx);
+        if i >= 5 {
+            assert!(
+                !result.compositor_dirty,
+                "fully-muted paused rig should idle after deadline, frame {i}"
+            );
+        }
+    }
 }

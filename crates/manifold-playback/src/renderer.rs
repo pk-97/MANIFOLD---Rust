@@ -9,12 +9,16 @@ use std::any::Any;
 /// Port of C# IClipRenderer interface.
 pub trait ClipRenderer: Any + Send {
     fn can_handle(&self, clip: &TimelineClip) -> bool;
+    /// `fire_clip_edge=false` starts the clip without counting a clip edge
+    /// (P3 heal: a layer-drag rebind is not a trigger). Renderers without an
+    /// edge concept ignore it.
     fn start_clip(
         &mut self,
         clip: &TimelineClip,
         current_time: Seconds,
         layers: &[Layer],
         layer_index: i32,
+        fire_clip_edge: bool,
     ) -> bool;
     fn stop_clip(&mut self, clip_id: &str);
 
@@ -87,6 +91,9 @@ pub trait ClipRenderer: Any + Send {
 pub struct StubRenderer {
     active_clips: std::collections::HashMap<ClipId, StubClipState>,
     is_generator: bool,
+    /// Test instrumentation (P3): every start, in order, with the edge flag it
+    /// carried — lets tests prove a heal restarted a clip with no edge fired.
+    start_log: Vec<(ClipId, bool)>,
 }
 
 struct StubClipState {
@@ -103,6 +110,7 @@ impl StubRenderer {
         Self {
             active_clips: std::collections::HashMap::new(),
             is_generator: false,
+            start_log: Vec::new(),
         }
     }
 
@@ -110,7 +118,25 @@ impl StubRenderer {
         Self {
             active_clips: std::collections::HashMap::new(),
             is_generator: true,
+            start_log: Vec::new(),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn start_count_for(&self, clip_id: &str) -> usize {
+        self.start_log
+            .iter()
+            .filter(|(id, _)| id.as_str() == clip_id)
+            .count()
+    }
+
+    #[doc(hidden)]
+    pub fn last_edge_flag_for(&self, clip_id: &str) -> Option<bool> {
+        self.start_log
+            .iter()
+            .rev()
+            .find(|(id, _)| id.as_str() == clip_id)
+            .map(|(_, edge)| *edge)
     }
 }
 
@@ -129,7 +155,9 @@ impl ClipRenderer for StubRenderer {
         _current_time: Seconds,
         _layers: &[Layer],
         _layer_index: i32,
+        fire_clip_edge: bool,
     ) -> bool {
+        self.start_log.push((clip.id.clone(), fire_clip_edge));
         self.active_clips.insert(
             clip.id.clone(),
             StubClipState {

@@ -1238,6 +1238,7 @@ impl ClipRenderer for GeneratorRenderer {
         _current_time: Seconds,
         layers: &[Layer],
         layer_index: i32,
+        fire_clip_edge: bool,
     ) -> bool {
         // Use the layer_index from the scheduler to get layer_id and generator_type — O(1).
         let layer = layers.get(layer_index as usize);
@@ -1273,11 +1274,13 @@ impl ClipRenderer for GeneratorRenderer {
         // silently drops the clip-launch contribution for this layer's
         // trigger_count. `PresetInstance::clip_edge_enabled()` owns the
         // disabled-means-absent rule; don't read a mod's `trigger_mode`
-        // directly.
-        let clip_edge_enabled = layer
-            .and_then(|l| l.gen_params())
-            .map(|gp| gp.clip_edge_enabled())
-            .unwrap_or(true);
+        // directly. P3: a layer-drag heal start (`fire_clip_edge=false`)
+        // never counts as an edge either — a drag is not a trigger.
+        let clip_edge_enabled = fire_clip_edge
+            && layer
+                .and_then(|l| l.gen_params())
+                .map(|gp| gp.clip_edge_enabled())
+                .unwrap_or(true);
         // The layer's live per-instance manifest — its `spec`s are the reshape
         // authority a first-clip build must honor over the graph shadow
         // (BUG-078). Borrowed from the external `layers` slice, not `self`.

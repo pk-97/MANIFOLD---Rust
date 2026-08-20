@@ -390,8 +390,6 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute(cmd, p);
                 }
-                // Editing commands may add/remove clips — sync on next tick.
-                self.engine.mark_sync_dirty();
                 // Refresh the compositor even while paused: a blend-mode change,
                 // effect edit, or reorder that doesn't alter clip membership
                 // won't be picked up by the sync path alone.
@@ -409,7 +407,6 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute_batch(cmds, desc, p);
                 }
-                self.engine.mark_sync_dirty();
                 self.engine.mark_compositor_dirty_now();
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
@@ -443,7 +440,6 @@ impl ContentThread {
                     }
                 }
                 self.engine.mark_compositor_dirty_now();
-                self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
                     (
@@ -499,7 +495,6 @@ impl ContentThread {
                     }
                 }
                 self.engine.mark_compositor_dirty_now();
-                self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
                     (
@@ -862,7 +857,6 @@ impl ContentThread {
                     self.ableton_bridge.rebuild_listeners(p);
                     p.settings.ableton_set_context = Some(self.ableton_bridge.build_set_context());
                 }
-                self.engine.mark_sync_dirty();
             }
             ContentCommand::AbletonUnmapParam { target } => {
                 use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
@@ -873,7 +867,6 @@ impl ContentThread {
                     self.editing_service.execute(Box::new(cmd), p);
                     self.ableton_bridge.rebuild_listeners(p);
                 }
-                self.engine.mark_sync_dirty();
             }
             ContentCommand::AbletonRediscover => {
                 if self.ableton_bridge.is_connected() {

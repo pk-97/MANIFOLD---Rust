@@ -121,6 +121,9 @@ mod viewport_input;
 mod viewport_p5c_demo;
 // P6 evidence — test-only (`#![cfg(test)]` inside), see its module doc.
 mod viewport_p6_demo;
+// P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
+#[cfg(all(test, target_os = "macos"))]
+mod mute_visibility_probe;
 mod window_registry;
 mod workspace;
 
