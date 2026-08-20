@@ -34,6 +34,19 @@ use manifold_gpu::{
 };
 use manifold_playback::renderer::ClipRenderer;
 
+/// Total RGBA8 decoded-source bytes warmed per project load. Each warmed still
+/// holds its full-resolution source plus a canvas-sized fit in memory; this cap
+/// keeps a project packed with large photos from exploding load-time RSS.
+/// Clips beyond the budget decode on first play, exactly like today.
+const IMAGE_WARMUP_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Cheap metadata probe for the decoded size of an image file without a full
+/// decode. Used to enforce `IMAGE_WARMUP_BUDGET_BYTES` before touching disk.
+fn estimate_native_bytes(path: &str) -> Option<u64> {
+    let (w, h) = image::image_dimensions(path).ok()?;
+    Some(w as u64 * h as u64 * 4)
+}
+
 /// The full-resolution decoded source, RGBA8. Decoded from disk exactly
 /// once per clip and cached so a canvas resize re-fits from memory instead
 /// of re-opening and re-decoding the file (disk decode dominates cost).
@@ -365,6 +378,87 @@ impl ClipRenderer for ImageRenderer {
         }
     }
 
+    fn prewarm_layer(
+        &mut self,
+        layer: &Layer,
+        _budget: manifold_core::WarmupBudget,
+    ) -> manifold_core::WarmupOutcome {
+        // Collect image clips on this layer; most-likely-first = timeline order.
+        let mut image_clips: Vec<&TimelineClip> = layer
+            .clips
+            .iter()
+            .filter(|c| c.is_image() && !c.image_path.is_empty())
+            .collect();
+        if image_clips.is_empty() {
+            return manifold_core::WarmupOutcome::Quiescent;
+        }
+        image_clips.sort_by(|a, b| {
+            a.start_beat
+                .0
+                .partial_cmp(&b.start_beat.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut used_bytes: u64 = 0;
+        for clip in image_clips {
+            let est = estimate_native_bytes(&clip.image_path).unwrap_or(0);
+            if used_bytes.saturating_add(est) > IMAGE_WARMUP_BUDGET_BYTES {
+                log::warn!(
+                    "[ImageRenderer] image warmup budget exhausted after {} bytes; skipping {}",
+                    used_bytes,
+                    clip.image_path
+                );
+                break;
+            }
+            used_bytes = used_bytes.saturating_add(est);
+
+            // Decode synchronously on the content thread during load. Reuses the
+            // production decode path and populates the same cache `start_clip` would.
+            let native = match decode_native(&clip.image_path) {
+                Ok(n) => Arc::new(n),
+                Err(e) => {
+                    log::error!(
+                        "[ImageRenderer] warmup decode failed for {}: {e}",
+                        clip.image_path
+                    );
+                    continue;
+                }
+            };
+            let fitted = match fit_native(&native, self.width, self.height) {
+                Ok(f) => f,
+                Err(e) => {
+                    log::error!(
+                        "[ImageRenderer] warmup fit failed for {}: {e}",
+                        clip.image_path
+                    );
+                    continue;
+                }
+            };
+
+            self.active_clips.insert(
+                clip.id.clone(),
+                ActiveImageClip {
+                    path: clip.image_path.clone(),
+                    native: None,
+                    texture: None,
+                    has_frame: false,
+                    decode_pending: false,
+                },
+            );
+            let Some(clip_state) = self.active_clips.get_mut(clip.id.as_str()) else {
+                continue;
+            };
+            clip_state.native = Some(native);
+            Self::ensure_texture(clip_state, &self.device, fitted.width, fitted.height);
+            if let Some(tex) = &clip_state.texture {
+                self.device.upload_texture(tex, &fitted.rgba);
+                clip_state.has_frame = true;
+            }
+        }
+
+        manifold_core::WarmupOutcome::Quiescent
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -521,5 +615,43 @@ mod tests {
         assert_eq!((b.width, b.height), (8, 2));
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn prewarm_layer_decodes_image_clips() {
+        // Load-time image warmup should decode and cache the clip's source
+        // so the first play is a cache hit instead of a disk decode.
+        let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
+        let mut renderer = ImageRenderer::new(device, 320, 180);
+        let mut layer = Layer::new(
+            "ImageWarmup".to_string(),
+            manifold_core::LayerType::Video,
+            0,
+        );
+        let path = format!(
+            "{}/../../tests/fixtures/gltf/goldens/triangle.png",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        layer.clips.push(TimelineClip::new_image(
+            path,
+            Beats(0.0),
+            Beats(4.0),
+        ));
+
+        let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
+        assert_eq!(outcome, manifold_core::WarmupOutcome::Quiescent);
+
+        assert_eq!(
+            renderer.active_clips.len(),
+            1,
+            "warmup should create one active image clip"
+        );
+        let clip = renderer.active_clips.values().next().unwrap();
+        assert!(clip.native.is_some(), "native decode should be cached");
+        assert!(clip.has_frame, "fitted texture should be uploaded");
+        assert!(
+            renderer.get_clip_texture(layer.clips[0].id.as_str()).is_some(),
+            "get_clip_texture should return the warmed texture"
+        );
     }
 }

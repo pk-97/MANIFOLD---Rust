@@ -89,17 +89,23 @@ impl ContentThread {
             return;
         };
 
-        // Collect generator-layer info up front so we can drop the immutable
-        // project borrow before mutating renderers.
-        let generator_layers: Vec<(usize, manifold_core::LayerId, String)> = project
+        // Collect layers that need warmup: generator layers plus any layer
+        // carrying still-image clips (P2b). Skip video layers — they stay on
+        // decoder lookahead (WARMUP_DESIGN.md D8).
+        let warmup_layers: Vec<(usize, manifold_core::LayerId, String)> = project
             .timeline
             .layers
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.generator_type().is_none())
+            .filter(|(_, l)| {
+                !l.generator_type().is_none()
+                    || l.clips
+                        .iter()
+                        .any(|c| c.is_image() && !c.image_path.is_empty())
+            })
             .map(|(i, l)| (i, l.layer_id.clone(), l.name.clone()))
             .collect();
-        let total = generator_layers.len() as u32;
+        let total = warmup_layers.len() as u32;
         if total == 0 {
             return;
         }
@@ -113,8 +119,8 @@ impl ContentThread {
         // the subsequent playback sample window.
         manifold_core::cold_touch::reset_cold_touch_counts();
 
-        log::info!("[ContentThread] Starting warmup for {total} generator layers");
-        for (done, (layer_index, _layer_id, layer_name)) in generator_layers.iter().enumerate() {
+        log::info!("[ContentThread] Starting warmup for {total} layers");
+        for (done, (layer_index, _layer_id, layer_name)) in warmup_layers.iter().enumerate() {
             // Abort early on shutdown so a quit during a long warm doesn't hang.
             match cmd_rx.try_recv() {
                 Ok(ContentCommand::Shutdown) => {
@@ -156,29 +162,27 @@ impl ContentThread {
             // 1.5s and `last_response` only advances on content frames.
             self.ableton_bridge.update(self.time_since_start.0);
 
-            // Re-borrow the layer and renderer through the split borrow so the
-            // immutable project reference and mutable renderer reference can
-            // coexist.
+            // Re-borrow the layer and every renderer through the split borrow
+            // so the immutable project reference and mutable renderer references
+            // can coexist. Each renderer's `prewarm_layer` no-ops for content it
+            // doesn't own (e.g. ImageRenderer on a generator layer).
             let (renderers, project) = self.engine.split_renderer_project();
-            let outcome = if let Some(p) = project
+            if let Some(p) = project
                 && let Some(layer) = p.timeline.layers.get(*layer_index)
-                && let Some(renderer) = renderers
-                    .iter_mut()
-                    .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>())
             {
-                Some(renderer.prewarm_layer(layer, budget))
-            } else {
-                None
-            };
-
-            if outcome == Some(manifold_core::WarmupOutcome::BudgetExhausted) {
-                log::warn!(
-                    "[ContentThread] Warmup budget exhausted for layer '{}' ({}); \
-                     layer may first-touch once at play",
-                    layer_name.as_str(),
-                    _layer_id.as_str()
-                );
-                any_budget_exhausted = true;
+                for renderer in renderers.iter_mut() {
+                    if renderer.prewarm_layer(layer, budget)
+                        == manifold_core::WarmupOutcome::BudgetExhausted
+                    {
+                        log::warn!(
+                            "[ContentThread] Warmup budget exhausted for a renderer on \
+                             layer '{}' ({}); layer may first-touch once at play",
+                            layer_name.as_str(),
+                            _layer_id.as_str()
+                        );
+                        any_budget_exhausted = true;
+                    }
+                }
             }
 
             // P2: warm the layer's post-fx chain via the same production
@@ -212,6 +216,21 @@ impl ContentThread {
             ..ContentState::default()
         });
         self.clear_generator_trigger_state();
+
+        // P2b: pre-create LED tap / composite resources when the project routes
+        // layers to LEDs, so the first LED-enabled frame doesn't allocate on stage.
+        // LED output may not be initialized yet; default grid size is enough to
+        // construct the resources that don't depend on the live controller.
+        #[cfg(target_os = "macos")]
+        if let Some(p) = self.engine.project() {
+            if self.led_controller.is_none() {
+                log::info!(
+                    "[ContentThread] LED output not initialized at load; \
+                     warming LED resources at default grid size"
+                );
+            }
+            self.content_pipeline.prewarm_led_resources(p);
+        }
 
         let status = if any_budget_exhausted {
             "completed with budget exhaustion"
@@ -954,16 +973,54 @@ impl ContentThread {
             // ── Generator ─────────────────────────────────────────
             ContentCommand::GeneratorTypeChanged { layer_id, new_type } => {
                 // Port of C# PlaybackController.NotifyGeneratorTypeChanged().
-                let (renderers, _) = self.engine.split_renderer_project();
-                for renderer in renderers.iter_mut() {
-                    if let Some(gen_renderer) = renderer.as_any_mut()
-                        .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
-                    {
-                        gen_renderer.update_active_types_for_layer(&layer_id, new_type);
-                        break;
+                // Capture transport state before borrowing renderers so we can
+                // decide whether to warm the edit after the renderer update.
+                let transport_playing = self.engine.is_playing();
+                {
+                    let (renderers, _) = self.engine.split_renderer_project();
+                    for renderer in renderers.iter_mut() {
+                        if let Some(gen_renderer) = renderer.as_any_mut()
+                            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                        {
+                            gen_renderer.update_active_types_for_layer(&layer_id, new_type);
+                            break;
+                        }
                     }
                 }
                 self.engine.mark_compositor_dirty_now();
+
+                // D7: a generator assigned while the transport is stopped warms
+                // immediately through the same prewarm_layer seam. If transport is
+                // playing, the edit previews lazily so the show is not blocked.
+                if !transport_playing {
+                    let layer_index = self
+                        .engine
+                        .project()
+                        .and_then(|p| {
+                            p.timeline
+                                .layers
+                                .iter()
+                                .position(|l| l.layer_id == layer_id)
+                        });
+                    if let Some(layer_index) = layer_index {
+                        let (renderers, project) = self.engine.split_renderer_project();
+                        if let Some(p) = project
+                            && let Some(layer) = p.timeline.layers.get(layer_index)
+                        {
+                            for renderer in renderers.iter_mut() {
+                                if let Some(gen_renderer) = renderer.as_any_mut()
+                                    .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                                {
+                                    let _ = gen_renderer.prewarm_layer(
+                                        layer,
+                                        manifold_core::WarmupBudget::default(),
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── LED output ─────────────────────────────────────────────

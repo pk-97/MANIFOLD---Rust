@@ -6,6 +6,7 @@ use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::{EffectId, NodeId, WarmupBudget, WarmupOutcome};
 use manifold_core::layer::Layer;
+use manifold_core::project::Project;
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
@@ -299,6 +300,18 @@ pub trait Compositor: Send {
         _layer: &Layer,
         _budget: WarmupBudget,
         _device: &manifold_gpu::GpuDevice,
+    ) -> WarmupOutcome {
+        WarmupOutcome::Quiescent
+    }
+
+    /// Warm up LED tap / composite resources when the project routes layers to
+    /// LEDs. Default no-op for compositors without an LED path.
+    fn prewarm_led_resources(
+        &mut self,
+        _device: &manifold_gpu::GpuDevice,
+        _pool: Option<&manifold_gpu::TexturePool>,
+        _led_grid_size: (u32, u32),
+        _project: &Project,
     ) -> WarmupOutcome {
         WarmupOutcome::Quiescent
     }

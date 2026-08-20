@@ -886,6 +886,58 @@ impl LayerCompositor {
         outcome
     }
 
+    /// Pre-create LED tap / composite resources when the loaded project routes
+    /// layers to LEDs. Mirrors the lazy construction in `render()` so the first
+    /// LED-enabled frame does not allocate on stage. Safe to call before LED
+    /// output is initialized: default grid size is used for `led_main`.
+    pub fn prewarm_led_resources(
+        &mut self,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        project: &manifold_core::project::Project,
+    ) -> WarmupOutcome {
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.blit_to_led);
+        if !has_led_layers {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let (main_w, main_h) = (self.main.width(), self.main.height());
+        if self.led_tap.is_none() {
+            self.led_tap = Some(RenderTarget::new(
+                device,
+                main_w,
+                main_h,
+                GpuTextureFormat::Rgba16Float,
+                "LED_Tap",
+            ));
+        }
+
+        let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
+        if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
+            self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
+        }
+
+        if self.led_black_tex.is_none() {
+            self.led_black_tex = Some(device.create_texture(&GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "LED Black 1x1",
+            }));
+        }
+
+        if has_enabled_effects(&project.settings.master_effects) && self.led_master_ec.is_none() {
+            self.led_master_ec = Some(None);
+        }
+
+        WarmupOutcome::Quiescent
+    }
+
     /// Hybrid pool eviction policy:
     ///
     /// 1. **Event-based (immediate)**: drop any pool entry whose `LayerId`
@@ -2380,6 +2432,16 @@ impl Compositor for LayerCompositor {
         self.prewarm_layer_chains(layer, budget, device)
     }
 
+    fn prewarm_led_resources(
+        &mut self,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        project: &manifold_core::project::Project,
+    ) -> WarmupOutcome {
+        self.prewarm_led_resources(device, pool, led_grid_size, project)
+    }
+
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
         // Aim the authoring-time output preview at the watched node (or clear)
         // before any chain runs, so a freshly rebuilt chain re-acquires it.
@@ -3182,5 +3244,52 @@ mod chain_pool_tests {
             "no chain construction (or other first-touch work) during playback after warmup"
         );
         set_transport_playing(false);
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod led_warmup_tests {
+    //! P2b LED tap warmup: resources that build on the first LED-enabled frame
+    //! should be pre-created at load when the project routes layers to LEDs.
+
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+    use manifold_core::types::LayerType;
+    use manifold_core::Beats;
+
+    fn led_project() -> Project {
+        let mut project = Project::default();
+        let mut layer = Layer::new("LED layer".to_string(), LayerType::Generator, 0);
+        layer.blit_to_led = true;
+        layer.clips.push(TimelineClip::new_generator(
+            Beats(0.0),
+            Beats(4.0),
+        ));
+        project.timeline.layers.push(layer);
+        project
+    }
+
+    #[test]
+    fn led_tap_resident_after_prewarm() {
+        let device = crate::test_device();
+        let mut comp = LayerCompositor::new(&device, 64, 64);
+        let project = led_project();
+
+        let outcome = comp.prewarm_led_resources(&device, None, (8, 120), &project);
+        assert_eq!(
+            outcome,
+            manifold_core::WarmupOutcome::Quiescent,
+            "LED resource warmup should be synchronous"
+        );
+        assert!(
+            comp.led_tap.is_some(),
+            "LED tap render target should be pre-created for LED projects"
+        );
+        assert!(
+            comp.led_main.is_some(),
+            "LED main ping-pong should be pre-created for LED projects"
+        );
     }
 }

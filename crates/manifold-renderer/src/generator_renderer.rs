@@ -2038,4 +2038,35 @@ mod warmup_tests {
         );
         set_transport_playing(false);
     }
+
+    /// D7 edit-time add-warmup: assigning a generator to a layer while the
+    /// transport is stopped must warm that layer through the same prewarm_layer
+    /// seam, leaving `layer_generators` populated.
+    #[test]
+    fn edit_time_generator_assignment_warms_when_stopped() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        let mut layer = Layer::new("Edit".to_string(), LayerType::Generator, 0);
+        layer.change_generator_type(PresetTypeId::new("TrivialPassthrough"));
+        let layer_id = layer.layer_id.clone();
+
+        // Simulate the command path: type change notification, then warm.
+        renderer.update_active_types_for_layer(&layer_id, layer.generator_type().clone());
+        let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
+        assert!(
+            matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
+            "edit-time warm of TrivialPassthrough must quiesce; got {:?}",
+            outcome
+        );
+        assert!(
+            renderer.layer_generators.contains_key(&layer_id),
+            "edit-time generator assignment must leave the layer warm"
+        );
+    }
 }
