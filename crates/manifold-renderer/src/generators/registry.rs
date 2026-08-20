@@ -70,32 +70,28 @@ impl GeneratorRegistry {
             }
         }
 
-        // BUG-037: `node.render_scene` and `node.gltf_texture_source` compile
-        // their GPU pipelines lazily inside `run()` (a hand-written
-        // `Option::get_or_insert_with`, not the codegen-path pipelines the
-        // bundled-preset loop above touches indirectly), gated on real
-        // project data (a material actually drawn, a texture actually
-        // decoded) that no bundled preset carries — so the loop above never
-        // reaches them. Neither pipeline depends on project/asset content
-        // (fixed shader source, fixed entry points), so both warm
-        // unconditionally here rather than waiting for a real glTF scene
-        // layer's first rendered frame to pay the compile cost
-        // (`RENDER_TRACE` showed `generators=37.1ms` on that frame).
+        // P4: these four hand-written pipeline families stay in the startup
+        // prewarm because none of them are reached by the atom codegen sweep
+        // below. They are fixed-source, fixed-entry-point pipelines independent
+        // of project content, so warming them once at startup populates the
+        // cross-launch metallib cache. Projects that use them also warm them
+        // via the P1 per-layer pre-roll, but deleting the startup call would make
+        // first-ever loads (and loads after cache eviction) pay the compile cost
+        // off the stage.
+        //
+        // `node.render_scene` is a hand-written EffectNode, not `primitive!`,
+        // with MSAA depth render-pipeline variants keyed on material kind /
+        // blend / velocity+AO+denoise auxiliary outputs.
         RenderScene::prewarm_pipelines(device);
+        // `node.gltf_texture_source` uses `primitive!` for ports/params but its
+        // runtime blit is a hand-written `create_compute_pipeline` kernel (no
+        // `wgsl_body`), so the atom sweep skips it.
         GltfTextureSource::prewarm_pipeline(device);
-        // BUG-037:
-        // `node.scatter_on_mesh` is a barriered multi-pass scan/reduce
-        // (exempt from the codegen path), so `prewarm_all_atom_codegen_pipelines`
-        // below never reaches its three hand-written pipelines either. Same
-        // asset-independent-fixed-source shape as the two lines above.
+        // `node.scatter_on_mesh` is a barriered three-pass scan/reduce; exempt
+        // from the codegen path.
         ScatterOnMesh::prewarm_pipelines(device);
-        // BUG-191: `node.spawn_from_image` is the same
-        // barriered-multi-pass, exempt-from-codegen shape as
-        // `scatter_on_mesh` above, and no bundled preset happens to
-        // reference it either — its four hand-written pipelines were never
-        // reached by any prewarm mechanism, so a project's first live use
-        // (e.g. a clip becoming active for the first time after a
-        // mid-timeline seek) paid the full compile cost on that frame.
+        // `node.spawn_from_image` is a barriered four-pass compact/scan/place;
+        // exempt from the codegen path.
         SeedParticlesFromTexture::prewarm_pipelines(device);
 
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
