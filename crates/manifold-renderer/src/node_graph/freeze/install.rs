@@ -719,6 +719,16 @@ pub fn segment_generation() -> u64 {
     SEGMENT_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Number of segment/effect-view compiles still in flight on the chain-fusion
+/// worker. Content thread only — the pending maps are thread-local. A return of
+/// zero means every prewarm job has been pumped and the cached results are
+/// available to the next chain build.
+pub fn prewarm_worker_pending_count() -> usize {
+    let segments = SEGMENT_PENDING.with(|p| p.borrow().len());
+    let effects = FUSED_EFFECT_PENDING.with(|p| p.borrow().len());
+    segments + effects
+}
+
 struct SegmentJob {
     key: u64,
     /// Owned def clones — the live defs can mutate under editing while the

@@ -1344,7 +1344,9 @@ impl ClipRenderer for GeneratorRenderer {
 
         // Collect layer-level string defaults from every clip, matching
         // `start_clip`'s first-touch behavior so the warm generator sees the
-        // same params as the first live clip launch.
+        // same params as the first live clip launch. A layer with no clips
+        // still warms bare — the defaults map stays empty and is passed to
+        // `install_layer_generator` directly.
         let mut layer_string_defaults = std::collections::BTreeMap::new();
         for c in &layer.clips {
             if let Some(map) = &c.string_params {
@@ -1367,7 +1369,19 @@ impl ClipRenderer for GeneratorRenderer {
         let manifest = layer.gen_params().map(|gp| &gp.params);
         let current_param_version: Option<u32> = manifest.map(|_| param_version);
 
-        if !self.install_layer_generator(
+        // D11: activate the layer's first clip through the production
+        // `start_clip` path before rendering, so clip-context topology
+        // (including any clip-post-fx chain state) is built during warmup
+        // and not on stage. `fire_clip_edge=false` keeps the clip-launch
+        // trigger counter clean — the post-warmup trigger-state re-clear
+        // handles the rest.
+        let first_clip = layer.clips.first();
+        if let Some(clip) = first_clip {
+            let layers = std::slice::from_ref(layer);
+            if !self.start_clip(clip, Seconds(0.0), layers, 0, false) {
+                return manifold_core::WarmupOutcome::InstallFailed;
+            }
+        } else if !self.install_layer_generator(
             layer_id.clone(),
             gen_type,
             override_def,
@@ -1380,18 +1394,12 @@ impl ClipRenderer for GeneratorRenderer {
             relight,
             relight_params,
         ) {
-            return manifold_core::WarmupOutcome::BudgetExhausted {
-                cap: manifold_core::WarmupCap::PerLayerFrames,
-                elapsed: std::time::Duration::ZERO,
-            };
+            return manifold_core::WarmupOutcome::InstallFailed;
         }
 
         // Pre-build the merged string-params cache so `render()` sees the same
         // map the per-frame sweep would build for an active clip.
-        let first_clip_params = layer
-            .clips
-            .first()
-            .and_then(|c| c.string_params.as_ref());
+        let first_clip_params = first_clip.and_then(|c| c.string_params.as_ref());
         if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
             ls.merged_string_params.clone_from(&ls.layer_string_defaults);
             if let Some(map) = first_clip_params {
@@ -1484,6 +1492,21 @@ impl ClipRenderer for GeneratorRenderer {
         // Recycle the scratch target at the current canvas size.
         scratch.resize(&device, self.width, self.height);
         self.available_rts.push(scratch);
+
+        // The frame-cap exhausted path leaves the initial placeholder value
+        // with a zero elapsed — stamp the real wall time so the log is honest
+        // and budget-exhausted layers don't look like install failures.
+        if let manifold_core::WarmupOutcome::BudgetExhausted {
+            cap: manifold_core::WarmupCap::PerLayerFrames,
+            elapsed,
+        } = outcome
+            && elapsed.is_zero()
+        {
+            return manifold_core::WarmupOutcome::BudgetExhausted {
+                cap: manifold_core::WarmupCap::PerLayerFrames,
+                elapsed: layer_start.elapsed(),
+            };
+        }
         outcome
     }
 

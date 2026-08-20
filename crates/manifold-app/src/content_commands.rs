@@ -113,11 +113,37 @@ impl ContentThread {
         let budget = manifold_core::WarmupBudget::default();
         let start = std::time::Instant::now();
         let mut any_budget_exhausted = false;
+        let mut any_install_failed = false;
 
         // Warmup is the boundary where cold touches are *expected*. Reset the
         // detector so any first-touch cost it triggers is not counted against
         // the subsequent playback sample window.
         manifold_core::cold_touch::reset_cold_touch_counts();
+
+        // D12: wait for the chain-fusion worker queue to drain BEFORE the
+        // per-layer chain pre-roll, so fused segment / per-card view swap-ins
+        // happen during warmup instead of on stage. The pending maps live on
+        // the content thread (thread-local), so this is a query, not new
+        // shared state.
+        let drain_start = std::time::Instant::now();
+        let mut drain_logged = false;
+        while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+            if start.elapsed() >= budget.total {
+                log::warn!(
+                    "[ContentThread] Warmup fusion worker drain timed out after {:.1?}; \
+                     chains may swap in fused segments during playback",
+                    drain_start.elapsed()
+                );
+                any_budget_exhausted = true;
+                break;
+            }
+            manifold_renderer::node_graph::freeze::install::pump_segment_results();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !drain_logged && drain_start.elapsed() >= std::time::Duration::from_secs(1) {
+                log::info!("[ContentThread] Waiting for fusion worker drain...");
+                drain_logged = true;
+            }
+        }
 
         log::info!("[ContentThread] Starting warmup for {total} layers");
         for (done, (layer_index, _layer_id, layer_name)) in warmup_layers.iter().enumerate() {
@@ -163,6 +189,14 @@ impl ContentThread {
             // 1.5s and `last_response` only advances on content frames.
             self.ableton_bridge.update(self.time_since_start.0);
 
+            // Remember the first clip so we can stop it after chain warmup.
+            // Stopping returns the clip's render target to the pool.
+            let first_clip_id = self
+                .engine
+                .project()
+                .and_then(|p| p.timeline.layers.get(*layer_index))
+                .and_then(|l| l.clips.first().map(|c| c.id.clone()));
+
             // Re-borrow the layer and every renderer through the split borrow
             // so the immutable project reference and mutable renderer references
             // can coexist. Each renderer's `prewarm_layer` no-ops for content it
@@ -172,39 +206,95 @@ impl ContentThread {
                 && let Some(layer) = p.timeline.layers.get(*layer_index)
             {
                 for renderer in renderers.iter_mut() {
-                    if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } =
-                        renderer.prewarm_layer(layer, budget)
-                    {
-                        log::warn!(
-                            "[ContentThread] Warmup budget exhausted ({cap:?}) for a renderer on \
-                             layer '{}' ({}) after {elapsed:.1?}; layer may first-touch once at play",
-                            layer_name.as_str(),
-                            _layer_id.as_str()
-                        );
-                        any_budget_exhausted = true;
+                    match renderer.prewarm_layer(layer, budget) {
+                        manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                            log::warn!(
+                                "[ContentThread] Warmup budget exhausted ({cap:?}) for a renderer on \
+                                 layer '{}' ({}) after {elapsed:.1?}; layer may first-touch once at play",
+                                layer_name.as_str(),
+                                _layer_id.as_str()
+                            );
+                            any_budget_exhausted = true;
+                        }
+                        manifold_core::WarmupOutcome::InstallFailed => {
+                            log::error!(
+                                "[ContentThread] Warmup install failed for layer '{}' ({}); \
+                                 generator construction failed — layer will be cold on stage",
+                                layer_name.as_str(),
+                                _layer_id.as_str()
+                            );
+                            any_install_failed = true;
+                        }
+                        manifold_core::WarmupOutcome::Quiescent => {}
                     }
                 }
             }
 
-            // P2: warm the layer's post-fx chain via the same production
-            // construction path the first active frame would use. Skip if the
-            // generator pre-roll already ate the whole layer budget or the
-            // total load budget is gone.
-            if start.elapsed() < budget.total
-                && let Some(layer) = self
+            // P2/D11: warm the layer's post-fx chain while the generator's
+            // first clip is still active. Skip if the generator pre-roll or the
+            // total load budget already ran out.
+            let mut chain_warm_loops = 0;
+            while start.elapsed() < budget.total && chain_warm_loops < 3 {
+                chain_warm_loops += 1;
+
+                if let Some(layer) = self
                     .engine
                     .project()
                     .and_then(|p| p.timeline.layers.get(*layer_index))
-            {
-                let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
-                if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } = chain_outcome {
-                    log::warn!(
-                        "[ContentThread] Warmup chain budget exhausted ({cap:?}) for layer '{}' ({}) after {elapsed:.1?}; \
-                         chain may first-touch once at play",
-                        layer_name.as_str(),
-                        _layer_id.as_str()
-                    );
-                    any_budget_exhausted = true;
+                {
+                    let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
+                    if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } = chain_outcome {
+                        log::warn!(
+                            "[ContentThread] Warmup chain budget exhausted ({cap:?}) for layer '{}' ({}) after {elapsed:.1?}; \
+                             chain may first-touch once at play",
+                            layer_name.as_str(),
+                            _layer_id.as_str()
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                }
+
+                // D12: each chain pre-roll can enqueue per-card fused views or
+                // segment compiles. Wait for the worker to drain; if it produced
+                // new pending work, run chain pre-roll again so the swap-in
+                // rebuild happens during warmup rather than on stage. The loop
+                // stops once a chain pass produces no new worker jobs (or the
+                // budget / loop cap is hit).
+                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                if pending_after == 0 {
+                    break;
+                }
+                let drain_start = std::time::Instant::now();
+                let mut drain_logged = false;
+                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                    if start.elapsed() >= budget.total {
+                        log::warn!(
+                            "[ContentThread] Warmup chain-fusion drain timed out after {:.1?}; \
+                             chains may swap in fused views during playback",
+                            drain_start.elapsed()
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    if !drain_logged
+                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
+                    {
+                        log::info!("[ContentThread] Waiting for chain-fusion drain...");
+                        drain_logged = true;
+                    }
+                }
+            }
+
+            // Stop the warmed clip so its render target returns to the pool.
+            // GeneratorRenderer::prewarm_layer activated the first clip via the
+            // production path; other renderers no-op if the clip wasn't active.
+            if let Some(ref clip_id) = first_clip_id {
+                let renderers = self.engine.renderers_mut();
+                for renderer in renderers.iter_mut() {
+                    renderer.stop_clip(clip_id.as_str());
                 }
             }
         }
@@ -233,7 +323,9 @@ impl ContentThread {
             self.content_pipeline.prewarm_led_resources(p);
         }
 
-        let status = if any_budget_exhausted {
+        let status = if any_install_failed {
+            "completed with install failure(s)"
+        } else if any_budget_exhausted {
             "completed with budget exhaustion"
         } else {
             "completed"
