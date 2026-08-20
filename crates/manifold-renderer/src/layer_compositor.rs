@@ -9,7 +9,7 @@ use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
-use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupBudget, WarmupOutcome};
+use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupBudget, WarmupCap, WarmupOutcome};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -796,6 +796,21 @@ impl LayerCompositor {
         budget: WarmupBudget,
         device: &GpuDevice,
     ) -> WarmupOutcome {
+        let output_dims = (self.main.width(), self.main.height());
+        self.prewarm_layer_chains_with_output(layer, budget, device, output_dims)
+    }
+
+    /// Warm up the per-layer post-fx chain for `layer`, using the supplied
+    /// output dimensions instead of assuming they match the render dimensions.
+    /// Some chains size intermediate targets from `output_width`/`output_height`,
+    /// so warming with the real output dims prevents a rebuild on the first frame.
+    pub fn prewarm_layer_chains_with_output(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
         let effects = layer.effects();
         if !has_enabled_effects(effects) {
             return WarmupOutcome::Quiescent;
@@ -812,6 +827,7 @@ impl LayerCompositor {
 
         let width = self.main.width();
         let height = self.main.height();
+        let (output_width, output_height) = output_dims;
         let mut scratch = RenderTarget::new(
             device,
             width,
@@ -850,8 +866,8 @@ impl LayerCompositor {
                     dt: DT as f32,
                     width,
                     height,
-                    output_width: width,
-                    output_height: height,
+                    output_width,
+                    output_height,
                     aspect: if height > 0 {
                         width as f32 / height as f32
                     } else {
@@ -908,6 +924,315 @@ impl LayerCompositor {
         // A warmed chain's output target is owned by the cached PresetRuntime;
         // the scratch is only an input stand-in.
         outcome
+    }
+
+    /// Pump a single effect-chain slot against a cleared stand-in input until
+    /// its async work quiesces or the per-layer budget is exhausted.
+    fn pump_chain_warmup(
+        uniform_arena: &mut UniformArena,
+        chain: &mut Option<PresetRuntime>,
+        device: &GpuDevice,
+        input_texture: &GpuTexture,
+        effects: &[PresetInstance],
+        groups: &[EffectGroup],
+        ctx: &PresetContext,
+        scope: &str,
+        budget: WarmupBudget,
+    ) -> WarmupOutcome {
+        let start = std::time::Instant::now();
+        let mut outcome = WarmupOutcome::BudgetExhausted {
+            cap: WarmupCap::PerLayerFrames,
+            elapsed: std::time::Duration::ZERO,
+        };
+
+        for _frame in 0..budget.per_layer_frames {
+            if start.elapsed() >= budget.per_layer {
+                outcome = WarmupOutcome::BudgetExhausted {
+                    cap: WarmupCap::PerLayerWallClock,
+                    elapsed: start.elapsed(),
+                };
+                break;
+            }
+
+            uniform_arena.reset();
+            let mut native_enc = device.create_encoder("warmup chain");
+            {
+                let mut gpu = GpuEncoder::new(&mut native_enc, device);
+                gpu.uniform_arena = Some(uniform_arena as *mut UniformArena);
+                gpu.clear_texture(input_texture, 0.0, 0.0, 0.0, 0.0);
+                Self::apply_effects(
+                    chain,
+                    &mut gpu,
+                    input_texture,
+                    effects,
+                    groups,
+                    ctx,
+                    None,
+                    scope,
+                    false,
+                    crate::node_graph::RtQuality::default(),
+                );
+            }
+            native_enc.commit_and_wait_completed();
+            uniform_arena.flush(device);
+
+            if let Some(cg) = chain.as_ref()
+                && !cg.warmup_pending()
+            {
+                outcome = WarmupOutcome::Quiescent;
+                break;
+            }
+
+            if let Some(cg) = chain.as_ref()
+                && cg.warmup_pending()
+            {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+
+        outcome
+    }
+
+    /// Warm up the master effect chain so the first frame with master FX
+    /// doesn't pay chain construction on stage. Also warms the LED master
+    /// chain when the project routes layers to LEDs.
+    pub fn prewarm_master_chain(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+    ) -> WarmupOutcome {
+        let effects = &project.settings.master_effects;
+        if !has_enabled_effects(effects) {
+            return WarmupOutcome::Quiescent;
+        }
+        let groups = project.settings.master_effect_groups.as_deref().unwrap_or(&[]);
+
+        let width = self.main.width();
+        let height = self.main.height();
+        let mut scratch = RenderTarget::new(
+            device,
+            width,
+            height,
+            GpuTextureFormat::Rgba16Float,
+            "warmup master scratch",
+        );
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width,
+            height,
+            output_width: width,
+            output_height: height,
+            aspect: if height > 0 {
+                width as f32 / height as f32
+            } else {
+                1.0
+            },
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let outcome = Self::pump_chain_warmup(
+            &mut self.uniform_arena,
+            &mut self.master_effect_chain,
+            device,
+            &scratch.texture,
+            effects,
+            groups,
+            &ctx,
+            "master",
+            budget,
+        );
+
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.blit_to_led);
+        if !has_led_layers {
+            scratch.resize(device, width, height);
+            return outcome;
+        }
+
+        let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
+        if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
+            self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
+        }
+        if self.led_master_ec.is_none() {
+            self.led_master_ec = Some(None);
+        }
+
+        let led_ec = self.led_master_ec.as_mut().expect("inserted above");
+        let led_main = self.led_main.as_mut().expect("inserted above");
+        let led_ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: led_w,
+            height: led_h,
+            output_width: led_w,
+            output_height: led_h,
+            aspect: if led_h > 0 {
+                led_w as f32 / led_h as f32
+            } else {
+                1.0
+            },
+            owner_key: LED_MASTER_OWNER_KEY,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let led_outcome = Self::pump_chain_warmup(
+            &mut self.uniform_arena,
+            led_ec,
+            device,
+            led_main.source_texture(),
+            effects,
+            groups,
+            &led_ctx,
+            "led:master",
+            budget,
+        );
+
+        scratch.resize(device, width, height);
+        if outcome == WarmupOutcome::Quiescent {
+            led_outcome
+        } else {
+            outcome
+        }
+    }
+
+    /// Warm up every group-level effect chain that carries enabled effects.
+    /// Groups fold child layers before the final blend; warming here removes
+    /// the first group-FX build from the first frame. Also warms the LED group
+    /// chains when the project routes layers to LEDs.
+    pub fn prewarm_group_chains(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        let group_layers: Vec<&manifold_core::layer::Layer> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.is_group() && has_enabled_effects(l.effects()))
+            .collect();
+        if group_layers.is_empty() {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.blit_to_led);
+        let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
+        let (width, height) = (self.main.width(), self.main.height());
+        let (output_width, output_height) = output_dims;
+        let mut any_exhausted = false;
+        let mut last_outcome = WarmupOutcome::Quiescent;
+
+        for group in group_layers {
+            self.ensure_group_buf(&group.layer_id, device, pool);
+            self.ensure_group_chain(&group.layer_id);
+            let Some(group_buf) = self.group_bufs.get_mut(&group.layer_id) else {
+                continue;
+            };
+            let Some(group_chain) = self.group_effect_chains.get_mut(&group.layer_id) else {
+                continue;
+            };
+            let ctx = PresetContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width,
+                height,
+                output_width,
+                output_height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
+                owner_key: group_id_owner_key(&group.layer_id),
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let scope = fx_scope(&group.layer_id);
+            let outcome = Self::pump_chain_warmup(
+                &mut self.uniform_arena,
+                group_chain,
+                device,
+                group_buf.source_texture(),
+                group.effects(),
+                group.effect_groups(),
+                &ctx,
+                &scope,
+                budget,
+            );
+            if outcome != WarmupOutcome::Quiescent {
+                any_exhausted = true;
+                last_outcome = outcome;
+            }
+
+            if !has_led_layers {
+                continue;
+            }
+            self.ensure_led_group_buf(&group.layer_id, device, pool, led_w, led_h);
+            self.ensure_led_group_chain(&group.layer_id);
+            let Some(led_group_buf) = self.led_group_bufs.get_mut(&group.layer_id) else {
+                continue;
+            };
+            let Some(led_group_chain) = self.led_group_effect_chains.get_mut(&group.layer_id) else {
+                continue;
+            };
+            let led_ctx = PresetContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width: led_w,
+                height: led_h,
+                output_width: led_w,
+                output_height: led_h,
+                aspect: if led_h > 0 {
+                    led_w as f32 / led_h as f32
+                } else {
+                    1.0
+                },
+                owner_key: group_id_owner_key(&group.layer_id),
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let led_scope = led_scope(&group.layer_id);
+            let led_outcome = Self::pump_chain_warmup(
+                &mut self.uniform_arena,
+                led_group_chain,
+                device,
+                led_group_buf.source_texture(),
+                group.effects(),
+                group.effect_groups(),
+                &led_ctx,
+                &led_scope,
+                budget,
+            );
+            if led_outcome != WarmupOutcome::Quiescent {
+                any_exhausted = true;
+                last_outcome = led_outcome;
+            }
+        }
+
+        if any_exhausted {
+            last_outcome
+        } else {
+            WarmupOutcome::Quiescent
+        }
     }
 
     /// Pre-create LED tap / composite resources when the loaded project routes
@@ -2456,6 +2781,16 @@ impl Compositor for LayerCompositor {
         self.prewarm_layer_chains(layer, budget, device)
     }
 
+    fn prewarm_layer_chains_with_output(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        self.prewarm_layer_chains_with_output(layer, budget, device, output_dims)
+    }
+
     fn prewarm_led_resources(
         &mut self,
         device: &GpuDevice,
@@ -2464,6 +2799,29 @@ impl Compositor for LayerCompositor {
         project: &manifold_core::project::Project,
     ) -> WarmupOutcome {
         self.prewarm_led_resources(device, pool, led_grid_size, project)
+    }
+
+    fn prewarm_master_chain(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+    ) -> WarmupOutcome {
+        self.prewarm_master_chain(project, budget, device, pool, led_grid_size)
+    }
+
+    fn prewarm_group_chains(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        self.prewarm_group_chains(project, budget, device, pool, led_grid_size, output_dims)
     }
 
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {

@@ -106,10 +106,6 @@ impl ContentThread {
             .map(|(i, l)| (i, l.layer_id.clone(), l.name.clone()))
             .collect();
         let total = warmup_layers.len() as u32;
-        if total == 0 {
-            return;
-        }
-
         let budget = manifold_core::WarmupBudget::default();
         let start = std::time::Instant::now();
         let mut any_budget_exhausted = false;
@@ -145,7 +141,9 @@ impl ContentThread {
             }
         }
 
-        log::info!("[ContentThread] Starting warmup for {total} layers");
+        if total > 0 {
+            log::info!("[ContentThread] Starting warmup for {total} layers");
+        }
         for (done, (layer_index, _layer_id, layer_name)) in warmup_layers.iter().enumerate() {
             // Abort early on shutdown so a quit during a long warm doesn't hang.
             match cmd_rx.try_recv() {
@@ -321,6 +319,112 @@ impl ContentThread {
                 );
             }
             self.content_pipeline.prewarm_led_resources(p);
+        }
+
+        // P5c: warm the master and group effect chains after per-layer chains
+        // and the fusion worker have drained, so global chains don't rebuild on
+        // the first playback frame. Each pass is followed by a fusion-worker
+        // drain and re-primed if the worker produced new segment compiles.
+        if let Some(p) = self.engine.project() {
+            while start.elapsed() < budget.total {
+                match self.content_pipeline.prewarm_master_chain(p, budget) {
+                    manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                        log::warn!(
+                            "[ContentThread] Warmup master-chain budget exhausted ({cap:?}) after {elapsed:.1?}; \
+                             master FX may first-touch once at play"
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_core::WarmupOutcome::InstallFailed => {
+                        log::error!(
+                            "[ContentThread] Warmup master-chain install failed; \
+                             master FX will be cold on stage"
+                        );
+                        any_install_failed = true;
+                        break;
+                    }
+                    manifold_core::WarmupOutcome::Quiescent => {}
+                }
+
+                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                if pending_after == 0 {
+                    break;
+                }
+                let drain_start = std::time::Instant::now();
+                let mut drain_logged = false;
+                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                    if start.elapsed() >= budget.total {
+                        log::warn!(
+                            "[ContentThread] Warmup master-chain fusion drain timed out after {:.1?}; \
+                             master FX may swap in fused segments during playback",
+                            drain_start.elapsed()
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    if !drain_logged
+                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
+                    {
+                        log::info!("[ContentThread] Waiting for master-chain fusion drain...");
+                        drain_logged = true;
+                    }
+                }
+            }
+
+            while start.elapsed() < budget.total {
+                let output_dims = (
+                    p.settings.output_width.max(1) as u32,
+                    p.settings.output_height.max(1) as u32,
+                );
+                match self.content_pipeline.prewarm_group_chains(p, budget, output_dims) {
+                    manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                        log::warn!(
+                            "[ContentThread] Warmup group-chain budget exhausted ({cap:?}) after {elapsed:.1?}; \
+                             group FX may first-touch once at play"
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_core::WarmupOutcome::InstallFailed => {
+                        log::error!(
+                            "[ContentThread] Warmup group-chain install failed; \
+                             group FX will be cold on stage"
+                        );
+                        any_install_failed = true;
+                        break;
+                    }
+                    manifold_core::WarmupOutcome::Quiescent => {}
+                }
+
+                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                if pending_after == 0 {
+                    break;
+                }
+                let drain_start = std::time::Instant::now();
+                let mut drain_logged = false;
+                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                    if start.elapsed() >= budget.total {
+                        log::warn!(
+                            "[ContentThread] Warmup group-chain fusion drain timed out after {:.1?}; \
+                             group FX may swap in fused segments during playback",
+                            drain_start.elapsed()
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    if !drain_logged
+                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
+                    {
+                        log::info!("[ContentThread] Waiting for group-chain fusion drain...");
+                        drain_logged = true;
+                    }
+                }
+            }
         }
 
         let status = if any_install_failed {

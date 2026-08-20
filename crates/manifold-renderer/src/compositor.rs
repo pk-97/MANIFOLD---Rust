@@ -304,6 +304,19 @@ pub trait Compositor: Send {
         WarmupOutcome::Quiescent
     }
 
+    /// Warm up the per-layer post-fx chain for `layer` using the given output
+    /// dimensions instead of the render dimensions. Default no-op for
+    /// compositors without effect chains.
+    fn prewarm_layer_chains_with_output(
+        &mut self,
+        _layer: &Layer,
+        _budget: WarmupBudget,
+        _device: &manifold_gpu::GpuDevice,
+        _output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        WarmupOutcome::Quiescent
+    }
+
     /// Warm up LED tap / composite resources when the project routes layers to
     /// LEDs. Default no-op for compositors without an LED path.
     fn prewarm_led_resources(
@@ -312,6 +325,35 @@ pub trait Compositor: Send {
         _pool: Option<&manifold_gpu::TexturePool>,
         _led_grid_size: (u32, u32),
         _project: &Project,
+    ) -> WarmupOutcome {
+        WarmupOutcome::Quiescent
+    }
+
+    /// Warm up the master/global effect chain so the first frame with master FX
+    /// doesn't pay chain construction on stage. Default no-op for compositors
+    /// without a master effect chain.
+    fn prewarm_master_chain(
+        &mut self,
+        _project: &Project,
+        _budget: WarmupBudget,
+        _device: &manifold_gpu::GpuDevice,
+        _pool: Option<&manifold_gpu::TexturePool>,
+        _led_grid_size: (u32, u32),
+    ) -> WarmupOutcome {
+        WarmupOutcome::Quiescent
+    }
+
+    /// Warm up every group-level effect chain that carries enabled effects so
+    /// the first group fold doesn't pay chain construction on stage. Default
+    /// no-op for compositors without group effect chains.
+    fn prewarm_group_chains(
+        &mut self,
+        _project: &Project,
+        _budget: WarmupBudget,
+        _device: &manifold_gpu::GpuDevice,
+        _pool: Option<&manifold_gpu::TexturePool>,
+        _led_grid_size: (u32, u32),
+        _output_dims: (u32, u32),
     ) -> WarmupOutcome {
         WarmupOutcome::Quiescent
     }
