@@ -178,6 +178,9 @@ pub struct PlaybackEngine {
     timeline_active_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for timeline active clip indices from get_active_clips_at_beat.
     active_indices_scratch: Vec<(usize, usize)>,
+    /// Pre-allocated scratch for per-layer active clip indices passed to
+    /// `get_active_clips_at_beat_ref`.
+    active_layer_indices_scratch: Vec<usize>,
     /// Pre-allocated scratch for live slot refs (avoids per-frame Vec allocation).
     live_slot_refs_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for session-slot refs — the third `sync_clips_to_time`
@@ -245,7 +248,7 @@ pub struct PlaybackEngine {
     timeline_query_frame: u64,
     became_ready_list: Vec<ClipId>,
     clips_to_stop_drift: Vec<ClipId>,
-    prewarm_candidates: Vec<TimelineClip>,
+    prewarm_candidates: Vec<(TimelineClip, bool)>,
     compositor_fallback_clips: Vec<ActiveClipRef>,
 
     // Prewarm state. Port of C# PlaybackEngine prewarm fields.
@@ -318,6 +321,7 @@ impl PlaybackEngine {
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
             active_indices_scratch: Vec::with_capacity(32),
+            active_layer_indices_scratch: Vec::with_capacity(8),
             live_slot_refs_scratch: Vec::with_capacity(8),
             session_refs_scratch: Vec::with_capacity(8),
             session_wrap_restart_scratch: Vec::with_capacity(4),
@@ -1013,23 +1017,30 @@ impl PlaybackEngine {
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
-        //    Only runs while compositor dirty deadline is active or generators are running.
-        let has_active_clips = !self.active_clip_renderers.is_empty();
-        let compositor_dirty =
-            ctx.realtime_now.0 < self.compositor_dirty_deadline || has_active_clips;
-
-        let ready = if compositor_dirty {
-            self.filter_ready_clips(ctx.pre_render_dt)
+        //    With hot mute, ready clips on hidden layers don't keep the
+        //    compositor running, so a fully-muted paused rig idles.
+        let ready = self.filter_ready_clips(ctx.pre_render_dt);
+        let has_visible_ready = if let Some(project) = &self.project {
+            let layers = &project.timeline.layers;
+            let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
+            ready.iter().any(|clip| {
+                let layer_index = clip.layer_index as usize;
+                layers.get(layer_index).is_some_and(|layer| {
+                    let parent = manifold_core::layer::Layer::find_parent_layer(layers, layer_index)
+                        .map(|(_, p)| p);
+                    !layer.is_hidden(parent, any_solo_video)
+                })
+            })
         } else {
-            Vec::new()
+            false
         };
+        let compositor_dirty =
+            ctx.realtime_now.0 < self.compositor_dirty_deadline || has_visible_ready;
 
         TickResult {
             ready_clips: ready,
             compositor_dirty,
-            should_clear_compositor: !compositor_dirty
-                && self.active_clip_renderers.is_empty()
-                && !self.has_pending_clip_state(),
+            should_clear_compositor: !compositor_dirty && !has_visible_ready && !self.has_pending_clip_state(),
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
@@ -1050,13 +1061,15 @@ impl PlaybackEngine {
         }
 
         // Step 2: query active clips and build lightweight refs
-        // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch)
+        // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch/active_layer_indices_scratch)
         self.timeline_active_scratch.clear();
         if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            project
-                .timeline
-                .get_active_clips_at_beat_ref(beat, &mut self.active_indices_scratch);
+            project.timeline.get_active_clips_at_beat_ref(
+                beat,
+                &mut self.active_indices_scratch,
+                &mut self.active_layer_indices_scratch,
+            );
         }
         if let Some(project) = &self.project {
             for (li, ci) in &self.active_indices_scratch {
@@ -1081,6 +1094,7 @@ impl PlaybackEngine {
                         duration_beats: clip.duration_beats,
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
+                        is_muted: clip.is_muted,
                     });
                 }
             }
@@ -2528,24 +2542,21 @@ impl PlaybackEngine {
         let window_start = self.current_time - Seconds(LOOKAHEAD_PREWARM_BEHIND_TIME as f64);
         let window_end = self.current_time + Seconds(LOOKAHEAD_PREWARM_AHEAD_TIME as f64);
 
-        // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow)
+        // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow).
+        // Mute/solo/clip-mute are presentational (P2), so prewarm considers every
+        // video clip in the window and ranks visible layers first.
         self.prewarm_candidates.clear();
         if let Some(project) = &self.project {
-            let any_solo = project.timeline.layers.iter().any(|l| l.is_solo);
             let fallback_bpm = project.settings.bpm;
+            let layers = &project.timeline.layers;
+            let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
 
-            for layer in &project.timeline.layers {
-                if layer.is_muted {
-                    continue;
-                }
-                if any_solo && !layer.is_solo {
-                    continue;
-                }
+            for (li, layer) in layers.iter().enumerate() {
+                let parent = manifold_core::layer::Layer::find_parent_layer(layers, li)
+                    .map(|(_, p)| p);
+                let hidden = layer.is_hidden(parent, any_solo_video);
 
                 for clip in &layer.clips {
-                    if clip.video_clip_id.is_empty() || clip.is_muted {
-                        continue;
-                    }
                     if clip.video_clip_id.is_empty() {
                         continue;
                     }
@@ -2566,21 +2577,27 @@ impl PlaybackEngine {
                     if clip_start > window_end {
                         continue;
                     }
-                    self.prewarm_candidates.push(clip.clone());
+                    self.prewarm_candidates.push((clip.clone(), hidden));
                 }
             }
         }
 
-        self.prewarm_candidates.sort_unstable_by(|a, b| {
-            a.start_beat
-                .partial_cmp(&b.start_beat)
-                .unwrap_or(std::cmp::Ordering::Equal)
+        // Rank visible-first so a muted layer's earlier clip can't evict a
+        // visible layer's next clip from the prewarm cap (D7b).
+        self.prewarm_candidates.sort_unstable_by(|(a, a_hidden), (b, b_hidden)| {
+            a_hidden
+                .cmp(b_hidden)
+                .then_with(|| {
+                    a.start_beat
+                        .partial_cmp(&b.start_beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
         });
 
         // Build prewarm set from candidates
         let mut prewarm_set: HashMap<String, crate::video_time::PrewarmCandidate> = HashMap::new();
         if let Some(project) = &self.project {
-            for clip in &self.prewarm_candidates {
+            for (clip, _hidden) in &self.prewarm_candidates {
                 if prewarm_set.len() >= LOOKAHEAD_PREWARM_MAX_UNIQUE_CLIPS {
                     break;
                 }

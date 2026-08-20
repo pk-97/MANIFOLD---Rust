@@ -384,6 +384,17 @@ impl Layer {
         self.layer_type == LayerType::Group
     }
 
+    /// Whether this layer is hidden from the visual composite by mute/solo.
+    /// `parent` is the immediate group parent (if any); `any_solo_video` is
+    /// true when any non-audio layer is soloed. Audio layers are never passed
+    /// here — their mute/solo is an audible bus, not a visual gate.
+    #[inline]
+    pub fn is_hidden(&self, parent: Option<&Layer>, any_solo_video: bool) -> bool {
+        self.is_muted
+            || parent.is_some_and(|p| p.is_muted)
+            || (any_solo_video && !self.is_solo && !parent.is_some_and(|p| p.is_solo))
+    }
+
     /// Get the generator type for this layer (from genParams or legacy field).
     pub fn generator_type(&self) -> &PresetTypeId {
         if let Some(gp) = &self.gen_params {
@@ -396,6 +407,25 @@ impl Layer {
     }
 
 
+
+    /// True when any non-audio layer is soloed. Audio layers have their own
+    /// solo/mute bus (audible, not visual) and must not affect video visibility.
+    pub fn any_solo_video(layers: &[Layer]) -> bool {
+        layers.iter().filter(|l| !l.is_audio()).any(|l| l.is_solo)
+    }
+
+    /// Find the parent group layer for a child in a slice of layers in tree order.
+    /// Returns the parent's positional index and a reference. `None` when the
+    /// child has no parent or the parent is not present.
+    pub fn find_parent_layer(layers: &[Layer], child_index: usize) -> Option<(usize, &Layer)> {
+        let parent_id = layers.get(child_index)?.parent_layer_id.as_ref()?;
+        for i in (0..child_index).rev() {
+            if layers[i].layer_id == *parent_id {
+                return Some((i, &layers[i]));
+            }
+        }
+        None
+    }
 
     /// Ensure both clip ordering caches are up-to-date.
     /// From Unity Layer.cs EnsureClipOrderingCaches (lines 457-473).
@@ -444,7 +474,8 @@ impl Layer {
         }
 
         // Index into clips_by_end_indices where end_beat > beat starts
-        let end_idx = Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, beat);
+        let end_idx =
+            Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, beat);
         let ending_after_count = self.clips_by_end_indices.len() - end_idx;
 
         // Iterate the smaller candidate set
@@ -452,30 +483,23 @@ impl Layer {
             // Scan the start-sorted prefix: clips 0..started_count where start_beat <= beat
             for i in 0..started_count {
                 let clip = &self.clips[i];
-                if clip.is_muted {
-                    continue;
-                }
                 if beat < clip.end_beat() {
                     results.push(i);
                 }
             }
         } else {
-            // Scan the end-sorted suffix: clips where end_beat > beat
-            // Collect into scratch, sort by start_beat for deterministic ordering
-            let mut scratch: Vec<usize> = Vec::new();
+            // Scan the end-sorted suffix: clips where end_beat > beat.
+            // Push into the caller's buffer, then sort only the tail we added
+            // so deterministic per-layer ordering is preserved.
+            let start = results.len();
             for i in end_idx..self.clips_by_end_indices.len() {
                 let ci = self.clips_by_end_indices[i];
                 let clip = &self.clips[ci];
-                if clip.is_muted {
-                    continue;
-                }
                 if clip.start_beat <= beat {
-                    scratch.push(ci);
+                    results.push(ci);
                 }
             }
-            // Preserve deterministic per-layer ordering (sort by clip index in start-sorted order)
-            scratch.sort_unstable();
-            results.extend(scratch);
+            results[start..].sort_unstable();
         }
     }
 
@@ -539,7 +563,11 @@ impl Layer {
 
     /// Convenience: ensure caches + collect active clips in one &mut self call.
     /// Use when you don't need to split the borrow.
-    pub fn collect_active_clips_at_beat_mut(&mut self, beat: Beats, results: &mut Vec<usize>) {
+    pub fn collect_active_clips_at_beat_mut(
+        &mut self,
+        beat: Beats,
+        results: &mut Vec<usize>,
+    ) {
         self.ensure_clip_ordering_caches();
         self.collect_active_clips_at_beat(beat, results);
     }
@@ -1270,5 +1298,66 @@ mod tests {
         layer.detect_stem_role = Some(DetectStemRole::Other);
         let json = serde_json::to_string(&layer).unwrap();
         assert!(json.contains("\"detectStemRole\":\"other\""));
+    }
+
+    #[test]
+    fn muted_layer_is_hidden() {
+        let mut layer = Layer::new("Muted".into(), LayerType::Video, 0);
+        layer.is_muted = true;
+        assert!(layer.is_hidden(None, false));
+    }
+
+    #[test]
+    fn unmuted_layer_with_no_solo_is_visible() {
+        let layer = Layer::new("Visible".into(), LayerType::Video, 0);
+        assert!(!layer.is_hidden(None, false));
+    }
+
+    #[test]
+    fn parent_muted_hides_child() {
+        let mut parent = Layer::new("Parent".into(), LayerType::Group, 0);
+        parent.is_muted = true;
+        let mut child = Layer::new("Child".into(), LayerType::Video, 1);
+        child.parent_layer_id = Some(parent.layer_id.clone());
+        assert!(child.is_hidden(Some(&parent), false));
+    }
+
+    #[test]
+    fn parent_solo_saves_child_from_any_solo() {
+        let mut parent = Layer::new("Parent".into(), LayerType::Group, 0);
+        parent.is_solo = true;
+        let mut child = Layer::new("Child".into(), LayerType::Video, 1);
+        child.parent_layer_id = Some(parent.layer_id.clone());
+        // Another unrelated layer is soloed, but the parent is soloed too.
+        assert!(!child.is_hidden(Some(&parent), true));
+    }
+
+    #[test]
+    fn solo_loser_is_hidden() {
+        let mut solo = Layer::new("Solo".into(), LayerType::Video, 0);
+        solo.is_solo = true;
+        let loser = Layer::new("Loser".into(), LayerType::Video, 1);
+        assert!(loser.is_hidden(None, true));
+        assert!(!solo.is_hidden(None, true));
+    }
+
+    #[test]
+    fn audio_solo_does_not_count_as_any_solo_video() {
+        let mut audio = Layer::new_audio("Drums".into(), 0);
+        audio.is_solo = true;
+        let video = Layer::new("Video".into(), LayerType::Video, 1);
+        let any_solo = Layer::any_solo_video(&[audio.clone(), video.clone()]);
+        assert!(!video.is_hidden(None, any_solo));
+    }
+
+    #[test]
+    fn find_parent_layer_scans_backwards_in_tree_order() {
+        let parent = Layer::new("G".into(), LayerType::Group, 0);
+        let mut child = Layer::new("C".into(), LayerType::Video, 1);
+        child.parent_layer_id = Some(parent.layer_id.clone());
+        let layers = vec![parent.clone(), child.clone()];
+        let (idx, p) = Layer::find_parent_layer(&layers, 1).unwrap();
+        assert_eq!(idx, 0);
+        assert_eq!(p.layer_id, parent.layer_id);
     }
 }

@@ -28,6 +28,9 @@ pub struct ActiveClipRef {
     /// Whether this clip is a video clip (non-empty video_clip_id).
     /// Used for renderer dispatch without needing the full TimelineClip.
     pub is_video: bool,
+    /// Whether this clip is muted. Mute is presentational (P2): the clip stays
+    /// active for scheduling/modulation but contributes no pixels.
+    pub is_muted: bool,
 }
 
 impl ActiveClipRef {
@@ -222,6 +225,7 @@ mod tests {
             duration_beats: Beats::from_f32(duration_beats),
             is_looping: false,
             is_video: false,
+            is_muted: false,
         }
     }
 
@@ -239,6 +243,7 @@ mod tests {
             duration_beats: Beats::from_f32(duration_beats),
             is_looping: false,
             is_video: false,
+            is_muted: false,
         }
     }
 
