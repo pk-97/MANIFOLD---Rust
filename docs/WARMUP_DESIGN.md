@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** IN PROGRESS — P1 (core pre-roll) + P2 (chains, image/LED, edit-time adds) + P3 (disk caches) shipped 2026-08-20; P4 built 2026-08-20 · k3 (lead)
+**Status:** SHIPPED — P1–P4 on main 2026-08-20 (core pre-roll, chains/image/LED/edit-time, disk caches, consolidation + cold-touch gate) · k3 (lead). Kept as the cited policy contract: the cold-touch gate and every warmup seam point here.
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
