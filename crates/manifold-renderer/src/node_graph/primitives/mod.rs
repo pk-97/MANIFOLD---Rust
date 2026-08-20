@@ -114,7 +114,7 @@ mod gradient_ramp;
 mod grid_uv_field;
 mod hash_field_by_seed;
 mod hdr_retention_mix;
-mod hdri_source;
+pub(crate) mod hdri_source;
 mod heightfield_shadow;
 mod heightmap_to_normal;
 mod hue_saturation;

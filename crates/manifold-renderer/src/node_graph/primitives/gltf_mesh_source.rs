@@ -14,11 +14,10 @@
 use std::borrow::Cow;
 use std::sync::mpsc;
 
-use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
-
 use crate::generators::mesh_common::MeshVertex;
+use crate::node_graph::decode_cache::cached_load_gltf_mesh;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector, load_gltf_mesh};
+use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -373,8 +372,7 @@ impl Primitive for GltfMeshSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    record_cold_touch(ColdTouchKind::GlbParse);
-                    let result = load_gltf_mesh(&path_buf, selector)
+                    let result = cached_load_gltf_mesh(&path_buf, selector)
                         .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
                         .map(|verts| apply_translate(verts, translate));
                     let _ = tx.send(result);

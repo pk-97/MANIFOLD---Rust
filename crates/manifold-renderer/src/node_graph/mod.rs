@@ -30,6 +30,7 @@ pub mod catalog_gen;
 mod chain_spec;
 pub mod composites;
 pub mod depth_rule;
+pub(crate) mod decode_cache;
 pub mod descriptor;
 pub mod preview_encoding;
 mod effect_node;
