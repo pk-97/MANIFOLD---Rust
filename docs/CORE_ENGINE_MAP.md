@@ -11,7 +11,9 @@ timecode — and the doc a bug hunt attacks (section 13). It is the sibling of
 maps what decides *which clips are alive and what time it is*.
 
 Written immediately after SESSION_MODE P2 merged (`SessionRuntime` as the
-third ref source); sections marked (P2) are that fresh.
+third ref source); sections marked (P2) are that fresh. Updated 2026-08-20
+for DESIRED_STATE_RECONCILIATION_DESIGN.md (sections 3 and 5 rewritten):
+every-tick reconcile, hot mute as presentation, layer-aware binding identity.
 
 ---
 
@@ -74,7 +76,7 @@ one of those happened.
 |---|---|
 | `units.rs` | `Beats`(f64) / `Seconds`(f64) / `Bpm`(f32) newtypes. The engine's beat accumulator is f64; several boundaries still round-trip f32 (section 13.6). |
 | `tempo.rs` | `TempoMap` (sorted points, step-change BPM) + `TempoMapConverter` (piecewise beat↔seconds integration, f64 variant for the per-frame path, BPM clamped 20–300). Linear walks (section 13.9). |
-| `timeline.rs` | `Timeline`: layers, self-healing clip-id lookup cache, `enforce_tree_order` (pre-order DFS group invariant), mute/solo-aware `get_active_clips_at_beat_ref`, markers. |
+| `timeline.rs` | `Timeline`: layers, self-healing clip-id lookup cache, `enforce_tree_order` (pre-order DFS group invariant), group-aware `get_active_clips_at_beat_ref` (mute/solo are presentational, not membership — D2), markers. |
 | `layer.rs` | `Layer`: sorted clip caches, **`enforce_non_overlap_for`** — DaVinci-style write-time overlap resolution (delete / trim-start with in-point advance / trim-end / split), returning `OverlapAction`s for undo. |
 | `clip.rs` | `TimelineClip`: beat-domain position/duration, `in_point` (Seconds), loop fields, `recorded_bpm`, absolute-tick provenance. |
 | `math.rs` | `BeatQuantizer`: BPM step 0.01, beat step 0.0001, time step 0.0001 — save-file jitter suppression. |
@@ -117,14 +119,16 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
        prior per-branch reset ran after the playing branch's own
        clip-trigger push and wiped it every tick; see section 6)
      playing branch:
-       consume sync-dirty → advance_time (unless external_time_sync) → sync_project_bpm
+       advance_time (unless external_time_sync) → sync_project_bpm
        → activate due pending live launches → audio triggers (fire/expire one-shots,
          pushes fire_meters — section 6)
        → sync_clips_to_time               (THE authority — see section 5)
        → update_active_clip_playback_rates → check_custom_loop_boundaries
        → evaluate_modulation (pushes fire_meters) → correct_video_drift (every 2s, not in export)
        → filter_ready_clips → compute_prewarm_candidates
-     non-playing branch: flush sync-dirty (sync + seek_active_clips), rates,
+     non-playing branch: sync_clips_to_time (same every-tick reconcile —
+       DESIRED_STATE_RECONCILIATION_DESIGN.md D1; seek_active_clips only when
+       membership changed), rates,
        audio triggers meter-only walk (pushes fire_meters, never fires — BUG-109 P5,
        section 6), modulation (pushes fire_meters), filter
 4b. transport out (AbletonBridge or OscPositionSender late_update — echo-suppressed)
@@ -168,11 +172,18 @@ an undoable command (`RescaleBeatsForBpmChangeCommand`), never silently.
 ## 5. `sync_clips_to_time` — the sole authority
 
 Everything that starts or stops a clip goes through this one idempotent
-function (invariant since the Unity port; P2 kept it — `SessionRuntime` feeds
-it rather than bypassing it):
+function, and it runs EVERY tick in EVERY transport state
+(DESIRED_STATE_RECONCILIATION_DESIGN.md D1 — the old `sync_clips_dirty`
+deferral is deleted; correctness no longer depends on callers requesting a
+re-sync). It returns whether membership changed; the paused tick uses that
+to gate `seek_active_clips` (scrub re-anchors via `seek_to` directly):
 
-1. `query_active_timeline_clips` — mute/solo/group-aware timeline query at
+1. `query_active_timeline_clips` — group-aware timeline query at
    `current_beat` into scratch (skipped for session-overridden layers, P2).
+   Mute/solo/clip-mute are NOT membership inputs (hot mute, D2) — they are
+   presentational, computed once per frame by the `Layer::is_hidden`
+   predicate in manifold-core and consumed by the compositor, occlusion,
+   render-skip, the paused-idle gate, and prewarm ranking (D3/D4/D7).
 2. `resolve_session_refs` (P2) — promote due pending launches, resolve playing
    slots to global-beat `ActiveClipRef`s, stop wrap-restart evictions.
 3. `fill_live_slot_refs` — phantom clips (NoteOff-lifetime: merged when
@@ -182,14 +193,16 @@ it rather than bypassing it):
 4. `ClipScheduler::compute_sync` — pure diff against `active_clip_ids`;
    micro-clip guard: don't start non-looping clips with < 0.02s-worth of beats
    remaining.
-5. Stops via `stop_clip` (renderer stop + tracking cleanup + stopped-clips list
+5. Layer-mismatch heal (P3, DESIRED_STATE_RECONCILIATION_DESIGN.md D5): an
+   active clip whose project layer changed (a drag) gets no to_stop/to_start
+   from the clip_id diff, so the engine compares `active_clip_layers`
+   (stamped at start) against each ref's `layer_id` and heals mismatches with
+   an edge-suppressed stop+start — no clip-edge push, no generator
+   `clip_count` bump (`fire_clip_edge=false` on the renderer start).
+6. Stops via `stop_clip` (renderer stop + tracking cleanup + stopped-clips list
    → GPU per-owner state release), starts via `start_clip` (renderer dispatch
    by `can_handle`, group layers refused, pending-pause for video, recently-
    started gate entry).
-
-Deferral: MIDI/live events set `sync_clips_dirty` instead of syncing inline;
-the tick consumes it (playing: implicit — sync runs anyway; stopped/paused:
-sync + `seek_active_clips`, which is what makes scrub-while-stopped render).
 
 Clip start → ready is a state machine for video: `start_clip` → (prepare
 phase) `preparing_clips` → `check_preparing_clips` polls readiness → seek to
