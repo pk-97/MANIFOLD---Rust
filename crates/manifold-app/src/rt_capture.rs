@@ -461,13 +461,23 @@ pub fn run(args: &[String]) -> ! {
     ct.timer.set_target_fps(fr);
     ct.timer.set_frame_clocked(frame_clock);
     crate::content_thread::apply_realtime_thread_policy(fr);
-    ct.handle_command(ContentCommand::LoadProject(Box::new(real_project)));
 
     let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
     let drain = std::thread::Builder::new()
         .name("rt-capture-drain".into())
         .spawn(move || while state_rx.recv().is_ok() {})
         .expect("spawn drain");
+
+    ct.handle_command(ContentCommand::LoadProject(Box::new(real_project)));
+    // Mirror the production drain loop (content_thread.rs LoadProject arm):
+    // the load-time warmup pass runs right after the load. Without this call
+    // the harness exercises a load path production never takes.
+    {
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+        let warm_start = std::time::Instant::now();
+        ct.run_warmup(&cmd_rx, &cmd_tx, &state_tx);
+        eprintln!("[rt-capture] warmup pass took {:.1?}", warm_start.elapsed());
+    }
 
     // Phase 1: Play N frames (rotation, beat advancing).
     ct.handle_command(ContentCommand::Play);
@@ -673,6 +683,30 @@ pub fn run(args: &[String]) -> ! {
             let verdict = if changed { "LIVE-FLIP EFFECTIVE" } else { "LIVE-FLIP INERT" };
             println!("{verdict}");
             eprintln!("{verdict}");
+    }
+
+    // Warmup verification surface: any cold touch recorded after the warmup
+    // pass's reset means a lazy path fired late (WARMUP_DESIGN.md INV1).
+    {
+        use manifold_core::cold_touch::{
+            ColdTouchKind, cold_touch_count, total_cold_touches,
+        };
+        eprintln!(
+            "[rt-capture] cold touches during playback: {}",
+            total_cold_touches()
+        );
+        for kind in [
+            ColdTouchKind::PipelineCompile,
+            ColdTouchKind::GlbParse,
+            ColdTouchKind::HdriDecode,
+            ColdTouchKind::ModelLoad,
+            ColdTouchKind::ChainConstruction,
+        ] {
+            let n = cold_touch_count(kind);
+            if n > 0 {
+                eprintln!("[rt-capture]   {kind:?}: {n}");
+            }
+        }
     }
 
     println!("=== DONE ===");

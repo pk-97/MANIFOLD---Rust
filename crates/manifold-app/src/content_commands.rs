@@ -140,9 +140,10 @@ impl ContentThread {
 
             if start.elapsed() >= budget.total {
                 log::warn!(
-                    "[ContentThread] Warmup total budget exhausted after {} layers; \
+                    "[ContentThread] Warmup total budget exhausted (wall-clock) after {} layers ({:.1?}); \
                      continuing load without warming remaining layers",
-                    done
+                    done,
+                    start.elapsed()
                 );
                 any_budget_exhausted = true;
                 break;
@@ -171,12 +172,12 @@ impl ContentThread {
                 && let Some(layer) = p.timeline.layers.get(*layer_index)
             {
                 for renderer in renderers.iter_mut() {
-                    if renderer.prewarm_layer(layer, budget)
-                        == manifold_core::WarmupOutcome::BudgetExhausted
+                    if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } =
+                        renderer.prewarm_layer(layer, budget)
                     {
                         log::warn!(
-                            "[ContentThread] Warmup budget exhausted for a renderer on \
-                             layer '{}' ({}); layer may first-touch once at play",
+                            "[ContentThread] Warmup budget exhausted ({cap:?}) for a renderer on \
+                             layer '{}' ({}) after {elapsed:.1?}; layer may first-touch once at play",
                             layer_name.as_str(),
                             _layer_id.as_str()
                         );
@@ -196,9 +197,9 @@ impl ContentThread {
                     .and_then(|p| p.timeline.layers.get(*layer_index))
             {
                 let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
-                if chain_outcome == manifold_core::WarmupOutcome::BudgetExhausted {
+                if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } = chain_outcome {
                     log::warn!(
-                        "[ContentThread] Warmup chain budget exhausted for layer '{}' ({}); \
+                        "[ContentThread] Warmup chain budget exhausted ({cap:?}) for layer '{}' ({}) after {elapsed:.1?}; \
                          chain may first-touch once at play",
                         layer_name.as_str(),
                         _layer_id.as_str()

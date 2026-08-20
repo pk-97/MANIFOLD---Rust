@@ -1380,7 +1380,10 @@ impl ClipRenderer for GeneratorRenderer {
             relight,
             relight_params,
         ) {
-            return manifold_core::WarmupOutcome::BudgetExhausted;
+            return manifold_core::WarmupOutcome::BudgetExhausted {
+                cap: manifold_core::WarmupCap::PerLayerFrames,
+                elapsed: std::time::Duration::ZERO,
+            };
         }
 
         // Pre-build the merged string-params cache so `render()` sees the same
@@ -1410,8 +1413,22 @@ impl ClipRenderer for GeneratorRenderer {
 
         const DT: f64 = 1.0 / 60.0;
         let default_manifest = ParamManifest::default();
-        let mut outcome = manifold_core::WarmupOutcome::BudgetExhausted;
+        let layer_start = std::time::Instant::now();
+        let mut outcome = manifold_core::WarmupOutcome::BudgetExhausted {
+            cap: manifold_core::WarmupCap::PerLayerFrames,
+            elapsed: std::time::Duration::ZERO,
+        };
         for frame in 0..budget.per_layer_frames {
+            // Wall-clock is the primary per-layer cap; the frame cap is only
+            // a safety bound for runaway spin loops.
+            if layer_start.elapsed() >= budget.per_layer {
+                outcome = manifold_core::WarmupOutcome::BudgetExhausted {
+                    cap: manifold_core::WarmupCap::PerLayerWallClock,
+                    elapsed: layer_start.elapsed(),
+                };
+                break;
+            }
+
             self.uniform_arena.reset();
             let mut native_enc = device.create_encoder("warmup");
             {
@@ -1452,6 +1469,15 @@ impl ClipRenderer for GeneratorRenderer {
             {
                 outcome = manifold_core::WarmupOutcome::Quiescent;
                 break;
+            }
+
+            // Paced wait: if async work is still in flight, yield so the
+            // background threads (GLB parse, accel build) can land without
+            // burning a whole frame budget on spin-rendered no-ops.
+            if let Some(ls) = self.layer_generators.get(&layer_id)
+                && ls.generator.warmup_pending()
+            {
+                std::thread::sleep(std::time::Duration::from_millis(2));
             }
         }
 
@@ -1957,9 +1983,10 @@ mod warmup_tests {
     }
 
     /// INV2 — a layer whose async warmup work never finishes within the
-    /// per-layer frame budget must terminate with `BudgetExhausted` rather than
-    /// blocking open indefinitely. We use the real ApricotWeather scene with a
-    /// one-frame budget: the background GLB parse cannot complete that fast.
+    /// per-layer wall-clock budget must terminate with `BudgetExhausted` rather
+    /// than blocking open indefinitely. We use the real ApricotWeather scene
+    /// with a 1ns wall-clock budget: the cap trips before the GLB parse can
+    /// quiesce, even if a disk cache makes the parse fast on the second run.
     #[test]
     fn warmup_inv2_budget_terminates_never_quiescent() {
         let device = crate::test_device();
@@ -1974,14 +2001,17 @@ mod warmup_tests {
         let layer = &project.timeline.layers[0];
 
         let tight_budget = manifold_core::WarmupBudget {
-            per_layer_frames: 1,
+            per_layer: std::time::Duration::from_nanos(1),
+            per_layer_frames: 600,
             total: std::time::Duration::from_secs(60),
         };
         let outcome = renderer.prewarm_layer(layer, tight_budget);
-        assert_eq!(
-            outcome,
-            manifold_core::WarmupOutcome::BudgetExhausted,
-            "one-frame budget must exhaust before the GLB parse quiesces"
+        assert!(
+            matches!(
+                outcome,
+                manifold_core::WarmupOutcome::BudgetExhausted { .. }
+            ),
+            "1ns wall-clock budget must exhaust before the GLB parse quiesces"
         );
     }
 
