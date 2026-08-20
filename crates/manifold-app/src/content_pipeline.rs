@@ -3542,6 +3542,50 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             .prewarm_led_resources(device, self.texture_pool.as_ref(), self.led_grid_size, project)
     }
 
+    /// Warm up the master/global effect chain so the first frame with master FX
+    /// doesn't pay chain construction on stage. Delegates to the compositor;
+    /// no-op for compositors without a master chain.
+    pub fn prewarm_master_chain(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: manifold_core::WarmupBudget,
+    ) -> manifold_core::WarmupOutcome {
+        let device = self
+            .native_device
+            .as_ref()
+            .expect("native device required for master-chain warmup");
+        self.compositor.prewarm_master_chain(
+            project,
+            budget,
+            device,
+            self.texture_pool.as_ref(),
+            self.led_grid_size,
+        )
+    }
+
+    /// Warm up every group-level effect chain that carries enabled effects so
+    /// the first group fold doesn't pay chain construction on stage. Delegates
+    /// to the compositor; no-op for compositors without group chains.
+    pub fn prewarm_group_chains(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: manifold_core::WarmupBudget,
+        output_dims: (u32, u32),
+    ) -> manifold_core::WarmupOutcome {
+        let device = self
+            .native_device
+            .as_ref()
+            .expect("native device required for group-chain warmup");
+        self.compositor.prewarm_group_chains(
+            project,
+            budget,
+            device,
+            self.texture_pool.as_ref(),
+            self.led_grid_size,
+            output_dims,
+        )
+    }
+
     /// Block until all in-flight background work in effect processors completes.
     /// Called after each export frame so async pipelines (GPU readback → CPU worker
     /// → result) resolve deterministically before the frame is encoded.

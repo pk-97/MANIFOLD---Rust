@@ -80,6 +80,7 @@ use bindings::{StringBindingResolution, def_string_param_value, RelightParamWrit
 
 mod segments;
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
+pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
 mod build;

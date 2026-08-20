@@ -70,4 +70,9 @@ pub enum WarmupOutcome {
         cap: WarmupCap,
         elapsed: std::time::Duration,
     },
+    /// Generator construction failed (registry rejected the type or the
+    /// preset could not be loaded). Distinct from a budget trip — this layer
+    /// will pay the same construction cost on stage and likely render black
+    /// until the root cause is fixed.
+    InstallFailed,
 }
