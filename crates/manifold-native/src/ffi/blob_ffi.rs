@@ -27,8 +27,6 @@ type FnProcess = unsafe extern "C" fn(
 /// If the plugin is not found, construction returns None and the effect
 /// runs without any blob detection (matching Unity's DllNotFoundException path).
 pub struct FfiBlobDetector {
-    // Keep _lib alive so the symbols remain valid.
-    _lib: Library,
     fn_destroy: FnDestroy,
     fn_process: FnProcess,
     handle: *mut std::ffi::c_void,
@@ -51,7 +49,8 @@ impl FfiBlobDetector {
             let create: libloading::Symbol<FnCreate> = lib.get(b"BlobDetector_Create\0").ok()?;
             let destroy: libloading::Symbol<FnDestroy> = lib.get(b"BlobDetector_Destroy\0").ok()?;
             let process: libloading::Symbol<FnProcess> = lib.get(b"BlobDetector_Process\0").ok()?;
-            // Transmute symbol lifetimes away — safe because _lib outlives them.
+            // Transmute symbol lifetimes away — safe because the Library is
+            // forgotten below and never dlclosed.
             (*create, *destroy, *process)
         };
 
@@ -60,13 +59,17 @@ impl FfiBlobDetector {
             return None;
         }
 
+        // Never unload: the plugin's OpenBLAS/TBB spin up their own worker
+        // threads, and dlclose would unmap the code those threads are still
+        // parked in (segfault on rebuild-triggered detector teardown).
+        std::mem::forget(lib);
+
         log::info!(
             "[FfiBlobDetector] Loaded native plugin from {}",
             path.display()
         );
 
         Some(Self {
-            _lib: lib,
             fn_destroy,
             fn_process,
             handle,
