@@ -4,12 +4,10 @@
 //! a JSON `EffectGraphDef` consumed via [`crate::node_graph::LoadedPresetView`].
 //! The chain build loop calls [`splice_def_into_chain`] with each
 //! active effect's canonical (or per-instance overridden) def to graft
-//! its worker subgraph into the shared chain graph; [`is_skipped_for`]
-//! decides whether to skip an effect entirely based on its declared
-//! [`SkipMode`].
+//! its worker subgraph into the shared chain graph.
 //!
 //! This module holds the small set of types both paths share —
-//! [`SpliceResult`], [`SkipMode`], and the splice/skip fns themselves.
+//! [`SpliceResult`] and the splice function itself.
 //! The legacy `ChainSpec` inventory channel that previously lived here
 //! is gone (block 8); the file name persists for the moment so the
 //! re-export surface in `node_graph/mod.rs` can stay stable through
@@ -17,9 +15,8 @@
 
 use std::borrow::Cow;
 
-use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::{PresetInstance, RelightParams};
+use manifold_core::effects::RelightParams;
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
@@ -53,32 +50,6 @@ pub struct SpliceResult {
     /// every shipping effect today; opt-in as effects migrate off the
     /// hardcoded `apply_ctx_params_at` path).
     pub generator_input_id: Option<NodeInstanceId>,
-}
-
-/// When the chain should drop an effect entirely (no workers added,
-/// no cost). Previous output flows directly to the next effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkipMode {
-    /// Effect always contributes its workers.
-    Never,
-    /// Skip when the param identified by `param_id` is ≤ 0.
-    OnZero { param_id: &'static str },
-}
-
-/// Standalone skip check used by the JSON-loaded preset path
-/// (`LoadedPresetView`). Lookup goes through
-/// `preset_definition_registry::param_id_to_index` which is
-/// dual-source aware — works for both inventory-submitted
-/// `EffectMetadata` and JSON-loaded `PresetMetadata`.
-pub fn is_skipped_for(skip: SkipMode, _type_id: &PresetTypeId, fx: &PresetInstance) -> bool {
-    match skip {
-        SkipMode::Never => false,
-        SkipMode::OnZero { param_id } => fx
-            .params
-            .get(param_id.as_ref())
-            .map(|p| p.value <= 0.0)
-            .unwrap_or(false),
-    }
 }
 
 /// Splice an [`EffectGraphDef`] into the chain graph. Used by both the

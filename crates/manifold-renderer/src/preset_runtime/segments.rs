@@ -40,8 +40,6 @@ pub(super) enum SegmentMember {
     Boundary,
     /// Fusable segment member.
     Fuse,
-    /// Currently skipped — splices nothing; transparent to a run.
-    Transparent,
 }
 
 pub(super) fn classify_segment_member(
@@ -55,9 +53,6 @@ pub(super) fn classify_segment_member(
     let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
         return SegmentMember::Boundary;
     };
-    if is_skipped_for(view.skip_mode, &view.type_id, fx) {
-        return SegmentMember::Transparent;
-    }
     if view
         .canonical_def
         .preset_metadata
@@ -75,16 +70,12 @@ pub(super) fn classify_segment_member(
 }
 
 /// Scan one maximal segment run starting at `i` (caller guarantees
-/// `members[i] == Fuse`): returns `(j, fuse_idxs)` — the exclusive end after
-/// trimming trailing transparents, and the fusable indices within `[i, j)`.
+/// `members[i] == Fuse`): returns `(j, fuse_idxs)` — the exclusive end
+/// and the fusable indices within `[i, j)`.
 pub(super) fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
     let mut j = i;
     while j < members.len() && members[j] != SegmentMember::Boundary {
         j += 1;
-    }
-    // Trim trailing transparents back into plain cards.
-    while j > i && members[j - 1] == SegmentMember::Transparent {
-        j -= 1;
     }
     let fuse_idxs = (i..j).filter(|&k| members[k] == SegmentMember::Fuse).collect();
     (j, fuse_idxs)

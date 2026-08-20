@@ -3,7 +3,7 @@
 //!
 //! A [`LoadedPresetView`] pairs the canonical [`EffectGraphDef`] (from
 //! `assets/effect-presets/<TypeId>.json`) with the renderer-side
-//! runtime types ([`ParamBinding`], [`SkipMode`]) reconstructed from
+//! runtime type [`ParamBinding`] reconstructed from
 //! the JSON's `presetMetadata` block. It carries everything the chain
 //! builder needs to graft an effect's worker subgraph into a chain
 //! and to wire up parameter routing — exactly the same surface
@@ -13,15 +13,15 @@
 //! Today this module is **parallel infrastructure**: views are built
 //! lazily on demand and cached, but the chain runtime
 //! ([`crate::effect_chain_graph`]) still consults [`chain_spec_by_id`]
-//! for bindings + skip. Block 6b/6c rewires the chain build loop to
+//! for bindings. Block 6b/6c rewires the chain build loop to
 //! use [`loaded_preset_view_by_id`] instead; block 8 deletes the
 //! inventory `ChainSpec` submissions once that switch is complete.
 //!
 //! ## Lifecycle
 //!
 //! Views are built once on first lookup per effect id, leaking owned
-//! `String`s into `&'static str` so the resulting [`ParamBinding`] and
-//! [`SkipMode`] match the lifetime contract the renderer-side types
+//! `String`s into `&'static str` so the resulting [`ParamBinding`]
+//! matches the lifetime contract the renderer-side types
 //! already use. The leak is bounded — at most one view per shipping
 //! effect, ~30 strings each — and amortised over the process lifetime.
 //! Same pattern as
@@ -37,11 +37,10 @@ use arc_swap::ArcSwap;
 use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EffectGraphDef, PresetMetadata, SkipModeDef,
+    BindingDef, BindingTarget, EffectGraphDef, PresetMetadata,
 };
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
-use crate::node_graph::chain_spec::SkipMode;
 use crate::node_graph::param_binding::{ParamBinding, ParamId, ParamTarget};
 use crate::node_graph::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
 
@@ -70,7 +69,6 @@ pub struct LoadedPresetView {
     /// [`Self::canonical_def`] — the canonical build owns this once at
     /// startup, a fused build owns a freshly retargeted copy per fuse.
     pub bindings: Vec<ParamBinding>,
-    pub skip_mode: SkipMode,
     /// Fusion binding-retarget map, populated only on **fused** views
     /// (empty for the plain JSON-loaded view). `(original stable
     /// node_id, original param) → (fused node id, fused uniform field
@@ -91,10 +89,7 @@ pub struct LoadedPresetView {
 ///
 /// At rest the generation never moves, so [`loaded_preset_view_by_id`] is
 /// one relaxed atomic compare + an `ArcSwap` pointer load + an
-/// `AHashMap::get` — the same cost class as the old `OnceLock`. This sits
-/// on the per-frame path (`compute_topology_hash` reads `view.skip_mode`),
-/// so the at-rest cost is the single atomic load the prime directive
-/// permits.
+/// `AHashMap::get` — the same cost class as the old `OnceLock`.
 struct ViewCache {
     generation: AtomicU64,
     map: ArcSwap<AHashMap<PresetTypeId, &'static LoadedPresetView>>,
@@ -152,7 +147,6 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
         // startup, per shipped preset. Bounded, not a per-edit leak.
         canonical_def: Arc::new(def.clone()),
         bindings: owned_bindings(metadata),
-        skip_mode: skip_mode_from_def(&metadata.skip_mode),
         // Unfused view — no retargeting; user bindings resolve directly
         // against the canonical inner nodes.
         fused_retarget: AHashMap::default(),
@@ -205,16 +199,6 @@ fn target_def_to_runtime(def: &BindingTarget) -> ParamTarget {
         BindingTarget::Composite { outer_name } => ParamTarget::Composite {
             outer_name: Cow::Owned(outer_name.clone()),
         },
-    }
-}
-
-fn skip_mode_from_def(def: &SkipModeDef) -> SkipMode {
-    match def {
-        SkipModeDef::Never => SkipMode::Never,
-        SkipModeDef::OnZero { param_id } => {
-            let leaked: &'static str = Box::leak(param_id.clone().into_boxed_str());
-            SkipMode::OnZero { param_id: leaked }
-        }
     }
 }
 
@@ -341,14 +325,13 @@ mod tests {
             .expect("assemble two_material_pbr import graph");
 
         // Build the LoadedPresetView the pristine path builds — same
-        // canonical_def + owned bindings + skip_mode `build_view` produces,
-        // just from the imported def instead of a bundled catalog entry.
+        // canonical_def + owned bindings that `build_view` produces, just from
+        // the imported def instead of a bundled catalog entry.
         let meta = def.preset_metadata.clone().expect("import def carries metadata");
         let view = LoadedPresetView {
             type_id: PresetTypeId::from_string("test.gltf_import".to_string()),
             canonical_def: Arc::new(def),
             bindings: owned_bindings(&meta),
-            skip_mode: skip_mode_from_def(&meta.skip_mode),
             fused_retarget: AHashMap::default(),
         };
 

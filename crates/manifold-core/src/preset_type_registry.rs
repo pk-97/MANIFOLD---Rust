@@ -207,7 +207,6 @@ mod tests {
             is_line_based: false,
             params: Vec::new(),
             bindings: Vec::new(),
-            skip_mode: Default::default(),
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),

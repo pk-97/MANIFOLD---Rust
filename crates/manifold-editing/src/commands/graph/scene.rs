@@ -13,7 +13,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID,
     GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, PresetMetadata,
-    SerializedParamValue, SkipModeDef, StringBindingDef,
+    SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
@@ -230,7 +230,6 @@ impl Command for AddSceneObjectCommand {
                 is_line_based: false,
                 params: Vec::new(),
                 bindings: Vec::new(),
-                skip_mode: SkipModeDef::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
@@ -420,7 +419,6 @@ impl Command for AddSceneLightCommand {
                 is_line_based: false,
                 params: Vec::new(),
                 bindings: Vec::new(),
-                skip_mode: SkipModeDef::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
@@ -1098,7 +1096,6 @@ impl Command for AddSceneEnvironmentCommand {
                 is_line_based: false,
                 params: Vec::new(),
                 bindings: Vec::new(),
-                skip_mode: SkipModeDef::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
@@ -1233,7 +1230,6 @@ impl Command for AddSceneFogCommand {
                 is_line_based: false,
                 params: Vec::new(),
                 bindings: Vec::new(),
-                skip_mode: SkipModeDef::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
@@ -1495,8 +1491,7 @@ impl Command for ImportModelIntoSceneCommand {
                         is_line_based: false,
                         params: Vec::new(),
                         bindings: Vec::new(),
-                        skip_mode: SkipModeDef::default(),
-                        param_aliases: Vec::new(),
+                                param_aliases: Vec::new(),
                         value_aliases: Vec::new(),
                         string_params: Vec::new(),
                         string_bindings: Vec::new(),
@@ -1810,7 +1805,7 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
-    use manifold_core::effect_graph_def::{BindingDef, GROUP_TYPE_ID, ParamSpecDef, PresetMetadata, SkipModeDef, StringBindingDef};
+    use manifold_core::effect_graph_def::{BindingDef, GROUP_TYPE_ID, ParamSpecDef, PresetMetadata, StringBindingDef};
     use crate::command::Command;
 
     /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
@@ -2415,7 +2410,6 @@ mod tests {
                 is_line_based: false,
                 params: Vec::new(),
                 bindings: Vec::new(),
-                skip_mode: Default::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
@@ -3111,7 +3105,6 @@ mod tests {
             is_line_based: false,
             params: vec![],
             bindings: vec![],
-            skip_mode: SkipModeDef::default(),
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),

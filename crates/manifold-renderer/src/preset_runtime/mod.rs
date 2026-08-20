@@ -64,7 +64,7 @@ use crate::node_graph::{
     ResourceId, Slot, Source, SpliceResult, StateStore, apply_binding_defaults, compile,
     splice_def_into_chain,
 };
-use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
+use crate::node_graph::loaded_preset_view_by_id;
 use crate::preset_context::PresetContext;
 use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef};
 use manifold_core::params::ParamManifest;

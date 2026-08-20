@@ -122,10 +122,10 @@ pub fn fused_view_by_id(id: &PresetTypeId) -> Option<Arc<LoadedPresetView>> {
 }
 
 /// Fuse an arbitrary `canonical_def` (shipped, edited, or created) carrying the
-/// given outer-card `bindings` + `skip_mode`, or `None` if the def has no fusable
-/// region (or a binding would strand). The fused view keeps the same outer-card
-/// params + skip mode (so the chain builder's `outer_param_index` /
-/// `n_static_slots` / skip logic are byte-identical) and swaps in the fused def +
+/// given outer-card `bindings`, or `None` if the def has no fusable region
+/// (or a binding would strand). The fused view keeps the same outer-card
+/// params + bindings (so the chain builder's `outer_param_index` /
+/// `n_static_slots` are byte-identical) and swaps in the fused def +
 /// retargeted bindings. Takes the def by reference (not `&'static`) so an edited
 /// `PresetInstance::graph` can be fused in place — only the freshly-built fused
 /// def is leaked. Pure codegen, no device: the GPU pipeline compile happens
@@ -136,7 +136,6 @@ fn fuse_view_parts(
     canonical_def: &EffectGraphDef,
     bindings: &[ParamBinding],
     type_id: &PresetTypeId,
-    skip_mode: crate::node_graph::SkipMode,
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
 ) -> Option<LoadedPresetView> {
@@ -166,7 +165,6 @@ fn fuse_view_parts(
         type_id: type_id.clone(),
         canonical_def: Arc::new(fused_def),
         bindings,
-        skip_mode,
         // Carry the full retarget map so the chain builder can repoint a
         // per-instance user binding (off-def, invisible to the content-keyed
         // fuse) onto the fused node — the same retarget the static bindings
@@ -395,14 +393,14 @@ pub fn fused_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
     compiled
 }
 
-/// Pure codegen of a fused view from an arbitrary def + the canonical bindings /
-/// skip mode to carry. No device, no UI state, no thread assumption — the unit
+/// Pure codegen of a fused view from an arbitrary def + the canonical bindings
+/// to carry. No device, no UI state, no thread assumption — the unit
 /// that relocates to a background worker later. `None` when the def has no
 /// fusable region or a binding would strand.
 fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
     let registry = PrimitiveRegistry::with_builtin();
     let fused =
-        fuse_view_parts(def, &base.bindings, &base.type_id, base.skip_mode, &registry, None)?;
+        fuse_view_parts(def, &base.bindings, &base.type_id, &registry, None)?;
     Some(Arc::new(fused))
 }
 
@@ -444,7 +442,7 @@ pub fn select_card_fused_view(
     // cache. The "effective def" is the user's edited graph when present, else
     // the canonical preset. There is no `has_override` veto: an override is
     // just the effective def to fuse. The fused view keeps the same outer-card
-    // params + skip mode, so the chain build's splice / outer_param_index /
+    // params + bindings, so the chain build's splice / outer_param_index /
     // bindings lines are shape-identical either way.
     let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
     // D8/P7: relight fuses — augment with DEFAULT knob values before fusion so
@@ -546,7 +544,6 @@ pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> F
                 def: def.clone(),
                 bindings: base.bindings.clone(),
                 type_id: base.type_id.clone(),
-                skip_mode: base.skip_mode,
             };
             if segment_worker().tx.send(FusionJob::Effect(Box::new(job))).is_err() {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
@@ -575,7 +572,6 @@ fn compile_effect_view_panic_safe(
             &job.def,
             &job.bindings,
             &job.type_id,
-            job.skip_mode,
             registry,
             None,
         )
@@ -744,7 +740,6 @@ struct EffectJob {
     def: EffectGraphDef,
     bindings: Vec<ParamBinding>,
     type_id: PresetTypeId,
-    skip_mode: crate::node_graph::SkipMode,
 }
 
 // Variants are constructed only on the production (`not(test)`) lookup paths

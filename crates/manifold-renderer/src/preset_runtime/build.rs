@@ -42,14 +42,10 @@ fn generator_error_from_prealloc(
 /// primitive state (Bloom mip pyramids, Watercolor feedback) every
 /// time modulation drove `wet_dry` through 1.0.
 ///
-/// **Skip-on-zero state is layout-affecting.** `try_build` walks
-/// active effects and drops any whose `is_skipped_for(view.skip_mode, …, fx)`
-/// returns `true`, so flipping that predicate (typically by dragging
-/// `amount` off / onto 0) changes which effects appear in the graph.
-/// We hash the predicate's current result per effect so the rebuild
-/// fires when the user drags `amount` away from 0 — without it the
-/// freshly-added effect would never enter the graph until the user
-/// toggled `enabled` (which IS in the hash) to force a rebuild.
+/// `amount` is a performance control, not structure: an effect at
+/// `amount = 0` still runs as a normal effect at `amount = 0`. The
+/// only structural skip is `PresetInstance.enabled`; that is
+/// already hashed below.
 pub(super) fn compute_topology_hash(
     effects: &[PresetInstance],
     groups: &[EffectGroup],
@@ -90,12 +86,6 @@ pub(super) fn compute_topology_hash(
         // only `graph_version` (for the UI snapshot) and is applied in place by
         // `run`'s `apply_inner_param_overrides`, so feedback/sim state survives.
         fx.graph_structure_version.hash(&mut h);
-        // Skip-on-zero predicate state — see the doc-comment above.
-        // Effects without a `LoadedPresetView` are ignored here
-        // (legacy fallback); `try_build` will short-circuit anyway.
-        if let Some(view) = loaded_preset_view_by_id(fx.effect_type()) {
-            is_skipped_for(view.skip_mode, &view.type_id, fx).hash(&mut h);
-        }
     }
     for g in groups {
         g.id.as_str().hash(&mut h);

@@ -65,7 +65,7 @@ mod tests {
 fn card_owned_def(mirror: bool) -> EffectGraphDef {
     use manifold_core::effect_graph_def::{
         BindingDef, BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphNode, ParamSpecDef,
-        PresetMetadata, SkipModeDef,
+        PresetMetadata,
     };
     use manifold_core::effects::ParamConvert;
     use manifold_core::macro_bank::MacroCurve;
@@ -118,7 +118,6 @@ fn card_owned_def(mirror: bool) -> EffectGraphDef {
                 offset: 0.0,
                 default_mirrors_node_param: mirror,
             }],
-            skip_mode: SkipModeDef::Never,
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),
@@ -311,7 +310,6 @@ fn pruned_card_slot_refuses_redirect() {
     fn card_owned_write_warning_scopes_to_authored_defaults() {
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphNode, PresetMetadata,
-            SkipModeDef,
         };
         use manifold_core::effects::ParamConvert;
         use manifold_core::{NodeId, PresetTypeId};
@@ -348,8 +346,7 @@ fn pruned_card_slot_refuses_redirect() {
                     binding("authored", "n_a", "amount", false),
                     binding("mirrored", "n_b", "radius", true),
                 ],
-                skip_mode: SkipModeDef::Never,
-                param_aliases: Vec::new(),
+                    param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),

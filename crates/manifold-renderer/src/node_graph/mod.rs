@@ -106,7 +106,7 @@ pub use effect_node::{
 };
 pub use execution::{Executor, StepProfile};
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
-pub use chain_spec::{SkipMode, SpliceResult, is_skipped_for, splice_def_into_chain};
+pub use chain_spec::{SpliceResult, splice_def_into_chain};
 pub use graph::{Graph, NodeInstance, WireWalkMode};
 pub use graph_loader::{
     BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,

@@ -366,8 +366,8 @@ impl EffectGraphDef {
 /// This is the JSON-wire shape — `String` fields throughout (no
 /// `&'static str` / `Cow`-flavoured optimisations like the
 /// renderer-side compile-time submission types). Conversion to/from
-/// the renderer's runtime types (`ParamSpec`, `ParamBinding`,
-/// `SkipMode`) lives in the loader (`manifold_renderer::node_graph::persistence`).
+/// the renderer's runtime types (`ParamSpec`, `ParamBinding`)
+/// lives in the loader (`manifold_renderer::node_graph::persistence`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresetMetadata {
@@ -411,9 +411,6 @@ pub struct PresetMetadata {
     /// position — positional indexing silently strands the second
     /// binding in a fan-out on its `default_value`.
     pub bindings: Vec<BindingDef>,
-    /// When the runtime should drop this effect entirely (no GPU work).
-    #[serde(default)]
-    pub skip_mode: SkipModeDef,
     /// Backward-compat table for renamed outer-slider parameter ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_aliases: Vec<AliasEntry>,
@@ -747,19 +744,6 @@ impl<'de> Deserialize<'de> for BindingTarget {
             },
         })
     }
-}
-
-/// JSON-wire shape mirroring `manifold_renderer::node_graph::SkipMode`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum SkipModeDef {
-    /// Effect always contributes its workers.
-    #[default]
-    Never,
-    /// Skip when the param identified by `param_id` is ≤ 0. The
-    /// chain runtime walks `params` for the matching id and reads its
-    /// current value; absence of the id falls through to `Never`.
-    OnZero { param_id: String },
 }
 
 /// One entry in a backward-compat alias table.
@@ -1195,9 +1179,6 @@ mod tests {
                 offset: 0.0,
                 default_mirrors_node_param: false,
             }],
-            skip_mode: SkipModeDef::OnZero {
-                param_id: "amount".to_string(),
-            },
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),
@@ -1222,7 +1203,27 @@ mod tests {
         assert_eq!(def, back);
     }
 
-    /// `BindingTarget` and `SkipModeDef` are tagged enums. Confirm the
+    /// Regression: old preset and project files carry a `skipMode` key in
+    /// `presetMetadata`. After `SkipModeDef` was deleted, that key is an
+    /// unknown field and must be ignored so existing files still load.
+    #[test]
+    fn legacy_skip_mode_key_parses_as_unknown() {
+        let json = r#"{
+            "id": "test::legacy_skip_mode",
+            "displayName": "Legacy Skip Mode",
+            "category": "Test",
+            "oscPrefix": "legacy_skip",
+            "params": [],
+            "bindings": [],
+            "skipMode": {"kind": "onZero", "paramId": "amount"}
+        }"#;
+        let meta: PresetMetadata = serde_json::from_str(json).expect(
+            "PresetMetadata must ignore the legacy skipMode key so old files keep loading"
+        );
+        assert_eq!(meta.id.as_str(), "test::legacy_skip_mode");
+    }
+
+    /// `BindingTarget` is a tagged enum. Confirm the
     /// wire form uses the expected tag keys so JSON authors (humans and
     /// LLMs) can write them by hand.
     #[test]
@@ -1268,25 +1269,6 @@ mod tests {
         let json = serde_json::to_string(&t).unwrap();
         let back: BindingTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(t, back);
-    }
-
-    #[test]
-    fn skip_mode_serializes_with_kind_tag() {
-        let s = SkipModeDef::OnZero {
-            param_id: "amount".to_string(),
-        };
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"kind\":\"onZero\""));
-        assert!(json.contains("\"paramId\":\"amount\""));
-    }
-
-    /// `SkipModeDef::Never` is the default — confirm it serializes
-    /// compactly so JSON files that don't bother to spell it out
-    /// still parse, and round-trip when explicitly set.
-    #[test]
-    fn skip_mode_default_is_never() {
-        let s = SkipModeDef::default();
-        assert!(matches!(s, SkipModeDef::Never));
     }
 
     /// The MOD badge must ignore pure canvas layout. Moving a node (only

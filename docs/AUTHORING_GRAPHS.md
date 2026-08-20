@@ -85,8 +85,7 @@ instead of nine).
 Observed-complete field set (authoritative structs: `PresetMetadata` in
 `crates/manifold-core/src/effects.rs`):
 
-- `id`, `displayName`, `category`, `oscPrefix`, `available: bool`, `isLineBased`,
-  `skipMode: {"kind": "never"}`.
+- `id`, `displayName`, `category`, `oscPrefix`, `available: bool`, `isLineBased`.
 - `params: [ParamSpec]` — the cards. Fields: `id`, `name`, `min`, `max`,
   `defaultValue`, `wholeNumbers`, `isToggle`, `isTrigger`, `formatString` ("F1"/"F2"),
   optional `isAngle: true` (renders as angle), optional `section: "Sun"` (collapsible

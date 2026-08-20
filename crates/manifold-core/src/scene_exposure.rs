@@ -149,7 +149,6 @@ fn empty_scene_preset_metadata() -> PresetMetadata {
         is_line_based: false,
         params: Vec::new(),
         bindings: Vec::new(),
-        skip_mode: crate::effect_graph_def::SkipModeDef::default(),
         param_aliases: Vec::new(),
         value_aliases: Vec::new(),
         string_params: Vec::new(),
