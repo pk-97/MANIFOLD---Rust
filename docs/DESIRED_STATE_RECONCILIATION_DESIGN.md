@@ -1,6 +1,6 @@
 # Desired-State Reconciliation — one reconcile, one visibility predicate, edges as outputs
 
-**Status:** IN PROGRESS — design approved by Peter's delegation 2026-08-20; P1–P4 not built · k3 (lead)
+**Status:** IN PROGRESS — P1 built 2026-08-20 (reconcile every tick, `sync_dirty` deleted; gate green); P2–P4 not built · k3 (lead)
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -29,7 +29,9 @@ section 5 (sync_clips_to_time — the sole authority) and the frame order in sec
 chains key on LayerId, which this design relies on).
 
 **For the instrument:** mute/unmute becomes instant and glitch-free in every transport
-state — unmuting reveals a generator that kept cooking, never a reboot. Dragging a live
+state — time-based generators keep cooking underneath a mute and reappear evolved;
+stateful sims freeze while hidden and resume where they left off (same as an occluded
+layer today — see D4's honest cost). Dragging a live
 clip across layers rebinds the same frame instead of lying until the next rising edge.
 The whole "paused means stale" category dies.
 
@@ -40,7 +42,7 @@ The whole "paused means stale" category dies.
 | Pure membership diff | `scheduler.rs:122` (`ClipScheduler::compute_sync`) | **Extend.** Pure, tested, zero-alloc; diffs on `clip_id` alone |
 | Sole-authority sync | `engine.rs:1338` (`sync_clips_to_time`) | **Extend.** Idempotent; runs every tick only while playing (`engine.rs:859`) |
 | Paused tick | `engine.rs:972` (`tick_non_playing`) | **Change.** Syncs only on `consume_sync_dirty` (`engine.rs:976`) |
-| sync-dirty flag | `engine.rs:551,557`; writers: `content_commands.rs:263,281,315,370,734,745`, `live_clip_manager.rs:843` (+ trait decl `:31`, test impl `tests/live_clip.rs:83`) | **Delete.** Correctness must not depend on callers remembering |
+| sync-dirty flag | `engine.rs:551,557`; writers: 6 `content_commands.rs` sites, `live_clip_manager.rs:843` (+ trait decl `:31`, test impl `tests/live_clip.rs:83`) | **Delete.** Correctness must not depend on callers remembering |
 | Mute/solo in membership | `timeline.rs:407-446` (`get_active_clips_at_beat_ref` filters layer mute, parent mute, solo, clip mute) | **Delete filters.** This is the double authority |
 | Mute/solo at compositor | `layer_compositor.rs:263,1009,1059,1808,1851` (live descriptor checks) | **Extend.** Becomes the single visual authority, fed one computed flag |
 | Mute at audio tap | `audio_layer_playback.rs:290` (`tap_hot` reads live flags) | **Keep as-is.** Already the model this design copies |
@@ -57,11 +59,12 @@ The whole "paused means stale" category dies.
 
 Re-derivation (run at execution; counts must match or stop and list new sites):
 `rg -n "mark_sync_dirty|consume_sync_dirty|sync_dirty" crates/ --type rust` (13 sites
-today) · `rg -n "get_active_clips_at_beat" crates/ --type rust` (callers beyond
-`engine.rs:1343` unknown — ⚠ VERIFY-AT-IMPL) · `rg -n "is_muted" crates/manifold-playback/src/audio_mixdown.rs`
-(export mixdown's mute handling — ⚠ VERIFY-AT-IMPL: it must keep reading live flags) ·
-`rg -n "active_audio_clip_at" crates/manifold-core/src` (does audio clip membership read
-clip mute — ⚠ VERIFY-AT-IMPL: audio stays untouched either way).
+today) · `rg -n "get_active_clips_at_beat" crates/ --type rust` — RESOLVED 2026-08-20:
+only `breadcrumb.rs:385` (crash-diagnostics payload; muted clips in the payload is
+more truth, not less) · `rg -n "is_muted" crates/manifold-playback/src/audio_mixdown.rs`
+— RESOLVED: reads live flags (`:147`), intentionally ignores per-clip mute (`:24`) — unchanged ·
+`rg -n "active_audio_clip_at" crates/manifold-core/src` — RESOLVED: no mute read
+(`layer.rs:317`) — audio was already fully hot.
 
 ## 2. Decisions
 
@@ -80,7 +83,11 @@ a seek marks dirty). This is uniform paused-preview semantics — what you see s
 is what play shows — and it rewrites `engine_tick_while_stopped_has_no_active_clips`
 into its positive form. Rejected alternative shape: extract desired-state resolution
 into a new pure module — `compute_sync` already IS the pure, tested unit; a new home
-is migration cost for zero semantic gain.
+is migration cost for zero semantic gain. **P1 as-built note:** the paused tick gates
+`seek_active_clips` on membership-changed (the reconcile returns it) — video players
+are never re-seeked on an idle paused tick; scrub-while-paused re-anchors through
+`seek_to`'s own direct sync+seek (`engine.rs:706-707`), so no beat-moved gate is
+needed.
 
 **D2 — Mute/solo/clip-mute leave membership entirely (hot mute).**
 The filters in `get_active_clips_at_beat_ref` (`timeline.rs:417-441`) and prewarm
@@ -97,20 +104,31 @@ Deferred entry for pausing muted players. (b) Mute/unmute no longer fires clip
 stop/start edges: trigger counters don't increment on unmute, param-step actions don't
 fire on mute, decay envelopes keep running (they already do — CORE_ENGINE_MAP.md
 section 8 (Modulation pipeline): "Muted layers still modulate"). This is the correct
-semantic — muting is not the clip ending — and it is a behavior change.
+semantic — muting is not the clip ending — and it is a behavior change. (c) Solo
+becomes per-domain, fixing an unhit bug: today the timeline query's `any_solo` spans
+ALL layers (`timeline.rs:408`), so soloing an AUDIO layer strips every video clip from
+membership, while audio playback uses an audio-only solo
+(`audio_layer_playback.rs:276`). With the filters deleted and the D3 predicate
+computed over non-audio layers, audio solo affects audio only and video solo affects
+video only. Cure-test `audio_solo_does_not_suppress_video` (P2).
 
-**D3 — Visibility is decided once per frame, in one place, as one flag.**
-`CompositeLayerDescriptor.is_muted/is_solo` is replaced by `hidden: bool`, computed in
-`content_pipeline.rs` at descriptor build (`content_pipeline.rs:2295-2315`) by one
-predicate: `hidden = layer.is_muted || parent.is_muted || (any_solo &&
-!layer.is_solo && !parent.is_solo)`. Every compositor check site
-(`layer_compositor.rs:263,1009,1059,1808,1851`) reads `ld.hidden`; `any_solo`
-disappears from the renderer crate. Occlusion (`compute_occluded_layer_indices`) and
-render-skip (`compute_render_skip_indices`) take the hidden set as input — a muted
-opaque layer no longer occludes the layers beneath it. Clip-level mute rides the same
-frame: `ActiveClipRef.is_muted` → `CompositeClipDescriptor.is_muted`, checked at the
+**D3 — Visibility is decided once per frame, by one shared predicate.**
+The predicate is a free function in `manifold-core` (it needs only `Layer` fields):
+`hidden = layer.is_muted || parent.is_muted || (any_solo_video &&
+!layer.is_solo && !parent.is_solo)`, where `any_solo_video` spans non-audio layers
+only (D2c). `CompositeLayerDescriptor.is_muted/is_solo` is replaced by `hidden: bool`,
+computed with this function at descriptor build (`content_pipeline.rs:2295-2315`).
+Every compositor check site (`layer_compositor.rs:263,1009,1059,1808,1851`) reads
+`ld.hidden`; `any_solo` disappears from the renderer crate. The SAME function feeds
+every other consumer, so disagreement is impossible: occlusion
+(`compute_occluded_layer_indices`, `content_pipeline.rs:69-78` — which today reads
+`is_muted`/`is_solo` directly and computes its own `any_solo`; those reads are
+DELETED and it takes the hidden set as input, so a muted opaque layer no longer
+occludes the layers beneath it), render-skip (D4), the engine's paused-idle gate
+(D7), and prewarm ranking (D7). Clip-level mute rides the same frame:
+`ActiveClipRef.is_muted` → `CompositeClipDescriptor.is_muted`, checked at the
 same generate/blend sites. Rationale: today three systems re-decide visibility and
-disagree about timing; one predicate computed once per frame cannot disagree with
+disagree about timing; one function consumed everywhere cannot disagree with
 itself. Rejected: per-consumer checks reading live flags (that is today's disease,
 renamed). Parent-group semantics are preserved by folding them into the predicate at
 build time — today parent mute/solo reach visuals only through membership, so this is
@@ -124,7 +142,13 @@ return perfectly evolved (they render from the time uniform). Stateful sims free
 while muted — identical to an occluded layer today. Grouped and LED-tapped muted
 layers keep rendering (blend-skip only), same as occluded ones. Rejected: any
 mute-specific skip policy — invent nothing; the occlusion predicate already answered
-"which hidden layers are safe to not render."
+"which hidden layers are safe to not render." **Consequences, stated honestly:** a
+stateful sim (fluid, feedback) frozen under a muted layer resumes from where it
+froze — a muted sim does NOT keep cooking. Mute is a deliberate gesture, unlike
+occlusion, so this is a product call: the alternative (exempt stateful sims from the
+skip) costs full sim GPU on invisible layers and needs a statefulness classification
+that doesn't exist (D6). If the frozen reveal reads wrong on stage, the revival
+trigger is the Deferred entry for keep-cooking sim mute.
 
 **D5 — Binding identity is (clip_id, layer_id); mismatch heals via existing
 stop+start, same tick.**
@@ -136,14 +160,35 @@ hand (timeline query, live slots, session resolve). After the `compute_sync` dif
 `sync_clips_to_time` walks should-be-active entries that are already active; a
 `layer_id` mismatch pushes the clip onto to_stop AND to_start this tick. The heal is
 the existing machinery — `GeneratorRenderer::acquire_clip` rebinds on the fresh start
-because the stop removed the id. Rationale: "clip on layer B" means "B's generator
-through B's chain," and stop+start is the engine's only honest re-resolve. Rejected:
+because the stop removed the id. **Heals suppress edge emission:** the reconcile knows
+which start/stop pairs it pushed, and those starts must NOT push `clip_edge_layers`
+(modulation param-steps would fire on the destination layer — dragging a clip mid-bar
+would visibly step/randomize the layer being touched) and must NOT bump the
+destination generator's `clip_count` (`clip_edge_enabled=false` on the heal's
+acquire). `last_active_clip_id` for the destination layer IS updated silently, so a
+later real edge on that layer diffs correctly. This is a parameter on the existing
+start path, not a new lifecycle path (D6-intact). Rationale: "clip on layer B" means
+"B's generator through B's chain," and stop+start is the engine's only honest
+re-resolve. Rejected:
 rebind-in-place (new machinery in every renderer for a rare gesture — Peter's call,
 confirmed in discussion). Rejected: include loop-mode/source/trim in the identity —
 deferred with trigger; those edits mid-flight are rarer than the drag and each has a
 working retrigger path. **Consequences, stated honestly:** the drag of a live clip
 rebinds with a one-frame clear + re-acquire (generator clips) or a re-seek (video) —
 an accepted blink on an edit gesture, never a steady-state cost.
+
+**D7 — Paused idle and prewarm rank by VISIBLE clips, using the same predicate.**
+Two hot-mute follow-ons, both consuming the D3 function (never a re-derivation):
+(a) With muted clips staying active, `tick_non_playing`'s `compositor_dirty`
+gate (`engine.rs:1046-1048`, keyed on `has_active_clips`) would render every paused
+tick forever in the parked-between-songs state (all layers muted, transport stopped).
+The gate becomes "any ready clip on a non-hidden layer" — computed with the D3
+function over the (tiny) ready list, so a fully-muted paused rig idles exactly like
+today. `should_clear_compositor` (`engine.rs:1059`) keys on the same set.
+(b) Prewarm candidates rank visible-first: `compute_prewarm_candidates`
+(`engine.rs:2517`) sorts by `(hidden, start_beat)` so a muted layer's earlier clip
+can't evict a visible layer's next clip from the prewarm cap. Rationale for both:
+hot mute must never charge the performer for content they can't see.
 
 **D6 — No new abstractions.** Vetoed by name, for the executor who will reinvent them
 at 2am: no event bus or observer pattern for dirty propagation; no generic "binding
@@ -158,19 +203,24 @@ After this design, `sync_clips_to_time` is: compute desired membership from (Pro
 beat, live slots, session refs) → diff against realized (clip_id set + realized
 layer) → heal via stop/start → emit edges (clip-edge layers, trigger counters) as
 outputs. It runs every tick in every transport state, takes no dirty input, and is
-safe to call redundantly (idempotent today, stays so). `mark_compositor_dirty` and the
-paused-tick `filter_ready_clips` gating are untouched — they are UI-snapshot and
-render-filter optimizations that never decided correctness of membership, and still
-don't. `seek_active_clips` after paused syncs stays (scrub-while-stopped re-anchors
-video). Export is unaffected: export ticks already sync every tick.
+safe to call redundantly (idempotent today, stays so). The paused tick gates
+`seek_active_clips` on the reconcile's membership-changed return (P1 as-built); scrub
+re-anchors via `seek_to` directly. `mark_compositor_dirty` and the
+paused-tick `filter_ready_clips` gating are untouched except that the paused idle
+gate keys on VISIBLE clips (D7a). Session mode is unaffected by the every-tick
+stopped reconcile: `resolve_refs` is a pure function of the frozen beat, so no
+spurious evictions; the one visible shift is that arrangement clips under the
+playhead now bind at the stopped reconcile rather than at `play()` — the CORE_ENGINE_MAP.md
+section 13.15 (Session P2 seams) transient moves earlier, unchanged in shape.
+Export is unaffected: export ticks already sync every tick.
 
 ## 4. Invariants & enforcement
 
 1. **Membership never reads mute/solo.** Enforcement: `rg "is_muted|is_solo" crates/manifold-core/src/timeline.rs` → zero hits inside `get_active_clips_at_beat_ref`; cure-test `muted_layer_clip_stays_active` (P2).
 2. **Reconcile runs every tick in every state.** Enforcement: cure-test `stopped_engine_activates_clip_under_playhead` — stopped engine, no dirty calls, tick once, clip active (rewrite of `engine_tick_while_stopped_has_no_active_clips`, P1).
-3. **Visibility is single-sourced.** Enforcement: `rg "any_solo|is_solo" crates/manifold-renderer/src/layer_compositor.rs` → zero hits; `rg "\.is_muted" crates/manifold-renderer/src/layer_compositor.rs` → zero hits outside the `hidden` field read (P2).
+3. **Visibility is single-sourced.** Enforcement: `rg "any_solo|is_solo" crates/manifold-renderer/src/layer_compositor.rs` → zero hits; `rg "\.is_muted" crates/manifold-renderer/src/layer_compositor.rs` → zero hits outside the `hidden` field read; `rg "is_muted|is_solo" crates/manifold-app/src/content_pipeline.rs` → zero hits outside the predicate call and descriptor build (occlusion's own flag reads are deleted); predicate unit tests in `manifold-core` (P2).
 4. **An active clip's realized layer matches its project layer within one tick.** Enforcement: cure-test `drag_active_clip_across_layers_rebinds` (paused and playing variants, P3).
-5. **No new shared state, no per-frame allocation on the reconcile path** (house rules). Enforcement: `rg "Arc<Mutex|Arc<RwLock" crates/manifold-playback/src` → zero new hits; reconcile uses existing scratch buffers only — verified by the P1 gate tests plus code review.
+5. **No new shared state, no NEW per-frame allocation on the reconcile path** (house rules). Enforcement: `rg "Arc<Mutex|Arc<RwLock" crates/manifold-playback/src` → zero new hits; the reconcile uses existing scratch buffers only. Pre-existing debt named, not silently kept: `get_active_clips_at_beat_ref` allocates one `Vec::new()` per call (`timeline.rs:410`) — P2 threads a caller scratch through and deletes it.
 
 ## 5. Phasing
 
@@ -201,20 +251,29 @@ video). Export is unaffected: export ticks already sync every tick.
 ### P2 — Hot mute: visibility predicate + membership filter removal (fixes the semantics of BUG-gg64 (paused mute stall))
 
 - **Entry state:** P1 landed on the branch; `rg "sync_dirty" crates/` → zero.
-- **Read-back:** D2/D3/D4 + audit; restate: mute leaves membership, one `hidden` flag,
-  occlusion + render-skip consume it, parent-group semantics folded at build time.
-- **Deliverables:** `hidden` predicate at `content_pipeline.rs:2295`; descriptor
-  `is_muted`/`is_solo` → `hidden`; compositor check sites updated; occlusion input
-  excludes hidden layers; render-skip candidates include hidden layers under the same
-  safety filter; `timeline.rs:417-441` and `engine.rs:2551-2563` filters deleted;
+- **Read-back:** D2/D3/D4/D7 + audit; restate: mute leaves membership, one `hidden`
+  predicate in `manifold-core` consumed by descriptor build, occlusion, the engine
+  idle gate, and prewarm ranking; parent-group semantics folded at build time.
+- **Deliverables:** the `manifold-core` predicate fn + unit tests; `hidden` at
+  `content_pipeline.rs:2295`; descriptor `is_muted`/`is_solo` → `hidden`; compositor
+  check sites updated; occlusion's own flag reads (`content_pipeline.rs:69-78`)
+  deleted — it takes the hidden set; render-skip candidates include hidden layers
+  under the same safety filter; `timeline.rs:417-441` and `engine.rs:2551-2563`
+  filters deleted; prewarm sort key `(hidden, start_beat)` (D7b); paused-idle gate
+  keyed on visible ready clips (D7a); `get_active_clips_at_beat_ref` scratch-threaded
+  (kills the per-call `Vec::new()`; both callers — engine + `breadcrumb.rs:385`);
   `ActiveClipRef.is_muted` + `CompositeClipDescriptor.is_muted` + clip-mute check at
   the same generate/blend sites; cure-tests `muted_layer_clip_stays_active`,
   `muted_layer_hidden_from_composite` (predicate unit test), `clip_muted_stays_active_hidden`,
-  `muted_layer_does_not_occlude_below`.
-- **Gate — positive:** `cargo test -p manifold-playback -p manifold-renderer -p manifold-app`
+  `muted_layer_does_not_occlude_below`, `audio_solo_does_not_suppress_video` (D2c),
+  `muted_led_layer_goes_dark` (review finding 8: LED consumes LayerOutputs, hidden
+  layers push none), `all_muted_paused_rig_idles` (D7a).
+- **Gate — positive:** `cargo test -p manifold-core -p manifold-playback -p manifold-renderer -p manifold-app`
   green; new cure-tests fail on pre-P2 code. **Negative:** `rg "any_solo|is_solo"
   crates/manifold-renderer/src/layer_compositor.rs` → zero; `rg "is_muted"
-  crates/manifold-core/src/timeline.rs` → zero inside the query fn.
+  crates/manifold-core/src/timeline.rs` → zero inside the query fn; `rg "is_muted|is_solo"
+  crates/manifold-app/src/content_pipeline.rs` → zero outside the predicate call and
+  descriptor build.
 - **Acceptance demo (L2, computed):** headless render of a two-layer paused scene via
   the headless harness → PNG; scripted region-mean probe: output mean with top layer
   muted equals output mean with top layer deleted (±1/255), and differs from unmuted.
@@ -225,7 +284,7 @@ video). Export is unaffected: export ticks already sync every tick.
   the generator reappears evolved, no reboot, no black frame.
 - **Forbidden moves:** pausing muted video players (Deferred); a second visibility
   predicate anywhere; muting via membership "temporarily" for groups.
-- **Test scope:** nextest `-p manifold-playback -p manifold-renderer -p manifold-app`;
+- **Test scope:** nextest `-p manifold-core -p manifold-playback -p manifold-renderer -p manifold-app`;
   clippy same. GPU-proofs NOT required (no kernel, graph, or shared-WGSL change —
   predicate is CPU-side).
 
@@ -233,15 +292,20 @@ video). Export is unaffected: export ticks already sync every tick.
 
 - **Entry state:** P2 landed; `rg "any_solo" crates/manifold-renderer/src/layer_compositor.rs` → zero.
 - **Read-back:** D5/D6; restate: heal is stop+start only; identity is exactly
-  (clip_id, layer_id) — no structural fields this phase.
+  (clip_id, layer_id) — no structural fields this phase; heals suppress edge emission
+  (no `clip_edge_layers` push, `clip_edge_enabled=false` on the heal's acquire,
+  `last_active_clip_id` updated silently).
 - **Deliverables:** `ActiveClipRef.layer_id` (populated at timeline query, live-slot
   fill, session resolve — ⚠ VERIFY-AT-IMPL: `rg -n "ActiveClipRef {" crates/ --type rust`
   for all construction sites, incl. `scheduler.rs:216` test helpers);
   `engine.active_clip_layers` maintained in `start_clip`/`stop_clip`/`stop_all_clips`;
-  the post-diff layer-mismatch walk in `sync_clips_to_time`; cure-test
+  the post-diff layer-mismatch walk in `sync_clips_to_time` with edge-suppressed
+  heal starts (D5); cure-test
   `drag_active_clip_across_layers_rebinds` (paused + playing: engine with
   StubRenderer, move the clip's layer via direct project mutation, tick, assert a
-  stop+start pair fired for the clip and `start_clip` saw the new layer).
+  stop+start pair fired for the clip and `start_clip` saw the new layer) +
+  `heal_emits_no_clip_edge` (assert `clip_edge_layers` stays empty and the
+  destination generator's `clip_count` does not bump across the heal).
 - **Gate — positive:** `cargo test -p manifold-playback` green; cure-test fails on
   pre-P3 code. **Negative:** none beyond suite (no symbol deletions this phase).
 - **Demo:** none — L1.
@@ -277,9 +341,14 @@ video). Export is unaffected: export ticks already sync every tick.
 5. Binding identity is (clip_id, layer_id); heal is existing stop+start; no
    rebind-in-place, ever (D5).
 6. No new abstractions — no event bus, no registry, no desired-state cache (D6).
+7. Paused idle and prewarm rank by visible clips, via the one predicate (D7).
 
 ## 7. Deferred
 
+- **Keep-cooking sim mute** (exempt stateful-sim layers from the mute render-skip so
+  a muted sim keeps evolving). Trigger: the frozen reveal reads wrong on stage (D4's
+  honest cost). Needs a statefulness classification that doesn't exist today —
+  building it is the cost of revival, and it's why this isn't v1.
 - **Pause muted video players** (decode relief for hot-muted 4K layers). Trigger:
   profiling shows muted-layer decode load in a real project; machinery exists
   (`pending_pauses`, transport pause/resume).
