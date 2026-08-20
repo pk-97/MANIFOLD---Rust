@@ -3854,7 +3854,7 @@ mod render_skip_tests {
     fn skip_for(layers: &[Layer], clips: &[ActiveClipRef]) -> Vec<i32> {
         let occ = occluded(layers, clips);
         let mut skip = Vec::new();
-        compute_render_skip_indices(&layers, &occ, &hidden(layers), true, false, &mut skip);
+        compute_render_skip_indices(layers, &occ, &hidden(layers), true, false, &mut skip);
         skip
     }
 
