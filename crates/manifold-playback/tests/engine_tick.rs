@@ -43,6 +43,23 @@ fn create_engine() -> PlaybackEngine {
     PlaybackEngine::new(renderers)
 }
 
+/// A fixture-free project with one video layer owning one generator clip at beat 0.
+/// Used by the stopped-engine reconciliation cure-test.
+fn project_with_clip_at_beat_zero() -> manifold_core::project::Project {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer = manifold_core::layer::Layer::new(
+        "Test".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(4.0),
+    ));
+    project.timeline.layers.push(layer);
+    project
+}
+
 /// A fixture-free project with one video layer owning one enabled, maximally
 /// sensitive clip trigger reading a single send's Full-band transient —
 /// BUG-109's regression tests don't need a real fixture, just the minimal
@@ -176,8 +193,8 @@ fn engine_initializes_with_project() {
 }
 
 #[test]
-fn engine_tick_while_stopped_has_no_active_clips() {
-    let project = load_project("Burn V5.manifold");
+fn stopped_engine_activates_clip_under_playhead() {
+    let project = project_with_clip_at_beat_zero();
     let mut engine = create_engine();
     engine.initialize(project);
 
@@ -191,8 +208,8 @@ fn engine_tick_while_stopped_has_no_active_clips() {
 
     let result = engine.tick(ctx);
     assert!(
-        result.ready_clips.is_empty(),
-        "No clips should be ready when stopped at beat 0"
+        !result.ready_clips.is_empty() || engine.active_clip_count() > 0,
+        "A stopped engine must reconcile every tick: the clip under the playhead should become active"
     );
 }
 

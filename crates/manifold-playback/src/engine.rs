@@ -155,10 +155,6 @@ pub struct PlaybackEngine {
     // Compositor
     compositor_dirty_deadline: f64,
 
-    // Deferred sync flag — set by mark_sync_dirty(), consumed by tick/driver.
-    // Port of C# PlaybackEngine.syncClipsDirty (lines 281-289).
-    sync_clips_dirty: bool,
-
     // Live external tempo (set by driver from sync controllers each frame).
     // Port of C# PlaybackEngine lines 113-116.
     live_external_tempo: Option<(f32, TempoPointSource)>,
@@ -310,7 +306,6 @@ impl PlaybackEngine {
             live_trigger_state: crate::live_trigger::LiveTriggerState::default(),
             fire_meters: manifold_core::audio_trigger::FireMeterCapture::default(),
             compositor_dirty_deadline: 0.0,
-            sync_clips_dirty: false,
             live_external_tempo: None,
             video_sync_interval: Seconds(2.0),
             last_sync_time: Seconds::ZERO,
@@ -514,7 +509,6 @@ impl PlaybackEngine {
         self.current_beat = 0.0;
         self.last_sync_time = Seconds::ZERO;
         self.drift_correction_count = 0;
-        self.sync_clips_dirty = false;
         self.last_realtime_now = 0.0;
         self.last_frame_count = 0;
         self.timeline_query_frame = u64::MAX;
@@ -542,24 +536,6 @@ impl PlaybackEngine {
     pub fn set_clock(&mut self, realtime_now: Seconds, frame_count: u64) {
         self.last_realtime_now = realtime_now.0;
         self.last_frame_count = frame_count;
-    }
-
-    // ─── Sync dirty flag ───
-
-    /// Mark that clips need re-synchronization (deferred from MIDI events).
-    /// Port of C# PlaybackEngine.MarkSyncDirty (line 442).
-    pub fn mark_sync_dirty(&mut self) {
-        self.sync_clips_dirty = true;
-    }
-
-    /// Consume the sync-dirty flag. Returns true and resets if set.
-    /// Port of C# PlaybackEngine.ConsumeSyncDirty (lines 284-289).
-    pub fn consume_sync_dirty(&mut self) -> bool {
-        if !self.sync_clips_dirty {
-            return false;
-        }
-        self.sync_clips_dirty = false;
-        true
     }
 
     pub fn shutdown(&mut self) {
@@ -614,8 +590,6 @@ impl PlaybackEngine {
         self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
         self.compositor_dirty_deadline = 0.0; // Force one more compositor update
-
-        self.sync_clips_dirty = false;
     }
 
     pub fn pause(&mut self) {
@@ -825,11 +799,7 @@ impl PlaybackEngine {
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
-        // 1. Clear deferred sync flag — SyncClipsToTime below handles it.
-        //    Port of C# line 1138.
-        self.consume_sync_dirty();
-
-        // 2. Advance time (unless external sync source is the clock authority).
+        // 1. Advance time (unless external sync source is the clock authority).
         //    Port of C# lines 1141-1150.
         if !self.external_time_sync {
             let frame_delta = if self.is_export_mode && ctx.export_fixed_dt.0 > 0.0 {
@@ -971,10 +941,11 @@ impl PlaybackEngine {
 
     /// Non-playing (paused/stopped) tick. Matches C# PlaybackController.Update lines 1114-1133.
     fn tick_non_playing(&mut self, ctx: TickContext) -> TickResult {
-        // 1. Flush deferred sync from MIDI events.
-        //    Port of C# lines 1117-1120.
-        if self.consume_sync_dirty() {
-            self.sync_clips_to_time();
+        // 1. Reconcile desired membership every tick (P1: unconditional reconcile).
+        //    Seek active clips only when membership actually changed — re-seeking
+        //    every paused frame would churn every active video player.
+        let membership_changed = self.sync_clips_to_time();
+        if membership_changed {
             self.seek_active_clips();
         }
 
@@ -1335,9 +1306,13 @@ impl PlaybackEngine {
     /// Re-synchronize active clips to current playback position.
     /// Called by play() and seek_to() for immediate state consistency.
     /// The heart of deterministic playback — idempotent.
-    pub fn sync_clips_to_time(&mut self) {
+    ///
+    /// Returns `true` if membership actually changed this call (any clip
+    /// started or stopped). Callers use this to gate cheap-but-not-free work
+    /// like re-seeking active video players.
+    pub fn sync_clips_to_time(&mut self) -> bool {
         if self.project.is_none() {
-            return;
+            return false;
         }
 
         self.query_active_timeline_clips();
@@ -1363,7 +1338,7 @@ impl PlaybackEngine {
         // never a parallel path. May evict a clip via `stop_clip` (the same
         // primitive this function's own to_stop loop uses) to force a
         // same-clip loop-wrap restart before the diff below runs.
-        self.resolve_session_refs();
+        let mut membership_changed = self.resolve_session_refs();
 
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
@@ -1379,6 +1354,9 @@ impl PlaybackEngine {
         for clip_id in &sync_result.to_stop {
             self.stop_clip(clip_id);
         }
+        membership_changed = membership_changed
+            || !sync_result.to_stop.is_empty()
+            || !sync_result.to_start.is_empty();
 
         // F4: `start_clip` below is stamped with `self.last_realtime_now`, not
         // a zero epoch. `sync_clips_to_time` is called from outside `tick()`
@@ -1448,6 +1426,8 @@ impl PlaybackEngine {
 
         // Reclaim buffers for reuse on the next sync call (zero allocation).
         self.scheduler.reclaim(sync_result);
+
+        membership_changed
     }
 
     // ─── Session mode resolution (P2) ───
@@ -1463,7 +1443,7 @@ impl PlaybackEngine {
     /// in `sync_clips_to_time` already uses. This keeps `sync_clips_to_time`
     /// the sole authority: the eviction only pre-empties the very next
     /// `compute_sync` diff, it never bypasses it.
-    fn resolve_session_refs(&mut self) {
+    fn resolve_session_refs(&mut self) -> bool {
         self.session_refs_scratch.clear();
         self.session_wrap_restart_scratch.clear();
         let current_beat = self.current_beat;
@@ -1482,6 +1462,9 @@ impl PlaybackEngine {
                 self.stop_clip(clip_id);
             }
             self.session_wrap_restart_scratch = ids;
+            true
+        } else {
+            false
         }
     }
 
@@ -1522,10 +1505,10 @@ impl PlaybackEngine {
         } else {
             self.session_runtime.stop_slot(layer_id, current_beat, immediate);
         }
-        // Direct re-sync (not just `mark_sync_dirty`), matching `play`/`seek_to`:
-        // this is a dedicated playback-affecting API call, not a generic
-        // project edit — a quantized launch's *pending* entry still waits for
-        // its beat, but an immediate one must resolve now, not one tick later.
+        // Direct re-sync, matching `play`/`seek_to`: this is a dedicated
+        // playback-affecting API call, not a generic project edit — a quantized
+        // launch's *pending* entry still waits for its beat, but an immediate one
+        // must resolve now, not one tick later.
         self.sync_clips_to_time();
     }
 
@@ -1722,8 +1705,8 @@ impl PlaybackEngine {
         // the public API, so we use pointer-level split borrow here.
         // This is safe because the LiveClipHost methods on PlaybackEngine that take
         // &mut self only mutate fields that are NOT project or live_clip_manager
-        // (stop_clip mutates active_clip_renderers etc., mark_sync_dirty sets a bool,
-        // mark_compositor_dirty sets a deadline, invalidate_lookahead_prewarm resets a timer).
+        // (stop_clip mutates active_clip_renderers etc., mark_compositor_dirty sets a
+        // deadline, invalidate_lookahead_prewarm resets a timer).
         let project = self.project.as_mut().unwrap() as *mut manifold_core::project::Project;
         let live_clip_manager = self.live_clip_manager.as_mut().unwrap()
             as *mut crate::live_clip_manager::LiveClipManager;
@@ -2725,10 +2708,6 @@ impl LiveClipHost for PlaybackEngine {
 
     fn stop_clip(&mut self, clip_id: &str) {
         PlaybackEngine::stop_clip(self, clip_id);
-    }
-
-    fn mark_sync_dirty(&mut self) {
-        PlaybackEngine::mark_sync_dirty(self);
     }
 
     fn mark_compositor_dirty(&mut self) {
