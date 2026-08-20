@@ -38,6 +38,22 @@ impl SharedOutputView {
     }
 }
 
+/// Compute a per-layer-index `hidden` bitmap from the core predicate.
+/// `out` is resized to `layers.len()` and filled; `layers` must be in tree
+/// order (parent indices < child indices) so `find_parent_layer` scans safely.
+fn compute_hidden_by_index(
+    layers: &[manifold_core::layer::Layer],
+    out: &mut Vec<bool>,
+) {
+    out.clear();
+    out.resize(layers.len(), false);
+    let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
+    for (i, layer) in layers.iter().enumerate() {
+        let parent = manifold_core::layer::Layer::find_parent_layer(layers, i).map(|(_, p)| p);
+        out[layer.index as usize] = layer.is_hidden(parent, any_solo_video);
+    }
+}
+
 /// Opaque occlusion: find every layer made invisible by a fully-opaque
 /// layer above it, so the compositor can skip blending it into the
 /// composite. Blend-skip ONLY — nothing upstream (generator render, sim
@@ -61,18 +77,17 @@ impl SharedOutputView {
 fn compute_occluded_layer_indices(
     layers: &[manifold_core::layer::Layer],
     ready_clips: &[manifold_playback::scheduler::ActiveClipRef],
+    hidden: &[i32],
     out: &mut Vec<i32>,
 ) {
     out.clear();
-    // Audio layers have their own solo/mute bus (audible, not visual) — they must
-    // never affect compositing. See docs/AUDIO_LAYER_DESIGN.md section 5.
-    let any_solo = layers.iter().filter(|l| !l.is_audio()).any(|l| l.is_solo);
     let mut cutoff: Option<i32> = None;
     for l in layers {
         if l.is_group() || l.parent_layer_id.is_some() {
             continue;
         }
-        if l.is_muted || (any_solo && !l.is_solo) {
+        // A hidden layer never acts as an occluder.
+        if hidden.contains(&l.index) {
             continue;
         }
         if l.default_blend_mode != BlendMode::Opaque || l.opacity < 1.0 {
@@ -131,6 +146,7 @@ fn compute_occluded_layer_indices(
 fn compute_render_skip_indices(
     layers: &[manifold_core::layer::Layer],
     occluded: &[i32],
+    hidden: &[i32],
     enabled: bool,
     preview_active: bool,
     out: &mut Vec<i32>,
@@ -146,6 +162,17 @@ fn compute_render_skip_indices(
             !l.is_group() && l.parent_layer_id.is_none() && !l.blit_to_led
         });
         if safe {
+            out.push(idx);
+        }
+    }
+    for &idx in hidden {
+        // Hidden layers inherit the same safety filter as occluded layers:
+        // plain top-level leaf, not LED-tapped, no preview. Grouped/LED
+        // layers stay on the blend-skip-only path.
+        let safe = layers.iter().find(|l| l.index == idx).is_some_and(|l| {
+            !l.is_group() && l.parent_layer_id.is_none() && !l.blit_to_led
+        });
+        if safe && !out.contains(&idx) {
             out.push(idx);
         }
     }
@@ -929,6 +956,13 @@ pub struct ContentPipeline {
     /// shows values that move under a card slider / driver / Ableton / envelope
     /// instead of the frozen authoring def. Empty whenever no editor is watching.
     last_live_node_params: manifold_renderer::node_graph::LiveNodeParams,
+    /// Per-frame visibility bitmap: layer.index -> hidden. Computed once per
+    /// frame by the content pipeline and consumed by occlusion, render-skip,
+    /// layer descriptor build, and the paused-idle gate via TickResult.
+    hidden_layers_scratch: Vec<bool>,
+    /// Per-frame list of hidden layer indices, built from `hidden_layers_scratch`
+    /// and passed to occlusion / render-skip as the hidden set.
+    hidden_layer_indices_scratch: Vec<i32>,
     /// Layer indices occluded this frame by a fully-opaque layer above them
     /// (opaque blend at full opacity replaces every pixel, so nothing below
     /// it can contribute). Occlusion elides ONLY the final blend dispatches
@@ -1051,6 +1085,8 @@ impl ContentPipeline {
             node_preview_generator: None,
             last_node_preview_info: None,
             last_live_node_params: Vec::new(),
+            hidden_layers_scratch: Vec::new(),
+            hidden_layer_indices_scratch: Vec::new(),
             occluded_layers_scratch: Vec::new(),
             render_skip_scratch: Vec::new(),
             occlusion_render_skip_enabled: std::env::var("MANIFOLD_OCCLUSION_RENDER_SKIP")
@@ -2026,9 +2062,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // beneath it (Opaque blend ignores the base), so the compositor
         // skips blending the layers below. Everything still RENDERS —
         // generators, sims, and effect chains advance normally.
+        compute_hidden_by_index(layers, &mut self.hidden_layers_scratch);
+        // Build the index list of hidden layers for occlusion / render-skip.
+        self.hidden_layer_indices_scratch.clear();
+        for layer in layers {
+            if self.hidden_layers_scratch[layer.index as usize] {
+                self.hidden_layer_indices_scratch.push(layer.index);
+            }
+        }
+        // Hidden layers never act as occluders and are also candidates for
+        // the render-skip optimization.
         compute_occluded_layer_indices(
             layers,
             &tick_result.ready_clips,
+            &self.hidden_layer_indices_scratch,
             &mut self.occluded_layers_scratch,
         );
         // Render-skip: of the occluded layers, which are safe to not render at
@@ -2041,6 +2088,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         compute_render_skip_indices(
             layers,
             &self.occluded_layers_scratch,
+            &self.hidden_layer_indices_scratch,
             self.occlusion_render_skip_enabled,
             preview_active,
             &mut self.render_skip_scratch,
@@ -2273,6 +2321,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     layer_index: entry.layer_index,
                     blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),
+                    is_muted: entry.is_muted,
                     effects: &[],
                     effect_groups: &[],
                 });
@@ -2302,8 +2351,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 layer_id: &layer.layer_id,
                 blend_mode: layer.default_blend_mode,
                 opacity: layer.opacity,
-                is_muted: layer.is_muted,
-                is_solo: layer.is_solo,
+                hidden: self.hidden_layers_scratch[layer.index as usize],
                 blit_to_led: layer.blit_to_led,
                 effects: layer.effects.as_deref().unwrap_or(empty_effects),
                 effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
@@ -3666,7 +3714,21 @@ mod occlusion_tests {
             duration_beats: manifold_core::Beats(4.0),
             is_looping: false,
             is_video: false,
+            is_muted: false,
+            layer_id: manifold_core::LayerId::new(format!("layer-{layer_index}")),
         }
+    }
+
+    /// Build the hidden index list from the core predicate, mirroring the
+    /// per-frame computation in `render_content`.
+    fn hidden(layers: &[Layer]) -> Vec<i32> {
+        let mut bitmap = Vec::new();
+        super::compute_hidden_by_index(layers, &mut bitmap);
+        layers
+            .iter()
+            .filter(|l| bitmap[l.index as usize])
+            .map(|l| l.index)
+            .collect()
     }
 
     #[test]
@@ -3679,35 +3741,35 @@ mod occlusion_tests {
         ];
         let clips = vec![clip(0), clip(1), clip(2), clip(3)];
         let mut out = Vec::new();
-        compute_occluded_layer_indices(&layers, &clips, &mut out);
+        compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
         assert_eq!(out, vec![2, 3], "layers below the opaque cutoff are culled");
     }
 
     #[test]
-    fn no_cull_when_opaque_is_faded_muted_or_clipless() {
+    fn no_cull_when_opaque_is_faded_or_clipless_or_hidden() {
         let mut out = Vec::new();
         // Partial opacity: a fade is in progress, everything below shows.
         let faded = vec![layer(0, BlendMode::Opaque, 0.99), layer(1, BlendMode::Normal, 1.0)];
-        compute_occluded_layer_indices(&faded, &[clip(0), clip(1)], &mut out);
+        compute_occluded_layer_indices(&faded, &[clip(0), clip(1)], &hidden(&faded), &mut out);
         assert!(out.is_empty(), "fading opaque layer must not occlude");
-        // Muted opaque layer doesn't block.
+        // Hidden opaque layer doesn't block (mute/solo are presentational, fed via hidden set).
         let mut muted = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
         muted[0].is_muted = true;
-        compute_occluded_layer_indices(&muted, &[clip(0), clip(1)], &mut out);
-        assert!(out.is_empty(), "muted opaque layer must not occlude");
+        compute_occluded_layer_indices(&muted, &[clip(0), clip(1)], &hidden(&muted), &mut out);
+        assert!(out.is_empty(), "hidden opaque layer must not occlude");
         // Opaque layer with no ready clip this frame doesn't block.
         let idle = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
-        compute_occluded_layer_indices(&idle, &[clip(1)], &mut out);
+        compute_occluded_layer_indices(&idle, &[clip(1)], &hidden(&idle), &mut out);
         assert!(out.is_empty(), "clipless opaque layer must not occlude");
     }
 
     #[test]
     fn solo_overrides_opaque_and_children_follow_their_group() {
         let mut out = Vec::new();
-        // Solo elsewhere hides the opaque layer entirely.
+        // Solo elsewhere hides the opaque layer entirely (via the hidden set).
         let mut soloed = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
         soloed[1].is_solo = true;
-        compute_occluded_layer_indices(&soloed, &[clip(0), clip(1)], &mut out);
+        compute_occluded_layer_indices(&soloed, &[clip(0), clip(1)], &hidden(&soloed), &mut out);
         assert!(out.is_empty(), "solo on another layer suppresses the occluder");
         // Parent-chain rule: a child whose group header sits ABOVE the
         // cutoff still renders into that group's composite; a plain layer
@@ -3722,6 +3784,7 @@ mod occlusion_tests {
         compute_occluded_layer_indices(
             &layers,
             &[clip(1), clip(2), clip(3)],
+            &hidden(&layers),
             &mut out,
         );
         assert!(
@@ -3730,11 +3793,24 @@ mod occlusion_tests {
         );
         assert!(out.contains(&3), "plain layer below the cutoff is culled");
     }
+
+    #[test]
+    fn muted_layer_does_not_occlude_below() {
+        let mut layers = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
+        layers[0].is_muted = true;
+        let clips = vec![clip(0), clip(1)];
+        let mut out = Vec::new();
+        compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
+        assert!(out.is_empty(), "a hidden (muted) layer must not occlude below");
+    }
 }
 
 #[cfg(test)]
 mod render_skip_tests {
-    use super::{compute_occluded_layer_indices, compute_render_skip_indices};
+    use super::{compute_hidden_by_index, compute_occluded_layer_indices, compute_render_skip_indices};
     use manifold_core::layer::Layer;
     use manifold_core::{BlendMode, LayerType};
     use manifold_playback::scheduler::ActiveClipRef;
@@ -3755,14 +3831,33 @@ mod render_skip_tests {
             duration_beats: manifold_core::Beats(4.0),
             is_looping: false,
             is_video: false,
+            is_muted: false,
+            layer_id: manifold_core::LayerId::new(format!("layer-{layer_index}")),
         }
+    }
+
+    fn hidden(layers: &[Layer]) -> Vec<i32> {
+        let mut bitmap = Vec::new();
+        compute_hidden_by_index(layers, &mut bitmap);
+        layers
+            .iter()
+            .filter(|l| bitmap[l.index as usize])
+            .map(|l| l.index)
+            .collect()
     }
 
     /// The occluded set for the layer stack, for feeding render-skip.
     fn occluded(layers: &[Layer], clips: &[ActiveClipRef]) -> Vec<i32> {
         let mut o = Vec::new();
-        compute_occluded_layer_indices(layers, clips, &mut o);
+        compute_occluded_layer_indices(layers, clips, &hidden(layers), &mut o);
         o
+    }
+
+    fn skip_for(layers: &[Layer], clips: &[ActiveClipRef]) -> Vec<i32> {
+        let occ = occluded(layers, clips);
+        let mut skip = Vec::new();
+        compute_render_skip_indices(layers, &occ, &hidden(layers), true, false, &mut skip);
+        skip
     }
 
     #[test]
@@ -3775,8 +3870,7 @@ mod render_skip_tests {
         let clips = vec![clip(0), clip(1), clip(2)];
         let occ = occluded(&layers, &clips);
         assert_eq!(occ, vec![1, 2], "both below the opaque cutoff are occluded");
-        let mut skip = Vec::new();
-        compute_render_skip_indices(&layers, &occ, true, false, &mut skip);
+        let skip = skip_for(&layers, &clips);
         assert_eq!(skip, vec![1, 2], "plain top-level leaves render-skip too");
     }
 
@@ -3791,8 +3885,7 @@ mod render_skip_tests {
         let clips = vec![clip(0), clip(1), clip(2)];
         let occ = occluded(&layers, &clips);
         assert_eq!(occ, vec![1, 2], "occlusion still lists the LED layer");
-        let mut skip = Vec::new();
-        compute_render_skip_indices(&layers, &occ, true, false, &mut skip);
+        let skip = skip_for(&layers, &clips);
         assert_eq!(
             skip,
             vec![2],
@@ -3812,9 +3905,7 @@ mod render_skip_tests {
         child.parent_layer_id = Some(group_header.layer_id.clone());
         let plain = layer(3, BlendMode::Normal, 1.0);
         let layers = vec![occluder, group_header, child, plain];
-        let occ = occluded(&layers, &[clip(0), clip(2), clip(3)]);
-        let mut skip = Vec::new();
-        compute_render_skip_indices(&layers, &occ, true, false, &mut skip);
+        let skip = skip_for(&layers, &[clip(0), clip(2), clip(3)]);
         assert!(!skip.contains(&1), "group header is never render-skipped");
         assert!(!skip.contains(&2), "grouped child is never render-skipped");
         assert!(skip.contains(&3), "plain top-level leaf still render-skips");
@@ -3828,10 +3919,27 @@ mod render_skip_tests {
         ];
         let occ = occluded(&layers, &[clip(0), clip(1)]);
         assert_eq!(occ, vec![1]);
+        let hidden_set = hidden(&layers);
         let mut skip = Vec::new();
-        compute_render_skip_indices(&layers, &occ, false, false, &mut skip);
+        compute_render_skip_indices(&layers, &occ, &hidden_set, false, false, &mut skip);
         assert!(skip.is_empty(), "toggle off → render nothing skipped");
-        compute_render_skip_indices(&layers, &occ, true, true, &mut skip);
+        compute_render_skip_indices(&layers, &occ, &hidden_set, true, true, &mut skip);
         assert!(skip.is_empty(), "preview open → render nothing skipped");
+    }
+
+    #[test]
+    fn hidden_layer_is_render_skipped_when_safe() {
+        // A muted top-level leaf below an active layer is hidden and should
+        // render-skip even though it is not occluded.
+        let mut layers = vec![
+            layer(0, BlendMode::Normal, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
+        layers[1].is_muted = true;
+        let clips = vec![clip(0), clip(1)];
+        let occ = occluded(&layers, &clips);
+        assert!(occ.is_empty(), "muted layer is not occluded, just hidden");
+        let skip = skip_for(&layers, &clips);
+        assert_eq!(skip, vec![1], "hidden plain leaf render-skips");
     }
 }

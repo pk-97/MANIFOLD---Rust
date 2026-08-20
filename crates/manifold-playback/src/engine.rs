@@ -123,6 +123,10 @@ pub struct PlaybackEngine {
     // Active clip tracking
     active_clip_renderers: AHashMap<ClipId, usize>, // clip_id → renderer index
     active_clip_ids: AHashSet<ClipId>,
+    /// clip_id → the layer the clip was started on (the realized half of the
+    /// binding identity, P3). The reconcile compares it against the clip's
+    /// project layer and heals a mismatch with an edge-suppressed stop+start.
+    active_clip_layers: AHashMap<ClipId, LayerId>,
     preparing_clips: AHashSet<ClipId>,
     pending_pauses: AHashMap<ClipId, f64>, // clip_id → pause deadline
     looping_clip_ids: AHashSet<ClipId>,
@@ -155,10 +159,6 @@ pub struct PlaybackEngine {
     // Compositor
     compositor_dirty_deadline: f64,
 
-    // Deferred sync flag — set by mark_sync_dirty(), consumed by tick/driver.
-    // Port of C# PlaybackEngine.syncClipsDirty (lines 281-289).
-    sync_clips_dirty: bool,
-
     // Live external tempo (set by driver from sync controllers each frame).
     // Port of C# PlaybackEngine lines 113-116.
     live_external_tempo: Option<(f32, TempoPointSource)>,
@@ -182,6 +182,9 @@ pub struct PlaybackEngine {
     timeline_active_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for timeline active clip indices from get_active_clips_at_beat.
     active_indices_scratch: Vec<(usize, usize)>,
+    /// Pre-allocated scratch for per-layer active clip indices passed to
+    /// `get_active_clips_at_beat_ref`.
+    active_layer_indices_scratch: Vec<usize>,
     /// Pre-allocated scratch for live slot refs (avoids per-frame Vec allocation).
     live_slot_refs_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for session-slot refs — the third `sync_clips_to_time`
@@ -195,6 +198,8 @@ pub struct PlaybackEngine {
     session_wrap_restart_scratch: Vec<ClipId>,
     /// Pre-allocated scratch for clips to start during sync (avoids per-sync Vec allocation).
     sync_start_scratch: Vec<ActiveClipRef>,
+    /// Scratch for layer-mismatch heals in `sync_clips_to_time` (P3).
+    sync_heal_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
     modulation_timing_scratch: Vec<(Beats, Beats)>,
     /// section 8 param triggers: which instances' own `audio_trigger` config fired
@@ -249,7 +254,7 @@ pub struct PlaybackEngine {
     timeline_query_frame: u64,
     became_ready_list: Vec<ClipId>,
     clips_to_stop_drift: Vec<ClipId>,
-    prewarm_candidates: Vec<TimelineClip>,
+    prewarm_candidates: Vec<(TimelineClip, bool)>,
     compositor_fallback_clips: Vec<ActiveClipRef>,
 
     // Prewarm state. Port of C# PlaybackEngine prewarm fields.
@@ -299,6 +304,7 @@ impl PlaybackEngine {
             renderers,
             active_clip_renderers: AHashMap::with_capacity(32),
             active_clip_ids: AHashSet::with_capacity(32),
+            active_clip_layers: AHashMap::with_capacity(32),
             preparing_clips: AHashSet::with_capacity(8),
             pending_pauses: AHashMap::with_capacity(8),
             looping_clip_ids: AHashSet::with_capacity(16),
@@ -310,7 +316,6 @@ impl PlaybackEngine {
             live_trigger_state: crate::live_trigger::LiveTriggerState::default(),
             fire_meters: manifold_core::audio_trigger::FireMeterCapture::default(),
             compositor_dirty_deadline: 0.0,
-            sync_clips_dirty: false,
             live_external_tempo: None,
             video_sync_interval: Seconds(2.0),
             last_sync_time: Seconds::ZERO,
@@ -323,10 +328,12 @@ impl PlaybackEngine {
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
             active_indices_scratch: Vec::with_capacity(32),
+            active_layer_indices_scratch: Vec::with_capacity(8),
             live_slot_refs_scratch: Vec::with_capacity(8),
             session_refs_scratch: Vec::with_capacity(8),
             session_wrap_restart_scratch: Vec::with_capacity(4),
             sync_start_scratch: Vec::with_capacity(4),
+            sync_heal_scratch: Vec::with_capacity(2),
             modulation_timing_scratch: Vec::with_capacity(64),
             pending_trigger_pulses: Vec::new(),
             last_active_clip_id: AHashMap::with_capacity(32),
@@ -461,6 +468,23 @@ impl PlaybackEngine {
     pub fn recently_started_time(&self, clip_id: &str) -> Option<f64> {
         self.recently_started_times.get(clip_id).copied()
     }
+    /// Test instrumentation (P3): the clip-edge pushes not yet consumed by a
+    /// tick's modulation step. Read after a direct `sync_clips_to_time` call.
+    #[doc(hidden)]
+    pub fn pending_clip_edge_layers(&self) -> &[i32] {
+        &self.clip_edge_layers
+    }
+    /// Test instrumentation (P3): the last clip the engine believes was
+    /// started on a layer (the edge-diff state, including silent heal updates).
+    #[doc(hidden)]
+    pub fn last_active_clip_id_for(&self, layer_index: i32) -> Option<&ClipId> {
+        self.last_active_clip_id.get(&layer_index)
+    }
+    /// Read access to the renderers (tests downcast to `StubRenderer`).
+    #[doc(hidden)]
+    pub fn renderers(&self) -> &[Box<dyn ClipRenderer>] {
+        &self.renderers
+    }
 
     // ─── Renderer access ───
 
@@ -514,7 +538,6 @@ impl PlaybackEngine {
         self.current_beat = 0.0;
         self.last_sync_time = Seconds::ZERO;
         self.drift_correction_count = 0;
-        self.sync_clips_dirty = false;
         self.last_realtime_now = 0.0;
         self.last_frame_count = 0;
         self.timeline_query_frame = u64::MAX;
@@ -542,24 +565,6 @@ impl PlaybackEngine {
     pub fn set_clock(&mut self, realtime_now: Seconds, frame_count: u64) {
         self.last_realtime_now = realtime_now.0;
         self.last_frame_count = frame_count;
-    }
-
-    // ─── Sync dirty flag ───
-
-    /// Mark that clips need re-synchronization (deferred from MIDI events).
-    /// Port of C# PlaybackEngine.MarkSyncDirty (line 442).
-    pub fn mark_sync_dirty(&mut self) {
-        self.sync_clips_dirty = true;
-    }
-
-    /// Consume the sync-dirty flag. Returns true and resets if set.
-    /// Port of C# PlaybackEngine.ConsumeSyncDirty (lines 284-289).
-    pub fn consume_sync_dirty(&mut self) -> bool {
-        if !self.sync_clips_dirty {
-            return false;
-        }
-        self.sync_clips_dirty = false;
-        true
     }
 
     pub fn shutdown(&mut self) {
@@ -614,8 +619,6 @@ impl PlaybackEngine {
         self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
         self.compositor_dirty_deadline = 0.0; // Force one more compositor update
-
-        self.sync_clips_dirty = false;
     }
 
     pub fn pause(&mut self) {
@@ -825,11 +828,7 @@ impl PlaybackEngine {
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
-        // 1. Clear deferred sync flag — SyncClipsToTime below handles it.
-        //    Port of C# line 1138.
-        self.consume_sync_dirty();
-
-        // 2. Advance time (unless external sync source is the clock authority).
+        // 1. Advance time (unless external sync source is the clock authority).
         //    Port of C# lines 1141-1150.
         if !self.external_time_sync {
             let frame_delta = if self.is_export_mode && ctx.export_fixed_dt.0 > 0.0 {
@@ -971,10 +970,11 @@ impl PlaybackEngine {
 
     /// Non-playing (paused/stopped) tick. Matches C# PlaybackController.Update lines 1114-1133.
     fn tick_non_playing(&mut self, ctx: TickContext) -> TickResult {
-        // 1. Flush deferred sync from MIDI events.
-        //    Port of C# lines 1117-1120.
-        if self.consume_sync_dirty() {
-            self.sync_clips_to_time();
+        // 1. Reconcile desired membership every tick (P1: unconditional reconcile).
+        //    Seek active clips only when membership actually changed — re-seeking
+        //    every paused frame would churn every active video player.
+        let membership_changed = self.sync_clips_to_time();
+        if membership_changed {
             self.seek_active_clips();
         }
 
@@ -1042,23 +1042,30 @@ impl PlaybackEngine {
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
-        //    Only runs while compositor dirty deadline is active or generators are running.
-        let has_active_clips = !self.active_clip_renderers.is_empty();
-        let compositor_dirty =
-            ctx.realtime_now.0 < self.compositor_dirty_deadline || has_active_clips;
-
-        let ready = if compositor_dirty {
-            self.filter_ready_clips(ctx.pre_render_dt)
+        //    With hot mute, ready clips on hidden layers don't keep the
+        //    compositor running, so a fully-muted paused rig idles.
+        let ready = self.filter_ready_clips(ctx.pre_render_dt);
+        let has_visible_ready = if let Some(project) = &self.project {
+            let layers = &project.timeline.layers;
+            let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
+            ready.iter().any(|clip| {
+                let layer_index = clip.layer_index as usize;
+                layers.get(layer_index).is_some_and(|layer| {
+                    let parent = manifold_core::layer::Layer::find_parent_layer(layers, layer_index)
+                        .map(|(_, p)| p);
+                    !layer.is_hidden(parent, any_solo_video)
+                })
+            })
         } else {
-            Vec::new()
+            false
         };
+        let compositor_dirty =
+            ctx.realtime_now.0 < self.compositor_dirty_deadline || has_visible_ready;
 
         TickResult {
             ready_clips: ready,
             compositor_dirty,
-            should_clear_compositor: !compositor_dirty
-                && self.active_clip_renderers.is_empty()
-                && !self.has_pending_clip_state(),
+            should_clear_compositor: !compositor_dirty && !has_visible_ready && !self.has_pending_clip_state(),
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
@@ -1079,13 +1086,15 @@ impl PlaybackEngine {
         }
 
         // Step 2: query active clips and build lightweight refs
-        // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch)
+        // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch/active_layer_indices_scratch)
         self.timeline_active_scratch.clear();
         if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            project
-                .timeline
-                .get_active_clips_at_beat_ref(beat, &mut self.active_indices_scratch);
+            project.timeline.get_active_clips_at_beat_ref(
+                beat,
+                &mut self.active_indices_scratch,
+                &mut self.active_layer_indices_scratch,
+            );
         }
         if let Some(project) = &self.project {
             for (li, ci) in &self.active_indices_scratch {
@@ -1110,6 +1119,8 @@ impl PlaybackEngine {
                         duration_beats: clip.duration_beats,
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
+                        is_muted: clip.is_muted,
+                        layer_id: layer.layer_id.clone(),
                     });
                 }
             }
@@ -1120,6 +1131,19 @@ impl PlaybackEngine {
     // ─── Clip lifecycle ───
 
     pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: Seconds, layer_index: i32) {
+        self.start_clip_with_edge(clip, realtime_now, layer_index, true);
+    }
+
+    /// `fire_clip_edge=false` starts the clip without firing a clip edge
+    /// (P3 heal: a layer-drag rebind must not bump the destination
+    /// generator's `clip_count` or fire param-step actions).
+    fn start_clip_with_edge(
+        &mut self,
+        clip: &TimelineClip,
+        realtime_now: Seconds,
+        layer_index: i32,
+        fire_clip_edge: bool,
+    ) {
         // Fix 6: Never start clips on group layers
         if let Some(project) = &self.project
             && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
@@ -1136,11 +1160,23 @@ impl PlaybackEngine {
                 .project
                 .as_ref()
                 .map_or(&[] as &[_], |p| &p.timeline.layers);
-            let success =
-                self.renderers[idx].start_clip(clip, self.current_time, layers, layer_index);
+            let success = self.renderers[idx].start_clip(
+                clip,
+                self.current_time,
+                layers,
+                layer_index,
+                fire_clip_edge,
+            );
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
+                // The realized layer is the layer the clip was started ON
+                // (authoritative container), never `clip.layer_id` — a dragged
+                // clip's own field is exactly what may be stale (P3).
+                if let Some(layer) = layers.get(layer_index as usize) {
+                    self.active_clip_layers
+                        .insert(clip.id.clone(), layer.layer_id.clone());
+                }
                 self.recently_started_times
                     .insert(clip.id.clone(), realtime_now.0);
 
@@ -1164,6 +1200,7 @@ impl PlaybackEngine {
             self.renderers[renderer_idx].stop_clip(clip_id);
         }
         self.active_clip_ids.remove(clip_id);
+        self.active_clip_layers.remove(clip_id);
         self.preparing_clips.remove(clip_id);
         self.pending_pauses.remove(clip_id);
         self.looping_clip_ids.remove(clip_id);
@@ -1190,6 +1227,7 @@ impl PlaybackEngine {
         self.stopped_this_tick
             .extend(self.stop_buffer.iter().cloned());
         self.active_clip_ids.clear();
+        self.active_clip_layers.clear();
         self.preparing_clips.clear();
         self.pending_pauses.clear();
         self.looping_clip_ids.clear();
@@ -1335,9 +1373,13 @@ impl PlaybackEngine {
     /// Re-synchronize active clips to current playback position.
     /// Called by play() and seek_to() for immediate state consistency.
     /// The heart of deterministic playback — idempotent.
-    pub fn sync_clips_to_time(&mut self) {
+    ///
+    /// Returns `true` if membership actually changed this call (any clip
+    /// started or stopped). Callers use this to gate cheap-but-not-free work
+    /// like re-seeking active video players.
+    pub fn sync_clips_to_time(&mut self) -> bool {
         if self.project.is_none() {
-            return;
+            return false;
         }
 
         self.query_active_timeline_clips();
@@ -1363,7 +1405,7 @@ impl PlaybackEngine {
         // never a parallel path. May evict a clip via `stop_clip` (the same
         // primitive this function's own to_stop loop uses) to force a
         // same-clip loop-wrap restart before the diff below runs.
-        self.resolve_session_refs();
+        let mut membership_changed = self.resolve_session_refs();
 
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
@@ -1378,6 +1420,30 @@ impl PlaybackEngine {
 
         for clip_id in &sync_result.to_stop {
             self.stop_clip(clip_id);
+        }
+        membership_changed = membership_changed
+            || !sync_result.to_stop.is_empty()
+            || !sync_result.to_start.is_empty();
+
+        // P3 (layer-aware binding identity): the compute_sync diff keys on
+        // clip_id alone, so an active clip dragged to another layer produces
+        // no stop/start — but its start-edge binding (renderer, generator
+        // instance, render target) belongs to the OLD layer. Heal each
+        // mismatch with a stop+start through the existing lifecycle. Heals
+        // suppress the clip edge (D5): no param-step actions, no generator
+        // clip_count bump — a drag is not a trigger.
+        let mut heals = std::mem::take(&mut self.sync_heal_scratch);
+        heals.clear();
+        for entry in &sync_result.should_be_active {
+            if self.active_clip_ids.contains(&entry.clip_id)
+                && self.active_clip_layers.get(&entry.clip_id) != Some(&entry.layer_id)
+            {
+                heals.push(entry.clone());
+            }
+        }
+        membership_changed = membership_changed || !heals.is_empty();
+        for entry in &heals {
+            self.stop_clip(&entry.clip_id);
         }
 
         // F4: `start_clip` below is stamped with `self.last_realtime_now`, not
@@ -1400,7 +1466,17 @@ impl PlaybackEngine {
         let mut starts = std::mem::take(&mut self.sync_start_scratch);
         starts.clear();
         starts.extend(sync_result.to_start.iter().cloned());
+        starts.extend(heals.iter().cloned());
+        self.sync_heal_scratch = heals;
         for entry in &starts {
+            // A heal is not a trigger (D5): no edge push, no param-step
+            // actions, no generator clip_count bump — but the destination
+            // layer's `last_active_clip_id` still updates silently so a later
+            // real edge on that layer diffs correctly.
+            let is_heal = self
+                .sync_heal_scratch
+                .iter()
+                .any(|h| h.clip_id == entry.clip_id);
             // PARAM_STEP_ACTIONS D5: record the clip-edge at scheduler-decision
             // time — the engine's own notion of "this layer just started a
             // clip" — never gated on whether a renderer later accepts it
@@ -1410,7 +1486,8 @@ impl PlaybackEngine {
             // below is almost always true; it's kept explicit (rather than
             // pushing unconditionally) so `last_active_clip_id` is a genuine
             // before/after diff, not just a to_start mirror.
-            if self.last_active_clip_id.get(&entry.layer_index) != Some(&entry.clip_id) {
+            if !is_heal && self.last_active_clip_id.get(&entry.layer_index) != Some(&entry.clip_id)
+            {
                 self.clip_edge_layers.push(entry.layer_index);
             }
             self.last_active_clip_id
@@ -1431,7 +1508,12 @@ impl PlaybackEngine {
                     .cloned()
             };
             if let Some(ref clip) = clip {
-                self.start_clip(clip, Seconds(self.last_realtime_now), entry.layer_index);
+                self.start_clip_with_edge(
+                    clip,
+                    Seconds(self.last_realtime_now),
+                    entry.layer_index,
+                    !is_heal,
+                );
             }
         }
         self.sync_start_scratch = starts;
@@ -1448,6 +1530,8 @@ impl PlaybackEngine {
 
         // Reclaim buffers for reuse on the next sync call (zero allocation).
         self.scheduler.reclaim(sync_result);
+
+        membership_changed
     }
 
     // ─── Session mode resolution (P2) ───
@@ -1463,7 +1547,7 @@ impl PlaybackEngine {
     /// in `sync_clips_to_time` already uses. This keeps `sync_clips_to_time`
     /// the sole authority: the eviction only pre-empties the very next
     /// `compute_sync` diff, it never bypasses it.
-    fn resolve_session_refs(&mut self) {
+    fn resolve_session_refs(&mut self) -> bool {
         self.session_refs_scratch.clear();
         self.session_wrap_restart_scratch.clear();
         let current_beat = self.current_beat;
@@ -1482,6 +1566,9 @@ impl PlaybackEngine {
                 self.stop_clip(clip_id);
             }
             self.session_wrap_restart_scratch = ids;
+            true
+        } else {
+            false
         }
     }
 
@@ -1522,10 +1609,10 @@ impl PlaybackEngine {
         } else {
             self.session_runtime.stop_slot(layer_id, current_beat, immediate);
         }
-        // Direct re-sync (not just `mark_sync_dirty`), matching `play`/`seek_to`:
-        // this is a dedicated playback-affecting API call, not a generic
-        // project edit — a quantized launch's *pending* entry still waits for
-        // its beat, but an immediate one must resolve now, not one tick later.
+        // Direct re-sync, matching `play`/`seek_to`: this is a dedicated
+        // playback-affecting API call, not a generic project edit — a quantized
+        // launch's *pending* entry still waits for its beat, but an immediate one
+        // must resolve now, not one tick later.
         self.sync_clips_to_time();
     }
 
@@ -1722,8 +1809,8 @@ impl PlaybackEngine {
         // the public API, so we use pointer-level split borrow here.
         // This is safe because the LiveClipHost methods on PlaybackEngine that take
         // &mut self only mutate fields that are NOT project or live_clip_manager
-        // (stop_clip mutates active_clip_renderers etc., mark_sync_dirty sets a bool,
-        // mark_compositor_dirty sets a deadline, invalidate_lookahead_prewarm resets a timer).
+        // (stop_clip mutates active_clip_renderers etc., mark_compositor_dirty sets a
+        // deadline, invalidate_lookahead_prewarm resets a timer).
         let project = self.project.as_mut().unwrap() as *mut manifold_core::project::Project;
         let live_clip_manager = self.live_clip_manager.as_mut().unwrap()
             as *mut crate::live_clip_manager::LiveClipManager;
@@ -2545,24 +2632,21 @@ impl PlaybackEngine {
         let window_start = self.current_time - Seconds(LOOKAHEAD_PREWARM_BEHIND_TIME as f64);
         let window_end = self.current_time + Seconds(LOOKAHEAD_PREWARM_AHEAD_TIME as f64);
 
-        // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow)
+        // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow).
+        // Mute/solo/clip-mute are presentational (P2), so prewarm considers every
+        // video clip in the window and ranks visible layers first.
         self.prewarm_candidates.clear();
         if let Some(project) = &self.project {
-            let any_solo = project.timeline.layers.iter().any(|l| l.is_solo);
             let fallback_bpm = project.settings.bpm;
+            let layers = &project.timeline.layers;
+            let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
 
-            for layer in &project.timeline.layers {
-                if layer.is_muted {
-                    continue;
-                }
-                if any_solo && !layer.is_solo {
-                    continue;
-                }
+            for (li, layer) in layers.iter().enumerate() {
+                let parent = manifold_core::layer::Layer::find_parent_layer(layers, li)
+                    .map(|(_, p)| p);
+                let hidden = layer.is_hidden(parent, any_solo_video);
 
                 for clip in &layer.clips {
-                    if clip.video_clip_id.is_empty() || clip.is_muted {
-                        continue;
-                    }
                     if clip.video_clip_id.is_empty() {
                         continue;
                     }
@@ -2583,21 +2667,27 @@ impl PlaybackEngine {
                     if clip_start > window_end {
                         continue;
                     }
-                    self.prewarm_candidates.push(clip.clone());
+                    self.prewarm_candidates.push((clip.clone(), hidden));
                 }
             }
         }
 
-        self.prewarm_candidates.sort_unstable_by(|a, b| {
-            a.start_beat
-                .partial_cmp(&b.start_beat)
-                .unwrap_or(std::cmp::Ordering::Equal)
+        // Rank visible-first so a muted layer's earlier clip can't evict a
+        // visible layer's next clip from the prewarm cap (D7b).
+        self.prewarm_candidates.sort_unstable_by(|(a, a_hidden), (b, b_hidden)| {
+            a_hidden
+                .cmp(b_hidden)
+                .then_with(|| {
+                    a.start_beat
+                        .partial_cmp(&b.start_beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
         });
 
         // Build prewarm set from candidates
         let mut prewarm_set: HashMap<String, crate::video_time::PrewarmCandidate> = HashMap::new();
         if let Some(project) = &self.project {
-            for clip in &self.prewarm_candidates {
+            for (clip, _hidden) in &self.prewarm_candidates {
                 if prewarm_set.len() >= LOOKAHEAD_PREWARM_MAX_UNIQUE_CLIPS {
                     break;
                 }
@@ -2725,10 +2815,6 @@ impl LiveClipHost for PlaybackEngine {
 
     fn stop_clip(&mut self, clip_id: &str) {
         PlaybackEngine::stop_clip(self, clip_id);
-    }
-
-    fn mark_sync_dirty(&mut self) {
-        PlaybackEngine::mark_sync_dirty(self);
     }
 
     fn mark_compositor_dirty(&mut self) {

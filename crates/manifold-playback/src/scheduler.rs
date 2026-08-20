@@ -1,5 +1,6 @@
 use ahash::AHashSet;
 use manifold_core::ClipId;
+use manifold_core::LayerId;
 use manifold_core::{Beats, Seconds};
 
 /// Lightweight clip reference for the per-frame pipeline.
@@ -28,6 +29,12 @@ pub struct ActiveClipRef {
     /// Whether this clip is a video clip (non-empty video_clip_id).
     /// Used for renderer dispatch without needing the full TimelineClip.
     pub is_video: bool,
+    /// Whether this clip is muted. Mute is presentational (P2): the clip stays
+    /// active for scheduling/modulation but contributes no pixels.
+    pub is_muted: bool,
+    /// The layer this clip belongs to. Part of the binding identity (P3):
+    /// the reconcile restarts an active clip whose realized layer differs.
+    pub layer_id: LayerId,
 }
 
 impl ActiveClipRef {
@@ -222,6 +229,8 @@ mod tests {
             duration_beats: Beats::from_f32(duration_beats),
             is_looping: false,
             is_video: false,
+            is_muted: false,
+            layer_id: LayerId::new(format!("layer-{layer_index}")),
         }
     }
 
@@ -239,6 +248,8 @@ mod tests {
             duration_beats: Beats::from_f32(duration_beats),
             is_looping: false,
             is_video: false,
+            is_muted: false,
+            layer_id: LayerId::new(format!("layer-{layer_index}")),
         }
     }
 

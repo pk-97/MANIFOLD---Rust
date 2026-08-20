@@ -21,7 +21,6 @@ struct MockHost {
     stopped_clips: Vec<String>,
     registered_clips: HashMap<String, TimelineClip>,
     recorded_commands: Vec<Box<dyn Command>>,
-    sync_dirty: bool,
     compositor_dirty: bool,
 }
 
@@ -37,7 +36,6 @@ impl MockHost {
             stopped_clips: Vec::new(),
             registered_clips: HashMap::new(),
             recorded_commands: Vec::new(),
-            sync_dirty: false,
             compositor_dirty: false,
         }
     }
@@ -79,9 +77,6 @@ impl LiveClipHost for MockHost {
     }
     fn stop_clip(&mut self, clip_id: &str) {
         self.stopped_clips.push(clip_id.to_string());
-    }
-    fn mark_sync_dirty(&mut self) {
-        self.sync_dirty = true;
     }
     fn mark_compositor_dirty(&mut self) {
         self.compositor_dirty = true;
@@ -283,7 +278,6 @@ fn commit_with_recording_adds_to_timeline() {
 
     // Clip should be committed to timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 1);
-    assert!(host.sync_dirty);
     assert!(host.compositor_dirty);
     assert!(host.recorded_commands.len() == 1);
 }
