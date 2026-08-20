@@ -3527,6 +3527,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.compositor.prewarm_layer_chains(layer, budget, device)
     }
 
+    /// Warm up LED tap / composite resources when the loaded project routes
+    /// layers to LEDs. Delegates to the compositor; no-op for compositors
+    /// without an LED path.
+    pub fn prewarm_led_resources(
+        &mut self,
+        project: &manifold_core::project::Project,
+    ) -> manifold_core::WarmupOutcome {
+        let device = self
+            .native_device
+            .as_ref()
+            .expect("native device required for LED warmup");
+        self.compositor
+            .prewarm_led_resources(device, self.texture_pool.as_ref(), self.led_grid_size, project)
+    }
+
     /// Block until all in-flight background work in effect processors completes.
     /// Called after each export frame so async pipelines (GPU readback → CPU worker
     /// → result) resolve deterministically before the frame is encoded.
