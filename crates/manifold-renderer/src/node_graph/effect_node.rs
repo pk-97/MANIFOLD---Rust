@@ -1010,6 +1010,14 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Load-time warmup quiescence query. Return `true` while this node has
+    /// async initialization work that must settle before first play (GLB
+    /// decode, RT accel build, DNN model load). Default `false` — pure-GPU
+    /// nodes are warm by construction.
+    fn warmup_pending(&self) -> bool {
+        false
+    }
+
     /// The sampler ADDRESS MODE a fused region must bind so this atom's
     /// `Gather` inputs sample identically whether fused or standalone. The
     /// freeze compiler folds a gather atom into a `node.wgsl_compute` kernel

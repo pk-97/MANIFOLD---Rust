@@ -189,6 +189,10 @@ pub struct UIRoot {
     /// undo/redo gets a distinct key even when the description repeats).
     pub last_undo_redo_toast_key: Option<u64>,
 
+    /// Load-time warmup progress shown as a centered overlay during project
+    /// open. `None` when no warmup is active.
+    pub warmup: Option<manifold_core::WarmupProgress>,
+
     /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
     /// in sync with the content snapshot. Change-gated by
     /// `embedded_presets_fingerprint` so the Vec rebuilds only when the embedded
@@ -471,6 +475,7 @@ impl UIRoot {
             overlay_region_start: 0,
             overlay_open_snapshot: 0,
             closed_overlays: smallvec::SmallVec::new(),
+            warmup: None,
         }
     }
 
@@ -787,6 +792,58 @@ impl UIRoot {
 
         // Scroll-affected panels — rebuilt on scroll/zoom changes.
         self.build_scroll_panels();
+
+        // Load-time warmup overlay: centered progress bar + layer label,
+        // drawn above everything else while the content thread is warming.
+        if let Some(ref warmup) = self.warmup {
+            use manifold_ui::chrome::{materialize, Align, Pad, Sizing, View};
+            use manifold_ui::color;
+            use manifold_ui::node::Color32;
+
+            const OVERLAY_W: f32 = 360.0;
+            const OVERLAY_H: f32 = 80.0;
+            const BAR_W: f32 = 280.0;
+            const BAR_H: f32 = 10.0;
+            const BAR_RADIUS: f32 = 4.0;
+
+            let fill_w = (BAR_W - 2.0) * warmup.fraction();
+            let track = View::panel()
+                .fixed(BAR_W, BAR_H)
+                .bg(color::SLIDER_TRACK_PRESSED_C32)
+                .radius(BAR_RADIUS)
+                .pad(Pad::all(1.0))
+                .child(
+                    View::panel()
+                        .w(Sizing::Fixed(fill_w))
+                        .fill_h()
+                        .bg(Color32::new(64, 184, 82, 255))
+                        .radius(2.0),
+                );
+            let label = View::label(format!(
+                "Warming project — layer {} of {}\n{}",
+                warmup.done, warmup.total, warmup.label
+            ))
+            .font(color::FONT_LABEL)
+            .text_color(color::TEXT_PRIMARY_C32)
+            .align_text(manifold_ui::node::TextAlign::Center);
+            let overlay = View::stack()
+                .fixed(OVERLAY_W, OVERLAY_H)
+                .main_align(Align::Center)
+                .cross_align(Align::Center)
+                .child(label)
+                .child(track);
+
+            let full = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
+            let region = self.tree.begin_region(
+                full,
+                ZTier::Chrome,
+                "warmup_overlay",
+                manifold_ui::node::UIFlags::empty(),
+            );
+            let start = self.tree.count();
+            let _ = materialize(&mut self.tree, &overlay, full);
+            self.tree.end_region(region, start);
+        }
 
         self.built = true;
     }

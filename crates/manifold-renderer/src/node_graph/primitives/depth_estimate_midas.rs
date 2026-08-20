@@ -27,6 +27,7 @@
 
 use std::borrow::Cow;
 
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -70,6 +71,10 @@ struct DepthState {
     staging_texture: GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
+    /// True once the worker has returned its first successful inference.
+    /// Load-time pre-roll waits for this so the model is resident before
+    /// the first live frame.
+    first_response_delivered: bool,
 }
 
 crate::primitive! {
@@ -145,7 +150,9 @@ impl DepthEstimateMidas {
                 }
             })
         });
-        if self.depth_worker.is_none() {
+        if self.depth_worker.is_some() {
+            record_cold_touch(ColdTouchKind::ModelLoad);
+        } else {
             log::warn!(
                 "[node.depth_map] MiDaS native plugin unavailable — output will be black"
             );
@@ -218,11 +225,21 @@ impl DepthEstimateMidas {
             staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
+            first_response_delivered: false,
         });
     }
 }
 
 impl Primitive for DepthEstimateMidas {
+    fn warmup_pending(&self) -> bool {
+        // Warm until the DNN worker exists and has delivered its first
+        // successful inference — the model load + first run that makes the
+        // node ready for stage time.
+        self.depth_state
+            .as_ref()
+            .is_some_and(|s| !s.first_response_delivered)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let analysis_max_dim = match ctx.params.get("analysis_max_dim") {
             Some(ParamValue::Float(i)) => i.round().max(64_f32) as u32,
@@ -274,6 +291,7 @@ impl Primitive for DepthEstimateMidas {
                 ds.depth_buffer = buf;
                 ds.has_depth = true;
                 ds.depth_dirty = true;
+                ds.first_response_delivered = true;
                 // DIAGNOSTIC: confirm MiDaS is producing real (non-flat)
                 // depth. An all-zero / constant buffer downstream makes
                 // `z = depth * depth_scale` collapse → the Wireframe Depth

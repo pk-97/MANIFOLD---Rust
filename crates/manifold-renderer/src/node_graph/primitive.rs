@@ -351,6 +351,15 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
+    /// Load-time warmup quiescence query — mirror of
+    /// [`EffectNode::warmup_pending`](crate::node_graph::effect_node::EffectNode::warmup_pending).
+    /// Override on nodes with async initialization (GLB decode, RT accel
+    /// build, DNN model load) so the load-time pre-roll can render until
+    /// everything settles. Default `false`.
+    fn warmup_pending(&self) -> bool {
+        false
+    }
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -654,6 +663,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn io_pending(&self) -> bool {
         Primitive::io_pending(self)
+    }
+    fn warmup_pending(&self) -> bool {
+        Primitive::warmup_pending(self)
     }
     fn fused_gather_sampler_mode(
         &self,

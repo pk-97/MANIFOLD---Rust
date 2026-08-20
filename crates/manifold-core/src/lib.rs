@@ -45,6 +45,7 @@ pub mod type_id_migration;
 pub mod types;
 pub mod units;
 pub mod video;
+pub mod warmup;
 pub use color::Color;
 pub use effects::{EffectContainer, ParamSource};
 pub use graph_target::GraphTarget;
@@ -72,3 +73,8 @@ pub use stage::{
 };
 pub use types::*;
 pub use units::{Beats, Bpm, Seconds, beats_to_seconds, seconds_to_beats};
+pub use warmup::{WarmupBudget, WarmupOutcome, WarmupProgress};
+
+// Re-export the cross-cutting cold-touch detector from `manifold-foundation`
+// so `manifold-app` can reach it through `manifold_core`.
+pub use manifold_foundation::cold_touch;

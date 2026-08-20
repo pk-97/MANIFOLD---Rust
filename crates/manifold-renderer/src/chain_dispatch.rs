@@ -24,6 +24,8 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
+
 use crate::preset_runtime::{ChainBuildInputs, PresetRuntime};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::PrimitiveRegistry;
@@ -203,6 +205,7 @@ pub fn dispatch_chain<'a>(
         // unchanged cards carry their sims / trails / workers across the
         // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md section 5).
         let mut prior = cache.take();
+        record_cold_touch(ColdTouchKind::ChainConstruction);
         *cache = PresetRuntime::try_build(
             ChainBuildInputs {
                 effects,

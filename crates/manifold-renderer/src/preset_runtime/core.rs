@@ -1921,6 +1921,13 @@ impl PresetRuntime {
         self.graph.nodes().any(|n| n.node.io_pending())
     }
 
+    /// Any node in this graph still has load-time warmup work pending
+    /// (`EffectNode::warmup_pending`). The load-time pre-roll pumps frames
+    /// until this returns `false` for every generator layer.
+    pub fn warmup_pending(&self) -> bool {
+        self.graph.nodes().any(|n| n.node.warmup_pending())
+    }
+
     /// Push a value/position editor edit's inner-node values into the running
     /// generator in place (no rebuild — sim/particle state survives) and clear
     /// the binding cache so live card sliders re-assert over them.

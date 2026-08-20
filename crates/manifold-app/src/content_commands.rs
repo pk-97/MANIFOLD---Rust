@@ -6,9 +6,12 @@ use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, Seconds};
 use manifold_playback::transport_controller::TransportController;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
+use manifold_playback::renderer::ClipRenderer;
 
 use crate::content_command::ContentCommand;
+use crate::content_state::ContentState;
 use crate::content_thread::ContentThread;
+use crossbeam_channel::{Receiver, Sender};
 
 /// Look up the existing Ableton mapping for a target (for undo snapshot).
 /// The three host variants route through the shared
@@ -70,6 +73,131 @@ impl ContentThread {
                 gen_renderer.clear_all_trigger_state();
             }
         }
+    }
+
+    /// Load-time warmup pass (WARMUP_DESIGN.md P1). Runs inside the
+    /// `LoadProject` handler after the project is initialized and resized.
+    /// Blocks the content thread, publishes per-layer progress, and aborts
+    /// if a Shutdown command arrives.
+    pub(crate) fn run_warmup(
+        &mut self,
+        cmd_rx: &Receiver<ContentCommand>,
+        cmd_tx: &Sender<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) {
+        let Some(project) = self.engine.project() else {
+            return;
+        };
+
+        // Collect generator-layer info up front so we can drop the immutable
+        // project borrow before mutating renderers.
+        let generator_layers: Vec<(usize, manifold_core::LayerId, String)> = project
+            .timeline
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| !l.generator_type().is_none())
+            .map(|(i, l)| (i, l.layer_id.clone(), l.name.clone()))
+            .collect();
+        let total = generator_layers.len() as u32;
+        if total == 0 {
+            return;
+        }
+
+        let budget = manifold_core::WarmupBudget::default();
+        let start = std::time::Instant::now();
+        let mut any_budget_exhausted = false;
+
+        // Warmup is the boundary where cold touches are *expected*. Reset the
+        // detector so any first-touch cost it triggers is not counted against
+        // the subsequent playback sample window.
+        manifold_core::cold_touch::reset_cold_touch_counts();
+
+        log::info!("[ContentThread] Starting warmup for {total} generator layers");
+        for (done, (layer_index, _layer_id, layer_name)) in generator_layers.iter().enumerate() {
+            // Abort early on shutdown so a quit during a long warm doesn't hang.
+            match cmd_rx.try_recv() {
+                Ok(ContentCommand::Shutdown) => {
+                    log::info!("[ContentThread] Shutdown during warmup, aborting");
+                    return;
+                }
+                Ok(cmd) => {
+                    // Other commands address the new project and should run
+                    // after load completes — put them back on the queue.
+                    let _ = cmd_tx.send(cmd);
+                }
+                Err(_) => {}
+            }
+
+            if start.elapsed() >= budget.total {
+                log::warn!(
+                    "[ContentThread] Warmup total budget exhausted after {} layers; \
+                     continuing load without warming remaining layers",
+                    done
+                );
+                any_budget_exhausted = true;
+                break;
+            }
+
+            let label = format!("Loading {}...", layer_name.as_str());
+            let _ = state_tx.send(ContentState {
+                warmup: Some(manifold_core::WarmupProgress {
+                    done: done as u32,
+                    total,
+                    label,
+                }),
+                ..ContentState::default()
+            });
+
+            // Keep Ableton bridge heartbeat alive — its connection timeout is
+            // 1.5s and `last_response` only advances on content frames.
+            self.ableton_bridge.update(self.time_since_start.0);
+
+            // Re-borrow the layer and renderer through the split borrow so the
+            // immutable project reference and mutable renderer reference can
+            // coexist.
+            let (renderers, project) = self.engine.split_renderer_project();
+            let outcome = if let Some(p) = project
+                && let Some(layer) = p.timeline.layers.get(*layer_index)
+                && let Some(renderer) = renderers
+                    .iter_mut()
+                    .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>())
+            {
+                Some(renderer.prewarm_layer(layer, budget))
+            } else {
+                None
+            };
+
+            if outcome == Some(manifold_core::WarmupOutcome::BudgetExhausted) {
+                log::warn!(
+                    "[ContentThread] Warmup budget exhausted for layer '{}' ({}); \
+                     layer may first-touch once at play",
+                    layer_name.as_str(),
+                    _layer_id.as_str()
+                );
+                any_budget_exhausted = true;
+            }
+        }
+
+        // Clear progress and re-clear trigger latches so warmup frames don't
+        // pollute the first live frame's sample_and_hold / clip_trigger_cycle
+        // state (WARMUP_DESIGN.md 3.2 step 5).
+        let _ = state_tx.send(ContentState {
+            warmup: None,
+            ..ContentState::default()
+        });
+        self.clear_generator_trigger_state();
+
+        let status = if any_budget_exhausted {
+            "completed with budget exhaustion"
+        } else {
+            "completed"
+        };
+        log::info!(
+            "[ContentThread] Warmup {} in {:?}",
+            status,
+            start.elapsed()
+        );
     }
 
     /// Handle a single command. Returns true if Shutdown.

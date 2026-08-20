@@ -30,6 +30,7 @@
 
 use std::borrow::Cow;
 
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -73,6 +74,8 @@ struct MaskState {
     staging_texture: GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
+    /// True once the worker has returned its first successful inference.
+    first_response_delivered: bool,
 }
 
 crate::primitive! {
@@ -180,7 +183,9 @@ impl PersonSegment {
                 }
             })
         });
-        if self.mask_worker.is_none() {
+        if self.mask_worker.is_some() {
+            record_cold_touch(ColdTouchKind::ModelLoad);
+        } else {
             log::warn!(
                 "[node.person_mask] Native subject-segmentation API unavailable — output will be black"
             );
@@ -251,11 +256,18 @@ impl PersonSegment {
             staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
+            first_response_delivered: false,
         });
     }
 }
 
 impl Primitive for PersonSegment {
+    fn warmup_pending(&self) -> bool {
+        self.mask_state
+            .as_ref()
+            .is_some_and(|s| !s.first_response_delivered)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let analysis_max_dim = match ctx.params.get("analysis_max_dim") {
             Some(ParamValue::Float(i)) => i.round().max(64_f32) as u32,
@@ -307,6 +319,7 @@ impl Primitive for PersonSegment {
                 ms.mask_buffer = buf;
                 ms.has_mask = true;
                 ms.mask_dirty = true;
+                ms.first_response_delivered = true;
                 // DIAGNOSTIC: confirm the segmentation model returns a real
                 // subject mask. An all-zero mask makes the subject-isolation
                 // path in wire_mask fall back to depth/semantic heuristics.

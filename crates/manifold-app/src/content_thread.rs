@@ -392,6 +392,20 @@ impl ContentThread {
                         }
                         self.run_export(*config, &cmd_rx, &state_tx);
                     }
+                    Ok(ContentCommand::LoadProject(project)) => {
+                        // Flush any pending seek before the load.
+                        if let Some(seek) = pending_seek.take() {
+                            if self.handle_command(seek) {
+                                log::info!("[ContentThread] shutdown received");
+                                return;
+                            }
+                        }
+                        if self.handle_command(ContentCommand::LoadProject(project)) {
+                            log::info!("[ContentThread] shutdown received");
+                            return;
+                        }
+                        self.run_warmup(&cmd_rx, &cmd_tx, &state_tx);
+                    }
                     Ok(cmd @ ContentCommand::SeekTo(_))
                     | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
                         // Coalesce: overwrite previous pending seek.
@@ -594,6 +608,10 @@ impl ContentThread {
         let dt = self.timer.consume_tick();
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
+
+        // Cold-touch detector transport flag: the content thread is the only
+        // thread that knows whether the audience is currently seeing frames.
+        manifold_core::cold_touch::set_transport_playing(self.engine.is_playing());
 
         // Read back a still-frame export submitted on the previous tick (if any).
         // Runs before this frame's render so the GPU completion we wait on is the
@@ -1378,6 +1396,7 @@ impl ContentThread {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
             ableton_session: if self.ableton_bridge.session_changed() {
                 Some(Arc::new(self.ableton_bridge.session().clone()))

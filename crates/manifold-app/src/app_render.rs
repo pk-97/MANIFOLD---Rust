@@ -468,6 +468,18 @@ impl Application {
             }
         }
 
+        // 1d3. Warmup progress overlay — published from inside the blocking
+        // LoadProject warmup pass (WARMUP_DESIGN.md D5). Rebuild while warming
+        // so the layer label + bar update; rebuild once more when it clears
+        // so the overlay disappears.
+        {
+            let was_warming = self.ws.ui_root.warmup.is_some();
+            self.ws.ui_root.warmup = self.content_state.warmup.clone();
+            if self.ws.ui_root.warmup.is_some() || was_warming {
+                self.needs_rebuild = true;
+            }
+        }
+
         // 1e2. Sync live recording state to layer header record button.
         self.ws.ui_root.layer_headers.set_recording_active(
             &mut self.ws.ui_root.tree,
