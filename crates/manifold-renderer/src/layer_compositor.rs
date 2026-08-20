@@ -783,8 +783,8 @@ impl LayerCompositor {
 
     /// Warm up the per-layer post-fx chain for `layer`. Builds the chain via
     /// the production `dispatch_chain` path against a cleared scratch input,
-    /// then pumps frames until `warmup_pending()` reports quiescent or the
-    /// per-layer frame budget is exhausted.
+    /// then pumps frames until `warmup_pending()` reports quiescent or either
+    /// the per-layer wall-clock cap or the per-layer frame cap is exhausted.
     ///
     /// Mirrors `GeneratorRenderer::prewarm_layer`: the chain slot is inserted
     /// into `effect_chains`, rendered offscreen, and left resident so the
@@ -821,9 +821,23 @@ impl LayerCompositor {
         );
 
         const DT: f64 = 1.0 / 60.0;
-        let mut outcome = WarmupOutcome::BudgetExhausted;
+        let layer_start = std::time::Instant::now();
+        let mut outcome = WarmupOutcome::BudgetExhausted {
+            cap: manifold_core::WarmupCap::PerLayerFrames,
+            elapsed: std::time::Duration::ZERO,
+        };
         let group_id = layer.layer_id.clone();
         for frame in 0..budget.per_layer_frames {
+            // Wall-clock is the primary per-layer cap; the frame cap is only
+            // a safety bound for runaway spin loops.
+            if layer_start.elapsed() >= budget.per_layer {
+                outcome = WarmupOutcome::BudgetExhausted {
+                    cap: manifold_core::WarmupCap::PerLayerWallClock,
+                    elapsed: layer_start.elapsed(),
+                };
+                break;
+            }
+
             self.uniform_arena.reset();
             let mut native_enc = device.create_encoder("warmup chain");
             {
@@ -876,6 +890,16 @@ impl LayerCompositor {
             {
                 outcome = WarmupOutcome::Quiescent;
                 break;
+            }
+
+            // Paced wait: if async work is still in flight, yield so the
+            // background threads can land without burning a whole frame budget
+            // on spin-rendered no-ops.
+            if let Some(chain) = self.effect_chains.get(&group_id)
+                && let Some(cg) = chain.as_ref()
+                && cg.warmup_pending()
+            {
+                std::thread::sleep(std::time::Duration::from_millis(2));
             }
         }
 
