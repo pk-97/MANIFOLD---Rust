@@ -132,6 +132,11 @@ pub struct GpuDevice {
     msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
     /// Pre-compiled compute clear pipelines per texture format.
     clear_pipelines: std::sync::OnceLock<ClearPipelines>,
+    /// RT shadow-ray pipeline set (MSL library + seven PSOs), shared by
+    /// every `MetalShadowRayTracer` instance — COMPILE_CONTRACT_DESIGN D3:
+    /// code is device-global, instances own data. OnceLock like
+    /// `clear_pipelines`; populate-once, never on the hot path.
+    rt_pipelines: std::sync::OnceLock<super::raytrace::RtPipelines>,
     /// Lazily-created linear (bilinear) sampler with clamp addressing.
     /// Shared by `GpuEncoder::resize_sample` and any other helper that
     /// needs a default filtering sampler without minting a fresh
@@ -176,6 +181,7 @@ impl GpuDevice {
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             msl_cache: std::sync::Mutex::new(None),
             clear_pipelines: std::sync::OnceLock::new(),
+            rt_pipelines: std::sync::OnceLock::new(),
             linear_sampler: std::sync::OnceLock::new(),
             capture_scope: std::sync::OnceLock::new(),
             mtl4_bridge: std::sync::OnceLock::new(),
@@ -1098,6 +1104,13 @@ impl GpuDevice {
             .unwrap()
             .insert(hash, pipeline.clone());
         pipeline
+    }
+
+    /// Get or lazily compile the RT shadow-ray pipeline set (MSL library +
+    /// seven PSOs). Once per process; every tracer instance shares it.
+    pub fn rt_pipelines(&self) -> &super::raytrace::RtPipelines {
+        self.rt_pipelines
+            .get_or_init(|| super::raytrace::RtPipelines::compile(self))
     }
 
     /// Get or lazily compile all compute clear pipelines.
