@@ -369,3 +369,17 @@ mod gpu_tests {
         }
     }
 }
+
+impl MultiBlend {
+    /// COMPILE_CONTRACT_DESIGN P2: prewarm all num_inputs variants (2..MAX_INPUTS)
+    /// at startup. Each variant compiles a specialized shader for that exact count.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        for k in 2..=MAX_INPUTS {
+            device.create_compute_pipeline(
+                &Self::shader_for(k),
+                "cs_main",
+                &format!("node.multi_blend.{k}inputs"),
+            );
+        }
+    }
+}

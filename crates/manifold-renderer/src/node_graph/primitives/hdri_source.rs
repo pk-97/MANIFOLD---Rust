@@ -327,13 +327,8 @@ impl Primitive for HdriSource {
             ctx.mark_outputs_unchanged();
         } else {
             let gpu = ctx.gpu_encoder();
-            let pipeline = self.pipeline.get_or_insert_with(|| {
-                gpu.device.create_compute_pipeline(
-                    include_str!("shaders/hdri_source_blit.wgsl"),
-                    "cs_main",
-                    "node.hdri_source",
-                )
-            });
+            // COMPILE_CONTRACT_DESIGN P2: pipeline is prewarmed at startup.
+            let pipeline = self.pipeline.as_ref().expect("hdri pipeline prewarmed at startup");
             let sampler = self
                 .sampler
                 .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

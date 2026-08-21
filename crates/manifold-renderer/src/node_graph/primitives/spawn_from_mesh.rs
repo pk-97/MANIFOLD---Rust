@@ -180,8 +180,8 @@ impl Primitive for SpawnFromMesh {
 
         let gpu = ctx.gpu_encoder();
 
-        // Lazy-compile all four entry points from the shared shader source.
-        // `self.pipeline` (macro-provided) holds vertices_main.
+        // COMPILE_CONTRACT_DESIGN P2: create pipelines at run start BEFORE any
+        // early returns so warmup creates them even with empty mesh.
         const SHADER_SRC: &str = include_str!("shaders/spawn_from_mesh.wgsl");
         if self.pipeline.is_none() {
             self.pipeline = Some(gpu.device.create_compute_pipeline(
