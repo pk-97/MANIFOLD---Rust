@@ -38,14 +38,16 @@ against main @ ff7edc285.
 |---|---|---|---|---|
 | Freeze/fusion chain kernels | `crates/manifold-renderer/src/node_graph/freeze/` | fused segment + per-card kernels | chain topology hash — post-P6 (`preset_runtime/build.rs` `compute_topology_hash`) keys on structure only: effect ids/types, enabled flags, group ids, graph structure version, dims | structure |
 | render_scene raster variants | `render_scene.rs:3140` (`aux_variant`), prewarmed at startup `render_scene.rs:3293` (`prewarm_pipelines`, called from `GeneratorRegistry::prewarm_all`) | 8 fixed aux-output permutations (velocity × ao_mask × denoise) | three booleans from RT quality settings — fixed per project settings, prewarmed | structure |
-| RT trace PSOs | `crates/manifold-gpu/src/metal/raytrace.rs:4991-5010` | `trace_shadow_rays` × {binary, translucent} (HAS_TRANSLUCENCY function constant, dead-code elimination) | **nothing — owned per `MetalShadowRayTracer` instance; every accel topo change constructs a new tracer and recompiles both PSOs for identical entry+constants** | **violation (ownership)** |
+| RT trace PSOs + MSL library | `crates/manifold-gpu/src/metal/raytrace.rs:4918` (library compile), `:4612` (PSO compile), `:4991-5010` (translucency variants) | full SHADOW_RAYS_MSL library + SIX PSOs per tracer: trace×2 (HAS_TRANSLUCENCY constant), upsample, atrous, accumulate, debug×2 | **nothing — owned per `MetalShadowRayTracer` instance. The trigger is tracer construction: `ensure_rt_tracer` (`render_scene.rs:2429-2433`) sets it once per `RenderScene` instance and never resets it, so every fresh RenderScene — a later clip's chain at transport start, re-activation after state-cache eviction — compiles the library + all six PSOs again. N RT scenes = N full MSL library compiles** | **violation (ownership)** |
+| Cold-touch counter coverage | `metal/device.rs:463,740,920,1308,1509` (WGSL path records) | — | **the counter fires ONLY in the WGSL path; the MSL/raytrace compile helpers record nothing — the acceptance gate is blind to exactly the violation class above (the 6 residue compiles were all WGSL-path)** | **enforcement gap — P1's first fix** |
 | Device pipeline cache | `crates/manifold-gpu/src/metal/device.rs:432` (`create_compute_pipeline`), `:600` (specialized variants) | all WGSL-path compute/render PSOs | global cache keyed on shader source + specialization + formats — the compliant precedent | structure |
 | value_overlay (blob labels) | `primitives/render_value_overlay.rs:321` (data-driven skip) | label-drawing pipeline | **first use is data-gated: zero detections at load → skipped in warmup → compiles when the first blob is detected (Corrosion probe: frame ~60)** | **violation (data-gated first use)** |
 | wgsl_compute escape hatch | `node_graph/descriptor.rs:321-323` | per-node WGSL source | node source string — structure (fixed by preset def) | structure |
 | **wgsl_compute `@static_param` specialization** | `primitives/wgsl_compute.rs:2541-2617` | param values baked as module-scope `const` after `SPEC_STABLE_FRAMES` stable | **post-specialization source text — the key is live param VALUES: a performer holds a slider still → new WGSL → compile on stage** | **violation (data-keyed)** |
-| variable_blur quality/weighting | `primitives/gaussian_blur_variable_width.rs:100,167` | QUALITY_LEVEL × WEIGHTING_MODE substitutions | 3×2 fixed enum variants, but selected lazily — a mid-show enum flip compiles the unseen variant | **violation (lazy bounded set — prewarm all 6)** |
+| variable_blur quality/weighting | `primitives/gaussian_blur_variable_width.rs:100,167` | QUALITY_LEVEL × WEIGHTING_MODE substitutions | 3×2 fixed enum variants, lazy per-variant map; the startup atom sweep explicitly skips it (`registry.rs:376-379`) — its 6 variants are guaranteed cold | **violation (lazy bounded set — prewarm all 6)** |
 | MultiBlend input-count kernel | `primitives/multi_blend.rs:246-249` | `shader_for(k)`, k = wired inputs 1..MAX | k is graph structure, but the variant compiles on first configure | structure (lazy — prewarm at install) |
-| Data-gated lazy pipelines (class) | `render_value_overlay.rs:491-508`, `blob_detect_ffi.rs:352-358,401-406`, `watercolor.rs:127-187`, `render_text.rs:369+`, `spawn_from_mesh.rs:187-208`, `hdri_source.rs:320-390` | fixed-source pipelines compiled on first evaluate | source is fixed — but first use is data-gated (zero detections at load → skipped in warmup → compiles when the first blob lands, Corrosion frame ~60) | **violation (data-gated first use)** |
+| Data-gated lazy pipelines (class) | `render_value_overlay.rs:491-508` (get_or_insert AFTER the quad_count==0 early return — confirmed data-gated), `blob_detect_ffi.rs:352-358,401-406`, `watercolor.rs:127-187`, `render_text.rs:369+`, `spawn_from_mesh.rs:187-208`, `hdri_source.rs:320-390` | fixed-source pipelines compiled on first evaluate | source is fixed — but first use is data-gated (zero detections at load → skipped in warmup → compiles when the first blob lands, Corrosion frame ~60) | **violation (data-gated first use)** |
+| render_scene lazy RT-adjacent + IBL | `render_scene.rs:2797-2820` (IBL prefilter/irradiance/brdf_lut — gated on async envmap arrival, NOT in `prewarm_pipelines`), `:5907` (hit_dist_extract), `:7042` (upscale_alpha_combine) | fixed-source pipelines, lazy Option fields | device-cached so once-per-process — but first-use lands whenever the data arrives, including mid-show | **violation (same class; P2's inventory must find lazy-Option pipeline fields, not just data-skip declarations)** |
 | Clear/blit/utility, compositor, tonemap, upscalers, UI, LED, media | `metal/device.rs:1103-1123`, `layer_compositor.rs:65-77`, `tonemap.rs:73-80`, `fsr1.rs:61-79`, `metalfx_upscaler.rs:55-75` | fixed-source pipelines | fixed | structure — created at construction/startup |
 
 Corrosion probe numbers behind the classifications: post-P6 residue 55 → counter-fix
@@ -61,9 +63,13 @@ with `rg -n 'new_compute_pipeline|newComputePipelineStateWithFunction' crates/ -
 ## 2. Decisions
 
 - **D1 — The contract is zero compiles after warmup.** After `LoadProject`'s warmup
-  pass completes, no pipeline compiles during playback, ever. Enforcement already
-  exists as the cold-touch counter (`manifold_foundation::cold_touch`); this design
-  makes it a standing gate instead of a probe (section 4).
+  pass completes, no pipeline or library compiles during playback, ever. The
+  enforcement oracle is the cold-touch counter (`manifold_foundation::cold_touch`) —
+  **but today it only records the WGSL path** (`metal/device.rs:463,740,920,1308,1509`);
+  the MSL/raytrace compile helpers (`raytrace.rs:4918`, `:4612`) record nothing, so
+  the gate is blind to the biggest known violator. Wiring EVERY compile path into the
+  counter is therefore P1's first deliverable — until then `cold touches: 0` proves
+  nothing about MSL.
 - **D2 — Specialize on structure, never on data.** A compile key may contain: node
   types, graph topology (post-P6 definition), texture formats, fixed feature
   permutations (RT quality settings, HAS_TRANSLUCENCY's two variants — both compiled
@@ -83,15 +89,20 @@ with `rg -n 'new_compute_pipeline|newComputePipelineStateWithFunction' crates/ -
   Rejected: async compile with a placeholder/fallback frame — a silent quality
   fallback is a forbidden move class repo-wide, and on stage a placeholder frame IS
   the bug.
-- **D3 — Pipelines are owned globally; instances own data only.** PSOs live in the
-  device-level cache (precedent: `GpuDevice`'s pipeline cache,
-  `metal/device.rs:432-648`), keyed by (entry/source, constants, formats).
+- **D3 — Pipelines are owned globally; instances own data only.** PSOs live in a
+  device-level cache keyed by (source, entry, constants, fixed-function state).
   Per-scene/per-chain structs (`MetalShadowRayTracer`, chain executors, primitive
-  instances) own data — accel structures, buffers, histories — and never PSO fields.
-  `MetalShadowRayTracer::new` takes its two trace PSOs from the cache instead of
-  compiling them. Rejected: per-instance PSO ownership (the audited bug — a topo
-  change recompiles identical PSOs on stage); a second per-family cache (the device
-  cache already exists — one identity system, not two).
+  instances) own data — accel structures, buffers, histories — and never PSO or
+  library fields. **The existing device cache does not cover the MSL path**: it keys
+  on WGSL source hash (`metal/device.rs:459`), while the RT tracer compiles raw MSL
+  with `MTLFunctionConstantValues`, bypassing cache, counter, and binary archive.
+  D3 therefore requires a cache extension keyed on (MSL source hash, entry, function
+  constants, language version) — a named deliverable, not a fit-check. The hoist
+  moves the full SHADOW_RAYS_MSL library and all six tracer PSOs (trace×2, upsample,
+  atrous, accumulate, debug×2) into it; `MetalShadowRayTracer::new` receives them.
+  Rejected: per-instance PSO ownership (the audited bug — a fresh `RenderScene`
+  instance on chain rebuild/eviction recompiles the library + six PSOs on stage);
+  a second per-family cache (one identity system, not two).
 - **D4 — Warmup enumerates assets and structure, never states.** The warm pass
   decodes data, builds accels, seeds state, and installs the finite structure-keyed
   kernel set. It never walks clip/parameter combinations.
@@ -104,25 +115,34 @@ with `rg -n 'new_compute_pipeline|newComputePipelineStateWithFunction' crates/ -
 
 ### 3.1 The ownership seam (D3)
 
-`MetalShadowRayTracer` today: `trace_pipeline_binary` / `trace_pipeline_translucent`
-fields compiled in `new` (`metal/raytrace.rs:4877-4880`, `:4991-5010`). New shape:
+`MetalShadowRayTracer` today: `new` compiles the SHADOW_RAYS_MSL library
+(`metal/raytrace.rs:4918`) plus six PSOs — trace×2 (`:4991-5010`), upsample, atrous,
+accumulate, debug×2 — into instance fields (`:4877-4880` and siblings). Called from
+`ensure_rt_tracer` (`render_scene.rs:2429-2433`), once per `RenderScene` instance,
+never reset: every fresh RenderScene (later clip's chain, post-eviction
+re-activation) recompiles the lot. New shape:
 
 ```rust
-// metal/raytrace.rs — tracer owns data; PSOs come in
+// metal/raytrace.rs — tracer owns data; code comes in
 pub struct MetalShadowRayTracer {
     // ... accels, buffers, tables (unchanged, per-instance data)
-    trace_pipeline_binary: GpuComputePipeline,      // from cache
-    trace_pipeline_translucent: GpuComputePipeline, // from cache
+    pipelines: RtPipelines,  // shared, from the device cache
 }
+
+/// Device-cache-owned: one MSL library + the six PSOs, keyed on
+/// (source hash, entry, function constants, language version).
+pub struct RtPipelines { /* library handle + six GpuComputePipeline */ }
 ```
 
-The compile moves to a `trace_pipelines(device) -> (GpuComputePipeline,
-GpuComputePipeline)` free function behind the device cache (shape like
-`create_specialized_compute_pipeline`, `metal/device.rs:600`), called once from app
-startup prewarm — same pattern as `render_scene.rs:3293`'s `prewarm_pipelines`
-registered in `GeneratorRegistry::prewarm_all`. Tracer construction becomes pure
-data assembly; a scene topo change rebuilds accels (async, already bounded —
-RAYTRACING_DESIGN section 8.2) and compiles nothing.
+The cache extension (D3) lives beside the WGSL cache in `metal/device.rs` —
+`msl_pipeline_cache(source_hash, entry, constants) -> GpuComputePipeline` — and every
+compile helper (`compile_pipeline`, `compile_pipeline_with_constants`, the library
+compile) routes through it AND records `ColdTouchKind::PipelineCompile` on a miss
+(D1's counter coverage). Startup prewarm calls it once for the full RT set — same
+pattern as `render_scene.rs:3293`'s `prewarm_pipelines` registered in
+`GeneratorRegistry::prewarm_all`. Tracer construction becomes pure data assembly; a
+fresh RenderScene rebuilds accels (async, already bounded — RAYTRACING_DESIGN
+section 8.2) and compiles nothing.
 
 ### 3.2 Data-gated first use and lazy bounded sets (D2 applied)
 
@@ -158,51 +178,67 @@ of states is deleted as a strategy, not improved.
 
 ## 4. Invariants & enforcement
 
-- **INV1 — Zero pipeline compiles during playback.** Enforcement: the cold-touch
-  counter (already wired, `manifold_foundation::cold_touch`) + the Corrosion probe
-  as the acceptance command (`cargo build -p manifold-app --features perf-soak &&
-  RUST_LOG=info ./target/debug/manifold rt-capture '<Corrosion path>' --frames 360`
-  → `cold touches during playback: 0`); nightly `trunk_health.py` runs the probe on
-  the RT fixture set so the contract can't rot between shows.
-- **INV2 — No PSO fields on per-instance structs.** Enforcement: value test —
-  construct a tracer, rebuild its accel under a new topo key, assert
-  `GpuDevice::compute_pipeline_cache_len()` (`metal/device.rs:421`) is unchanged.
-  Plus review rule in `ADDING_PRIMITIVES.md`: new pipelines come from the device
-  cache or a named `prewarm_pipelines` registration.
+- **INV1 — Zero compiles during playback, all paths.** Enforcement: the cold-touch
+  counter extended to the MSL path (P1's first deliverable — every compile helper in
+  `metal/raytrace.rs` records `PipelineCompile` on a cache miss) + the Corrosion
+  probe as the acceptance command (`cargo build -p manifold-app --features perf-soak
+  && RUST_LOG=info ./target/debug/manifold rt-capture '<Corrosion path>' --frames
+  360` → `cold touches during playback: 0`); nightly `trunk_health.py` runs the
+  probe on the RT fixture set so the contract can't rot between shows.
+- **INV2 — No PSO/library fields on per-instance structs.** Enforcement: value test —
+  construct a tracer, force a fresh `RenderScene` instance (the real trigger), assert
+  the cold-touch counter's PipelineCompile total is unchanged. (The naive version —
+  watching `compute_pipeline_cache_len()` — is vacuous: MSL compiles never touch
+  that cache, so it passes with the bug present. The assertion must ride the
+  extended counter from INV1.) Plus review rule in `ADDING_PRIMITIVES.md`: new
+  pipelines come from the device cache or a named `prewarm_pipelines` registration.
 - **INV3 — Data-gated nodes install pipelines at construction.** Enforcement: the
   gpu-proofs suite constructs each primitive with empty data and asserts its
   pipelines already exist in the device cache (extend the existing scope test,
-  docs/ADDING_PRIMITIVES.md).
+  docs/ADDING_PRIMITIVES.md). Implies a structural change P2 must name: pipeline
+  creation moves OUT of `run()` into an install-time hook per data-skip node.
 
 ## 5. Phasing
 
-### P1 — PSO ownership hoist (RT tracer + audit-confirmed siblings)
+### P1 — Counter coverage, then the PSO ownership hoist (RT tracer)
 
-- **Entry state:** audit lane's inventory re-derived (`rg` command in section 1);
-  every per-instance PSO owner listed or this phase's scope is confirmed complete.
+- **Entry state:** none beyond main. The per-instance PSO inventory is already
+  settled by the design audit + K3 review — do NOT re-derive scope; the RT tracer
+  is the confirmed owner.
 - **Read-back:** D1–D5, section 3.1, the forbidden moves below; then restate them.
-- **Deliverables:** `trace_pipelines` cache-backed constructor; `MetalShadowRayTracer`
-  takes cached PSOs; startup prewarm registration; the INV2 cache-len test; same
-  hoist for any sibling the entry-state inventory confirms.
+- **Deliverables, in order:** (1) every compile helper in `metal/raytrace.rs`
+  (`:4918` library, `:4612` PSO) records `ColdTouchKind::PipelineCompile` — the gate
+  is blind until this lands; (2) the MSL cache extension beside the WGSL cache in
+  `metal/device.rs`, keyed on (source hash, entry, function constants, language
+  version); (3) the hoist: library + all six PSOs (trace×2, upsample, atrous,
+  accumulate, debug×2) into `RtPipelines`, `MetalShadowRayTracer::new` receives it;
+  (4) startup prewarm registration for the full RT set; (5) the INV2
+  counter-based test.
 - **Gate:** Corrosion probe `cold touches during playback: 0` (or a named, explained
-  residue escalated to Peter); INV2 test green; `scripts/landing_gate.py` green.
+  residue escalated to Peter); INV2 test green — and it must fail on pre-hoist code
+  (a gate that never saw red proves nothing); `scripts/landing_gate.py` green.
 - **Acceptance demo:** the probe log — L2.
 - **Forbidden moves:** a second pipeline cache beside the device one; async compile
   with fallback; deleting the translucency two-variant scheme (both variants
   precompile — that is the compliant shape, keep it); warming later clips "just in
-  case" (D4 forbids state rehearsal).
+  case" (D4 forbids state rehearsal); claiming the gate green before deliverable (1)
+  lands (a blind gate passing is not a pass).
 - **Test scope:** `-p manifold-gpu -p manifold-renderer` + gpu_proofs_gate.
 
 ### P2 — Data-gated prewarm + contract hardening
 
 - **Entry state:** P1 landed; probe at 0 or named residue.
 - **Read-back:** D2, section 3.2, INV3.
-- **Deliverables:** install-time pipeline creation for every data-driven-skip node
-  (inventory: `rg -n 'data-driven skip|Data-driven skip' crates/manifold-renderer/src
-  -t rust`); prewarm of every bounded lazy variant set — variable_blur's 6
+- **Deliverables:** install-time pipeline creation for every data-gated lazy node —
+  inventory by lazy-Option pipeline fields AND data-skip declarations, NOT the skip
+  query alone: `rg -n 'get_or_insert|OnceCell|LazyLock|OnceLock' crates/manifold-renderer/src/node_graph/primitives -t rust` plus `rg -n 'data-driven skip|Data-driven skip' crates/manifold-renderer/src -t rust`; the audit-named sites are
+  `render_value_overlay.rs:491-508`, `render_scene.rs:2797-2820` (IBL ×3), `:5907`,
+  `:7042`, `blob_detect_ffi.rs:352-358,401-406`, `watercolor.rs:127-187`,
+  `render_text.rs:369+`, `spawn_from_mesh.rs:187-208`, `hdri_source.rs:320-390`;
+  prewarm of every bounded lazy variant set — variable_blur's 6
   (quality × weighting) and MultiBlend's 1..MAX_INPUTS — at install; the INV3
-  gpu-proofs extension; the ADDING_PRIMITIVES authoring rule; nightly probe in
-  `trunk_health.py`.
+  gpu-proofs extension (install-time hook moving pipeline creation out of `run()`);
+  the ADDING_PRIMITIVES authoring rule; nightly probe in `trunk_health.py`.
 - **Gate:** the INV3 test constructs every data-skip node on empty data and finds
   its pipelines cached; landing_gate green.
 - **Acceptance demo:** none — L1 (no user-visible surface; the probe already covers
@@ -214,9 +250,15 @@ of states is deleted as a strategy, not improved.
 
 - **Entry state:** P1–P2 landed.
 - **Read-back:** D2's deletion paragraph and its honest-cost measurement requirement.
-- **Deliverables:** the specialization path removed (`wgsl_compute.rs:2541-2617` and
-  callers/`@static_param` handling); params always uniforms; negative gate
-  `rg -n 'static_param|SPEC_STABLE_FRAMES' crates/ -t rust` = zero hits; a
+- **Deliverables:** the specialization path removed: `wgsl_compute.rs:2541-2617`,
+  the `Marker::StaticParam` variant (`markers.rs:52-55` — documented as "specialization
+  eligibility only — never a correctness dependency", so deletion is
+  correctness-safe by construction; the generic kernel is the always-correct
+  fallback, `wgsl_compute.rs:2502-2507`), and the freeze emit site in `install.rs`;
+  params always uniforms; the fusion golden regenerated (`fused_wgsl_snapshot.txt`
+  contains `@static_param` bytes — `UPDATE_FUSION_GOLDEN=1` for
+  `fused_wgsl_snapshot_unchanged`); negative gate
+  `rg -n 'static_param|SPEC_STABLE_FRAMES|StaticParam' crates/ -t rust` = zero hits; a
   before/after frame-cost measurement on the heaviest fused chains (Bloom +
   Watercolor stack, canonical fixture, `MANIFOLD_RENDER_TRACE=1`) reported in the
   phase notes.
@@ -244,4 +286,8 @@ of states is deleted as a strategy, not improved.
 - **Shipped-binary PSO precompilation (Metal pipeline archives)** — the device
   already has `load_pipeline_archive` (`metal/device.rs:648`); revive if load-time
   compile cost itself becomes the problem (measured: warmup compile time exceeds
-  budget on the canonical fixture).
+  budget on the canonical fixture). Note the archive only covers the WGSL path until
+  P1's cache extension exists.
+- **Parallel worker-thread PSO compile during warmup** — the standard load-screen
+  technique (no fallback, just concurrency). First lever to pull if warmup compile
+  time blows the budget; never during playback.
