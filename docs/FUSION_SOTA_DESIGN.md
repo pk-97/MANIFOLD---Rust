@@ -1,6 +1,6 @@
 # Fusion SOTA — closing the freeze compiler's structural gaps
 
-**Status:** SHIPPED 2026-07-14 — all seven phases (P1–P7) on main; the design is closed, nothing owed. Current compiler state: `FREEZE_COMPILER_MAP.md` (authoritative); refusal census: `docs/fusion_census.md`; per-phase as-built record: section 7 (As-built record). · Fable design, Peter in the room, Sonnet executing
+**Status:** SHIPPED 2026-07-14 — all seven phases (P1–P7) on main; the design is closed, nothing owed. Current compiler state: `FREEZE_COMPILER_MAP.md` (authoritative); refusal census: `docs/fusion_census.md`; per-phase as-built record: section 7 (As-built record). Post-ship: the `@static_param` specialization marker was later deleted by COMPILE_CONTRACT_DESIGN D2 (P3) — audit references to it below are historical. · Fable design, Peter in the room, Sonnet executing
 **Prerequisites:** none — shipped. The companion Sonnet sweep (includes fix, conversion sweep, prewarm, spike, hygiene items) was separate work with its own specs.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 

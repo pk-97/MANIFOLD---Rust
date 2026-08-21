@@ -62,7 +62,7 @@ make that impossible; the invariant list (section 9) is what a review must attac
 | `freeze/diff.rs` | GPU texture-diff reducer (max-abs + over-count verdicts) — the oracle's measuring device. | 305 |
 | `freeze/proof.rs` | The oracle suite (test-only): ~40 render-two-ways proofs, per-feature. See section 10. | 3864 |
 | `freeze/reference.rs` | Frozen golden hand-kernels for codegen-drift checks. | 101 |
-| `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers; owns static-param specialization. | 3440 |
+| `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers. Params are always uniforms — `@static_param` value-baking is deleted (COMPILE_CONTRACT_DESIGN D2). | 3440 |
 | `node_graph/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
 | `node_graph/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
 | `node_graph/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
@@ -171,7 +171,8 @@ generic pack skips it → recompute refreshes it every frame); a WIRED declared
 port stays a normal uniform member (wire wins, matching `run()`). The uniform
 field is emitted at the param's original struct position and passed to the
 body at its param position — never duplicated by the trailing
-derived-field/arg emission, never baked by static-param specialization.
+derived-field/arg emission, always packed from live values (no baked-const
+variants; COMPILE_CONTRACT_DESIGN D2).
 Without the declaration the fused kernel freezes the value at the param
 default (the Glitch freeze); the classify.rs source scan
 (`every_fusable_time_reading_atom_declares_frame_time_or_derived`) fails CI on
@@ -228,11 +229,11 @@ should diff both ends.
 | `// @dispatch_count_param: n{i}_<p>` | fused buffer codegen (in-place loop regions where all members agree on one `active_count` producer) | Cap the 1D grid at the named uniform's live value instead of buffer capacity (the FluidSim "fused slower" fix — kernel carries the matching guard). |
 | `// @sampler_address_mode: repeat\|mirror` on `samp` | fused texture codegen | Create the shared gather sampler at this mode (WGSL can't express address modes). `clamp` emits no marker — byte-identical legacy text. |
 | `// @reset_gated` | seed-pattern kernels | Node grows a synthetic optional `reset_trigger` input; dispatches only on integer edges. On skip of an *aliased* kernel it calls `mark_gpu_accessed()` — the executor stale-guard's documented escape hatch. |
-| `// @static_param: <field>` (one per line, prefix block) | install, texture regions only (never buffer — detected by `var<storage`) | Field is *eligible* for const-baking (specialization). Excluded: control-wired fields AND outer-card binding targets. Correctness does NOT rest on this classification — see section 7. |
+| ~~`// @static_param: <field>`~~ | deleted (COMPILE_CONTRACT_DESIGN D2 — P3) | Params are always uniforms; value-keyed kernel specialization is forbidden by the compile contract. |
 | `// @pure` | hand-authored kernels (BlackHole bake) | Author asserts output = f(params, inputs) → memoizer may hold it. |
 | `// @fusion: pointwise\|source` (+ `fn body`) | user-authored fragment-form `wgsl_compute` | The node synthesizes its standalone kernel via `generate_standalone` and reports a real `fusion_kind`, so user fragments fuse like built-ins. |
 | `// @camera_external: camera_ext_N` (P0/D7, 2026-07-12) | fused texture/buffer codegen, when a region member has a wired `Camera` input | Declares a synthetic, non-introspected `Camera`-typed input port on the fused node — the only channel a CPU-struct with no WGSL representation can travel through the def. Producer wire (Camera→Camera) reuses the ordinary `control_wires` rewrite. |
-| `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]` (P0/D7, 2026-07-12) | fused texture/buffer codegen, one per region member with non-empty `derived_uniforms()` | The contiguous uniform-buffer block that member's derived fields occupy, and how to refresh it every frame: `wgsl_compute::evaluate()` calls `derived_uniform_registry::recompute(type_id, ctx)` (ctx = frame clock + the routed `@camera_external` value, if named) and packs the result through each field's real `UniformMemberType`. Consulted by `introspect()` to exclude these fields from the generic port-shadow/param set. Kernels carrying this marker are excluded from static-param specialization (section 7) — baking would shift the surviving fields' byte offsets. |
+| `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]` (P0/D7, 2026-07-12) | fused texture/buffer codegen, one per region member with non-empty `derived_uniforms()` | The contiguous uniform-buffer block that member's derived fields occupy, and how to refresh it every frame: `wgsl_compute::evaluate()` calls `derived_uniform_registry::recompute(type_id, ctx)` (ctx = frame clock + the routed `@camera_external` value, if named) and packs the result through each field's real `UniformMemberType`. Consulted by `introspect()` to exclude these fields from the generic port-shadow/param set. |
 
 Sampler default everywhere is ClampToEdge; markers only encode deviations, so
 all-clamp regions keep byte-identical WGSL — and the WGSL text is the
@@ -286,15 +287,10 @@ contract is tiered — this is written down nowhere else:
    fp32 is an explicit `outputFormats` opt-in on data textures, never a
    compiler default.
 
-**Static-param specialization** (roadmap 4) never changes values: at dispatch,
-`wgsl_compute` bakes the `@static_param` fields' LIVE values into a const
-variant keyed by that value-set (LRU 4, compiled only after the key holds
-`SPEC_STABLE_FRAMES`); any mismatch between live values and a variant's key
-serves the generic all-uniform kernel. A per-frame-driven "static" field just
-never stabilizes → generic path → correct. Kill: `MANIFOLD_WGSL_SPECIALIZE=0`.
-A kernel carrying a `@derived_uniform_member` marker (P0/D7, 2026-07-12) never
-specializes at all — baking a const variant would shift the surviving fields'
-byte offsets against what `evaluate()`'s recompute pack expects.
+**Static-param specialization** is deleted (COMPILE_CONTRACT_DESIGN D2, P3):
+every fused-kernel param is a uniform, packed from live values each frame.
+Value-keyed kernel compilation was the compile contract's exact inverse —
+see that design doc for the deletion decision and its measured cost.
 
 ## 8. Caches, keys, threads, kill switches
 
@@ -370,8 +366,7 @@ invariant a fused def must respect:
    root cause of the "buffer fusion 12% residual"; lives in the backend now.
 9. **Memoizer** — pure steps (`is_pure` / `@pure`) skip when param + input
    epochs are unchanged; held slots serve consumers. Fused nodes are not
-   `@pure` (they read uniforms every frame) — no interaction today, but a
-   review should confirm specialization variants don't confuse epoch tracking.
+   `@pure` (they read uniforms every frame) — no interaction.
 10. **Derived-uniform recompute (P0/D7, 2026-07-12)** — a fused kernel has no
     per-member `run()`, so any member's `derived_uniforms()` fields (frame-
     derived, or recomputed from a routed `Camera` external) must be refreshed

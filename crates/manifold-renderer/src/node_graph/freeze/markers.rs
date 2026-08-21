@@ -49,10 +49,6 @@ pub enum Marker {
     /// `// @reset_gated` — own line. Hand-authored on seed-pattern kernels;
     /// the node exposes a synthetic optional `reset_trigger` input.
     ResetGated,
-    /// `// @static_param: <field>` — texture-region fused codegen (install),
-    /// one per param field with no in-graph control wire (specialization
-    /// eligibility only — never a correctness dependency).
-    StaticParam { field: String },
     /// `// @pure` — own line. Hand-authored assertion (BlackHole bake) that a
     /// kernel's output depends only on params + wired inputs.
     Pure,
@@ -104,7 +100,6 @@ impl Marker {
                 format!("// @sampler_address_mode: {mode}")
             }
             Marker::ResetGated => "// @reset_gated".to_string(),
-            Marker::StaticParam { field } => format!("// @static_param: {field}"),
             Marker::Pure => "// @pure".to_string(),
             Marker::Fusion { kind } => format!("// @fusion: {kind}"),
             Marker::CameraExternal { name } => format!("// @camera_external: {name}"),
@@ -128,7 +123,7 @@ impl Marker {
     /// pre-existing `split_line_comment` convention) or a bare comment body.
     /// Returns `None` when the line carries no recognized marker, or a
     /// recognized prefix with a malformed/empty payload (e.g.
-    /// `@static_param:` with no field name, `@fusion:` with an unknown kind).
+    /// `@dispatch_count_param:` with no field name, `@fusion:` with an unknown kind).
     /// Callers scan `source.lines()` (after `strip_block_comments`) and call
     /// this once per line.
     pub fn parse(line: &str) -> Option<Marker> {
@@ -156,10 +151,6 @@ impl Marker {
             let mode = rest.trim();
             return (!mode.is_empty())
                 .then(|| Marker::SamplerAddressMode { mode: mode.to_string() });
-        }
-        if let Some(rest) = c.strip_prefix("@static_param:") {
-            let name = rest.trim();
-            return (!name.is_empty()).then(|| Marker::StaticParam { field: name.to_string() });
         }
         if let Some(rest) = c.strip_prefix("@fusion:") {
             let kind = rest.trim();
@@ -217,7 +208,6 @@ mod tests {
             Marker::SamplerAddressMode { mode: "repeat".to_string() },
             Marker::SamplerAddressMode { mode: "mirror".to_string() },
             Marker::ResetGated,
-            Marker::StaticParam { field: "n1_gain".to_string() },
             Marker::Pure,
             Marker::Fusion { kind: "pointwise".to_string() },
             Marker::Fusion { kind: "source".to_string() },
@@ -259,7 +249,6 @@ mod tests {
 
     #[test]
     fn parse_rejects_empty_payload() {
-        assert_eq!(Marker::parse("// @static_param:"), None);
         assert_eq!(Marker::parse("// @dispatch_count_param:"), None);
         assert_eq!(Marker::parse("// @camera_external:"), None);
     }
@@ -323,7 +312,7 @@ mod tests {
     /// anywhere else in `manifold-renderer/src` is a hand-formatted/hand-matched
     /// marker that has drifted out of the single-sourced grammar — the exact
     /// failure mode D1 closes. Doc-comment prose referencing a marker in
-    /// backticks (`` `// @static_param` ``) does NOT match this pattern (no
+    /// backticks (e.g. `` `// @reset_gated` ``) does NOT match this pattern (no
     /// leading `"`), so this only catches real string-literal duplication.
     #[test]
     fn marker_literals_live_in_one_module() {
