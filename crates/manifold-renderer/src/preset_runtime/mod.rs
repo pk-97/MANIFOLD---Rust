@@ -86,6 +86,20 @@ use segments::{SegmentMember, classify_segment_member, segment_run, build_segmen
 mod build;
 use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, OpenGroup};
 
+/// The production chain-topology key, exposed for load-time clip-topology
+/// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
+/// chains against the exact inputs `is_compatible` hashes, so a warmed
+/// topology is precisely one the stage dispatch reuses.
+pub fn chain_topology_hash(
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    width: u32,
+    height: u32,
+    preview_effect: Option<&EffectId>,
+) -> u64 {
+    compute_topology_hash(effects, groups, width, height, preview_effect)
+}
+
 mod core;
 pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 use core::{EffectSlot, PresetIo, chain_active_effects};

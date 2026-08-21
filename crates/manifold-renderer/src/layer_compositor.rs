@@ -290,6 +290,88 @@ fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
     false
 }
 
+/// One unique per-clip chain topology (WARMUP_DESIGN P7 D17): a clip's
+/// effective post-fx set — the layer's effects followed by the clip's own
+/// (`TimelineClip::effects`, the legacy per-clip field; empty in projects
+/// saved since per-clip effects moved to the layer) — plus the layer's
+/// groups and owning layer. Deduped by the production
+/// [`PresetRuntime::is_compatible`] topology hash, so a warmed topology is
+/// exactly one the stage dispatch reuses.
+pub(crate) struct ClipChainTopology {
+    pub effects: Vec<PresetInstance>,
+    pub groups: Vec<EffectGroup>,
+    pub layer_id: LayerId,
+}
+
+/// Walk every clip on every visual layer and collect the UNIQUE effective
+/// chain topologies, deduped by the production topology hash (WARMUP_DESIGN
+/// P7 D17). Bounded by unique topology, not clip count — the design's point:
+/// a show with a thousand clips carries a handful of distinct chains. Group
+/// and audio layers are skipped (group chains warm via
+/// `prewarm_group_chains`, audio layers never enter the compositor).
+pub(crate) fn unique_clip_chain_topologies(
+    layers: &[manifold_core::layer::Layer],
+    width: u32,
+    height: u32,
+) -> Vec<ClipChainTopology> {
+    let mut seen: ahash::AHashSet<u64> = ahash::AHashSet::default();
+    let mut out = Vec::new();
+    for layer in layers {
+        if layer.is_group() || layer.is_audio() {
+            continue;
+        }
+        let layer_effects = layer.effects();
+        let groups = layer.effect_groups();
+
+        // Fast path: no clip carries legacy post-fx, so every clip's
+        // effective set IS the layer's — one hash for the whole layer
+        // instead of one per clip (Corrosion: 1496 clips, ~10 hashes).
+        if !layer.clips.iter().any(|c| !c.effects.is_empty()) {
+            if !has_enabled_effects(layer_effects) {
+                continue;
+            }
+            let hash = crate::preset_runtime::chain_topology_hash(
+                layer_effects,
+                groups,
+                width,
+                height,
+                None,
+            );
+            if seen.insert(hash) {
+                out.push(ClipChainTopology {
+                    effects: layer_effects.to_vec(),
+                    groups: groups.to_vec(),
+                    layer_id: layer.layer_id.clone(),
+                });
+            }
+            continue;
+        }
+
+        for clip in &layer.clips {
+            let mut effects = layer_effects.to_vec();
+            effects.extend(clip.effects.iter().cloned());
+            if !has_enabled_effects(&effects) {
+                continue;
+            }
+            let hash = crate::preset_runtime::chain_topology_hash(
+                &effects,
+                groups,
+                width,
+                height,
+                None,
+            );
+            if seen.insert(hash) {
+                out.push(ClipChainTopology {
+                    effects,
+                    groups: groups.to_vec(),
+                    layer_id: layer.layer_id.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Output descriptor for a single processed layer, ready for the blend pass.
 ///
 /// Uses a raw pointer for the texture reference to avoid borrow checker conflicts
@@ -924,6 +1006,144 @@ impl LayerCompositor {
         // A warmed chain's output target is owned by the cached PresetRuntime;
         // the scratch is only an input stand-in.
         outcome
+    }
+
+    /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
+    /// topology through the production `dispatch_chain` path. The per-layer
+    /// warm above leaves each layer's FIRST clip's topology resident (D11);
+    /// any other clip whose effective post-fx set differs is a topology the
+    /// stage would build — and compile fused kernels for — at that clip's
+    /// boundary. Topologies already resident in their layer's slot are
+    /// skipped via the production `is_compatible` check; the rest build
+    /// into a scratch slot whose kernels and fused views land in the
+    /// shared device/fusion caches — the warmth that survives the scratch
+    /// runtime being dropped. Budget-bounded per D6: exhaustion logs
+    /// loudly, never silently truncates.
+    pub fn prewarm_clip_chain_topologies(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        let width = self.main.width();
+        let height = self.main.height();
+        let topologies = unique_clip_chain_topologies(&project.timeline.layers, width, height);
+        if topologies.is_empty() {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let mut scratch = RenderTarget::new(
+            device,
+            width,
+            height,
+            GpuTextureFormat::Rgba16Float,
+            "warmup clip-topology scratch",
+        );
+        // One scratch slot for every topology: `dispatch_chain` hands the
+        // outgoing runtime to the next build as the state-harvest donor, so
+        // reuse here matches production's rebuild handoff.
+        let mut slot: Option<PresetRuntime> = None;
+        let walk_start = std::time::Instant::now();
+        let mut any_failure: Option<WarmupOutcome> = None;
+        let mut covered = 0usize;
+
+        for t in &topologies {
+            // D6: the total budget bounds the whole walk. Exhaustion is a
+            // loud stop naming how far it got — never a silent truncation.
+            if walk_start.elapsed() >= budget.total {
+                log::warn!(
+                    "[LayerCompositor] Clip-topology warmup total budget exhausted after \
+                     {covered}/{} unique topologies ({:.1?}); later clips' chains may \
+                     first-touch once at play",
+                    topologies.len(),
+                    walk_start.elapsed(),
+                );
+                any_failure = Some(WarmupOutcome::BudgetExhausted {
+                    cap: WarmupCap::TotalWallClock,
+                    elapsed: walk_start.elapsed(),
+                });
+                break;
+            }
+
+            // The layer's resident chain (warmed above with the first
+            // clip's topology) already covers this topology when the
+            // production reuse check passes.
+            let already_resident = self
+                .effect_chains
+                .get(&t.layer_id)
+                .and_then(|c| c.as_ref())
+                .is_some_and(|c| c.is_compatible(&t.effects, &t.groups, width, height, None));
+            if already_resident {
+                covered += 1;
+                continue;
+            }
+
+            let ctx = PresetContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width,
+                height,
+                output_width: width,
+                output_height: height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
+                owner_key: layer_id_owner_key(&t.layer_id),
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let scope = fx_scope(&t.layer_id);
+            let outcome = Self::pump_chain_warmup(
+                &mut self.uniform_arena,
+                &mut slot,
+                device,
+                &scratch.texture,
+                &t.effects,
+                &t.groups,
+                &ctx,
+                &scope,
+                budget,
+            );
+            match outcome {
+                WarmupOutcome::Quiescent => {}
+                WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                    log::warn!(
+                        "[LayerCompositor] Clip-topology warmup budget exhausted ({cap:?}) \
+                         on a topology of layer '{}' after {elapsed:.1?}; that topology \
+                         may first-touch once at play",
+                        t.layer_id.as_str(),
+                    );
+                    any_failure = Some(outcome);
+                }
+                WarmupOutcome::InstallFailed => {
+                    log::error!(
+                        "[LayerCompositor] Clip-topology warmup install failed on a \
+                         topology of layer '{}'; that topology will be cold on stage",
+                        t.layer_id.as_str(),
+                    );
+                    any_failure = Some(outcome);
+                }
+            }
+            covered += 1;
+        }
+
+        if topologies.len() > 1 {
+            log::info!(
+                "[LayerCompositor] Clip-topology warmup covered {covered}/{} unique \
+                 topologies in {:.1?}",
+                topologies.len(),
+                walk_start.elapsed(),
+            );
+        }
+
+        // Recycle the scratch target at the current canvas size.
+        scratch.resize(device, width, height);
+        any_failure.unwrap_or(WarmupOutcome::Quiescent)
     }
 
     /// Pump a single effect-chain slot against a cleared stand-in input until
@@ -2812,6 +3032,15 @@ impl Compositor for LayerCompositor {
         self.prewarm_master_chain(project, budget, device, pool, led_grid_size)
     }
 
+    fn prewarm_clip_chain_topologies(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: WarmupBudget,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        self.prewarm_clip_chain_topologies(project, budget, device)
+    }
+
     fn prewarm_group_chains(
         &mut self,
         project: &manifold_core::project::Project,
@@ -3672,6 +3901,98 @@ mod led_warmup_tests {
         assert!(
             comp.led_main.is_some(),
             "LED main ping-pong should be pre-created for LED projects"
+        );
+    }
+}
+
+#[cfg(test)]
+mod clip_topology_enumeration_tests {
+    //! P7 D17 (WARMUP_DESIGN section 5) value-level coverage: the per-clip
+    //! topology enumeration dedups by the production topology hash without
+    //! touching a GPU. Two clips with identical effective post-fx sets must
+    //! yield one topology; differing sets must yield two.
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    fn make_fx(ty: PresetTypeId) -> PresetInstance {
+        let mut fx = manifold_core::preset_definition_registry::create_default(&ty);
+        // `has_enabled_effects` gates on the first param being > 0 — the
+        // registry default for these presets is 1.0, but pin it so the test
+        // doesn't depend on preset defaults.
+        if let Some(p) = fx.params.iter_mut().next() {
+            p.value = 1.0;
+        }
+        fx
+    }
+
+    fn make_layer() -> manifold_core::layer::Layer {
+        Layer::new("gen".to_string(), LayerType::Generator, 0)
+    }
+
+    #[test]
+    fn clips_with_identical_post_fx_sets_produce_one_topology() {
+        let mut layer = make_layer();
+        layer.effects_mut().push(make_fx(PresetTypeId::MIRROR));
+        for _ in 0..3 {
+            layer.clips.push(TimelineClip::default());
+        }
+
+        let topos = unique_clip_chain_topologies(std::slice::from_ref(&layer), 256, 256);
+        assert_eq!(
+            topos.len(),
+            1,
+            "three clips with the same (empty) clip post-fx must collapse to \
+             the layer's single topology",
+        );
+        assert_eq!(
+            topos[0].effects.len(),
+            1,
+            "the collapsed topology carries the layer's effective post-fx set",
+        );
+    }
+
+    #[test]
+    fn clips_with_differing_post_fx_sets_produce_distinct_topologies() {
+        let mut layer = make_layer();
+        layer.effects_mut().push(make_fx(PresetTypeId::MIRROR));
+        let mut clip_a = TimelineClip::default();
+        clip_a.effects.push(make_fx(PresetTypeId::COLOR_GRADE));
+        layer.clips.push(clip_a);
+        let mut clip_b = TimelineClip::default();
+        clip_b.effects.push(make_fx(PresetTypeId::VORONOI_PRISM));
+        layer.clips.push(clip_b);
+        layer.clips.push(TimelineClip::default());
+
+        let topos = unique_clip_chain_topologies(std::slice::from_ref(&layer), 256, 256);
+        assert_eq!(
+            topos.len(),
+            3,
+            "layer topology + two distinct clip post-fx sets must yield \
+             three unique topologies (one per distinct set)",
+        );
+    }
+
+    #[test]
+    fn same_effect_shape_different_identity_stays_distinct() {
+        // The production hash keys on per-instance effect ids, not effect
+        // types — two same-typed effects with different ids are different
+        // topologies, and a shape-only dedup would silently pool them.
+        let mut layer = make_layer();
+        let mut clip_a = TimelineClip::default();
+        clip_a.effects.push(make_fx(PresetTypeId::MIRROR));
+        let mut clip_b = TimelineClip::default();
+        clip_b.effects.push(make_fx(PresetTypeId::MIRROR));
+        layer.clips.push(clip_a);
+        layer.clips.push(clip_b);
+
+        let topos = unique_clip_chain_topologies(std::slice::from_ref(&layer), 256, 256);
+        assert_eq!(
+            topos.len(),
+            2,
+            "same effect type with a different instance id is a distinct \
+             topology — the production key is id-keyed",
         );
     }
 }
