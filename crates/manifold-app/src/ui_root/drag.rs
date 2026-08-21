@@ -547,4 +547,28 @@ mod drag_capture_tests {
         );
         assert_eq!(steps(&click2), 1, "the second click must also fire one step: click2={click2:?}");
     }
+
+    /// Popup click-through regression: an event an overlay consumed must never
+    /// reach the tracks InteractionOverlay. A click a floating popup swallows
+    /// (its rect sits over the timeline) used to ALSO stash into
+    /// `viewport_events` in `process_events`' second, positional pass — the
+    /// tracks replay then selected the clip/layer behind the popup, and the
+    /// popup's own pick (AddEffect / SetGenType) landed on the wrong layer.
+    #[test]
+    fn overlay_consumed_click_does_not_stash_for_tracks() {
+        let mut ui = new_root();
+        ui.settings_popup.open();
+        ui.build_overlays();
+        let p = center(ui.viewport.tracks_rect());
+
+        ui.pointer_event(p, PointerAction::Down, 0.0);
+        let _ = ui.process_events();
+        ui.pointer_event(p, PointerAction::Up, 0.05);
+        let _ = ui.process_events();
+
+        assert!(
+            ui.drain_viewport_events().is_empty(),
+            "a modal-captured press/click over the tracks must not replay to the timeline"
+        );
+    }
 }
