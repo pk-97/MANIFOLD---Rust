@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, PresetMetadata,
-    SkipModeDef,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
@@ -317,7 +316,6 @@ impl Command for InsertMeshModifierCommand {
                 is_line_based: false,
                 params: Vec::new(),
                 bindings: Vec::new(),
-                skip_mode: SkipModeDef::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),

@@ -419,9 +419,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "stringParams": [
       {
         "id": "text",

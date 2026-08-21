@@ -1324,7 +1324,6 @@ mod tests {
                     offset: 0.0,
                     default_mirrors_node_param: false,
                 }],
-                skip_mode: Default::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),

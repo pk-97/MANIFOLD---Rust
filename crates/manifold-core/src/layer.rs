@@ -1219,7 +1219,6 @@ mod tests {
                 is_line_based: false,
                 params: vec![],
                 bindings: vec![],
-                skip_mode: Default::default(),
                 param_aliases: vec![],
                 value_aliases: vec![],
                 string_params: vec![],

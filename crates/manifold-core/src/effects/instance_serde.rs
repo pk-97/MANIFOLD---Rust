@@ -126,10 +126,10 @@ impl Serialize for ManifestSer<'_> {
 /// rewritten from the live manifest (PARAM_STORAGE_BOUNDARIES_DESIGN.md D12/
 /// D4: `meta.params` is derived on save from the manifest, the sole live
 /// authority — not a second thing calibration keeps in sync by hand). Every
-/// OTHER field on the graph (nodes, wires, `preset_metadata.bindings`,
-/// `skip_mode`, ...) serializes unchanged — this wrapper touches only the
-/// `params` list's per-entry CONTENT, by id, never its shape: which entries
-/// exist is still governed by expose/unexpose (`append_user_binding` /
+/// OTHER field on the graph (nodes, wires, `preset_metadata.bindings`, etc.)
+/// serializes unchanged — this wrapper touches only the `params` list's
+/// per-entry CONTENT, by id, never its shape: which entries exist is still
+/// governed by expose/unexpose (`append_user_binding` /
 /// `remove_user_binding_by_id`), not by this derivation.
 pub(super) struct GraphWithDerivedParams<'a> {
     pub(super) graph: &'a crate::effect_graph_def::EffectGraphDef,

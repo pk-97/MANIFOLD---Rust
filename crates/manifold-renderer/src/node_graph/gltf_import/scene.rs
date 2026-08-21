@@ -10,8 +10,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
-    InterfacePortDef, ParamSpecDef, PresetMetadata, SkipModeDef, StringBindingDef,
-    StringParamSpecDef,
+    InterfacePortDef, ParamSpecDef, PresetMetadata, StringBindingDef, StringParamSpecDef,
 };
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
@@ -885,7 +884,6 @@ pub(super) fn build_import_graph(
         is_line_based: false,
         params: card_params,
         bindings: card_bindings,
-        skip_mode: SkipModeDef::default(),
         param_aliases: Vec::new(),
         value_aliases: Vec::new(),
         string_params: vec![

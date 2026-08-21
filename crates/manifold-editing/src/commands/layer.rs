@@ -844,7 +844,7 @@ mod clip_trigger_command_tests {
 mod import_model_tests {
     use super::*;
     use manifold_core::effect_graph_def::{
-        EFFECT_GRAPH_VERSION, EffectGraphDef, PresetMetadata, SkipModeDef,
+        EFFECT_GRAPH_VERSION, EffectGraphDef, PresetMetadata,
     };
     use manifold_core::preset_def::PresetKind;
 
@@ -865,7 +865,6 @@ mod import_model_tests {
             is_line_based: false,
             params: Vec::new(),
             bindings: Vec::new(),
-            skip_mode: SkipModeDef::default(),
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),

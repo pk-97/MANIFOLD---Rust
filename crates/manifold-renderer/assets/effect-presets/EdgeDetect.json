@@ -63,10 +63,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    },
     "paramAliases": [
       {
         "old": "thresh",

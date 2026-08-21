@@ -83,11 +83,7 @@
         "convert": { "type": "Float" },
         "scale": -1000.0
       }
-    ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    }
+    ]
   },
   "nodes": [
     { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },

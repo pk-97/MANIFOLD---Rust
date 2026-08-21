@@ -54,7 +54,6 @@ A **preset** is a `LoadedPresetView` over a JSON file. `assets/effect-presets/<T
 - `nodes` + `wires` (the graph topology)
 - `presetMetadata.params` (the effect-card slider list)
 - `presetMetadata.bindings` (how card sliders route to inner-node params or wires)
-- `presetMetadata.skipMode` (the optimisation hint — see section 6.2 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md))
 
 Composite Rust builders under `composites/` still exist (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity) but are used only for parity tests against legacy fused shaders. Shipping artifacts are the JSON files.
 
@@ -194,7 +193,6 @@ Preset JSON schema lives in [`crates/manifold-core/src/effect_definition_registr
 - `nodes` carry stable `typeId` (`"node.gain"`, `"node.feedback"`, …) — treated as public API.
 - `params` are a typed map by name; additive evolution only (new optional fields with defaults are fine; renames and semantic changes require a new type ID).
 - `presetMetadata.bindings` carry `ParamId` (not positional index).
-- `presetMetadata.skipMode` is the optimisation hint for the zero-cost skip-passthrough path.
 
 User-saved composites (V2) will land under `graphs/custom_composites/<id>.json` inside the project ZIP.
 

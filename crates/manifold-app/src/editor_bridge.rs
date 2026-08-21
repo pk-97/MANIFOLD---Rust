@@ -2034,7 +2034,6 @@ mod binding_reroute_tests {
                     offset: 0.5,
                     default_mirrors_node_param: false,
                 }],
-                skip_mode: Default::default(),
                 param_aliases: vec![],
                 value_aliases: vec![],
                 string_params: vec![],

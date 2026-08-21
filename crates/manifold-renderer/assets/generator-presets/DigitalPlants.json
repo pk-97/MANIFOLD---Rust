@@ -89,8 +89,7 @@
       { "id": "cam_fov", "label": "Camera FOV", "defaultValue": 50.0,
         "target": { "kind": "node", "nodeId": "cam_fov_rad", "param": "a" },
         "convert": { "type": "Float" } }
-    ],
-    "skipMode": { "kind": "never" }
+    ]
   },
   "nodes": [
     { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },

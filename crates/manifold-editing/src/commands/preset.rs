@@ -488,7 +488,6 @@ mod tests {
                     card_visible: true,
                 }],
                 bindings: Vec::new(),
-                skip_mode: Default::default(),
                 param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),

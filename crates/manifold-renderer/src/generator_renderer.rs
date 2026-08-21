@@ -722,30 +722,6 @@ impl GeneratorRenderer {
                 continue;
             }
 
-            // Skip-mode (parity with the effect chain's `is_skipped_for`): a
-            // generator can declare skip-when-zero in its preset metadata. For
-            // a source there's no upstream to pass through, so a skipped
-            // generator renders a transparent frame — the compositor then
-            // shows the layers below. No shipping generator declares skip today
-            // (default `SkipMode::Never`), so this is a no-op until one does.
-            let skipped = layers
-                .get(layer_index as usize)
-                .and_then(|l| l.gen_params())
-                .is_some_and(|gp| {
-                    crate::node_graph::loaded_preset_view_by_id(gp.generator_type()).is_some_and(
-                        |view| {
-                            crate::node_graph::is_skipped_for(view.skip_mode, &view.type_id, gp)
-                        },
-                    )
-                });
-            if skipped {
-                if let Some(active) = self.active_clips.get_mut(id.as_str()) {
-                    gpu.clear_texture(&active.render_target.texture, 0.0, 0.0, 0.0, 0.0);
-                    active.needs_clear = false;
-                }
-                continue;
-            }
-
             gpu.checkpoint();
 
             let ctx = PresetContext {

@@ -40,8 +40,7 @@ If your effect can be expressed by composing primitives that already exist, that
         "target": { "kind": "handleNode", "handle": "invert", "param": "intensity" },
         "convert": { "type": "Float" }
       }
-    ],
-    "skipMode": { "kind": "onZero", "paramId": "amount" }
+    ]
   },
   "nodes": [
     { "id": 0, "typeId": "system.source", "handle": "source" },
@@ -66,7 +65,6 @@ If your effect can be expressed by composing primitives that already exist, that
 - **`presetMetadata.available`** — set `false` to hide from the picker but still load saved projects.
 - **`presetMetadata.params`** — the card-UI slider list. Each entry is one effect-card slider.
 - **`presetMetadata.bindings`** — how each slider routes to inner state. `target.kind: "handleNode"` is the common case; `handle` is the inner node's `handle` string and `param` is the param name on that primitive.
-- **`presetMetadata.skipMode`** — optimisation hint. `{"kind": "onZero", "paramId": "..."}` enables zero-cost skip-passthrough when that slider is at zero. Omit if every slider is load-bearing.
 - **`nodes[].typeId`** — must reference a registered primitive (browseable at `crates/manifold-renderer/src/node_graph/primitives/`) or one of the system nodes (`system.source`, `system.final_output`).
 - **`nodes[].handle`** — a string label used by bindings and wires. Must be unique within the preset.
 - **`nodes[].params`** — initial param values for this instance. Format is the same tagged-enum used everywhere: `{"type": "Float", "value": 0.5}`, `{"type": "Enum", "value": 2}`, `{"type": "Int", "value": 24}`, `{"type": "Vec2", "value": [0.5, 0.2]}`.

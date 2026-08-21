@@ -475,8 +475,8 @@ impl PresetRuntime {
 
         // Preflight: every active effect must have a `LoadedPresetView`
         // (JSON-loaded preset metadata). The chain build loop reads
-        // bindings, skip mode, and the canonical splice all off the
-        // view; an effect without one is unrunnable.
+        // bindings and the canonical splice all off the view; an effect
+        // without one is unrunnable.
         for (_, fx) in &active_effects {
             assert_manifest_gate(fx);
             if loaded_preset_view_by_id(fx.effect_type()).is_none() {
@@ -543,21 +543,14 @@ impl PresetRuntime {
             Card(usize),
             Segment {
                 /// Indices into `active_effects` of the fused member cards, in
-                /// chain order (currently-skipped cards excluded — they splice
-                /// nothing on the per-card path either).
+                /// chain order.
                 cards: Vec<usize>,
                 view: std::sync::Arc<freeze_install::SegmentView>,
             },
         }
-        // Skip note: `OnZero` skip in this runtime is STATIC per build — the
-        // predicate is in `compute_topology_hash`, a flip rebuilds the chain,
-        // and a skipped card isn't spliced at all. So a fused segment never
-        // contains skip logic: a currently-skipped card is TRANSPARENT
-        // (excluded from the segment without breaking the run — exactly the
-        // adjacency the per-card path produces), a currently-active OnZero
-        // card is an ordinary member, and each skip state is its own segment
-        // content key. Skip semantics ride the existing rebuild mechanism,
-        // identically to the per-card path.
+        // Eligibility: watched card, any grouped card (wet/dry Mix seams),
+        // stateful cards (positional namespacing must never key state by chain
+        // position), string-bound cards.
         //
         // Eligibility + run-scan live in `classify_segment_member` /
         // `segment_run` (module scope) — shared with the project-load
@@ -590,14 +583,6 @@ impl PresetRuntime {
                 );
                 match freeze_install::fused_segment_view_for(&cards) {
                     freeze_install::SegmentLookup::Ready(view) => {
-                        // Skipped (transparent) cards inside the run splice
-                        // nothing — emit them as plain cards so any future
-                        // skip-state bookkeeping sees them, then the segment.
-                        units.extend(
-                            (i..j)
-                                .filter(|&k| members[k] == SegmentMember::Transparent)
-                                .map(SpliceUnit::Card),
-                        );
                         units.push(SpliceUnit::Segment { cards: fuse_idxs, view });
                     }
                     freeze_install::SegmentLookup::Pending => {
@@ -841,8 +826,8 @@ impl PresetRuntime {
             }
 
             // Look up the JSON-loaded view. Every shipping effect has
-            // presetMetadata + bindings + skip_mode in its JSON file —
-            // see `assets/effect-presets/`. The preflight above
+            // presetMetadata + bindings in its JSON file — see
+            // `assets/effect-presets/`. The preflight above
             // guarantees the view exists.
             let Some(base_view) = loaded_preset_view_by_id(fx.effect_type()) else {
                 eprintln!(
@@ -867,11 +852,6 @@ impl PresetRuntime {
                 );
             pending_fused_effects |= fused_pending;
             let view: &LoadedPresetView = fused_view.as_deref().unwrap_or(base_view);
-            if is_skipped_for(view.skip_mode, &view.type_id, fx) {
-                // No workers added — previous output flows directly
-                // to the next effect.
-                continue;
-            }
             // The def actually spliced into the chain:
             //   - fused  → the fused def (already contains the relight template
             //              with default params if the toggle is on; live values

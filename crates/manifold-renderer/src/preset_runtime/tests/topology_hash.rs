@@ -1,10 +1,8 @@
-    //! Regression: the topology hash must include each effect's
-    //! current `is_skipped` state. Without it, dragging an
-    //! `amount` slider away from 0 doesn't trigger a chain rebuild,
-    //! so a freshly-added effect (which starts at `amount = 0` for
-    //! most types) never enters the graph until the user toggles
-    //! `enabled` — visible as the "add effect → must toggle to
-    //! work" symptom.
+    //! Regression: the topology hash must include only structure-
+    //! affecting fields (`enabled`, `graph_structure_version`, relight
+    //! toggle, etc.). Per-frame param values, including `amount`, must
+    //! NOT affect the hash — otherwise live modulation rebuilds the
+    //! chain and wipes primitive state.
     use super::*;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
@@ -43,16 +41,12 @@
     }
 
     #[test]
-    fn hash_changes_when_skip_predicate_flips() {
-        // Dragging an effect's `amount` slider across 0 must change
-        // the topology hash so the chain rebuilds — without that, the
-        // effect can't transition between "in graph" and "skipped"
-        // states without a separate enabled toggle.
-        //
-        // Set up the test scenario explicitly: amount=0 first, then
-        // amount=0.5. The section 9.1.5 audit moved most effects' default
-        // amount off zero, so we can't rely on the default for this
-        // fixture.
+    fn amount_sweep_does_not_change_topology_hash() {
+        // `amount` is a performance control, not structure. Dragging it
+        // through zero must NOT rebuild the chain, so stateful effects
+        // (Feedback, Watercolor, Bloom, ...) keep their accumulated
+        // state across the bypass moment. The only structural skip is
+        // `PresetInstance.enabled`.
         let mut fx = make_default(PresetTypeId::VORONOI_PRISM);
         fx.set_base_param("amount", 0.0);
 
@@ -61,12 +55,9 @@
         fx.set_base_param("amount", 0.5);
         let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256, None);
 
-        assert_ne!(
+        assert_eq!(
             hash_at_zero, hash_at_half,
-            "topology hash must change when an effect's SkipMode::OnZero \
-             predicate flips — otherwise the chain doesn't rebuild and \
-             the user has to toggle enabled to bring the effect into the \
-             graph. See the doc-comment on `compute_topology_hash`."
+            "amount is a value, not structure: sweeping through zero must not change the topology hash"
         );
     }
 
@@ -239,32 +230,3 @@
         );
     }
 
-    #[test]
-    fn stateful_effects_never_skip() {
-        // Stateful effects must keep their workers alive across an
-        // `amount → 0 → up` drag so their accumulated state (Feedback
-        // prev-frame texture, Bloom mip pyramid, Watercolor ping-pong,
-        // DNN worker spool, etc.) survives the bypass moment.
-        // Tagging them `SkipMode::Never` is how we guarantee that.
-        // Bloom is intentionally absent: its decomposed graph
-        // (threshold → downsample → blur → mix) is stateless, so it has
-        // no per-instance state to preserve and can stay SkipMode::OnZero.
-        for ty in [
-            PresetTypeId::STYLIZED_FEEDBACK,
-            PresetTypeId::WATERCOLOR,
-            PresetTypeId::DEPTH_OF_FIELD,
-            PresetTypeId::WIREFRAME_DEPTH,
-            PresetTypeId::BLOB_TRACKING,
-            PresetTypeId::AUTO_GAIN,
-        ] {
-            let view = loaded_preset_view_by_id(&ty).unwrap_or_else(|| {
-                panic!("{:?}: missing LoadedPresetView", ty);
-            });
-            assert!(
-                matches!(view.skip_mode, crate::node_graph::SkipMode::Never),
-                "{:?}: stateful effects must be SkipMode::Never so their \
-                 per-instance state survives an amount → 0 → up slider drag",
-                ty,
-            );
-        }
-    }

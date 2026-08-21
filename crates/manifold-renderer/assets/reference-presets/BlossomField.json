@@ -136,9 +136,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
     "stringParams": [
       {
         "id": "modelPath",

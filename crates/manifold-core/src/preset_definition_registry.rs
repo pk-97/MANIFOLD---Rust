@@ -816,8 +816,7 @@ mod tests {
     // ── section 11 block 2: PresetMetadata → EffectDef converter ──────────
 
     use crate::effect_graph_def::{
-        AliasEntry, BindingDef, BindingTarget, ParamSpecDef, PresetMetadata, SkipModeDef,
-        ValueAliasEntry,
+        AliasEntry, BindingDef, BindingTarget, ParamSpecDef, PresetMetadata, ValueAliasEntry,
     };
     use crate::effects::ParamConvert;
 
@@ -865,9 +864,6 @@ mod tests {
                 offset: 0.0,
                 default_mirrors_node_param: false,
             }],
-            skip_mode: SkipModeDef::OnZero {
-                param_id: "amount".to_string(),
-            },
             param_aliases: vec![AliasEntry {
                 old: "intensity".to_string(),
                 new: Some("amount".to_string()),
@@ -949,7 +945,6 @@ mod tests {
                 card_visible: true,
             }],
             bindings: Vec::new(),
-            skip_mode: SkipModeDef::default(),
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),

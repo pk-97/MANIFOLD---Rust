@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** IN PROGRESS — P1–P5 + budget fix on main 2026-08-20; residual cold touches from skip-mode topology divergence tracked in BUG-p8oe (warmup-p5-residue-cold-touches), decision with Peter · k3 (lead)
+**Status:** IN PROGRESS — P1–P5 + budget fix on main; P6 (skip-mode removal, BUG-p8oe (warmup-p5-residue-cold-touches)) executing on lane/warmup-p6-skip-mode-removal · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
@@ -383,11 +383,24 @@ Also in scope: one Corrosion layer (`cc0__oomurasaki_azalea…` a3a572d0) fails 
 - **Acceptance demo:** the probe log — L2.
 - **Forbidden moves:** warming a parallel "clip-like" context instead of the production clip-activation path; making the fusion wait a fixed sleep instead of a queue query; deleting the synthetic-context warm (a layer with zero clips still warms bare).
 
+### P6 — Skip-mode removal: amount is a value, the toggle is the structure (designed 2026-08-21 with Peter)
+
+The P5 residue (BUG-p8oe (warmup-p5-residue-cold-touches): 70 cold touches = 30 chain constructions + their 40 pipeline compiles) is one root cause counted twice: chain segmentation reads live modulated param values through `is_skipped_for` (`SkipMode::OnZero` — skip when `amount <= 0.0`, exactly zero, no epsilon). Load-warmed topology diverges from playback topology the moment modulation crosses zero; warmup can never predict live audio/LFO values. Decision (Peter, 2026-08-21): **the `amount` slider is a performance control, never structure — an effect at amount 0 runs as a normal effect at amount 0; the on/off toggle (`PresetInstance.enabled`) is the only structural skip.** `SkipMode` is deleted end to end; the param-triggered rebuild path dies with it.
+
+- **Deliverables:**
+  - **D13 — delete the concept (Rust).** `SkipMode` enum + `is_skipped_for` (`chain_spec.rs`); the topology-hash line (`build.rs:97`); `SegmentMember::Transparent` classification (`segments.rs:58` — remove the variant if skip was its only producer); the worker-drop `continue` (`core.rs:870`); the generator-renderer parity copy (`generator_renderer.rs:725`); `skip_mode` field + `skip_mode_from_def` + the `Box::leak` (`loaded_preset_view.rs:211`); the `gltf_import/scene.rs:888` default; `SkipModeDef` from the preset-def schema. Parser must silently ignore the legacy `skipMode` key in old files (verify no `deny_unknown_fields`; add a regression test parsing a fixture that carries it). `topology_hash.rs` tests updated; new regression test: an `amount` sweep across zero must NOT change the topology hash.
+  - **D14 — strip `"skipMode"` from all preset JSON** (57 files across `effect-presets/`, `reference-presets/`, `generator-presets/`). JSON stays valid; graph-tool validate passes on every touched file.
+  - **D15 — amount-0 passthrough audit (hard gate).** gpu-proofs test: each formerly-skippable preset rendered at `amount = 0` asserts output == input (identity). A preset whose kernel is not identity at 0 is a kernel bug — fix the kernel, never keep a skip. Serial run behind the device lock (`scripts/gpu_proofs_gate.py`).
+  - **D16 — warmup covers disabled chains: DESCOPED 2026-08-21.** The chain cache is keyed on the exact enabled set (one runtime slot per layer), so a warmed enabled-variant has nowhere to live — fixing it is a cache-contract change, not an enumeration tweak. Tracked as BUG-1j7x (toggle-on rebuild hitch) with three fix shapes; deliberate toggle-on is a rare single-chain gesture, accepted residual for P6.
+- **Gate:** Corrosion probe reports `cold touches during playback: 0`; gpu_proofs_gate green (incl. the new audit test); landing_gate green.
+- **Acceptance demo:** the probe log + audit test report — L2.
+- **Forbidden moves:** any new param-value-driven topology (the class dies here, not just this instance); failing old project/preset files on the removed key; a per-effect exemption list for D15; keeping a runtime alias-skip as part of this phase (steady-state cost of amount-0 dispatches is accepted; if profiling later shows it hurts, a dispatch-level — never topology-level — passthrough is a separate design).
+
 Phasing-completeness: every intro/audit claim maps to a phase — generator pre-build +
 pre-roll + progress + UI bar + detector (P1), post-fx chains + image/LED + edit-time
 adds (P2), disk caches (P3), consolidation + CI gate (P4), clip-active pre-roll +
-fusion quiescence (P5). GPU clock ramp: no deliverable — pre-roll provides it
-incidentally. Video: D8, no phase.
+fusion quiescence (P5), skip-mode removal (P6). GPU clock ramp: no deliverable —
+pre-roll provides it incidentally. Video: D8, no phase.
 
 ## 6. Decided — do not reopen
 
@@ -398,6 +411,7 @@ incidentally. Video: D8, no phase.
 5. Budgets bound everything; timeout = log + open anyway (D6).
 6. Edit-time warmup is transport-gated (D7).
 7. Video stays on lookahead (D8).
+8. `amount` never determines chain structure — the on/off toggle is the only structural skip; `SkipMode` is deleted (P6, Peter 2026-08-21).
 8. Cold-touch detector is the policy's enforcement (D9).
 
 ## 7. Deferred

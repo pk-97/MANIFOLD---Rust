@@ -73,10 +73,6 @@
         }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    },
     "valueAliases": [
       {
         "paramId": "mode",

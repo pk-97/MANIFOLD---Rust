@@ -113,7 +113,7 @@ mod sections_for_doc_ids_tests {
     use super::*;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{
-        BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata, SkipModeDef,
+        BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
         EFFECT_GRAPH_VERSION_WITH_METADATA,
     };
     use manifold_core::effects::ParamConvert;
@@ -189,7 +189,6 @@ mod sections_for_doc_ids_tests {
                     default_mirrors_node_param: false,
                 },
             ],
-            skip_mode: SkipModeDef::default(),
             param_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),

@@ -9,14 +9,13 @@
     }
 
     #[test]
-    fn segment_run_trims_transparents_and_collects_fuse_indices() {
-        use SegmentMember::{Boundary, Fuse, Transparent};
-        // Fuse, Transparent, Fuse, Transparent, Boundary: run ends at the
-        // boundary, the trailing transparent is trimmed, fuse idxs = [0, 2].
-        let members = [Fuse, Transparent, Fuse, Transparent, Boundary];
+    fn segment_run_collects_fuse_indices_until_boundary() {
+        use SegmentMember::{Boundary, Fuse};
+        // Fuse, Fuse, Boundary: run ends at the boundary, fuse idxs = [0, 1].
+        let members = [Fuse, Fuse, Boundary];
         let (j, fuse) = segment_run(&members, 0);
-        assert_eq!(j, 3, "trailing transparent trimmed back to a plain card");
-        assert_eq!(fuse, vec![0, 2]);
+        assert_eq!(j, 2);
+        assert_eq!(fuse, vec![0, 1]);
     }
 
     #[test]

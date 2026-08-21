@@ -10,10 +10,7 @@
     "available": true,
     "isLineBased": false,
     "params": [],
-    "bindings": [],
-    "skipMode": {
-      "kind": "never"
-    }
+    "bindings": []
   },
   "nodes": [
     {
