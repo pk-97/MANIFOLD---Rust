@@ -181,24 +181,32 @@ pub fn dispatch_chain<'a>(
     crate::node_graph::freeze::install::pump_segment_results();
 
     let catalog_generation = crate::preset_loader::catalog_generation();
-    let needs_rebuild = match cache.as_ref() {
-        None => true,
+    let (needs_rebuild, reason) = match cache.as_ref() {
+        None => (true, "cache-miss"),
         Some(cg) => {
-            cg.built_generation() != catalog_generation
-                || cg.awaiting_segment_swap()
+            if cg.built_generation() != catalog_generation {
+                (true, "catalog-generation")
+            } else if cg.awaiting_segment_swap() {
+                (true, "segment-swap")
+            } else if cg.awaiting_fused_swap() {
                 // BUG-j8gy: per-card fused views land on the same worker —
                 // same swap-in handshake as segments.
-                || cg.awaiting_fused_swap()
+                (true, "fused-swap")
+            } else if cg.awaiting_forced_outputs_rebuild() {
                 // BUG-18l: a live forced-outputs change is a topology change
                 // — same handshake as the segment swap-in above.
-                || cg.awaiting_forced_outputs_rebuild()
-                || !cg.is_compatible(effects, groups, ctx.width, ctx.height, preview_effect)
+                (true, "forced-outputs")
+            } else if !cg.is_compatible(effects, groups, ctx.width, ctx.height, preview_effect) {
+                (true, "incompatible")
+            } else {
+                (false, "")
+            }
         }
     };
     if needs_rebuild {
         if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
             let curr = topology_dump(effects, groups, ctx.width, ctx.height);
-            eprintln!("[rebuild] curr={curr}");
+            eprintln!("[rebuild] scope={scope} reason={reason} curr={curr}");
         }
         let t0 = std::time::Instant::now();
         // Hand the outgoing runtime to the build as the state-harvest donor:

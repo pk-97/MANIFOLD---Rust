@@ -39,6 +39,14 @@ pub(crate) fn alloc_log_backtrace() {
     }
 }
 
+/// Env-gated log for every pipeline cache miss that becomes a cold touch.
+/// Mirrors the rebuild-reason logger in chain_dispatch.rs so probe runs
+/// can attribute each PipelineCompile to a label + pipeline kind.
+pub(crate) fn pipeline_compile_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_LOG_REBUILD_REASON").is_some())
+}
+
 /// Generate a compute clear shader for a given WGSL storage texel format.
 fn clear_texture_wgsl(texel_format: &str) -> String {
     format!(
@@ -453,6 +461,9 @@ impl GpuDevice {
             return cached.clone();
         }
         record_cold_touch(ColdTouchKind::PipelineCompile);
+        if pipeline_compile_log_enabled() {
+            eprintln!("[pipeline-compile] label={label}");
+        }
 
         // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross)
         let (slot_map, msl_source, msl_entry_name, workgroup_size) = {
@@ -727,6 +738,9 @@ impl GpuDevice {
             return cached.clone();
         }
         record_cold_touch(ColdTouchKind::PipelineCompile);
+        if pipeline_compile_log_enabled() {
+            eprintln!("[pipeline-compile] label={label}");
+        }
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
@@ -904,6 +918,9 @@ impl GpuDevice {
             return cached.clone();
         }
         record_cold_touch(ColdTouchKind::PipelineCompile);
+        if pipeline_compile_log_enabled() {
+            eprintln!("[pipeline-compile] label={label}");
+        }
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
@@ -1289,6 +1306,9 @@ impl GpuDevice {
             return cached.clone();
         }
         record_cold_touch(ColdTouchKind::PipelineCompile);
+        if pipeline_compile_log_enabled() {
+            eprintln!("[pipeline-compile] label={label}");
+        }
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
@@ -1487,6 +1507,9 @@ impl GpuDevice {
             return cached.clone();
         }
         record_cold_touch(ColdTouchKind::PipelineCompile);
+        if pipeline_compile_log_enabled() {
+            eprintln!("[pipeline-compile] label={label}");
+        }
 
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
