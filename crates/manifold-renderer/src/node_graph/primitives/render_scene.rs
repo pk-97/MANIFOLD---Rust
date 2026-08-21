@@ -2794,6 +2794,9 @@ impl RenderScene {
                 mip_levels: 1,
             }));
         }
+        // COMPILE_CONTRACT_DESIGN P2: IBL pipelines are prewarmed at startup
+        // in prewarm_pipelines, but use lazy creation as fallback if prewarm
+        // hasn't run yet (e.g., during warmup itself).
         if self.ibl_prefilter_pipeline.is_none() {
             self.ibl_prefilter_pipeline = Some(device.create_compute_pipeline(
                 concat!(
@@ -2824,6 +2827,7 @@ impl RenderScene {
                 "node.render_scene ibl brdf lut",
             ));
         }
+
     }
 
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: run the split-sum IBL convolution
@@ -3402,6 +3406,50 @@ impl RenderScene {
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             Some(shaft_composite_blend),
             "node.render_scene shaft composite",
+        );
+
+        // COMPILE_CONTRACT_DESIGN P2: IBL pipelines are fixed-source,
+        // asset-independent (shader source depends only on render_scene's
+        // own WGSL files, not on any envmap content). Warm them here so
+        // the first frame that enables IBL is a cache hit, not a mid-show
+        // compile stall.
+        device.create_compute_pipeline(
+            concat!(
+                include_str!("shaders/pbr_brdf.wgsl"),
+                include_str!("shaders/ibl_prefilter_specular.wgsl"),
+            ),
+            "cs_main",
+            "node.render_scene ibl prefilter",
+        );
+        device.create_compute_pipeline(
+            concat!(
+                include_str!("shaders/pbr_brdf.wgsl"),
+                include_str!("shaders/ibl_irradiance.wgsl"),
+            ),
+            "cs_main",
+            "node.render_scene ibl irradiance",
+        );
+        device.create_compute_pipeline(
+            concat!(
+                include_str!("shaders/pbr_brdf.wgsl"),
+                include_str!("shaders/ibl_brdf_lut.wgsl"),
+            ),
+            "cs_main",
+            "node.render_scene ibl brdf lut",
+        );
+
+        // COMPILE_CONTRACT_DESIGN P2: hit_dist_extract and upscale_alpha_combine
+        // are both fixed-source compute pipelines, independent of scene content.
+        // Warm them here so their first use is a cache hit.
+        device.create_compute_pipeline(
+            include_str!("shaders/hit_dist_extract.wgsl"),
+            "cs_main",
+            "node.render_scene hit_dist_extract",
+        );
+        device.create_compute_pipeline(
+            include_str!("shaders/upscale_alpha_combine.wgsl"),
+            "cs_main",
+            "node.render_scene upscale_alpha_combine",
         );
     }
 
@@ -5904,14 +5952,18 @@ impl EffectNode for RenderScene {
                 // denoise_aux_ready is false and this block idles one frame.
                 if denoise_aux_ready {
                     let hit_dist_target = spec_hit_dist_out.expect("denoise_aux_ready implies Some");
+                    // COMPILE_CONTRACT_DESIGN P2: hit_dist_extract pipeline is prewarmed
+                    // at startup, but use lazy creation as fallback if prewarm hasn't run.
                     if self.hit_dist_extract_pipeline.is_none() {
                         self.hit_dist_extract_pipeline = Some(gpu.device.create_compute_pipeline(
                             include_str!("shaders/hit_dist_extract.wgsl"),
                             "cs_main",
-                            "node.render_scene hit_dist extract",
+                            "node.render_scene hit_dist_extract",
                         ));
                     }
-                    let hit_dist_pipeline = self.hit_dist_extract_pipeline.as_ref().unwrap();
+                    let hit_dist_pipeline = self.hit_dist_extract_pipeline
+                        .as_ref()
+                        .expect("just created or prewarmed");
                     gpu.native_enc.dispatch_compute(
                         hit_dist_pipeline,
                         &[
@@ -7039,14 +7091,18 @@ impl EffectNode for RenderScene {
             // render-res scratch the upscaler read (`target`). `native_color`
             // is Rgba16Float storage-writeable, so this is one compute pass —
             // no new scratch and no second blit.
+            // COMPILE_CONTRACT_DESIGN P2: upscale_alpha_combine pipeline is prewarmed
+            // at startup, but use lazy creation as fallback if prewarm hasn't run.
             if self.upscale_alpha_combine_pipeline.is_none() {
                 self.upscale_alpha_combine_pipeline = Some(gpu.device.create_compute_pipeline(
                     include_str!("shaders/upscale_alpha_combine.wgsl"),
                     "cs_main",
-                    "node.render_scene upscale alpha combine",
+                    "node.render_scene upscale_alpha_combine",
                 ));
             }
-            let combine_pipeline = self.upscale_alpha_combine_pipeline.as_ref().unwrap();
+            let combine_pipeline = self.upscale_alpha_combine_pipeline
+                .as_ref()
+                .expect("just created or prewarmed");
             let combine_sampler = gpu.device.linear_sampler();
             gpu.native_enc.dispatch_compute(
                 combine_pipeline,

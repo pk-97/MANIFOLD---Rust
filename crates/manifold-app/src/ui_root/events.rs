@@ -64,7 +64,13 @@ impl UIRoot {
         actions.append(&mut self.pending_keyboard_actions);
 
         let mut last_click_node: Option<NodeId> = None;
-        for event in &events {
+        // Events an overlay consumed in the routing pass below. The second
+        // pass re-walks every event and stashes positionally for the tracks
+        // InteractionOverlay — without this, a click a floating popup already
+        // swallowed (its cell sits over the timeline) is ALSO replayed to the
+        // tracks, selecting the clip/layer behind the popup.
+        let mut overlay_consumed = vec![false; events.len()];
+        for (event_idx, event) in events.iter().enumerate() {
             // Track which node was clicked (for dropdown anchoring).
             if let UIEvent::Click { node_id, .. } = event {
                 last_click_node = Some(*node_id);
@@ -99,6 +105,7 @@ impl UIRoot {
             // the event through the single driver. If one consumes it (or a modal
             // captures it), lower any stashed selection and skip the panels below.
             if self.route_overlay_event(event, &mut actions) {
+                overlay_consumed[event_idx] = true;
                 // D6/section 3.4 (`docs/DRAG_CAPTURE_DESIGN.md`): the consuming overlay
                 // may have just armed a precision-drag surface (audio panel's
                 // band divider) on this exact PointerDown — request zero-
@@ -210,7 +217,7 @@ impl UIRoot {
         // overlay's `gesture_ended` hook. The `drag_owner` clear is deferred
         // to the END of the terminal iteration — past the stash read — so the
         // timeline's terminal `DragEnd` is still routed to it (BUG-075).
-        for event in &events {
+        for (event_idx, event) in events.iter().enumerate() {
             match event {
                 UIEvent::DragBegin { node_id, origin, .. } => {
                     // Effect card drag handle — try to start card reorder drag
@@ -274,8 +281,10 @@ impl UIRoot {
                 _ => {}
             }
 
-            // Stash for `InteractionOverlay` (tracks-area events).
-            let stash = self.should_stash_for_tracks(event);
+            // Stash for `InteractionOverlay` (tracks-area events) — but never
+            // an event an overlay already consumed: a popup floating over the
+            // timeline must not leak its clicks to the clips beneath it.
+            let stash = !overlay_consumed[event_idx] && self.should_stash_for_tracks(event);
             if manifold_ui::input::input_trace_enabled()
                 && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
             {

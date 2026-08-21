@@ -470,24 +470,8 @@ impl Primitive for RenderValueOverlay {
 
         let gpu = ctx.gpu_encoder();
 
-        gpu.copy_texture_to_texture(in_tex, out_tex, w, h);
-
-        let quad_count = self.quads.len();
-        if quad_count == 0 { return }
-
-        let font_atlas = self.font_atlas.get_or_insert_with(|| create_font_atlas(gpu.device));
-        let point_sampler = self.font_sampler.get_or_insert_with(|| {
-            gpu.device.create_sampler(&GpuSamplerDesc {
-                min_filter: GpuFilterMode::Nearest,
-                mag_filter: GpuFilterMode::Nearest,
-                ..GpuSamplerDesc::default()
-            })
-        });
-        let quad_buf = self.quad_buf.get_or_insert_with(|| {
-            gpu.device.create_buffer_shared(
-                (MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64,
-            )
-        });
+        // COMPILE_CONTRACT_DESIGN P2: create pipeline BEFORE early return
+        // so warmup creates it even with zero detections.
         let pipeline = self.render_pipeline.get_or_insert_with(|| {
             let blend = GpuBlendState {
                 src_factor: GpuBlendFactor::One,
@@ -504,6 +488,25 @@ impl Primitive for RenderValueOverlay {
                 GpuTextureFormat::Rgba16Float,
                 Some(blend),
                 "node.value_overlay",
+            )
+        });
+
+        gpu.copy_texture_to_texture(in_tex, out_tex, w, h);
+
+        let quad_count = self.quads.len();
+        if quad_count == 0 { return }
+
+        let font_atlas = self.font_atlas.get_or_insert_with(|| create_font_atlas(gpu.device));
+        let point_sampler = self.font_sampler.get_or_insert_with(|| {
+            gpu.device.create_sampler(&GpuSamplerDesc {
+                min_filter: GpuFilterMode::Nearest,
+                mag_filter: GpuFilterMode::Nearest,
+                ..GpuSamplerDesc::default()
+            })
+        });
+        let quad_buf = self.quad_buf.get_or_insert_with(|| {
+            gpu.device.create_buffer_shared(
+                (MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64,
             )
         });
 

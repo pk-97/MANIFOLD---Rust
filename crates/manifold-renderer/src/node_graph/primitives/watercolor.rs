@@ -185,6 +185,53 @@ impl Watercolor {
             self.sampler = Some(device.create_sampler(&GpuSamplerDesc::default()));
         }
     }
+
+    /// COMPILE_CONTRACT_DESIGN P2: prewarm all seven watercolor pipelines
+    /// at startup so the first watercolor frame is a cache hit.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "1u")],
+            "node.watercolor.max",
+        );
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "2u")],
+            "node.watercolor.flow_gen",
+        );
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "3u")],
+            "node.watercolor.displace",
+        );
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "4u")],
+            "node.watercolor.blur",
+        );
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "5u")],
+            "node.watercolor.slope",
+        );
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "6u")],
+            "node.watercolor.luma",
+        );
+        device.create_specialized_compute_pipeline(
+            WATERCOLOR_WGSL,
+            "cs_main",
+            &[("uniforms.mode", "7u")],
+            "node.watercolor.blend",
+        );
+    }
 }
 
 impl Default for Watercolor {

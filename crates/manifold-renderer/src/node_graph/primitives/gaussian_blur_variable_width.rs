@@ -215,6 +215,32 @@ impl Primitive for GaussianBlurVariableWidth {
     }
 }
 
+impl GaussianBlurVariableWidth {
+    /// COMPILE_CONTRACT_DESIGN P2: prewarm all 6 quality×weighting variants
+    /// at startup. quality ∈ {0, 1, 2}, weighting_mode ∈ {0, 1}.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        for quality in 0u32..3 {
+            for weighting in 0u32..2 {
+                let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.variable_blur standalone codegen");
+                let quality_str = match quality {
+                    0 => "0u",
+                    2 => "2u",
+                    _ => "1u",
+                };
+                let weighting_str = if weighting == 1 { "1u" } else { "0u" };
+                let label = format!("node.variable_blur.q{quality}.w{weighting}");
+                device.create_specialized_compute_pipeline(
+                    &wgsl,
+                    crate::node_graph::freeze::codegen::ENTRY,
+                    &[("QUALITY_LEVEL", quality_str), ("WEIGHTING_MODE", weighting_str)],
+                    &label,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

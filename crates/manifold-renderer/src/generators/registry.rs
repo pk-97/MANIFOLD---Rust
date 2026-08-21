@@ -98,6 +98,19 @@ impl GeneratorRegistry {
         // exempt from the codegen path.
         SeedParticlesFromTexture::prewarm_pipelines(device);
 
+        // COMPILE_CONTRACT_DESIGN P2: watercolor's seven specialized pipelines
+        // are asset-independent, fixed-source. Warm them at startup.
+        crate::node_graph::primitives::watercolor::Watercolor::prewarm_pipelines(device);
+        // COMPILE_CONTRACT_DESIGN P2: hdri_source's stretch-blit pipeline is
+        // fixed-source, warmed when the first HDRI decode lands. Warm it here.
+        crate::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(device);
+        // COMPILE_CONTRACT_DESIGN P2: variable_blur's 6 quality×weighting variants
+        // are fixed-source, specialized by enum params only. Warm them here.
+        crate::node_graph::primitives::gaussian_blur_variable_width::GaussianBlurVariableWidth::prewarm_pipelines(device);
+        // COMPILE_CONTRACT_DESIGN P2: multi_blend's num_inputs variants (2..8) are
+        // fixed-source, specialized by input count only. Warm them all here.
+        crate::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(device);
+
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
         // preset's *structure* happens to reference (the loop above never
         // calls `run()`) plus RenderScene/GltfTextureSource's two hand-listed
