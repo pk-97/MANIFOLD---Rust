@@ -397,11 +397,20 @@ The P5 residue (BUG-p8oe (warmup-p5-residue-cold-touches): 70 cold touches = 30 
 - **Acceptance demo:** the probe log + audit test report — L2.
 - **Forbidden moves:** any new param-value-driven topology (the class dies here, not just this instance); failing old project/preset files on the removed key; a per-effect exemption list for D15; keeping a runtime alias-skip as part of this phase (steady-state cost of amount-0 dispatches is accepted; if profiling later shows it hurts, a dispatch-level — never topology-level — passthrough is a separate design).
 
+### P7 — Clip-topology chain enumeration (designed 2026-08-21 from the COMPILE_CONTRACT P1 probe)
+
+The last chain-compile class on the Corrosion probe: 5 fused `node.wgsl_compute` kernels at transport start + clip boundaries, compiled for chain topologies warmup never built. D11 pre-rolls each layer's FIRST clip; later clips with different post-fx sets are new topologies. Post-P6, chain topology is pure structure — every clip's post-fx chain is enumerable from the project file at load, so warming them is D4-compliant (enumerate structure, never states) and bounded by unique topology, not clip count (Corrosion: 1496 clips, but few distinct chains).
+
+- **Deliverables:** D17 — the warmup pass walks every clip on every layer, computes each clip's effective chain topology (layer post-fx + clip post-fx, the production `is_compatible` inputs), dedups by topology hash, and builds each unique topology through the production chain-build path. D18 — the fusion quiescence drain (D12) runs after this walk too.
+- **Gate:** Corrosion probe `cold touches during playback: 0` minus the value_overlay (COMPILE_CONTRACT P2's) — i.e. ≤1, then 0 once both land.
+- **Acceptance demo:** the probe log — L2.
+- **Forbidden moves:** rendering every clip (that's state rehearsal — D4 forbids); building chains through anything but the production path; a per-clip budget that silently truncates the walk (budget exhaustion escalates loudly, per D6).
+
 Phasing-completeness: every intro/audit claim maps to a phase — generator pre-build +
 pre-roll + progress + UI bar + detector (P1), post-fx chains + image/LED + edit-time
 adds (P2), disk caches (P3), consolidation + CI gate (P4), clip-active pre-roll +
-fusion quiescence (P5), skip-mode removal (P6). GPU clock ramp: no deliverable —
-pre-roll provides it incidentally. Video: D8, no phase.
+fusion quiescence (P5), skip-mode removal (P6), clip-topology chain enumeration (P7).
+GPU clock ramp: no deliverable — pre-roll provides it incidentally. Video: D8, no phase.
 
 ## 6. Decided — do not reopen
 
