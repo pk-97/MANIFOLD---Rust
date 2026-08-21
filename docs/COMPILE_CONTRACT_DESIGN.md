@@ -1,6 +1,6 @@
 # Compile Contract — nothing compiles during a show
 
-**Status:** PROPOSED — pending K3 adversarial review · 2026-08-21 · k3 (lead)
+**Status:** APPROVED design, not built · 2026-08-21 · k3 (lead) — K3 adversarial review passed (blockers amended, delta-confirmed); Peter's standing approval per session directive
 **Prerequisites:** none (builds on WARMUP_DESIGN P1–P6, all on main)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
@@ -56,9 +56,9 @@ Corrosion probe numbers behind the classifications: post-P6 residue 55 → count
 `value_overlay` at frame ~60. BUG-p8oe (warmup-p5-residue-cold-touches) carries the
 evidence; probe logs at /tmp/p6_probe2.log.
 
-⚠ VERIFY-AT-IMPL: the audit lane's full inventory table (any family missed here —
-plugins, LED, media encode, image loader) goes into the P1 entry state; re-derive
-with `rg -n 'new_compute_pipeline|newComputePipelineStateWithFunction' crates/ -t rust`.
+⚠ VERIFY-AT-IMPL: any family missed here (plugins, LED, media encode, image loader)
+is P2's entry-state check, not P1's — P2's fixed inventory method covers it:
+`rg -n 'new_compute_pipeline|newComputePipelineStateWithFunction' crates/ -t rust`.
 
 ## 2. Decisions
 
@@ -134,12 +134,15 @@ pub struct MetalShadowRayTracer {
 pub struct RtPipelines { /* library handle + six GpuComputePipeline */ }
 ```
 
-The cache extension (D3) lives beside the WGSL cache in `metal/device.rs` —
-`msl_pipeline_cache(source_hash, entry, constants) -> GpuComputePipeline` — and every
-compile helper (`compile_pipeline`, `compile_pipeline_with_constants`, the library
-compile) routes through it AND records `ColdTouchKind::PipelineCompile` on a miss
-(D1's counter coverage). Startup prewarm calls it once for the full RT set — same
-pattern as `render_scene.rs:3293`'s `prewarm_pipelines` registered in
+The cache extension (D3) lives beside the WGSL cache in `metal/device.rs`.
+**`RtPipelines` is the single cache unit, keyed on the MSL source hash** — the six
+PSO entries share one library, so the library is a field of the cache entry, never
+a separate per-PSO compile (a cold populate is one library compile + six PSO
+creations, exactly once per process). Every compile helper (`compile_pipeline`,
+`compile_pipeline_with_constants`, the library compile) routes through it AND
+records `ColdTouchKind::PipelineCompile` on a miss (D1's counter coverage). Startup
+prewarm populates it once for the full RT set — same pattern as
+`render_scene.rs:3293`'s `prewarm_pipelines` registered in
 `GeneratorRegistry::prewarm_all`. Tracer construction becomes pure data assembly; a
 fresh RenderScene rebuilds accels (async, already bounded — RAYTRACING_DESIGN
 section 8.2) and compiles nothing.
