@@ -1,5 +1,4 @@
 === effect:AutoGain node:100 ===
-// @static_param: n1_retention
 // @input_access: src_0 coincident
 struct Params {
     n0_gain: f32,
@@ -404,7 +403,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:ChromaticAberration node:6 ===
-// @static_param: n2_mode
 // @input_access: src_0 gather
 struct Params {
     n0_mode: u32,
@@ -517,11 +515,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:ColorGrade node:9 ===
-// @static_param: n2_saturation
-// @static_param: n2_value
-// @static_param: n5_mode
-// @static_param: n6_max
-// @static_param: n6_min
 // @input_access: src_0 coincident
 struct Params {
     n0_gain: f32,
@@ -670,10 +663,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:DepthOfField node:19 ===
-// @static_param: n0_scale
-// @static_param: n2_offset
-// @static_param: n3_high
-// @static_param: n3_low
 // @input_access: src_0 coincident
 struct Params {
     n0_scale: f32,
@@ -738,10 +727,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:DepthOfField node:20 ===
-// @static_param: n0_intensity
-// @static_param: n1_offset
-// @static_param: n2_max
-// @static_param: n2_min
 // @input_access: src_0 coincident
 struct Params {
     n0_intensity: f32,
@@ -792,28 +777,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:DigitalDrift node:18 ===
-// @static_param: n0_motion
-// @static_param: n0_scanline
-// @static_param: n1_lacunarity
-// @static_param: n1_octaves
-// @static_param: n1_persistence
-// @static_param: n1_scale
-// @static_param: n1_type
-// @static_param: n2_lacunarity
-// @static_param: n2_octaves
-// @static_param: n2_persistence
-// @static_param: n2_scale
-// @static_param: n2_type
-// @static_param: n3_default_a
-// @static_param: n3_default_b
-// @static_param: n3_default_g
-// @static_param: n3_default_r
-// @static_param: n4_offset
-// @static_param: n4_scale
-// @static_param: n5_amount
-// @static_param: n5_mode
-// @static_param: n6_mode
-// @static_param: n6_wrap
 // @input_access: src_0 gather
 struct Params {
     n0_amount: f32,
@@ -1231,10 +1194,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:DigitalDrift node:19 ===
-// @static_param: n0_angle
-// @static_param: n0_falloff
-// @static_param: n0_mode
-// @static_param: n2_mode
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 struct Params {
@@ -1462,9 +1421,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:EdgeStretch node:5 ===
-// @static_param: n1_mode
-// @static_param: n1_wrap
-// @static_param: n2_mode
 // @input_access: src_0 gather
 struct Params {
     n0_width: f32,
@@ -1583,14 +1539,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Glitch node:15 ===
-// @static_param: n0_bands
-// @static_param: n0_motion
-// @static_param: n2_amount
-// @static_param: n2_mode
-// @static_param: n3_mode
-// @static_param: n3_wrap
-// @static_param: n5_high
-// @static_param: n5_low
 // @input_access: src_0 gather
 struct Params {
     n0_amount: f32,
@@ -1807,12 +1755,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Glitch node:16 ===
-// @static_param: n0_angle
-// @static_param: n0_falloff
-// @static_param: n0_mode
-// @static_param: n2_intensity
-// @static_param: n3_amount
-// @static_param: n4_mode
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 // @input_access: src_2 coincident
@@ -1942,7 +1884,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:HighlightBoost node:7 ===
-// @static_param: n2_mode
 // @input_access: src_0 coincident
 struct Params {
     n0_level: f32,
@@ -2038,11 +1979,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Kaleidoscope node:5 ===
-// @static_param: n0_cx
-// @static_param: n0_cy
-// @static_param: n1_mode
-// @static_param: n1_wrap
-// @static_param: n2_mode
 // @input_access: src_0 gather
 struct Params {
     n0_segments: f32,
@@ -2162,9 +2098,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Mirror node:5 ===
-// @static_param: n1_mode
-// @static_param: n1_wrap
-// @static_param: n2_mode
 // @input_access: src_0 gather
 struct Params {
     n0_mode: u32,
@@ -2286,15 +2219,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:QuadMirror node:7 ===
-// @static_param: n0_cx
-// @static_param: n0_cy
-// @static_param: n0_scale_x
-// @static_param: n0_scale_y
-// @static_param: n2_offset
-// @static_param: n2_scale
-// @static_param: n3_mode
-// @static_param: n3_wrap
-// @static_param: n4_mode
 // @input_access: src_0 gather
 struct Params {
     n0_cx: f32,
@@ -2423,14 +2347,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:StylizedFeedback node:7 ===
-// @static_param: n0_translate_x
-// @static_param: n0_translate_y
-// @static_param: n2_shape
-// @static_param: n2_size
-// @static_param: n2_softness
-// @static_param: n2_strength
-// @static_param: n3_amount
-// @static_param: n3_mode
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 struct Params {
@@ -2582,28 +2498,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:VoronoiPrism node:16 ===
-// @static_param: n0_direction
-// @static_param: n10_mode
-// @static_param: n1_jitter
-// @static_param: n1_offset_x
-// @static_param: n1_offset_y
-// @static_param: n1_out_scale
-// @static_param: n2_mode
-// @static_param: n2_seed_x
-// @static_param: n2_seed_y
-// @static_param: n3_offset
-// @static_param: n3_scale
-// @static_param: n4_amount
-// @static_param: n4_mode
-// @static_param: n5_mode
-// @static_param: n5_wrap
-// @static_param: n6_mode
-// @static_param: n6_seed_x
-// @static_param: n6_seed_y
-// @static_param: n7_high
-// @static_param: n7_low
-// @static_param: n9_amount
-// @static_param: n9_mode
 // @input_access: src_0 gather
 struct Params {
     n0_width: f32,
@@ -2897,8 +2791,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Watercolor node:17 ===
-// @static_param: n1_amount
-// @static_param: n1_mode
 // @input_access: src_0 coincident
 // @input_access: src_1 coincident
 struct Params {
@@ -2986,11 +2878,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Watercolor node:18 ===
-// @static_param: n0_resolution
-// @static_param: n0_warp_scale
-// @static_param: n0_z_scale
-// @static_param: n1_offset
-// @static_param: n1_scale
 struct Params {
     n0_time: f32,
     n0_z_scale: f32,
@@ -3135,12 +3022,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Watercolor node:19 ===
-// @static_param: n0_address_mode
-// @static_param: n0_axis
-// @static_param: n0_kernel_size
-// @static_param: n0_radius_mode
-// @static_param: n0_step
-// @static_param: n1_bias
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 struct Params {
@@ -3382,16 +3263,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:Watercolor node:20 ===
-// @static_param: n0_address_mode
-// @static_param: n0_axis
-// @static_param: n0_kernel_size
-// @static_param: n0_radius
-// @static_param: n0_radius_mode
-// @static_param: n0_step
-// @static_param: n1_amount
-// @static_param: n2_max
-// @static_param: n2_min
-// @static_param: n3_mode
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 // @input_access: src_2 coincident
@@ -3685,38 +3556,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:Cymatics node:45 ===
-// @static_param: n1_a
-// @static_param: n1_b
-// @static_param: n1_c
-// @static_param: n1_freq_scale
-// @static_param: n1_time
-// @static_param: n1_time_scale
-// @static_param: n2_a
-// @static_param: n2_b
-// @static_param: n2_c
-// @static_param: n2_freq_scale
-// @static_param: n2_time
-// @static_param: n2_time_scale
-// @static_param: n3_amount
-// @static_param: n3_mode
-// @static_param: n4_a
-// @static_param: n4_b
-// @static_param: n4_c
-// @static_param: n4_freq_scale
-// @static_param: n4_time
-// @static_param: n4_time_scale
-// @static_param: n5_a
-// @static_param: n5_b
-// @static_param: n5_c
-// @static_param: n5_freq_scale
-// @static_param: n5_time
-// @static_param: n5_time_scale
-// @static_param: n6_amount
-// @static_param: n6_mode
-// @static_param: n7_amount
-// @static_param: n7_mode
-// @static_param: n9_amount
-// @static_param: n9_mode
 struct Params {
     n1_a: f32,
     n1_b: f32,
@@ -4693,10 +4532,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 === generator:FluidSim2D node:58 ===
-// @static_param: n0_rotation
-// @static_param: n0_translate_x
-// @static_param: n0_translate_y
-// @static_param: n1_curve
 // @input_access: src_0 gather
 struct Params {
     n0_translate_x: f32,
@@ -5497,10 +5332,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 === generator:FluidSim3D node:95 ===
-// @static_param: n0_rotation
-// @static_param: n0_translate_x
-// @static_param: n0_translate_y
-// @static_param: n1_curve
 // @input_access: src_0 gather
 struct Params {
     n0_translate_x: f32,
@@ -5573,11 +5404,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:Lightning node:62 ===
-// @static_param: n0_offset
-// @static_param: n1_amount
-// @static_param: n1_mode
-// @static_param: n2_amount
-// @static_param: n2_mode
 // @input_access: src_0 coincident
 // @input_access: src_1 coincident
 // @input_access: src_2 coincident
@@ -5691,19 +5517,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:Lightning node:63 ===
-// @static_param: n0_address_mode
-// @static_param: n0_axis
-// @static_param: n0_kernel_size
-// @static_param: n0_radius
-// @static_param: n0_radius_mode
-// @static_param: n0_step
-// @static_param: n1_amount
-// @static_param: n1_mode
-// @static_param: n2_mode
-// @static_param: n3_contrast
-// @static_param: n3_curve
-// @static_param: n3_intensity
-// @static_param: n4_alpha
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 struct Params {
@@ -6010,12 +5823,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:MetallicGlass node:44 ===
-// @static_param: n0_output_channel
-// @static_param: n1_offset
-// @static_param: n1_scale
-// @static_param: n2_amount
-// @static_param: n2_mode
-// @static_param: n3_mode
 // @input_access: src_0 coincident
 struct Params {
     n0_scale_x: f32,
@@ -6217,20 +6024,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:MetallicGlass node:45 ===
-// @static_param: n0_address_mode
-// @static_param: n0_axis
-// @static_param: n0_kernel_size
-// @static_param: n0_radius
-// @static_param: n0_radius_mode
-// @static_param: n0_step
-// @static_param: n1_weights_x
-// @static_param: n1_weights_y
-// @static_param: n1_weights_z
-// @static_param: n2_gamma
-// @static_param: n2_hi
-// @static_param: n2_lo
-// @static_param: n2_offset
-// @static_param: n2_scale
 // @input_access: src_0 gather
 struct Params {
     n0_kernel_size: u32,
@@ -6472,8 +6265,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:MetallicGlass node:46 ===
-// @static_param: n0_amount
-// @static_param: n0_mode
 // @input_access: src_0 coincident
 // @input_access: src_1 coincident
 struct Params {
@@ -6563,9 +6354,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:MetallicGlass node:47 ===
-// @static_param: n1_weights_x
-// @static_param: n1_weights_y
-// @static_param: n1_weights_z
 // @input_access: src_0 gather
 struct Params {
     n0_angle: f32,
@@ -6617,34 +6405,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:MetallicGlass node:48 ===
-// @static_param: n0_bias
-// @static_param: n0_k0
-// @static_param: n0_k1
-// @static_param: n0_k2
-// @static_param: n0_k3
-// @static_param: n0_k4
-// @static_param: n0_k5
-// @static_param: n0_k6
-// @static_param: n0_k7
-// @static_param: n0_k8
-// @static_param: n0_normalise
-// @static_param: n1_bias
-// @static_param: n1_k0
-// @static_param: n1_k1
-// @static_param: n1_k2
-// @static_param: n1_k3
-// @static_param: n1_k4
-// @static_param: n1_k5
-// @static_param: n1_k6
-// @static_param: n1_k7
-// @static_param: n1_k8
-// @static_param: n1_normalise
-// @static_param: n2_default_a
-// @static_param: n2_default_b
-// @static_param: n2_default_g
-// @static_param: n2_default_r
-// @static_param: n5_max
-// @static_param: n5_min
 // @input_access: src_0 gather
 struct Params {
     n0_k0: f32,
@@ -6794,9 +6554,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:MetallicGlass node:49 ===
-// @static_param: n0_amount
-// @static_param: n0_mode
-// @static_param: n1_scale
 // @input_access: src_0 coincident
 // @input_access: src_1 coincident
 struct Params {
@@ -6947,33 +6704,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:OilyFluid node:52 ===
-// @static_param: n0_offset_x
-// @static_param: n0_offset_y
-// @static_param: n0_output_channel
-// @static_param: n0_scale_x
-// @static_param: n0_scale_y
-// @static_param: n10_amount
-// @static_param: n10_mode
-// @static_param: n12_angle
-// @static_param: n13_amount
-// @static_param: n13_mode
-// @static_param: n14_boundary
-// @static_param: n16_amount
-// @static_param: n16_mode
-// @static_param: n1_offset_x
-// @static_param: n1_offset_y
-// @static_param: n1_output_channel
-// @static_param: n1_scale_x
-// @static_param: n1_scale_y
-// @static_param: n2_amount
-// @static_param: n2_mode
-// @static_param: n4_boundary
-// @static_param: n6_channel
-// @static_param: n6_scale_mode
-// @static_param: n6_wrap_mode
-// @static_param: n8_channel
-// @static_param: n8_scale_mode
-// @static_param: n8_wrap_mode
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 // @input_access: src_2 gather_texel
@@ -7383,47 +7113,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:OilyFluid node:53 ===
-// @static_param: n0_aspect
-// @static_param: n0_coord_space
-// @static_param: n1_color_x_high_w
-// @static_param: n1_color_x_high_x
-// @static_param: n1_color_x_high_y
-// @static_param: n1_color_x_high_z
-// @static_param: n1_color_x_low_w
-// @static_param: n1_color_x_low_x
-// @static_param: n1_color_x_low_y
-// @static_param: n1_color_x_low_z
-// @static_param: n1_color_y_high_w
-// @static_param: n1_color_y_high_x
-// @static_param: n1_color_y_high_y
-// @static_param: n1_color_y_high_z
-// @static_param: n1_color_y_low_w
-// @static_param: n1_color_y_low_x
-// @static_param: n1_color_y_low_y
-// @static_param: n1_color_y_low_z
-// @static_param: n2_color_w
-// @static_param: n2_color_x
-// @static_param: n2_color_y
-// @static_param: n2_color_z
-// @static_param: n2_power
-// @static_param: n2_view_x
-// @static_param: n2_view_y
-// @static_param: n2_view_z
-// @static_param: n3_amount
-// @static_param: n3_mode
-// @static_param: n4_color_w
-// @static_param: n4_color_x
-// @static_param: n4_color_y
-// @static_param: n4_color_z
-// @static_param: n4_light_x
-// @static_param: n4_light_y
-// @static_param: n4_light_z
-// @static_param: n4_power
-// @static_param: n4_view_x
-// @static_param: n4_view_y
-// @static_param: n4_view_z
-// @static_param: n5_amount
-// @static_param: n5_mode
 // @input_access: src_0 gather_texel
 // @precision_critical: src_0
 struct Params {
@@ -7685,13 +7374,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:OilyFluid node:55 ===
-// @static_param: n0_aspect
-// @static_param: n0_coord_space
-// @static_param: n0_z_scale
-// @static_param: n1_ambient
-// @static_param: n1_light_x
-// @static_param: n1_light_y
-// @static_param: n1_light_z
 // @input_access: src_0 gather_texel
 // @precision_critical: src_0
 struct Params {
@@ -7758,10 +7440,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:OilyFluid node:56 ===
-// @static_param: n0_dt
-// @static_param: n0_steps
-// @static_param: n1_high
-// @static_param: n1_low
 // @input_access: src_0 gather
 // @input_access: src_1 gather
 struct Params {
@@ -7833,10 +7511,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:OilyFluid node:57 ===
-// @static_param: n2_saturation
-// @static_param: n2_value
-// @static_param: n4_max
-// @static_param: n4_min
 // @input_access: src_0 coincident
 struct Params {
     n0_gain: f32,
@@ -8073,10 +7747,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:ParticleText node:67 ===
-// @static_param: n0_channel
-// @static_param: n0_scale_mode
-// @static_param: n0_wrap_mode
-// @static_param: n1_angle
 // @input_access: src_0 gather_texel
 // @precision_critical: src_0
 struct Params {
@@ -8410,26 +8080,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 === generator:ParticleText node:69 ===
-// @static_param: n0_rotation
-// @static_param: n0_translate_x
-// @static_param: n0_translate_y
-// @static_param: n1_curve
-// @static_param: n2_row0_w
-// @static_param: n2_row0_x
-// @static_param: n2_row0_y
-// @static_param: n2_row0_z
-// @static_param: n2_row1_w
-// @static_param: n2_row1_x
-// @static_param: n2_row1_y
-// @static_param: n2_row1_z
-// @static_param: n2_row2_w
-// @static_param: n2_row2_x
-// @static_param: n2_row2_y
-// @static_param: n2_row2_z
-// @static_param: n2_row3_w
-// @static_param: n2_row3_x
-// @static_param: n2_row3_y
-// @static_param: n2_row3_z
 // @input_access: src_0 gather
 struct Params {
     n0_translate_x: f32,
@@ -8531,55 +8181,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:StarField node:20 ===
-// @static_param: n0_jitter
-// @static_param: n0_out_scale
-// @static_param: n10_mode
-// @static_param: n11_offset
-// @static_param: n12_row0_w
-// @static_param: n12_row0_x
-// @static_param: n12_row0_y
-// @static_param: n12_row0_z
-// @static_param: n12_row1_w
-// @static_param: n12_row1_x
-// @static_param: n12_row1_y
-// @static_param: n12_row1_z
-// @static_param: n12_row2_w
-// @static_param: n12_row2_x
-// @static_param: n12_row2_y
-// @static_param: n12_row2_z
-// @static_param: n12_row3_w
-// @static_param: n12_row3_x
-// @static_param: n12_row3_y
-// @static_param: n12_row3_z
-// @static_param: n1_row0_w
-// @static_param: n1_row0_x
-// @static_param: n1_row0_y
-// @static_param: n1_row0_z
-// @static_param: n1_row1_w
-// @static_param: n1_row1_x
-// @static_param: n1_row1_y
-// @static_param: n1_row1_z
-// @static_param: n1_row2_w
-// @static_param: n1_row2_x
-// @static_param: n1_row2_y
-// @static_param: n1_row2_z
-// @static_param: n1_row3_w
-// @static_param: n1_row3_x
-// @static_param: n1_row3_y
-// @static_param: n1_row3_z
-// @static_param: n2_high
-// @static_param: n3_offset
-// @static_param: n3_scale
-// @static_param: n4_offset
-// @static_param: n4_scale
-// @static_param: n5_mode
-// @static_param: n5_phase
-// @static_param: n6_offset
-// @static_param: n6_scale
-// @static_param: n7_offset
-// @static_param: n7_scale
-// @static_param: n9_amount
-// @static_param: n9_mode
 struct Params {
     n0_scale: f32,
     n0_offset_x: f32,
@@ -9138,25 +8739,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:StrangeAttractor node:20 ===
-// @static_param: n0_rotation
-// @static_param: n0_translate_x
-// @static_param: n0_translate_y
-// @static_param: n2_row0_w
-// @static_param: n2_row0_x
-// @static_param: n2_row0_y
-// @static_param: n2_row0_z
-// @static_param: n2_row1_w
-// @static_param: n2_row1_x
-// @static_param: n2_row1_y
-// @static_param: n2_row1_z
-// @static_param: n2_row2_w
-// @static_param: n2_row2_x
-// @static_param: n2_row2_y
-// @static_param: n2_row2_z
-// @static_param: n2_row3_w
-// @static_param: n2_row3_x
-// @static_param: n2_row3_y
-// @static_param: n2_row3_z
 // @input_access: src_0 gather
 struct Params {
     n0_translate_x: f32,
