@@ -50,7 +50,7 @@ Everything below is proven doctrine under the old roster. Read it as seat descri
 | Agent-tool `model:` | Actual model | Tier |
 |---|---|---|
 | `"fable"` | Kimi K3 | judgment lane (rare — lead-tier work the lead delegates whole) |
-| `"opus"` | GLM-5.2 (`zai`) | **Strong lane** — escalation when the weak lane fails or the work needs stronger judgment within a decided brief. On ZAI since 2026-08-21 (Peter: burn the resetting ZAI plan, lapses 2026-08-24, not renewed — then revert to `kimi-for-coding`). Lane label `glm52-*` |
+| `"opus"` | GLM-5.3 (`zai`) | **Strong lane** — escalation when the weak lane fails or the work needs stronger judgment within a decided brief. On ZAI since 2026-08-21 (Peter: burn the resetting ZAI plan, lapses 2026-08-24, not renewed — then revert to `kimi-for-coding`). Lane label `glm52-*` |
 | `"sonnet"` | GLM-4.7 (`zai`) | **classifier slot — never spawn lanes on it.** The harness auto-mode permission classifier resolves off it (PERMISSION_BOUNDARY.md section 2 (Which model runs it)). Moved back to GLM 2026-08-21 (Peter: spend the ZAI plan before it lapses 2026-08-24); on Kimi 2026-08-20→21 |
 | `"haiku"` | GLM-4.7 (`zai`) | **Weak lane** — mechanical executor, the bulk tier. On ZAI since 2026-08-21, same 2026-08-24 lapse-revert as opus. Lane label `glm47-*` |
 
