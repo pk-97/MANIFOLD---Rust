@@ -57,6 +57,8 @@ use objc2_metal::{
     MTLResourceUsage, MTLSize,
 };
 
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
+
 use super::device::GpuDevice;
 use super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::{GpuEncoder, Slot, SlotKind, SlotMap};
@@ -4595,6 +4597,10 @@ fn compile_pipeline_with_constants(
     slot_map: SlotMap,
     constants: Option<&MTLFunctionConstantValues>,
 ) -> GpuComputePipeline {
+    // COMPILE_CONTRACT_DESIGN D1: the MSL path records cold touches too —
+    // the WGSL-path-only counter left this whole file invisible to the
+    // no-compiles-during-playback gate.
+    record_cold_touch(ColdTouchKind::PipelineCompile);
     let name = NSString::from_str(entry);
     let func = match constants {
         Some(cv) => library
@@ -4905,8 +4911,27 @@ pub struct MetalShadowRayTracer {
     dummy_alpha_tex: GpuTexture,
 }
 
-impl MetalShadowRayTracer {
-    pub fn new(device: &GpuDevice) -> Self {
+/// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
+/// one MSL library + seven PSOs, compiled once per process behind
+/// [`GpuDevice::rt_pipelines`] (OnceLock; the MSL source is a per-build
+/// constant, so the OnceLock IS the source-hash cache). Tracer instances
+/// own data (accels, buffers, textures), never code.
+#[derive(Clone)]
+pub struct RtPipelines {
+    pub trace_pipeline_binary: GpuComputePipeline,
+    pub trace_pipeline_translucent: GpuComputePipeline,
+    pub upsample_pipeline: GpuComputePipeline,
+    pub atrous_pipeline: GpuComputePipeline,
+    pub accumulate_pipeline: GpuComputePipeline,
+    pub debug_fetch_normal_pipeline: GpuComputePipeline,
+    pub debug_clamp_refl_history_pipeline: GpuComputePipeline,
+}
+
+impl RtPipelines {
+    pub(crate) fn compile(device: &GpuDevice) -> Self {
+        // One MSL library compile per populate (the PSO compiles record
+        // themselves inside compile_pipeline_with_constants).
+        record_cold_touch(ColdTouchKind::PipelineCompile);
         let opts = MTLCompileOptions::init(MTLCompileOptions::alloc());
         // Ray tracing needs the default (latest) language version, not
         // the WGSL path's pinned older version — matches the prototype's
@@ -5135,16 +5160,40 @@ impl MetalShadowRayTracer {
             ]),
         );
 
-        let dummy_alpha_tex = create_dummy_alpha_texture(device);
-
         Self {
-            trace_pipeline_translucent,
             trace_pipeline_binary,
+            trace_pipeline_translucent,
             upsample_pipeline,
             atrous_pipeline,
             accumulate_pipeline,
             debug_fetch_normal_pipeline,
             debug_clamp_refl_history_pipeline,
+        }
+    }
+}
+
+impl MetalShadowRayTracer {
+    /// Populate the device-global RT pipeline set at startup
+    /// (COMPILE_CONTRACT_DESIGN P1) — after this, tracer construction
+    /// compiles nothing.
+    pub fn prewarm(device: &GpuDevice) {
+        device.rt_pipelines();
+    }
+
+    pub fn new(device: &GpuDevice) -> Self {
+        // COMPILE_CONTRACT_DESIGN D3: code is device-global (compiled once
+        // per process); the tracer instance owns only data.
+        let p = device.rt_pipelines();
+        let dummy_alpha_tex = create_dummy_alpha_texture(device);
+
+        Self {
+            trace_pipeline_translucent: p.trace_pipeline_translucent.clone(),
+            trace_pipeline_binary: p.trace_pipeline_binary.clone(),
+            upsample_pipeline: p.upsample_pipeline.clone(),
+            atrous_pipeline: p.atrous_pipeline.clone(),
+            accumulate_pipeline: p.accumulate_pipeline.clone(),
+            debug_fetch_normal_pipeline: p.debug_fetch_normal_pipeline.clone(),
+            debug_clamp_refl_history_pipeline: p.debug_clamp_refl_history_pipeline.clone(),
             dummy_alpha_tex,
         }
     }
@@ -5903,6 +5952,8 @@ impl UploadBytes for GpuBuffer {
 #[cfg(test)]
 mod tests {
     use super::blas_geometry_opaque;
+    use super::{GpuDevice, MetalShadowRayTracer};
+    use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
 
     /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks
     /// translucency — the hardware fast path is kept only for objects the
@@ -5913,5 +5964,22 @@ mod tests {
         assert!(!blas_geometry_opaque(true, false));
         assert!(!blas_geometry_opaque(false, true));
         assert!(!blas_geometry_opaque(true, true));
+    }
+
+    /// COMPILE_CONTRACT_DESIGN INV2: code is device-global — a second tracer
+    /// construction (the fresh-RenderScene trigger: chain rebuild/eviction)
+    /// compiles nothing. Pre-hoist this failed: each `new` compiled the MSL
+    /// library + 7 PSOs.
+    #[test]
+    fn tracer_reconstruction_compiles_nothing() {
+        let device = GpuDevice::new();
+        let _t1 = MetalShadowRayTracer::new(&device);
+        let before = cold_touch_count(ColdTouchKind::PipelineCompile);
+        let _t2 = MetalShadowRayTracer::new(&device);
+        assert_eq!(
+            before,
+            cold_touch_count(ColdTouchKind::PipelineCompile),
+            "second tracer construction compiled pipelines — PSOs must be device-global"
+        );
     }
 }

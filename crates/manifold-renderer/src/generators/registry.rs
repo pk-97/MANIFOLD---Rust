@@ -83,6 +83,10 @@ impl GeneratorRegistry {
         // with MSAA depth render-pipeline variants keyed on material kind /
         // blend / velocity+AO+denoise auxiliary outputs.
         RenderScene::prewarm_pipelines(device);
+        // COMPILE_CONTRACT_DESIGN P1: the RT shadow-ray pipeline set (MSL
+        // library + seven PSOs) is device-global code — populate it here so
+        // even the first RenderScene construction compiles nothing.
+        manifold_gpu::raytrace::MetalShadowRayTracer::prewarm(device);
         // `node.gltf_texture_source` uses `primitive!` for ports/params but its
         // runtime blit is a hand-written `create_compute_pipeline` kernel (no
         // `wgsl_body`), so the atom sweep skips it.

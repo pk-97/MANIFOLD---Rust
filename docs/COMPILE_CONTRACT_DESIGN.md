@@ -221,6 +221,12 @@ of states is deleted as a strategy, not improved.
   residue escalated to Peter); INV2 test green — and it must fail on pre-hoist code
   (a gate that never saw red proves nothing); `scripts/landing_gate.py` green.
 - **Acceptance demo:** the probe log — L2.
+- **Result (2026-08-21):** landed. Probe count unchanged at 6 — expected: the
+  pre-P1 counter was blind to MSL, so the hoist's win is structural (zero MSL
+  compiles during playback with the counter now watching) not numeric. The 6
+  decompose: 5 fused chain kernels for unwarmed clip topologies → WARMUP_DESIGN
+  P7 (clip-topology enumeration — structure, D4-compliant); 1 value_overlay → P2.
+  INV2 red→green: 8 compiles on second tracer construction pre-hoist, 0 post.
 - **Forbidden moves:** a second pipeline cache beside the device one; async compile
   with fallback; deleting the translucency two-variant scheme (both variants
   precompile — that is the compliant shape, keep it); warming later clips "just in
