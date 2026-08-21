@@ -1,6 +1,7 @@
 # Compile Contract — nothing compiles during a show
 
 **Status:** SHIPPED P1–P3 2026-08-21 · k3 (lead) — RT pipelines device-global; data-gated/lazy-bounded pipelines compile at install; `@static_param` specialization deleted (frame cost within noise). Corrosion probe with WARMUP P7: cold touches during playback 0 — the contract holds on the canonical project.
+Lifecycle: contract — D1–D5 (section 6, Decided) bind all future GPU/pipeline work; cited by ADDING_PRIMITIVES (authoring rule), FREEZE_COMPILER_MAP, WARMUP_DESIGN, SCENE_FX_DESIGN, DEPTH_RELIGHT_DESIGN.
 **Prerequisites:** none (builds on WARMUP_DESIGN P1–P6, all on main)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
