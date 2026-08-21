@@ -298,6 +298,20 @@ inventory::submit! {
     }
 }
 
+impl MultiBlend {
+    /// COMPILE_CONTRACT_DESIGN P2: prewarm all num_inputs variants (2..MAX_INPUTS)
+    /// at startup. Each variant compiles a specialized shader for that exact count.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        for k in 2..=MAX_INPUTS {
+            device.create_compute_pipeline(
+                &Self::shader_for(k),
+                "cs_main",
+                &format!("node.multi_blend.{k}inputs"),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,20 +380,6 @@ mod gpu_tests {
         for k in 1..=MAX_INPUTS {
             let src = MultiBlend::shader_for(k);
             let _ = device.create_compute_pipeline(&src, "cs_main", "node.multi_blend test");
-        }
-    }
-}
-
-impl MultiBlend {
-    /// COMPILE_CONTRACT_DESIGN P2: prewarm all num_inputs variants (2..MAX_INPUTS)
-    /// at startup. Each variant compiles a specialized shader for that exact count.
-    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
-        for k in 2..=MAX_INPUTS {
-            device.create_compute_pipeline(
-                &Self::shader_for(k),
-                "cs_main",
-                &format!("node.multi_blend.{k}inputs"),
-            );
         }
     }
 }
