@@ -3527,6 +3527,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.compositor.prewarm_layer_chains(layer, budget, device)
     }
 
+    /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
+    /// topology (layer post-fx + clip post-fx, the production
+    /// `is_compatible` inputs) through the production chain-build path, so
+    /// later clips with different post-fx sets don't build — and compile
+    /// their fused kernels — on stage at clip boundaries. Delegates to the
+    /// compositor.
+    pub fn prewarm_clip_chain_topologies(
+        &mut self,
+        project: &manifold_core::project::Project,
+        budget: manifold_core::WarmupBudget,
+    ) -> manifold_core::WarmupOutcome {
+        let device = self
+            .native_device
+            .as_ref()
+            .expect("native device required for clip-topology warmup");
+        self.compositor
+            .prewarm_clip_chain_topologies(project, budget, device)
+    }
+
     /// Warm up LED tap / composite resources when the loaded project routes
     /// layers to LEDs. Delegates to the compositor; no-op for compositors
     /// without an LED path.

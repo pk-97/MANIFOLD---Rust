@@ -343,6 +343,19 @@ pub trait Compositor: Send {
         WarmupOutcome::Quiescent
     }
 
+    /// Warm up every unique per-clip chain topology (WARMUP_DESIGN P7 D17)
+    /// so clips whose effective post-fx set differs from their layer's
+    /// first clip don't build — and compile fused kernels — on stage at
+    /// clip boundaries. Default no-op for compositors without effect chains.
+    fn prewarm_clip_chain_topologies(
+        &mut self,
+        _project: &Project,
+        _budget: WarmupBudget,
+        _device: &manifold_gpu::GpuDevice,
+    ) -> WarmupOutcome {
+        WarmupOutcome::Quiescent
+    }
+
     /// Warm up every group-level effect chain that carries enabled effects so
     /// the first group fold doesn't pay chain construction on stage. Default
     /// no-op for compositors without group effect chains.

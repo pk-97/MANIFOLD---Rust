@@ -316,6 +316,69 @@ impl ContentThread {
             self.content_pipeline.prewarm_led_resources(p);
         }
 
+        // P7 D17: clip-topology chain enumeration. The per-layer loop above
+        // warmed each layer's first clip's chain (D11); any other clip whose
+        // effective post-fx set (layer + clip) differs is a topology warmup
+        // never built — it would build, and compile its fused kernels, on
+        // stage at that clip's boundary. Walk every clip, dedup by the
+        // production topology hash, and build each unique topology through
+        // the production chain-build path.
+        // D18: the fusion quiescence drain (D12) runs after this walk too —
+        // topologies that built unfused get their fused views compiled and
+        // re-built inside the warm, not swapped in on stage.
+        if let Some(p) = self.engine.project() {
+            let mut clip_walk_loops = 0;
+            while start.elapsed() < budget.total && clip_walk_loops < 3 {
+                clip_walk_loops += 1;
+                match self.content_pipeline.prewarm_clip_chain_topologies(p, budget) {
+                    manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                        log::warn!(
+                            "[ContentThread] Warmup clip-topology budget exhausted ({cap:?}) \
+                             after {elapsed:.1?}; later clips' chains may first-touch once at play"
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_core::WarmupOutcome::InstallFailed => {
+                        log::error!(
+                            "[ContentThread] Warmup clip-topology install failed; \
+                             that chain topology will be cold on stage"
+                        );
+                        any_install_failed = true;
+                        break;
+                    }
+                    manifold_core::WarmupOutcome::Quiescent => {}
+                }
+
+                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                if pending_after == 0 {
+                    break;
+                }
+                let drain_start = std::time::Instant::now();
+                let mut drain_logged = false;
+                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                    if start.elapsed() >= budget.total {
+                        log::warn!(
+                            "[ContentThread] Warmup clip-topology fusion drain timed out \
+                             after {:.1?}; later clips' chains may swap in fused views \
+                             during playback",
+                            drain_start.elapsed()
+                        );
+                        any_budget_exhausted = true;
+                        break;
+                    }
+                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    if !drain_logged
+                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
+                    {
+                        log::info!("[ContentThread] Waiting for clip-topology fusion drain...");
+                        drain_logged = true;
+                    }
+                }
+            }
+        }
+
         // P5c: warm the master and group effect chains after per-layer chains
         // and the fusion worker have drained, so global chains don't rebuild on
         // the first playback frame. Each pass is followed by a fusion-worker
