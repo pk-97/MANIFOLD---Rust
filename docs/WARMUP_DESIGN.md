@@ -1,6 +1,6 @@
 # Warmup — nothing initializes for the first time on stage
 
-**Status:** IN PROGRESS — P1–P5 + budget fix on main; P6 (skip-mode removal, BUG-p8oe (warmup-p5-residue-cold-touches)) executing on lane/warmup-p6-skip-mode-removal · k3 (lead)
+**Status:** IN PROGRESS — P1–P6 on main (P6 2026-08-21: skip-mode deleted, amount is a value, toggle is structure; Corrosion probe 70 → 55 cold touches); residue is RT/scene-pipeline + clip-boundary rebuilds, NOT skip-mode — BUG-p8oe (warmup-p5-residue-cold-touches) stays open · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
