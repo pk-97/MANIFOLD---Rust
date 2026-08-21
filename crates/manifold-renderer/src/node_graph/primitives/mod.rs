@@ -89,7 +89,7 @@ mod flatten_to_camera_plane;
 mod apply_radial_burst_3d_to_particles;
 mod scatter_particles_camera;
 mod gain;
-mod gaussian_blur_variable_width;
+pub mod gaussian_blur_variable_width;
 mod edges_from_grid_uv;
 mod edges_from_mesh;
 mod edges_from_hypercube;
@@ -145,7 +145,7 @@ mod unlit_material;
 mod phong_material;
 mod pbr_material;
 mod cel_material;
-mod multi_blend;
+pub mod multi_blend;
 mod mesh_ramp;
 mod morph_mesh;
 mod morph_targets_blend;
@@ -256,7 +256,7 @@ mod voronoi_2d;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 pub(crate) mod wgsl_compute;
-mod watercolor;
+pub mod watercolor;
 mod wet_dry_mix;
 
 pub use abs_texture::AbsTexture;

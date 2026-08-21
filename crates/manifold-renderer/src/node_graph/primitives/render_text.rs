@@ -365,6 +365,8 @@ impl Primitive for RenderText {
         };
 
         let gpu = ctx.gpu_encoder();
+        // COMPILE_CONTRACT_DESIGN P2: create pipeline before early return
+        // so warmup creates it even with empty text.
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/render_text.wgsl"),

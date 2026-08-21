@@ -310,6 +310,24 @@ impl Primitive for BlobDetectFfi {
         let capacity = (out_buf.size / blob_size) as u32;
 
         let gpu = ctx.gpu_encoder();
+
+        // COMPILE_CONTRACT_DESIGN P2: create pipelines AFTER gpu_encoder is available
+        // but BEFORE any early returns so warmup creates them even with zero blobs.
+        if self.upload_pipeline.is_none() {
+            self.upload_pipeline = Some(gpu.device.create_compute_pipeline(
+                include_str!("shaders/blob_detect_ffi_upload.wgsl"),
+                "cs_main",
+                "node.blob_tracker.upload",
+            ));
+        }
+        if self.downsample_pipeline.is_none() {
+            self.downsample_pipeline = Some(gpu.device.create_compute_pipeline(
+                include_str!("shaders/blob_detect_ffi_downsample.wgsl"),
+                "cs_main",
+                "node.blob_tracker.downsample",
+            ));
+        }
+
         self.ensure_blob_worker();
         self.ensure_blob_state(gpu.device, source.width, source.height, analysis_max_dim);
 
@@ -349,13 +367,7 @@ impl Primitive for BlobDetectFfi {
                 // downsample fully overwrites the staging and submit copies it
                 // into its own buffer, so reuse across cadences is safe (a new
                 // submit only runs once the prior readback completed).
-                let pipeline = self.downsample_pipeline.get_or_insert_with(|| {
-                    gpu.device.create_compute_pipeline(
-                        include_str!("shaders/blob_detect_ffi_downsample.wgsl"),
-                        "cs_main",
-                        "node.blob_tracker.downsample",
-                    )
-                });
+                let pipeline = self.downsample_pipeline.as_ref().expect("downsample pipeline created earlier in this run");
                 let sampler = self.downsample_sampler.get_or_insert_with(|| {
                     gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default())
                 });
@@ -397,13 +409,7 @@ impl Primitive for BlobDetectFfi {
             _pad1: 0,
         };
 
-        let pipeline = self.upload_pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/blob_detect_ffi_upload.wgsl"),
-                "cs_main",
-                "node.blob_tracker.upload",
-            )
-        });
+        let pipeline = self.upload_pipeline.as_ref().expect("upload pipeline created earlier in this run");
 
         gpu.native_enc.dispatch_compute(
             pipeline,

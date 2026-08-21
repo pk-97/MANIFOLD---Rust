@@ -327,6 +327,10 @@ impl Primitive for HdriSource {
             ctx.mark_outputs_unchanged();
         } else {
             let gpu = ctx.gpu_encoder();
+            // COMPILE_CONTRACT_DESIGN P2: prewarmed at startup, so this is a
+            // device-cache hit in production — the get_or_create stays because
+            // test harnesses and headless tools never run the startup prewarm.
+            // A true cold compile here is recorded by the cold-touch counter.
             let pipeline = self.pipeline.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(
                     include_str!("shaders/hdri_source_blit.wgsl"),
