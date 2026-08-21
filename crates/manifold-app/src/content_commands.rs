@@ -111,11 +111,6 @@ impl ContentThread {
         let mut any_budget_exhausted = false;
         let mut any_install_failed = false;
 
-        // Warmup is the boundary where cold touches are *expected*. Reset the
-        // detector so any first-touch cost it triggers is not counted against
-        // the subsequent playback sample window.
-        manifold_core::cold_touch::reset_cold_touch_counts();
-
         // D12: wait for the chain-fusion worker queue to drain BEFORE the
         // per-layer chain pre-roll, so fused segment / per-card view swap-ins
         // happen during warmup instead of on stage. The pending maps live on
@@ -439,6 +434,11 @@ impl ContentThread {
             status,
             start.elapsed()
         );
+
+        // Warmup is the boundary where cold touches are *expected*. Reset the
+        // detector after the pass so only first-touches that happen during the
+        // subsequent playback window are counted against the warm guarantee.
+        manifold_core::cold_touch::reset_cold_touch_counts();
     }
 
     /// Handle a single command. Returns true if Shutdown.
