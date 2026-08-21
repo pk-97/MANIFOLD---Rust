@@ -139,8 +139,7 @@ fn fuse_view_parts(
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
 ) -> Option<LoadedPresetView> {
-    let fused =
-        fuse_canonical_def_masked(canonical_def, registry, region_mask, &binding_targets(bindings))?;
+    let fused = fuse_canonical_def_masked(canonical_def, registry, region_mask)?;
     // Node ids that survive the rewrite (boundaries + the fused nodes): a binding
     // targeting one of these is left as-is; one targeting a fused-away member is
     // retargeted; anything else strands a slider, so refuse to fuse.
@@ -1068,24 +1067,7 @@ pub(crate) fn compile_segment_view(
         return None;
     }
 
-    // Binding targets across the segment, namespaced to match `concat`'s
-    // `c{i}.`-prefixed node ids. Each card's outer-card bindings are the live
-    // performance surface, so the static-param baker must exclude them here too.
-    let bound_targets: AHashSet<(String, String)> = cards
-        .iter()
-        .enumerate()
-        .flat_map(|(ci, (_, view))| {
-            let prefix = super::segment::card_prefix(ci);
-            view.bindings.iter().filter_map(move |b| match &b.target {
-                crate::node_graph::param_binding::ParamTarget::Node { node_id, param } => {
-                    Some((format!("{prefix}{}", node_id.as_str()), param.to_string()))
-                }
-                _ => None,
-            })
-        })
-        .collect();
-
-    let fused = fuse_canonical_def_masked(&concat, registry, None, &bound_targets)?;
+    let fused = fuse_canonical_def_masked(&concat, registry, None)?;
     if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
         return None;
     }
@@ -1194,8 +1176,7 @@ pub(crate) fn fuse_generator_def_masked(
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
 ) -> Option<EffectGraphDef> {
-    let fused =
-        fuse_canonical_def_masked(def, registry, region_mask, &def_binding_targets(def))?;
+    let fused = fuse_canonical_def_masked(def, registry, region_mask)?;
     // Node ids that survive (boundaries + fused nodes) — a binding targeting one
     // is left as-is; one targeting a fused-away member is retargeted; anything
     // else strands, so refuse to fuse (render unfused).
@@ -1532,42 +1513,6 @@ fn resolve_dispatch_count_field(
     field
 }
 
-/// `(node_id, param)` targets of every outer-card binding in a renderer-side
-/// `ParamBinding` slice. These are the LIVE performance surface — sliders,
-/// drivers, Ableton, LFOs, envelopes all write them via `param_values` every
-/// frame — so the fuse must keep them uniform, never bake them static.
-fn binding_targets(bindings: &[ParamBinding]) -> AHashSet<(String, String)> {
-    bindings
-        .iter()
-        .filter_map(|b| match &b.target {
-            crate::node_graph::param_binding::ParamTarget::Node { node_id, param } => {
-                Some((node_id.as_str().to_string(), param.to_string()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// `(node_id, param)` targets carried in a def's own `preset_metadata.bindings`
-/// — how generators (and shipped/edited single-card effect defs) declare their
-/// outer-card bindings. Same live-surface meaning as [`binding_targets`].
-fn def_binding_targets(def: &EffectGraphDef) -> AHashSet<(String, String)> {
-    def.preset_metadata
-        .as_ref()
-        .map(|m| {
-            m.bindings
-                .iter()
-                .filter_map(|b| match &b.target {
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => {
-                        Some((node_id.as_str().to_string(), param.clone()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// Partition `def` into its fusable regions and rewrite it with one fused
 /// `node.wgsl_compute` per region. Returns `None` (leave the card entirely
 /// unfused) when nothing fuses. Conservative throughout: any inability to
@@ -1579,7 +1524,7 @@ pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<FusedDef> {
-    fuse_canonical_def_masked(def, registry, None, &def_binding_targets(def))
+    fuse_canonical_def_masked(def, registry, None)
 }
 
 /// How many fusable regions the canonical def partitions into (after the same
@@ -1603,10 +1548,6 @@ pub(crate) fn fuse_canonical_def_masked(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
-    // Outer-card binding targets `(node_id, param)` — the live performance
-    // surface. A field they drive must never be tagged `@static_param` (baked),
-    // or every dragged/modulated value recompiles the fused kernel.
-    bound_targets: &AHashSet<(String, String)>,
 ) -> Option<FusedDef> {
     // The finder operates on a FLATTENED graph: `partition_regions` refuses any
     // def still carrying a group node (group boundary nodes would fragment every
@@ -1715,8 +1656,6 @@ pub(crate) fn fuse_canonical_def_masked(
         for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
-            // Specialization tokens baked from the def's static params (classify
-            // already gated binding-targeted / control-wired ones).
             // `substituted_body` already returns `Cow<'static, str>` (the
             // `Borrowed` arm is a compile-time WGSL const; the `Owned` arm is
             // a per-fuse-formatted `String`) — own it, no leak needed.
@@ -1896,10 +1835,6 @@ pub(crate) fn fuse_canonical_def_masked(
         let fused_doc = max_id + 1 + i as u32;
         let fused_id = NodeId::new(format!("fused_region_{i}").as_str());
         let mut fused_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
-        // Fields this region exposes to an outer-card binding (live performance
-        // surface). Excluded from `@static_param` below so a dragged/modulated
-        // slider never recompiles the fused kernel.
-        let mut bound_fields: AHashSet<String> = AHashSet::default();
         for (idx, member) in all_members.iter().enumerate() {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
@@ -1958,15 +1893,6 @@ pub(crate) fn fuse_canonical_def_masked(
                     continue;
                 }
 
-                if bound_targets.contains(&(stable.as_str().to_string(), p.name.to_string())) {
-                    bound_fields.insert(field.clone());
-                }
-                // D8/P7: relight template params are live uniforms written per-frame;
-                // they must never be `@static_param`-specialized, or the fused kernel
-                // would bake the default seed value and ignore knob drags.
-                if crate::node_graph::relight::is_relight_node_id(stable.as_str()) {
-                    bound_fields.insert(field.clone());
-                }
                 retarget.insert(
                     (stable.as_str().to_string(), p.name.to_string()),
                     (fused_id.clone(), field.clone()),
@@ -2041,56 +1967,12 @@ pub(crate) fn fuse_canonical_def_masked(
             }
         }
 
-        // STATIC-PARAM SPECIALIZATION (roadmap 4). A texture fused kernel carries
-        // every param as a uniform field, so the compiled kernel keeps a runtime
-        // branch for every mode/quality/count even though most params never move
-        // during a show. Tag each param field that has NO control wire driving it
-        // (graph-internal LFOs + frame-derived uniforms are the only in-graph
-        // dynamic sources, and both land in `control_wires`) with a
-        // `// @static_param:` marker. `node.wgsl_compute` reads the markers and, at
-        // dispatch, bakes those fields' LIVE values into a module-scope `const`
-        // variant so spirv-opt's CCP + DCE strip the dead branches — value-keyed,
-        // with the generic kernel as the permanent fallback (correctness is the
-        // runtime value-key compare, NOT this classification, so a binding written
-        // after the build, or a knob tweak, is always served correctly). Buffer /
-        // particle kernels are out of v1 scope (their uniform also carries derived
-        // counts) — detect them by the `var<storage` they always declare and the
-        // pure-texture kernels never do, and emit no markers there.
+        // Install markers ride the generated kernel only for pure-texture
+        // regions — a buffer / particle kernel (detected by the `var<storage`
+        // it always declares and texture kernels never do) gets none.
         let fused_wgsl = if generated.wgsl.contains("var<storage") {
             generated.wgsl
         } else {
-            let controlled: std::collections::HashSet<&str> = control_wires
-                .iter()
-                .filter(|(doc, ..)| *doc == fused_doc)
-                .map(|(.., field)| field.as_str())
-                .collect();
-            // Frame-time inputs are always dynamic, even when unwired (the fused
-            // kernel recomputes them from the frame clock). Never bake them into
-            // a specialized const variant.
-            let frame_time_fields: AHashSet<String> = all_members
-                .iter()
-                .enumerate()
-                .flat_map(|(idx, _member)| {
-                    let node = &node_keepalive[idx];
-                    node.frame_time_inputs().iter().map(move |&name| {
-                        format!("n{idx}_{name}")
-                    })
-                })
-                .collect();
-            let mut markers = String::new();
-            for field in fused_params.keys() {
-                // Skip in-graph control-wired fields AND outer-card binding
-                // targets: both are dynamic, so baking either thrashes the
-                // pipeline cache on every value change (the slider-drag stutter).
-                // Also skip frame-time fields — they are always live.
-                if !controlled.contains(field.as_str())
-                    && !bound_fields.contains(field.as_str())
-                    && !frame_time_fields.contains(field)
-                {
-                    markers.push_str(&Marker::StaticParam { field: field.clone() }.emit());
-                    markers.push('\n');
-                }
-            }
             // P7/D8 precision propagation: the fused node replaces its members
             // as the CONSUMER of every external texture, so it must report the
             // access and precision-criticality those members declared — else
@@ -2131,6 +2013,7 @@ pub(crate) fn fuse_canonical_def_masked(
                     }
                 }
             }
+            let mut markers = String::new();
             for (e, access) in slot_access.iter().enumerate() {
                 let Some(access) = access else { continue };
                 use crate::node_graph::freeze::classify::InputAccess as IA;
@@ -2460,7 +2343,7 @@ mod tests {
             2
         );
 
-        let half = fuse_canonical_def_masked(&def, &reg, Some(&[true, false]), &def_binding_targets(&def))
+        let half = fuse_canonical_def_masked(&def, &reg, Some(&[true, false]))
             .expect("one enabled region still fuses");
         assert_eq!(
             half.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
@@ -2479,7 +2362,7 @@ mod tests {
         );
 
         assert!(
-            fuse_canonical_def_masked(&def, &reg, Some(&[false, false]), &def_binding_targets(&def)).is_none(),
+            fuse_canonical_def_masked(&def, &reg, Some(&[false, false])).is_none(),
             "all regions masked off = fully unfused = None"
         );
     }
@@ -3160,56 +3043,6 @@ mod tests {
             }
             other => panic!("binding not retargeted to a node: {other:?}"),
         }
-    }
-
-    /// A param an outer-card binding drives (the live performance surface — a
-    /// slider/driver/Ableton/LFO writes it every frame) must NOT be tagged
-    /// `// @static_param` in the fused kernel: baking it bakes the value into a
-    /// `const` variant, so each dragged/modulated value recompiles the kernel
-    /// (the slider-drag render stutter). An unbound, unwired constant param in
-    /// the same region still bakes — that perf win is the whole point of the
-    /// specialization, and a true constant never thrashes.
-    #[test]
-    fn bound_param_rides_uniform_unbound_constant_bakes() {
-        let json = r#"{
-            "version": 1, "name": "FuseGenStatic",
-            "presetMetadata": {
-                "id": "FuseGenStatic", "displayName": "Fuse Gen Static", "category": "Diagnostic",
-                "oscPrefix": "fuse_gen_static",
-                "params": [{ "id": "g", "name": "Gain", "min": 0.0, "max": 4.0, "defaultValue": 2.0 }],
-                "bindings": [{ "id": "g", "label": "Gain", "defaultValue": 2.0,
-                    "target": { "kind": "node", "nodeId": "gain_a", "param": "gain" } }]
-            },
-            "nodes": [
-                { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
-                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-                { "id": 2, "typeId": "node.exposure", "nodeId": "gain_a" },
-                { "id": 3, "typeId": "node.exposure", "nodeId": "gain_b" },
-                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
-            ], "wires": [
-                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
-            ]
-        }"#;
-        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-        let fused = fuse_generator_def(&def, &registry()).expect("the generator fuses");
-        let node = fused
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.wgsl_compute")
-            .expect("a fused wgsl_compute node");
-        let wgsl = node.wgsl_source.as_deref().expect("fused source");
-        // gain_a is member 1 (field n1_gain) and is the binding target → uniform.
-        assert!(
-            !wgsl.contains(&Marker::StaticParam { field: "n1_gain".to_string() }.emit()),
-            "a bound (live) param must never be baked static:\n{wgsl}"
-        );
-        // gain_b is member 2 (field n2_gain), unbound + unwired → still bakes.
-        assert!(
-            wgsl.contains(&Marker::StaticParam { field: "n2_gain".to_string() }.emit()),
-            "an unbound constant param should still bake (perf win preserved):\n{wgsl}"
-        );
     }
 
     /// The enum mirror of [`generator_binding_def_retargets_onto_fused`] +
