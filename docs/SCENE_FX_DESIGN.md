@@ -238,7 +238,7 @@ presets, so warmup rides the existing preset-prewarm path.
 | Invariant | Enforcement |
 |---|---|
 | Every new deformer on the freeze codegen path | existing codegen-path scope test (docs/ADDING_PRIMITIVES.md:59) — P1 adds each atom to its coverage |
-| Default params = byte-identical passthrough ("off is free") | NEW check in the scope test: value-level GPU proof, default-params output == input — P1 deliverable, named `default_passthrough` per atom |
+| Amount-at-zero = byte-identical passthrough ("off is free") | NEW check in the scope test: value-level GPU proof — with every amount-like scalar forced to 0 (NOT the atom's defaults: the July family ships non-zero defaults like `push_along_normals.amount=0.2`), output == input. New atoms ship 0 defaults so "default" and "zero" coincide — P1 deliverable, named `default_passthrough` per atom |
 | No CPU per-vertex work, no per-frame alloc | hot-path discipline; `MANIFOLD_RENDER_TRACE=1` gate per phase (frame >20ms fails) |
 | `layer_source` never blocks render | unit test: unknown/missing/deleted layer id → fallback texture, no panic |
 | Feedback is always one-frame | structural: registry write site is after the last layer render (compositor end-of-frame); test: two-layer mutual-skin scene renders 300 frames without hang/panic |
