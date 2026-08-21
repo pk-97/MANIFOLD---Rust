@@ -217,7 +217,7 @@ fn render_generator(
 /// Reproduces `tests/parity/harness.rs`'s `Fixture::Gradient`: R=x, G=y,
 /// B=(x+y)/2, A=1 — a smooth, non-degenerate input that shows what an effect
 /// actually does to *something*, without depending on any real clip content.
-fn build_gradient_input(device: &GpuDevice, w: u32, h: u32, format: GpuTextureFormat) -> RenderTarget {
+pub(crate) fn build_gradient_input(device: &GpuDevice, w: u32, h: u32, format: GpuTextureFormat) -> RenderTarget {
     let mut pixels = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     let wm = (w.max(1) - 1).max(1) as f32;
     let hm = (h.max(1) - 1).max(1) as f32;
@@ -253,7 +253,7 @@ fn build_gradient_input(device: &GpuDevice, w: u32, h: u32, format: GpuTextureFo
 /// produced. Small plan-walk helper, duplicated (not shared) across this
 /// crate's headless-render call sites — same rationale `preset_runtime.rs`'s
 /// own copy states: a 5-line utility, not worth a cross-module dependency.
-fn output_resource(plan: &crate::node_graph::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+pub(crate) fn output_resource(plan: &crate::node_graph::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {

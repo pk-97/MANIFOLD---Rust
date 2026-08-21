@@ -128,6 +128,10 @@ mod generator_input_tests;
 #[path = "tests/chain_error.rs"]
 mod chain_error_tests;
 
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/amount_zero_passthrough.rs"]
+mod amount_zero_passthrough_tests;
+
 #[cfg(test)]
 #[path = "tests/generator_runtime.rs"]
 mod generator_runtime_tests;
