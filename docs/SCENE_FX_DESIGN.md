@@ -261,8 +261,10 @@ presets, so warmup rides the existing preset-prewarm path.
   exits 0; PNG region-mean probe at the model's screen position is non-zero and
   differs from the unwired baseline by a stated threshold (computed, not eyeballed).
 - **Demo:** the two PNGs, L2 — Peter looks.
-- **Forbidden moves:** no code changes in this phase; no "it probably works" verdict
-  without the probe numbers.
+- **Forbidden moves:** no feature-code changes in this phase; no "it probably works" verdict
+  without the probe numbers. (Lead amendment 2026-08-22: oracle-tooling fixes ARE in
+  scope when the named oracle is unfit — `graph-tool render` didn't wait on
+  `io_pending`, so GLB captures landed black; the lane fixed the tool, not the feature.)
 - **Test scope:** none beyond the spike commands.
 
 ### P1 — host + first glitch atoms (one session)
