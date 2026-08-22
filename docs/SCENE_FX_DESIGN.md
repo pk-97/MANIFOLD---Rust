@@ -1,6 +1,6 @@
 # Scene FX — performable deformers, scene mods, and layer skins for 3D scenes
 
-**Status:** IN PROGRESS — P0 SHIPPED 2026-08-22 (verdict WORKS: in-graph texture → emissive_map renders non-black, mean abs diff 8.80; `graph-tool render` now waits on io_pending+warmup, landing `5b6ccc43d`). P1–P4 not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
+**Status:** IN PROGRESS — P0 SHIPPED 2026-08-22 (`5b6ccc43d`); P1 SHIPPED 2026-08-22 (voxelize/boil/glitch-jitter + zero-amount passthrough check, `a2d62080d`; passthrough compares positions only — taper/morph renormalize normals at every amount, documented in scene_fx_default_passthrough.rs). P2–P4 not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
 **Prerequisites:** none hard — every consumed substrate is shipped in-tree (audit below).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
