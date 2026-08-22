@@ -1,0 +1,183 @@
+{
+  "version": 2,
+  "name": "Fog Blast",
+  "description": "SCENE_FX P3 scene-mod preset: a beat-synced fog-density swell. Atmosphere density is port-shadowed by node.beat_ramp so each beat pushes a haze front through the scene, then snaps back. No new atoms — just shipped primitives wired together.",
+  "presetMetadata": {
+    "id": "FogBlast",
+    "displayName": "Fog Blast",
+    "category": "Geometry",
+    "oscPrefix": "fogblast",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": []
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": { "type": "Float", "value": 5.0 },
+        "fov_y": { "type": "Float", "value": 0.9 },
+        "look_y": { "type": "Float", "value": 0.5 },
+        "orbit": { "type": "Float", "value": 0.7 },
+        "tilt": { "type": "Float", "value": 0.35 }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": { "type": "Float", "value": 0.3 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 0.0 },
+        "pos_y": { "type": "Float", "value": 7.0 },
+        "pos_z": { "type": "Float", "value": 7.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "range": { "type": "Float", "value": 30.0 }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "cube",
+      "typeId": "group",
+      "handle": "Cube",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            { "name": "vertices", "portType": "Array(MeshVertex)" },
+            { "name": "material", "portType": "Material" },
+            { "name": "transform", "portType": "Transform" }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 10,
+            "nodeId": "cube_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "cube_mesh",
+            "params": { "size": { "type": "Float", "value": 1.2 } }
+          },
+          {
+            "id": 11,
+            "nodeId": "cube_mat",
+            "typeId": "node.phong_material",
+            "handle": "cube_mat",
+            "params": {
+              "ambient": { "type": "Float", "value": 0.22 },
+              "color_r": { "type": "Float", "value": 0.85 },
+              "color_g": { "type": "Float", "value": 0.35 },
+              "color_b": { "type": "Float", "value": 0.3 }
+            }
+          },
+          {
+            "id": 12,
+            "nodeId": "cube_xform",
+            "typeId": "node.transform_3d",
+            "handle": "cube_xform",
+            "params": {
+              "pos_x": { "type": "Float", "value": 0.0 },
+              "pos_y": { "type": "Float", "value": 0.6 },
+              "pos_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "cube_out",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          { "fromNode": 10, "fromPort": "vertices", "toNode": 13, "toPort": "vertices" },
+          { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "material" },
+          { "fromNode": 12, "fromPort": "transform", "toNode": 13, "toPort": "transform" }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "fog",
+      "typeId": "node.atmosphere",
+      "handle": "fog",
+      "params": {
+        "fog_color_r": { "type": "Float", "value": 0.6 },
+        "fog_color_g": { "type": "Float", "value": 0.65 },
+        "fog_color_b": { "type": "Float", "value": 0.75 },
+        "fog_density": { "type": "Float", "value": 0.0 },
+        "height_falloff": { "type": "Float", "value": 0.2 }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "density_env",
+      "typeId": "node.beat_ramp",
+      "handle": "density_env",
+      "params": {
+        "rate": { "type": "Float", "value": 0.5 },
+        "attack": { "type": "Float", "value": 0.4 }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "cube_obj",
+      "typeId": "node.scene_object",
+      "handle": "Cube"
+    },
+    {
+      "id": 8,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "camera" },
+    { "fromNode": 2, "fromPort": "envmap", "toNode": 8, "toPort": "envmap" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 8, "toPort": "light_0" },
+    { "fromNode": 4, "fromPort": "vertices", "toNode": 7, "toPort": "vertices" },
+    { "fromNode": 4, "fromPort": "material", "toNode": 7, "toPort": "material" },
+    { "fromNode": 4, "fromPort": "transform", "toNode": 7, "toPort": "transform" },
+    { "fromNode": 5, "fromPort": "atmosphere", "toNode": 8, "toPort": "atmosphere" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 5, "toPort": "fog_density" },
+    { "fromNode": 7, "fromPort": "object", "toNode": 8, "toPort": "object_0" },
+    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+  ]
+}

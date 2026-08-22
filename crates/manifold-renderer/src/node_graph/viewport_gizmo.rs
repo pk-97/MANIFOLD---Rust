@@ -448,6 +448,8 @@ mod tests {
                 scale_driven: (false, false, false),
             }),
             material: crate::node_graph::scene_vm::MaterialVm::None,
+            transform_chain: Vec::new(),
+            transform_chain_parseable: true,
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
         }))
@@ -523,6 +525,8 @@ mod tests {
             visible_driven: false,
             transform: None,
             material: crate::node_graph::scene_vm::MaterialVm::None,
+            transform_chain: Vec::new(),
+            transform_chain_parseable: true,
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
         }));
