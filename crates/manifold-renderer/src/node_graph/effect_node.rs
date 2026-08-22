@@ -4,6 +4,8 @@
 use ahash::AHashMap;
 use manifold_core::{Beats, Seconds};
 
+use crate::layer_skin::LayerSkinRegistry;
+
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
 use crate::node_graph::material::MaterialKind;
 use crate::node_graph::parameters::{ParamDef, ParamValue};
@@ -281,6 +283,12 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// Option: the executor always provides it (live defaults when
     /// unset). Primitives consuming RT (render_scene) read from here.
     pub rt_quality: RtQuality,
+    /// SCENE_FX P4a — borrowed reference to the compositor's layer-skin
+    /// registry. `None` in paths that construct a context without a
+    /// registry (mock-backend tests, some standalone validation). The
+    /// `node.layer_source` primitive emits the fallback when this is
+    /// absent or when the requested layer id is missing.
+    pub layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -306,6 +314,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             outputs_unchanged: false,
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
+            layer_skin_registry: None,
         }
     }
 
@@ -323,6 +332,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         owner_key: OwnerKey,
         rebuild_epoch: u64,
         rt_quality: RtQuality,
+        layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
     ) -> Self {
         Self {
             time,
@@ -339,6 +349,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             outputs_unchanged: false,
             rebuild_epoch,
             rt_quality,
+            layer_skin_registry,
         }
     }
 

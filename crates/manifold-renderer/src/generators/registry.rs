@@ -104,6 +104,9 @@ impl GeneratorRegistry {
         // COMPILE_CONTRACT_DESIGN P2: hdri_source's stretch-blit pipeline is
         // fixed-source, warmed when the first HDRI decode lands. Warm it here.
         crate::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(device);
+        // COMPILE_CONTRACT_DESIGN P2: layer_source's registry blit is
+        // fixed-source, dispatched every frame a layer skin is bound.
+        crate::node_graph::primitives::layer_source::LayerSource::prewarm_pipeline(device);
         // COMPILE_CONTRACT_DESIGN P2: variable_blur's 6 quality×weighting variants
         // are fixed-source, specialized by enum params only. Warm them here.
         crate::node_graph::primitives::gaussian_blur_variable_width::GaussianBlurVariableWidth::prewarm_pipelines(device);

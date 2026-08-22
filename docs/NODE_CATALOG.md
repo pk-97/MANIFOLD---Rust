@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 258 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 259 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -100,7 +100,7 @@ _Generated from the node registry. Do not hand-edit. 258 nodes registered, group
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 
-### Generate (12)
+### Generate (13)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -112,6 +112,7 @@ _Generated from the node registry. Do not hand-edit. 258 nodes registered, group
 | Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | HDRI Source | `node.hdri_source` | Source | Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture… |
 | Image Folder | `node.image_folder` | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
+| Layer Source | `node.layer_source` | Source | Skins a scene object with another layer's output — wire it into emissive_map or base_color_map and pick the source layer; the model wears whatever that layer i… |
 | Lightning Bolt | `node.lightning_bolt` | Source | Grows a jagged lightning bolt with branches each time it is struck — thick at the trunk, hairline at the tips. Feed its points and edges into Draw Lines. |
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
@@ -383,7 +384,7 @@ _Generated from the node registry. Do not hand-edit. 258 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (53)
+### Effect & generator presets (52)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -415,7 +416,6 @@ _Generated from the node registry. Do not hand-edit. 258 nodes registered, group
 | `Infrared` | Infrared | effect | Color | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
-| `Lantern` | Lantern | generator | Geometry | 155 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
