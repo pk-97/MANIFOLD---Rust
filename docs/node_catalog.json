@@ -996,6 +996,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
+        "BrokenLamp",
         "FogBlast",
         "LightOrbit",
         "MetallicGlass",
@@ -1657,7 +1658,9 @@
         "ao denoise"
       ],
       "category": "Blur & Sharpen",
-      "examples": [],
+      "examples": [
+        "BrokenLamp"
+      ],
       "fusion": "multi_input_coincident",
       "inputs": [
         {
@@ -2270,7 +2273,9 @@
         "shutter angle"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "BrokenLamp"
+      ],
       "fusion": "boundary:non_gpu",
       "inputs": [
         {
@@ -6355,6 +6360,7 @@
       "category": "Color & Tone",
       "examples": [
         "AutoGain",
+        "BrokenLamp",
         "ColorGrade",
         "Glitch",
         "HighlightBoost",
@@ -8118,6 +8124,7 @@
       "examples": [
         "ApricotWeather",
         "BlossomWire",
+        "BrokenLamp",
         "Skin",
         "TimeScrub"
       ],
@@ -8685,7 +8692,8 @@
       ],
       "category": "Generate",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "BrokenLamp"
       ],
       "fusion": "boundary:io_bridge",
       "inputs": [],
@@ -9394,7 +9402,9 @@
         "equirect"
       ],
       "category": "Generate",
-      "examples": [],
+      "examples": [
+        "BrokenLamp"
+      ],
       "fusion": "boundary:io_bridge",
       "inputs": [],
       "label": "HDRI Source",
@@ -10356,6 +10366,7 @@
       "category": "Materials & Lighting",
       "examples": [
         "ApricotWeather",
+        "BrokenLamp",
         "FogBlast",
         "LightOrbit",
         "MetallicGlass",
@@ -11785,6 +11796,7 @@
       "category": "Composite",
       "examples": [
         "Bloom",
+        "BrokenLamp",
         "ChromaticAberration",
         "ColorGrade",
         "Cymatics",
@@ -12813,6 +12825,7 @@
       "category": "3D Geometry",
       "examples": [
         "ApricotWeather",
+        "BrokenLamp",
         "DigitalPlants",
         "FluidSim3D",
         "FogBlast",
@@ -13075,6 +13088,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
+        "BrokenLamp",
         "MetallicGlass"
       ],
       "fusion": "boundary:non_gpu",
@@ -16204,6 +16218,7 @@
       "category": "3D Geometry",
       "examples": [
         "ApricotWeather",
+        "BrokenLamp",
         "FogBlast",
         "LightOrbit",
         "SceneStarter",
@@ -17995,6 +18010,7 @@
       "category": "3D Geometry",
       "examples": [
         "ApricotWeather",
+        "BrokenLamp",
         "FogBlast",
         "LightOrbit",
         "SceneStarter",
@@ -19911,7 +19927,9 @@
         "ao"
       ],
       "category": "Mask",
-      "examples": [],
+      "examples": [
+        "BrokenLamp"
+      ],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -20384,6 +20402,7 @@
       "category": "Routing",
       "examples": [
         "BasicShapes",
+        "BrokenLamp",
         "Cymatics",
         "DepthOfField",
         "Infrared",
@@ -21324,6 +21343,7 @@
       "category": "3D Geometry",
       "examples": [
         "ApricotWeather",
+        "BrokenLamp",
         "FogBlast",
         "LightOrbit",
         "SceneStarter",
@@ -23203,6 +23223,7 @@
         "BlobTracking",
         "Bloom",
         "BlossomWire",
+        "BrokenLamp",
         "Caustics",
         "ChromaticAberration",
         "ColorCompass",
@@ -23284,6 +23305,7 @@
         "BasicShapes",
         "BlackHole",
         "BlossomWire",
+        "BrokenLamp",
         "Caustics",
         "ConcentricTunnel",
         "Cymatics",
@@ -23459,7 +23481,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 57,
+  "preset_count": 58,
   "presets": [
     {
       "category": "Geometry",
@@ -26820,6 +26842,1100 @@
           "max": "16",
           "min": "2",
           "name": "Segments"
+        }
+      ]
+    },
+    {
+      "category": "Geometry",
+      "id": "Lantern",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Lantern",
+      "params": [
+        {
+          "default": "512",
+          "id": "1_width",
+          "max": "4096",
+          "min": "64",
+          "name": "Width"
+        },
+        {
+          "default": "256",
+          "id": "1_height",
+          "max": "2048",
+          "min": "32",
+          "name": "Height"
+        },
+        {
+          "default": "1",
+          "id": "1_horizon_strength",
+          "max": "4",
+          "min": "0",
+          "name": "Horizon Strength"
+        },
+        {
+          "default": "0.12",
+          "id": "1_azimuth_variation",
+          "max": "1",
+          "min": "0",
+          "name": "Azimuth Variation"
+        },
+        {
+          "default": "1",
+          "id": "1_intensity",
+          "max": "4",
+          "min": "0",
+          "name": "Environment Intensity"
+        },
+        {
+          "default": "1",
+          "id": "1_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "3",
+          "id": "1_emitter_count",
+          "max": "8",
+          "min": "1",
+          "name": "Emitter Count"
+        },
+        {
+          "default": "3",
+          "id": "1_emitter_intensity",
+          "max": "50",
+          "min": "0",
+          "name": "Emitter Intensity"
+        },
+        {
+          "default": "0.15",
+          "id": "1_emitter_elevation",
+          "max": "1",
+          "min": "-1",
+          "name": "Emitter Elevation"
+        },
+        {
+          "default": "0.05",
+          "id": "1_emitter_width",
+          "max": "0.5",
+          "min": "0.001",
+          "name": "Emitter Width"
+        },
+        {
+          "default": "0",
+          "id": "1_sun_x",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun X"
+        },
+        {
+          "default": "0",
+          "id": "1_sun_y",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun Y"
+        },
+        {
+          "default": "0",
+          "id": "1_sun_z",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun Z"
+        },
+        {
+          "default": "0",
+          "id": "1_sun_disc_intensity",
+          "max": "50",
+          "min": "0",
+          "name": "Sun Disc Intensity"
+        },
+        {
+          "default": "0",
+          "id": "1_sun_disc_size",
+          "max": "1",
+          "min": "0",
+          "name": "Sun Disc Size"
+        },
+        {
+          "default": "0.6",
+          "id": "1_fill",
+          "max": "2",
+          "min": "0",
+          "name": "Fill Light"
+        },
+        {
+          "default": "0.7",
+          "id": "5_orbit",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Orbit"
+        },
+        {
+          "default": "0.3",
+          "id": "5_tilt",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Tilt"
+        },
+        {
+          "default": "33.366093",
+          "id": "5_distance",
+          "max": "100",
+          "min": "0.01",
+          "name": "Distance"
+        },
+        {
+          "default": "0.9",
+          "id": "5_fov_y",
+          "max": "2.5",
+          "min": "0.05",
+          "name": "FOV Y"
+        },
+        {
+          "default": "0",
+          "id": "5_look_y",
+          "max": "10",
+          "min": "-10",
+          "name": "Look Y"
+        },
+        {
+          "default": "0",
+          "id": "5_roll",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Roll"
+        },
+        {
+          "default": "0.05",
+          "id": "5_near",
+          "max": "10",
+          "min": "0.001",
+          "name": "Near"
+        },
+        {
+          "default": "200",
+          "id": "5_far",
+          "max": "10000",
+          "min": "1",
+          "name": "Far"
+        },
+        {
+          "default": "33.366093",
+          "id": "6_focus_distance",
+          "max": "1000",
+          "min": "0",
+          "name": "Focus Distance"
+        },
+        {
+          "default": "32",
+          "id": "6_f_stop",
+          "max": "1000",
+          "min": "0.5",
+          "name": "F-Stop"
+        },
+        {
+          "default": "0",
+          "id": "6_shutter_angle",
+          "max": "360",
+          "min": "0",
+          "name": "Shutter Angle"
+        },
+        {
+          "default": "0",
+          "id": "6_exposure_ev",
+          "max": "8",
+          "min": "-8",
+          "name": "Exposure (EV)"
+        },
+        {
+          "default": "0",
+          "id": "7_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "5",
+          "id": "7_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "2",
+          "id": "7_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "3",
+          "id": "7_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "7_aim_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim X"
+        },
+        {
+          "default": "0",
+          "id": "7_aim_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Y"
+        },
+        {
+          "default": "0",
+          "id": "7_aim_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Z"
+        },
+        {
+          "default": "1",
+          "id": "7_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "1",
+          "id": "7_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "1",
+          "id": "7_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "3.5",
+          "id": "7_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Intensity"
+        },
+        {
+          "default": "22.749609",
+          "id": "7_range",
+          "max": "200",
+          "min": "0.01",
+          "name": "Range"
+        },
+        {
+          "default": "1",
+          "id": "7_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "0",
+          "id": "7_shadow_softness",
+          "max": "3",
+          "min": "0",
+          "name": "Shadow Softness"
+        },
+        {
+          "default": "0.003",
+          "id": "7_shadow_bias",
+          "max": "0.1",
+          "min": "0",
+          "name": "Shadow Bias"
+        },
+        {
+          "default": "4096",
+          "id": "7_shadow_resolution",
+          "max": "8192",
+          "min": "128",
+          "name": "Shadow Resolution"
+        },
+        {
+          "default": "1",
+          "id": "7_light_size",
+          "max": "20",
+          "min": "0",
+          "name": "Light Size"
+        },
+        {
+          "default": "0",
+          "id": "8_rt_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "RT Enabled"
+        },
+        {
+          "default": "0",
+          "id": "8_temporal_upscale",
+          "max": "1",
+          "min": "0",
+          "name": "Temporal Upscale"
+        },
+        {
+          "default": "1",
+          "id": "8_rt_reflections",
+          "max": "1",
+          "min": "0",
+          "name": "RT Reflections"
+        },
+        {
+          "default": "1",
+          "id": "10_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour R"
+        },
+        {
+          "default": "1",
+          "id": "10_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour G"
+        },
+        {
+          "default": "1",
+          "id": "10_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour B"
+        },
+        {
+          "default": "1",
+          "id": "10_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0",
+          "id": "10_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "1",
+          "id": "10_metallic",
+          "max": "1",
+          "min": "0",
+          "name": "Metallic"
+        },
+        {
+          "default": "1",
+          "id": "10_roughness",
+          "max": "1",
+          "min": "0.01",
+          "name": "Roughness"
+        },
+        {
+          "default": "1",
+          "id": "10_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "1",
+          "id": "10_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "1",
+          "id": "10_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "1",
+          "id": "10_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "10_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "10_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "1",
+          "id": "10_specular",
+          "max": "1",
+          "min": "0",
+          "name": "Specular"
+        },
+        {
+          "default": "1",
+          "id": "10_specular_tint_r",
+          "max": "2",
+          "min": "0",
+          "name": "Specular Tint R"
+        },
+        {
+          "default": "1",
+          "id": "10_specular_tint_g",
+          "max": "2",
+          "min": "0",
+          "name": "Specular Tint G"
+        },
+        {
+          "default": "1",
+          "id": "10_specular_tint_b",
+          "max": "2",
+          "min": "0",
+          "name": "Specular Tint B"
+        },
+        {
+          "default": "1.5",
+          "id": "10_ior",
+          "max": "3",
+          "min": "1",
+          "name": "Index of Refraction"
+        },
+        {
+          "default": "0",
+          "id": "10_clearcoat",
+          "max": "1",
+          "min": "0",
+          "name": "Clearcoat"
+        },
+        {
+          "default": "0",
+          "id": "10_clearcoat_roughness",
+          "max": "1",
+          "min": "0",
+          "name": "Clearcoat Roughness"
+        },
+        {
+          "default": "0",
+          "id": "10_sheen_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Colour R"
+        },
+        {
+          "default": "0",
+          "id": "10_sheen_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Colour G"
+        },
+        {
+          "default": "0",
+          "id": "10_sheen_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Colour B"
+        },
+        {
+          "default": "0",
+          "id": "10_sheen_roughness",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Roughness"
+        },
+        {
+          "default": "0",
+          "id": "10_iridescence",
+          "max": "1",
+          "min": "0",
+          "name": "Iridescence"
+        },
+        {
+          "default": "1.3",
+          "id": "10_iridescence_ior",
+          "max": "3",
+          "min": "1",
+          "name": "Iridescence IOR"
+        },
+        {
+          "default": "100",
+          "id": "10_iridescence_thickness_min",
+          "max": "1000",
+          "min": "0",
+          "name": "Iridescence Thickness Min (nm)"
+        },
+        {
+          "default": "400",
+          "id": "10_iridescence_thickness_max",
+          "max": "1000",
+          "min": "0",
+          "name": "Iridescence Thickness Max (nm)"
+        },
+        {
+          "default": "0",
+          "id": "10_anisotropy_strength",
+          "max": "1",
+          "min": "0",
+          "name": "Anisotropy Strength"
+        },
+        {
+          "default": "0",
+          "id": "10_anisotropy_rotation",
+          "max": "3.1415927",
+          "min": "-3.1415927",
+          "name": "Anisotropy Rotation"
+        },
+        {
+          "default": "0",
+          "id": "10_dispersion",
+          "max": "1",
+          "min": "0",
+          "name": "Dispersion"
+        },
+        {
+          "default": "0",
+          "id": "10_transmission",
+          "max": "1",
+          "min": "0",
+          "name": "Transmission"
+        },
+        {
+          "default": "0",
+          "id": "10_volume_thickness",
+          "max": "1000",
+          "min": "0",
+          "name": "Volume Thickness"
+        },
+        {
+          "default": "1000000",
+          "id": "10_volume_attenuation_distance",
+          "max": "1000000",
+          "min": "0.001",
+          "name": "Volume Attenuation Distance"
+        },
+        {
+          "default": "1",
+          "id": "10_volume_attenuation_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Volume Attenuation Colour R"
+        },
+        {
+          "default": "1",
+          "id": "10_volume_attenuation_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Volume Attenuation Colour G"
+        },
+        {
+          "default": "1",
+          "id": "10_volume_attenuation_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Volume Attenuation Colour B"
+        },
+        {
+          "default": "1",
+          "id": "10_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M00"
+        },
+        {
+          "default": "0",
+          "id": "10_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M01"
+        },
+        {
+          "default": "0",
+          "id": "10_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M10"
+        },
+        {
+          "default": "1",
+          "id": "10_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M11"
+        },
+        {
+          "default": "0",
+          "id": "10_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform Offset X"
+        },
+        {
+          "default": "0",
+          "id": "10_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "10_nrm_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M00"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M01"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M10"
+        },
+        {
+          "default": "1",
+          "id": "10_nrm_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M11"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "10_mr_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M00"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M01"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M10"
+        },
+        {
+          "default": "1",
+          "id": "10_mr_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M11"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "10_occ_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M00"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M01"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M10"
+        },
+        {
+          "default": "1",
+          "id": "10_occ_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M11"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "10_em_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M00"
+        },
+        {
+          "default": "0",
+          "id": "10_em_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M01"
+        },
+        {
+          "default": "0",
+          "id": "10_em_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M10"
+        },
+        {
+          "default": "1",
+          "id": "10_em_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M11"
+        },
+        {
+          "default": "0",
+          "id": "10_em_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "10_em_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV Offset Y"
+        },
+        {
+          "default": "0",
+          "id": "10_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Base Colour Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "10_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Base Colour Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "10_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Normal Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Normal Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Normal Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_nrm_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Normal Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "MR Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "MR Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "MR Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_mr_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "MR Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Occlusion Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Occlusion Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Occlusion Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_occ_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Occlusion Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_em_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Emissive Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "10_em_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Emissive Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "10_em_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Emissive Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "10_em_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Emissive Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "13_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0",
+          "id": "13_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "13_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "13_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "13_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "13_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1",
+          "id": "13_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1",
+          "id": "13_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "1",
+          "id": "13_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "1",
+          "id": "11_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "0",
+          "id": "env_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Environment Mode"
+        },
+        {
+          "default": "0",
+          "id": "scene_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "0",
+          "id": "1_uniform",
+          "max": "1",
+          "min": "0",
+          "name": "Uniform (White Furnace)"
+        },
+        {
+          "default": "0",
+          "id": "10_translucency",
+          "max": "1",
+          "min": "0",
+          "name": "Translucency"
+        },
+        {
+          "default": "0",
+          "id": "10_baked_look",
+          "max": "1",
+          "min": "0",
+          "name": "Baked Look"
+        },
+        {
+          "default": "1",
+          "id": "11_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "8_rt_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "RT Shadows"
+        },
+        {
+          "default": "1",
+          "id": "8_rt_ao",
+          "max": "1",
+          "min": "0",
+          "name": "RT Ambient Occlusion"
+        },
+        {
+          "default": "1",
+          "id": "8_rt_gi",
+          "max": "1",
+          "min": "0",
+          "name": "RT Global Illumination"
+        },
+        {
+          "default": "0",
+          "id": "8_rt_denoise_feed",
+          "max": "1",
+          "min": "0",
+          "name": "RT Denoise Feed"
         }
       ]
     },

@@ -385,7 +385,7 @@ _Generated from the node registry. Do not hand-edit. 260 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (57)
+### Effect & generator presets (58)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -418,6 +418,7 @@ _Generated from the node registry. Do not hand-edit. 260 nodes registered, group
 | `Infrared` | Infrared | effect | Color | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
+| `Lantern` | Lantern | generator | Geometry | 155 |
 | `LightOrbit` | Light Orbit | generator | Geometry | 75 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
