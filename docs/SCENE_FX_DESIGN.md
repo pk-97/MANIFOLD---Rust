@@ -1,6 +1,6 @@
 # Scene FX — performable deformers, scene mods, and layer skins for 3D scenes
 
-**Status:** IN PROGRESS — P0 SHIPPED 2026-08-22 (`5b6ccc43d`); P1 SHIPPED 2026-08-22 (voxelize/boil/glitch-jitter + zero-amount passthrough check, `a2d62080d`; passthrough compares positions only — taper/morph renormalize normals at every amount, documented in scene_fx_default_passthrough.rs). P2–P4 not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
+**Status:** IN PROGRESS — P0+P1+P2 SHIPPED 2026-08-22 (all eight glitch deformers on main + zero-amount passthrough check; latest merge lane/scene-fx-p2). P3 (shake + presets) in flight, P4 (layer skins) not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
 **Prerequisites:** none hard — every consumed substrate is shipped in-tree (audit below).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -337,31 +337,52 @@ presets, so warmup rides the existing preset-prewarm path.
   `validate`.
 - **Test scope:** `-p manifold-renderer` + gpu-proofs; presets: graph-tool validate.
 
-### P4 — layer skins (one session; the risk phase)
+### P4 — layer skins (the risk phase; split P4a/P4b 2026-08-22, lead call)
 
-- **Entry state:** P0 verdict read; anchors `generator_renderer.rs:847` and
+Split at design time: P4a is renderer-only, P4b is the UI surface. Combined they
+were too wide for one lane session.
+
+**P4a — registry + node + execution seam (one session)**
+
+- **Entry state:** anchors `generator_renderer.rs:847` and
   `layer_compositor.rs:1696-1710` re-verified; D5–D9 read.
-- **Read-back:** section 3.3 + 3.4 whole; the two-thread model in CLAUDE.md; D8's
-  load-path rule; `commands/graph/modifiers.rs` (the splice precedent).
+- **Read-back:** section 3.3 whole; the two-thread model in CLAUDE.md; D8's
+  load-path rule.
 - **Deliverables:** `layer_skin.rs` registry (section 3.3 shape); `node.layer_source`
-  texture producer; context-carrier exposure; panel Skin row (source + target-map
-  dropdowns, manifest params only, visibly clickable chrome) + insert command;
-  missing-layer chip; tests per section 4 (fallback, one-frame feedback,
-  round-trip).
+  texture producer; context-carrier exposure; compositor end-of-frame publish;
+  tests per section 4 (fallback, one-frame feedback, round-trip of the `layer`
+  param).
+- **Gate:** `cargo nextest run -p manifold-renderer` green; the three named tests
+  green; negative rg gates per section 4; `MANIFOLD_RENDER_TRACE=1` two-layer skin
+  scene: no frame >20ms.
+- **Demo:** headless two-layer render where layer B's scene object wears layer A's
+  output — probe: the skin region's mean matches layer A's known content within a
+  stated tolerance (computed), L2.
+- **Performer gesture:** source layer's clip ends mid-render — skin goes dark, no
+  hitch; the feedback test covers it.
+- **Forbidden moves:** `Arc<Mutex>` anywhere; same-frame binding; clearing the
+  stored layer id on missing; per-clip binding (D6).
+- **Test scope:** `-p manifold-renderer`; gpu-proofs if shared WGSL touched
+  (expected: no).
+
+**P4b — panel Skin row + L3 flow (one session)**
+
+- **Entry state:** P4a landed; `commands/graph/modifiers.rs` read (splice
+  precedent); WIDGET_TREE_DESIGN section 5b read.
+- **Read-back:** section 3.4 whole; D7/D8.
+- **Deliverables:** Skin row per scene object (source dropdown of layer names from
+  the project snapshot + target-map dropdown, manifest params only, visibly
+  clickable chrome); insert command routing through EditingService; missing-layer
+  chip; `scripts/ui-flows/scene-skin.json`.
 - **Gate:** `cargo nextest run -p manifold-renderer -p manifold-ui -p manifold-editing`
-  green; round-trip test green; feedback test green; negative rg gates per section 4;
-  `MANIFOLD_RENDER_TRACE=1` two-layer skin scene: no frame >20ms.
-- **Demo:** L3 flow `scripts/ui-flows/scene-skin.json`: drop glb → add Skin → pick
-  source layer → assert the model's emissive samples non-black; then save → reload →
-  assert still bound (the round-trip driven, not just unit-tested).
-- **Performer gesture:** mid-set, the source layer's clip ends — the skin goes to
-  fallback (dark), the chip appears, nothing hitches; the flow's final step kills
-  the source clip and asserts the frame still renders.
-- **Forbidden moves:** `Arc<Mutex>` anywhere; same-frame binding "optimization";
-  clearing the stored layer id on missing; bespoke dropdown widgets outside the
-  manifest param surface; per-clip binding (D6).
-- **Test scope:** renderer + ui + editing crates; gpu-proofs if the texture path
-  touched shared WGSL (expected: no).
+  green; L3 flow green end-to-end INCLUDING save → reload → still bound.
+- **Demo:** the L3 flow IS the demo (L3); final step kills the source clip and
+  asserts the frame still renders (fallback).
+- **Performer gesture:** two clicks — pick source, pick map — and the model wears
+  the layer; the flow performs exactly that.
+- **Forbidden moves:** bespoke dropdown widgets outside the manifest surface;
+  direct model writes (EditingService only); silent drop of an unresolvable id.
+- **Test scope:** renderer + ui + editing crates.
 
 ---
 

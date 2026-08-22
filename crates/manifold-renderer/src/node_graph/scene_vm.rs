@@ -73,6 +73,11 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
     "node.voxelize_mesh",
     "node.noise_displace",
     "node.glitch_jitter",
+    "node.shatter_mesh",
+    "node.slice_mesh",
+    "node.ripple_mesh",
+    "node.fold_mesh",
+    "node.melt_mesh",
 ];
 /// The curated Transform-chain modifier vocabulary (P3): single-Transform-in/
 /// Transform-out atoms that may sit between `node.transform_3d` and
