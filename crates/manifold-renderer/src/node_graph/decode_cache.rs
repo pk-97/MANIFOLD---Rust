@@ -18,12 +18,12 @@
 //! Corrupted or unverifiable entries are deleted and re-decoded cold — the
 //! caller never sees partial cache data.
 
+use std::cell::Cell;
 use std::fs;
 use std::io::Read;
 #[cfg(test)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use sha2::{Digest, Sha256};
@@ -157,25 +157,52 @@ fn key_hash(namespace: &str, file_hash: &[u8; 32], extra: &[u8]) -> String {
     hex(&hasher.finalize())
 }
 
-static HDRI_HITS: AtomicU64 = AtomicU64::new(0);
-static HDRI_MISSES: AtomicU64 = AtomicU64::new(0);
-static GLTF_MESH_HITS: AtomicU64 = AtomicU64::new(0);
-static GLTF_MESH_MISSES: AtomicU64 = AtomicU64::new(0);
+// Hit/miss counts are thread-scoped on purpose: `node.gltf_mesh_source`
+// parses GLBs on detached threads that can complete during unrelated code
+// (in tests, during later test cases), and those out-of-band loads must not
+// land in whatever thread is asserting on its own counts. A count therefore
+// describes loads initiated by the recording thread only.
+thread_local! {
+    static HDRI_HITS: Cell<u64> = const { Cell::new(0) };
+    static HDRI_MISSES: Cell<u64> = const { Cell::new(0) };
+    static GLTF_MESH_HITS: Cell<u64> = const { Cell::new(0) };
+    static GLTF_MESH_MISSES: Cell<u64> = const { Cell::new(0) };
+}
 
 fn record_hdri_hit() {
-    HDRI_HITS.fetch_add(1, Ordering::Relaxed);
+    HDRI_HITS.with(|c| c.set(c.get() + 1));
 }
 
 fn record_hdri_miss() {
-    HDRI_MISSES.fetch_add(1, Ordering::Relaxed);
+    HDRI_MISSES.with(|c| c.set(c.get() + 1));
 }
 
 fn record_gltf_mesh_hit() {
-    GLTF_MESH_HITS.fetch_add(1, Ordering::Relaxed);
+    GLTF_MESH_HITS.with(|c| c.set(c.get() + 1));
 }
 
 fn record_gltf_mesh_miss() {
-    GLTF_MESH_MISSES.fetch_add(1, Ordering::Relaxed);
+    GLTF_MESH_MISSES.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+fn hdri_hits() -> u64 {
+    HDRI_HITS.with(Cell::get)
+}
+
+#[cfg(test)]
+fn hdri_misses() -> u64 {
+    HDRI_MISSES.with(Cell::get)
+}
+
+#[cfg(test)]
+fn gltf_mesh_hits() -> u64 {
+    GLTF_MESH_HITS.with(Cell::get)
+}
+
+#[cfg(test)]
+fn gltf_mesh_misses() -> u64 {
+    GLTF_MESH_MISSES.with(Cell::get)
 }
 
 /// Selector string used in the cache key and stored in the mesh cache header.
@@ -480,12 +507,6 @@ fn read_hash(cursor: &mut &[u8]) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use std::sync::atomic::Ordering;
-
-    // Counter tests run under this lock so the process-global hit/miss
-    // atomics aren't perturbed by parallel tests.
-    static COUNTER_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_cache_root() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -501,10 +522,10 @@ mod tests {
     }
 
     fn reset_counters() {
-        HDRI_HITS.store(0, Ordering::Relaxed);
-        HDRI_MISSES.store(0, Ordering::Relaxed);
-        GLTF_MESH_HITS.store(0, Ordering::Relaxed);
-        GLTF_MESH_MISSES.store(0, Ordering::Relaxed);
+        HDRI_HITS.with(|c| c.set(0));
+        HDRI_MISSES.with(|c| c.set(0));
+        GLTF_MESH_HITS.with(|c| c.set(0));
+        GLTF_MESH_MISSES.with(|c| c.set(0));
     }
 
     fn write_synthetic_exr(path: &Path, color: [f32; 3]) {
@@ -519,7 +540,6 @@ mod tests {
 
     #[test]
     fn hdri_second_decode_is_cache_hit() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
         reset_counters();
         let root = temp_cache_root();
         let dir = root.join("source");
@@ -533,13 +553,12 @@ mod tests {
         assert_eq!((w1, h1), (64, 32));
         assert_eq!((w1, h1), (w2, h2));
         assert_eq!(b1, b2);
-        assert_eq!(HDRI_HITS.load(Ordering::Relaxed), 1, "second decode must hit cache");
-        assert_eq!(HDRI_MISSES.load(Ordering::Relaxed), 1, "first decode must miss");
+        assert_eq!(hdri_hits(), 1, "second decode must hit cache");
+        assert_eq!(hdri_misses(), 1, "first decode must miss");
     }
 
     #[test]
     fn hdri_corrupt_cache_entry_re_decodes_and_recovers() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
         reset_counters();
         let root = temp_cache_root();
         let dir = root.join("source");
@@ -561,14 +580,13 @@ mod tests {
         let (_, _, b2) = cached_load_hdri_with_root(&path, Some(root.clone())).unwrap();
         assert_eq!(b1, b2, "re-decoded bytes must match the original");
         assert!(
-            HDRI_MISSES.load(Ordering::Relaxed) >= 2,
+            hdri_misses() >= 2,
             "corrupt entry must count as a miss + re-decode"
         );
     }
 
     #[test]
     fn hdri_same_path_different_content_is_a_miss() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
         reset_counters();
         let root = temp_cache_root();
         let dir = root.join("source");
@@ -582,12 +600,11 @@ mod tests {
         let (_, _, b2) = cached_load_hdri_with_root(&path, Some(root.clone())).unwrap();
 
         assert_ne!(b1, b2, "different content must produce different pixels");
-        assert_eq!(HDRI_MISSES.load(Ordering::Relaxed), 2, "content change must miss, not reuse stale cache");
+        assert_eq!(hdri_misses(), 2, "content change must miss, not reuse stale cache");
     }
 
     #[test]
     fn gltf_mesh_second_decode_is_cache_hit() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
         reset_counters();
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
@@ -602,13 +619,12 @@ mod tests {
 
         assert_eq!(v1.len(), v2.len());
         assert!(!v1.is_empty(), "fixture should produce vertices");
-        assert_eq!(GLTF_MESH_HITS.load(Ordering::Relaxed), 1);
-        assert_eq!(GLTF_MESH_MISSES.load(Ordering::Relaxed), 1);
+        assert_eq!(gltf_mesh_hits(), 1);
+        assert_eq!(gltf_mesh_misses(), 1);
     }
 
     #[test]
     fn gltf_mesh_corrupt_cache_entry_re_decodes_and_recovers() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
         reset_counters();
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
@@ -631,12 +647,11 @@ mod tests {
 
         let v2 = cached_load_gltf_mesh_with_root(&path, selector, Some(root.clone())).unwrap();
         assert_eq!(v1.len(), v2.len());
-        assert!(GLTF_MESH_MISSES.load(Ordering::Relaxed) >= 2);
+        assert!(gltf_mesh_misses() >= 2);
     }
 
     #[test]
     fn gltf_mesh_different_selector_is_a_miss() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
         reset_counters();
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
@@ -659,8 +674,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(GLTF_MESH_MISSES.load(Ordering::Relaxed), 2, "different selectors must not share an entry");
-        assert_eq!(GLTF_MESH_HITS.load(Ordering::Relaxed), 0);
+        assert_eq!(gltf_mesh_misses(), 2, "different selectors must not share an entry");
+        assert_eq!(gltf_mesh_hits(), 0);
     }
 
     #[test]
