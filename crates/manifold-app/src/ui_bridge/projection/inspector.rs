@@ -469,6 +469,8 @@ pub fn sync_inspector_data(
                                             visible_driven,
                                             transform,
                                             material,
+                                            transform_chain,
+                                            transform_chain_parseable: _,
                                             modifier_chain,
                                             modifier_chain_parseable,
                                             ..
@@ -496,6 +498,7 @@ pub fn sync_inspector_data(
                                             object_doc_ids.push(m.node_doc_id);
                                         }
                                         object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
+                                        object_doc_ids.extend(transform_chain.iter().map(|m| m.node_doc_id));
                                         let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
                                         ObjectRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::ObjectKnownRow {

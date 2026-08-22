@@ -1,6 +1,6 @@
 # Scene FX — performable deformers, scene mods, and layer skins for 3D scenes
 
-**Status:** IN PROGRESS — P0+P1+P2 SHIPPED 2026-08-22 (all eight glitch deformers on main + zero-amount passthrough check; latest merge lane/scene-fx-p2). P3 (shake + presets) in flight, P4 (layer skins) not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
+**Status:** IN PROGRESS — P0–P3 SHIPPED 2026-08-22 (eight glitch deformers, zero-amount passthrough check, transform_shake + five scene-mod presets, decode_cache thread_local counter hermeticity fix). P4a (layer-skin seam) in flight, P4b (panel Skin row) not built. Known gap: cameras have no Transform wire — transform_shake shakes objects/lights, NOT cameras; Camera-wire shake atom tracked in beads. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
 **Prerequisites:** none hard — every consumed substrate is shipped in-tree (audit below).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 

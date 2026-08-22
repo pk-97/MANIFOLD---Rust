@@ -1,0 +1,188 @@
+{
+  "version": 2,
+  "name": "Light Orbit",
+  "description": "SCENE_FX P3 scene-mod preset: a point light that orbits the scene on two LFOs — one drives X, one drives Z with a quarter-phase offset. The LFOs port-shadow node.light's pos_x and pos_z inputs, so the light circles the object without writing new atoms.",
+  "presetMetadata": {
+    "id": "LightOrbit",
+    "displayName": "Light Orbit",
+    "category": "Geometry",
+    "oscPrefix": "lightorbit",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": []
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": { "type": "Float", "value": 5.0 },
+        "fov_y": { "type": "Float", "value": 0.9 },
+        "look_y": { "type": "Float", "value": 0.5 },
+        "orbit": { "type": "Float", "value": 0.7 },
+        "tilt": { "type": "Float", "value": 0.35 }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": { "type": "Float", "value": 0.3 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "cube",
+      "typeId": "group",
+      "handle": "Cube",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            { "name": "vertices", "portType": "Array(MeshVertex)" },
+            { "name": "material", "portType": "Material" },
+            { "name": "transform", "portType": "Transform" }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 10,
+            "nodeId": "cube_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "cube_mesh",
+            "params": { "size": { "type": "Float", "value": 1.2 } }
+          },
+          {
+            "id": 11,
+            "nodeId": "cube_mat",
+            "typeId": "node.phong_material",
+            "handle": "cube_mat",
+            "params": {
+              "ambient": { "type": "Float", "value": 0.22 },
+              "color_r": { "type": "Float", "value": 0.85 },
+              "color_g": { "type": "Float", "value": 0.35 },
+              "color_b": { "type": "Float", "value": 0.3 }
+            }
+          },
+          {
+            "id": 12,
+            "nodeId": "cube_xform",
+            "typeId": "node.transform_3d",
+            "handle": "cube_xform",
+            "params": {
+              "pos_x": { "type": "Float", "value": 0.0 },
+              "pos_y": { "type": "Float", "value": 0.6 },
+              "pos_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "cube_out",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          { "fromNode": 10, "fromPort": "vertices", "toNode": 13, "toPort": "vertices" },
+          { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "material" },
+          { "fromNode": 12, "fromPort": "transform", "toNode": 13, "toPort": "transform" }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "orbit_light",
+      "typeId": "node.light",
+      "handle": "orbit_light",
+      "params": {
+        "mode": { "type": "Enum", "value": 1 },
+        "pos_x": { "type": "Float", "value": 0.0 },
+        "pos_y": { "type": "Float", "value": 2.0 },
+        "pos_z": { "type": "Float", "value": 0.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 0.8 },
+        "color_b": { "type": "Float", "value": 0.6 },
+        "intensity": { "type": "Float", "value": 2.0 },
+        "range": { "type": "Float", "value": 8.0 }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "lfo_x",
+      "typeId": "node.lfo",
+      "handle": "lfo_x",
+      "params": {
+        "rate_mode": { "type": "Enum", "value": 0 },
+        "rate": { "type": "Enum", "value": 2 },
+        "shape": { "type": "Enum", "value": 0 },
+        "phase": { "type": "Float", "value": 0.0 },
+        "min": { "type": "Float", "value": -3.0 },
+        "max": { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "lfo_z",
+      "typeId": "node.lfo",
+      "handle": "lfo_z",
+      "params": {
+        "rate_mode": { "type": "Enum", "value": 0 },
+        "rate": { "type": "Enum", "value": 2 },
+        "shape": { "type": "Enum", "value": 0 },
+        "phase": { "type": "Float", "value": 0.25 },
+        "min": { "type": "Float", "value": -3.0 },
+        "max": { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "cube_obj",
+      "typeId": "node.scene_object",
+      "handle": "Cube"
+    },
+    {
+      "id": 8,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "camera" },
+    { "fromNode": 2, "fromPort": "envmap", "toNode": 8, "toPort": "envmap" },
+    { "fromNode": 3, "fromPort": "vertices", "toNode": 7, "toPort": "vertices" },
+    { "fromNode": 3, "fromPort": "material", "toNode": 7, "toPort": "material" },
+    { "fromNode": 3, "fromPort": "transform", "toNode": 7, "toPort": "transform" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 8, "toPort": "light_0" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 4, "toPort": "pos_x" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 4, "toPort": "pos_z" },
+    { "fromNode": 7, "fromPort": "object", "toNode": 8, "toPort": "object_0" },
+    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+  ]
+}

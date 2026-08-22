@@ -1,0 +1,154 @@
+{
+  "version": 2,
+  "name": "Skin",
+  "description": "SCENE_FX P3 scene-mod preset: a procedural texture atom wired into a scene_object's emissive_map input. Uses the proven P0 emissive-wired shape — node.checkerboard drives node.scene_object.emissive_map on a GLB model — so a performer can swap the source texture and the model independently.",
+  "presetMetadata": {
+    "id": "Skin",
+    "displayName": "Skin",
+    "category": "Geometry",
+    "oscPrefix": "skin",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": [],
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "mesh",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "cam",
+      "typeId": "node.orbit_camera",
+      "handle": "cam",
+      "params": {
+        "distance": { "type": "Float", "value": 2.5 },
+        "fov_y": { "type": "Float", "value": 0.9 },
+        "look_y": { "type": "Float", "value": 0.5 },
+        "orbit": { "type": "Float", "value": 0.7 },
+        "tilt": { "type": "Float", "value": 0.35 }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "mesh",
+      "typeId": "node.gltf_mesh_source",
+      "handle": "mesh",
+      "params": {
+        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb" },
+        "fit": { "type": "Enum", "value": 1 },
+        "recenter": { "type": "Bool", "value": true },
+        "material_index": { "type": "Int", "value": -1 },
+        "mesh_index": { "type": "Int", "value": -1 },
+        "primitive_index": { "type": "Int", "value": -1 },
+        "max_capacity": { "type": "Int", "value": 8000000 }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "mat",
+      "typeId": "node.phong_material",
+      "handle": "mat",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.9 },
+        "color_g": { "type": "Float", "value": 0.9 },
+        "color_b": { "type": "Float", "value": 0.9 },
+        "ambient": { "type": "Float", "value": 0.4 },
+        "emission_intensity": { "type": "Float", "value": 2.0 }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "xform",
+      "typeId": "node.transform_3d",
+      "handle": "xform",
+      "params": {
+        "pos_y": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "emissive_pattern",
+      "typeId": "node.checkerboard",
+      "handle": "emissive_pattern",
+      "params": {
+        "scale": { "type": "Float", "value": 8.0 }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 0.0 },
+        "pos_y": { "type": "Float", "value": 5.0 },
+        "pos_z": { "type": "Float", "value": 5.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "object",
+      "typeId": "node.scene_object",
+      "handle": "object"
+    },
+    {
+      "id": 8,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "camera" },
+    { "fromNode": 2, "fromPort": "vertices", "toNode": 7, "toPort": "vertices" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 7, "toPort": "material" },
+    { "fromNode": 4, "fromPort": "transform", "toNode": 7, "toPort": "transform" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "emissive_map" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "light_0" },
+    { "fromNode": 7, "fromPort": "object", "toNode": 8, "toPort": "object_0" },
+    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+  ]
+}
