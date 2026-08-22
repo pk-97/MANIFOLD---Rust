@@ -162,10 +162,18 @@ CSG-style capping (he has not asked for capping).
 axis_phase)) · amount²`, positional `pos.xyz += same · amount² · 0.25`. Smooth noise
 = summed sines with irrational frequency ratios (the stateless standard — no stored
 phase, no RNG state). Composes onto any Transform wire: camera (the kick weight),
-lights (orbital shimmer), objects. Panel: no new row — it appears in the modifier
-menu wherever a Transform chain is walkable; if the panel's modifier walk is
-mesh-only today, P3 adds the Transform-chain walk to `scene_vm.rs` (one seam,
-named here so nobody invents a second).
+lights (orbital shimmer), objects.
+
+**Implementation shape (amended 2026-08-22, P3 escalation):** Transform is a CPU
+struct wire — the freeze codegen has no element domain to dispatch over, so the
+atom is a **CPU-only NonGpu primitive, precedent `camera_lens`/`transform_3d`** (no
+`wgsl_body`, no fusion). D2's codegen rule covers per-element GPU atoms; a
+single-struct CPU op (a few sin() calls per frame) is not a hot-path concern. The
+D3 passthrough invariant still binds and is enforced as a **CPU unit test**:
+amount=0 → output struct == input struct, bit-exact. Panel: no new row — it appears
+in the modifier menu wherever a Transform chain is walkable; the panel's modifier
+walk is mesh-only today, so P3 adds the Transform-chain walk to `scene_vm.rs` (one
+seam, named here so nobody invents a second).
 
 ### 3.3 Layer skins (P4) — the one new seam
 
@@ -316,8 +324,9 @@ presets, so warmup rides the existing preset-prewarm path.
 - **Deliverables:** `node.transform_shake` atom; the five presets of section 3.5
   (validation via `graph-tool validate --kind generator`); Transform-chain
   modifier walk in `scene_vm.rs` if the entry check found it missing.
-- **Gate:** gpu-proofs green for the atom (value proof vs CPU-computed noise);
-  presets validate; scope test + `default_passthrough` green; negative: `rg "struct.*Shake.*State\|static.*SHAKE" primitives/transform_shake.rs` → zero hits (stateless proof).
+- **Gate:** CPU unit tests green for the atom (value proof vs hand-computed noise;
+  amount=0 passthrough bit-exact); presets validate; the statelessness negative rg
+  (`struct.*Shake.*State\|static.*SHAKE` in transform_shake.rs → zero hits).
 - **Demo:** three-frame PNG sequence of a camera-shaken scene at rising amounts —
   probe = inter-frame pixel delta grows with amount (computed), L2. Presets: L2
   renders.
