@@ -1,6 +1,6 @@
 # Scene FX — performable deformers, scene mods, and layer skins for 3D scenes
 
-**Status:** APPROVED design, not built · 2026-08-21 · k3 (lead), design session with Peter
+**Status:** IN PROGRESS — P0 SHIPPED 2026-08-22 (verdict WORKS: in-graph texture → emissive_map renders non-black, mean abs diff 8.80; `graph-tool render` now waits on io_pending+warmup, landing `5b6ccc43d`). P1–P4 not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
 **Prerequisites:** none hard — every consumed substrate is shipped in-tree (audit below).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -261,8 +261,10 @@ presets, so warmup rides the existing preset-prewarm path.
   exits 0; PNG region-mean probe at the model's screen position is non-zero and
   differs from the unwired baseline by a stated threshold (computed, not eyeballed).
 - **Demo:** the two PNGs, L2 — Peter looks.
-- **Forbidden moves:** no code changes in this phase; no "it probably works" verdict
-  without the probe numbers.
+- **Forbidden moves:** no feature-code changes in this phase; no "it probably works" verdict
+  without the probe numbers. (Lead amendment 2026-08-22: oracle-tooling fixes ARE in
+  scope when the named oracle is unfit — `graph-tool render` didn't wait on
+  `io_pending`, so GLB captures landed black; the lane fixed the tool, not the feature.)
 - **Test scope:** none beyond the spike commands.
 
 ### P1 — host + first glitch atoms (one session)
