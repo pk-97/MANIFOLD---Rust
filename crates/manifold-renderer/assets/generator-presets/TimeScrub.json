@@ -15,7 +15,7 @@
       {
         "id": "modelPath",
         "name": "Model File",
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
         "isFilePicker": true,
         "useDropdown": false
       }
@@ -24,7 +24,7 @@
       {
         "id": "modelPath",
         "label": "Model File",
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
         "target": {
           "kind": "node",
           "nodeId": "mesh",
@@ -90,7 +90,7 @@
       "typeId": "node.gltf_mesh_source",
       "handle": "mesh",
       "params": {
-        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb" },
+        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb" },
         "fit": { "type": "Enum", "value": 1 },
         "recenter": { "type": "Bool", "value": true },
         "material_index": { "type": "Int", "value": -1 },
@@ -105,7 +105,7 @@
       "typeId": "node.gltf_animation_source",
       "handle": "anim",
       "params": {
-        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb" },
+        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb" },
         "translation_node": { "type": "Int", "value": -1 },
         "rotation_node": { "type": "Int", "value": -1 },
         "scale_node": { "type": "Int", "value": -1 },
