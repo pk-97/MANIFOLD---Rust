@@ -189,7 +189,9 @@ pub fn sync_inspector_data(
                         .generator_graph()
                         .cloned()
                         .or_else(|| manifold_renderer::node_graph::bundled_preset_def(&gen_type).cloned());
-                    match def.as_ref().and_then(SceneVm::from_def) {
+                    let layer_ids: Vec<manifold_core::LayerId> =
+                        project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
+                    match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
                             // Ranges transcribed from each primitive's own
@@ -500,6 +502,42 @@ pub fn sync_inspector_data(
                                         object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
                                         object_doc_ids.extend(transform_chain.iter().map(|m| m.node_doc_id));
                                         let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
+                                        // P4b: every Known object gets a Skin
+                                        // row, even when no `node.layer_source`
+                                        // exists yet — `source_node_id: None`
+                                        // means the editing command will mint one.
+                                        let source_options: Vec<(manifold_core::LayerId, String)> = project
+                                            .timeline
+                                            .layers
+                                            .iter()
+                                            .map(|l| (l.layer_id.clone(), l.name.clone()))
+                                            .collect();
+                                        let default_scope = visible_addr.scope_path.clone();
+                                        let skin = known.skin.as_ref().map(|s| {
+                                            use manifold_renderer::node_graph::scene_vm::SkinTargetMap as RTarget;
+                                            use manifold_ui::panels::scene_setup_panel::SkinTargetMap as UITarget;
+                                            manifold_ui::panels::scene_setup_panel::SkinRowVm {
+                                                source_node_id: Some(s.source_node_id),
+                                                source_scope_path: s.source_node_scope_path.clone(),
+                                                source: s.source_layer_id.as_ref().and_then(|id| {
+                                                    let lid = manifold_core::LayerId::new(id.as_str());
+                                                    project.timeline.layers.iter().any(|l| l.layer_id == lid).then_some(lid)
+                                                }),
+                                                source_options: source_options.clone(),
+                                                source_missing: s.source_missing,
+                                                target_map: match s.target_map {
+                                                    RTarget::Emissive => UITarget::Emissive,
+                                                    RTarget::BaseColor => UITarget::BaseColor,
+                                                },
+                                            }
+                                        }).or(Some(manifold_ui::panels::scene_setup_panel::SkinRowVm {
+                                            source_node_id: None,
+                                            source_scope_path: default_scope,
+                                            source: None,
+                                            source_options,
+                                            source_missing: false,
+                                            target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::Emissive,
+                                        }));
                                         ObjectRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
                                                 index: *index,
@@ -528,6 +566,7 @@ pub fn sync_inspector_data(
                                                     .collect(),
                                                 modifiers_addable: *modifier_chain_parseable,
                                                 sections,
+                                                skin,
                                             },
                                         ))
                                     }

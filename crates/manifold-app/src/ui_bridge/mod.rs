@@ -254,6 +254,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenRtQualityTierDropdown { .. }
             | RootAction::OpenRtQualityResDropdown { .. }
             | RootAction::SceneSetupAddModifierClicked(..)
+            | RootAction::SceneSetupSkinSourceClicked { .. }
+            | RootAction::SceneSetupSkinTargetMapClicked { .. }
             | RootAction::AudioSendGainBeginTextInput(..)
             | RootAction::CopyOscAddress(_)
             | RootAction::OpenGraphEditor(_)

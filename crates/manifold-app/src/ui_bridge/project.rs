@@ -398,6 +398,60 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+
+        // P4b: Skin row source/target edits — same shape as the modifier-stack
+        // arms above: resolve `GraphTarget::Generator(layer_id)`, grab the
+        // catalog default, execute locally + send to content thread.
+        ProjectAction::SceneSetupSkinSourceSet {
+            layer_id,
+            scope_path,
+            scene_object_id,
+            source_node_id,
+            target_map,
+            source,
+        } => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let source_string = source.as_ref().map(|id| id.to_string());
+                let cmd = manifold_editing::commands::graph::SetSceneObjectSkinSourceCommand::new(
+                    target,
+                    scope_path.clone(),
+                    *scene_object_id,
+                    *source_node_id,
+                    map_skin_target_map(*target_map),
+                    source_string,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupSkinTargetMapSet {
+            layer_id,
+            scope_path,
+            scene_object_id,
+            source_node_id,
+            target_map,
+        } => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::SetSceneObjectSkinTargetMapCommand::new(
+                    target,
+                    scope_path.clone(),
+                    *scene_object_id,
+                    *source_node_id,
+                    map_skin_target_map(*target_map),
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+
         // P5 properties-header "Duplicate" (Object selection, D11): the same
         // `DuplicateSceneObjectCommand` construction shape as
         // `SceneSetupRemoveObject` above.
@@ -907,6 +961,17 @@ pub(crate) fn generator_catalog_default(
     }
     let json = manifold_renderer::node_graph::bundled_preset_json(&gt)?;
     serde_json::from_str(&json).ok()
+}
+
+/// P4b: translate the UI's SkinTargetMap into the editing command's enum.
+fn map_skin_target_map(
+    target: manifold_ui::panels::scene_setup_panel::SkinTargetMap,
+) -> manifold_editing::commands::graph::SkinTargetMap {
+    use manifold_ui::panels::scene_setup_panel::SkinTargetMap as Ui;
+    match target {
+        Ui::Emissive => manifold_editing::commands::graph::SkinTargetMap::Emissive,
+        Ui::BaseColor => manifold_editing::commands::graph::SkinTargetMap::BaseColor,
+    }
 }
 
 #[cfg(test)]

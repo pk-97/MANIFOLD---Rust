@@ -215,6 +215,24 @@ pub enum ProjectAction {
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
     /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
     SceneSetupRemoveLight(LayerId, u32, u32),
+    /// P4b: a project layer was selected from the Skin source dropdown.
+    /// `source: None` clears the skin (the model uses its own texture).
+    SceneSetupSkinSourceSet {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        scene_object_id: u32,
+        source_node_id: Option<u32>,
+        target_map: crate::panels::scene_setup_panel::SkinTargetMap,
+        source: Option<LayerId>,
+    },
+    /// P4b: Emissive/Base Color was selected from the Skin target dropdown.
+    SceneSetupSkinTargetMapSet {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        scene_object_id: u32,
+        source_node_id: Option<u32>,
+        target_map: crate::panels::scene_setup_panel::SkinTargetMap,
+    },
     /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): click on a
     /// scene row's mod button — expose this inner param on the layer's
     /// generator card via the SAME `ToggleNodeParamExposeCommand` the graph
@@ -758,6 +776,33 @@ pub enum RootAction {
     /// node id (the app resolves its screen rect at open time — same
     /// convention as `SceneSetupBeginNumericTextInput`).
     AudioSendGainBeginTextInput(AudioSendId, f32, crate::node::NodeId),
+    /// P4b: click the Skin row's source dropdown — `UIRoot`'s pre-dispatch
+    /// dropdown intercept opens the shared `panels::dropdown` overlay anchored
+    /// to `button_node_id`, listing "None" + every `source_options` entry,
+    /// each item dispatching `SceneSetupSkinSourceSet`. The options ride the
+    /// action (captured from the row's freshly synced `SkinRowVm`) so the
+    /// opener needs no project cache — same self-contained convention as
+    /// `SceneSetupEnumClicked`'s label set.
+    SceneSetupSkinSourceClicked {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        scene_object_id: u32,
+        source_node_id: Option<u32>,
+        target_map: crate::panels::scene_setup_panel::SkinTargetMap,
+        source_options: Vec<(LayerId, String)>,
+        button_node_id: crate::node::NodeId,
+    },
+    /// P4b: click the Skin row's target-map dropdown — app-side opens the
+    /// shared dropdown, listing Emissive / Base Color, each item dispatching
+    /// `SceneSetupSkinTargetMapSet`.
+    SceneSetupSkinTargetMapClicked {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        scene_object_id: u32,
+        source_node_id: Option<u32>,
+        current_target_map: crate::panels::scene_setup_panel::SkinTargetMap,
+        button_node_id: crate::node::NodeId,
+    },
     // ── Graph-editor mapping-sidebar drags (`EffectMappingRange*` /
     // `EffectMappingAffine*`) are FRAME-RESIDENT (UI_FUNNEL_DECOMPOSITION P-I,
     // Fork-2): they stay `RootAction` variants dispatched from `app_render`'s

@@ -32,6 +32,7 @@
 
 use std::collections::HashSet;
 
+use manifold_core::LayerId;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue,
 };
@@ -134,6 +135,41 @@ pub struct SceneHeaderVm {
     pub vertex_count_exact: bool,
 }
 
+/// Which material map port a layer skin is wired into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinTargetMap {
+    Emissive,
+    BaseColor,
+}
+
+impl SkinTargetMap {
+    fn port_name(self) -> &'static str {
+        match self {
+            SkinTargetMap::Emissive => "emissive_map",
+            SkinTargetMap::BaseColor => "base_color_map",
+        }
+    }
+}
+
+/// P4b: one layer-skin binding discovered on a scene object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinVm {
+    /// The `node.layer_source` producer's doc id — the address the Skin row
+    /// writes the `layer` param at.
+    pub source_node_id: u32,
+    /// The scope path to the level that actually contains `source_node_id`
+    /// (the scene_object's own scope, which may be a group).
+    pub source_node_scope_path: Vec<u32>,
+    /// The bound layer id, read from the source node's `layer` param. `None`
+    /// when the param is empty/absent (the row shows "None").
+    pub source_layer_id: Option<String>,
+    /// Which map port the source is wired into.
+    pub target_map: SkinTargetMap,
+    /// `true` when `source_layer_id` is set but the id doesn't exist in the
+    /// project's current layer list (D8: loud missing-layer chip).
+    pub source_missing: bool,
+}
+
 /// Payload for [`SceneObjectVm::Known`], boxed at the enum site for the same
 /// clippy `large_enum_variant` reason as [`LightRow`]/[`OrbitCameraRow`].
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +216,10 @@ pub struct SceneObjectKnownRow {
     /// "Add modifier" only when this is `false` — never a blind splice
     /// into unrecognized topology (D6).
     pub modifier_chain_parseable: bool,
+    /// P4b: the object's layer skin, discovered from a `node.layer_source`
+    /// wired into `emissive_map` or `base_color_map`. `None` when neither
+    /// map has a layer_source producer.
+    pub skin: Option<SkinVm>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -399,10 +439,30 @@ fn param_f32(node: &EffectGraphNode, name: &str, default: f32) -> f32 {
     }
 }
 
+/// Read a string param, coercing only the exact string variant. Every other
+/// shape (including the Float placeholder `node.layer_source.layer` ships as a
+/// default) returns `None` so the UI falls back to "None".
+fn param_string(node: &EffectGraphNode, name: &str) -> Option<String> {
+    match node.params.get(name) {
+        Some(SerializedParamValue::String { value }) => Some(value.clone()),
+        _ => None,
+    }
+}
+
 impl SceneVm {
     /// Discover the full D3 trace for `def`. `None` when no `render_scene`
     /// reaches the graph's output (the empty-scene case; D7 handles it).
+    /// Backwards-compatible entry point: no project layer list, so missing-
+    /// source detection is disabled (used by tests and other call sites that
+    /// don't have the project handy).
     pub fn from_def(def: &EffectGraphDef) -> Option<SceneVm> {
+        Self::from_def_with_layers(def, &[])
+    }
+
+    /// P4b variant: pass the current project layer list so the VM can flag a
+    /// skin whose `layer` id no longer resolves (D8 missing-layer chip). Tests
+    /// and other callers without a layer list can use [`Self::from_def`].
+    pub fn from_def_with_layers(def: &EffectGraphDef, layer_ids: &[LayerId]) -> Option<SceneVm> {
         let root = Level { nodes: &def.nodes, wires: &def.wires };
 
         // Liveness: reachable-from-output, walked backward from
@@ -422,7 +482,9 @@ impl SceneVm {
         let multiple_scenes = candidates.len() > 1;
         let scene_node = root.node(scene_root_node_id)?;
 
-        let (objects, vertex_count, vertex_count_exact) = trace_objects(&root, scene_node);
+        let layer_id_set: HashSet<&str> = layer_ids.iter().map(|id| id.as_ref()).collect();
+        let (objects, vertex_count, vertex_count_exact) =
+            trace_objects(&root, scene_node, &layer_id_set);
         let lights = trace_lights(&root, scene_node);
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
@@ -566,7 +628,11 @@ fn resolve_producer_through_group<'a>(
 /// (`false` — at least one object's mesh source didn't resolve to a known
 /// count, e.g. a hand-wired procedural generator outside the closed-form
 /// table, or an unparseable chain).
-fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjectVm>, u64, bool) {
+fn trace_objects(
+    level: &Level,
+    scene_node: &EffectGraphNode,
+    layer_id_set: &HashSet<&str>,
+) -> (Vec<SceneObjectVm>, u64, bool) {
     let objects = param_f32(scene_node, "objects", 0.0).max(0.0) as usize;
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
@@ -576,7 +642,7 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjec
         let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
             Some((producer_id, _)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
-                    trace_scene_object(level, Vec::new(), producer_node, None, k)
+                    trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set)
                 }
                 Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
                     match producer_node.group.as_deref().and_then(find_scene_object_in_group) {
@@ -587,6 +653,7 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjec
                                 inner_node,
                                 Some(producer_id),
                                 k,
+                                layer_id_set,
                             )
                         }
                         None => (SceneObjectVm::Custom { index: k }, None),
@@ -684,6 +751,7 @@ fn trace_scene_object(
     node: &EffectGraphNode,
     group_node_id: Option<u32>,
     k: usize,
+    layer_id_set: &HashSet<&str>,
 ) -> (SceneObjectVm, Option<u32>) {
     let object_node_id = node.id;
     let name = node.handle.clone().unwrap_or_else(|| format!("Object {k}"));
@@ -709,6 +777,32 @@ fn trace_scene_object(
             }))
         })
         .unwrap_or(MaterialVm::None);
+
+    // P4b: discover a `node.layer_source` wired into `emissive_map` or
+    // `base_color_map`. Emissive takes precedence if both are wired.
+    let skin = [SkinTargetMap::Emissive, SkinTargetMap::BaseColor]
+        .iter()
+        .find_map(|&target| {
+            resolve_producer_through_group(level, object_node_id, target.port_name())
+                .filter(|(_, _, n, _)| n.type_id == "node.layer_source")
+                .map(|(_lvl, crossed_group, n, _)| {
+                    let mut source_node_scope_path = scope_path.clone();
+                    if let Some(g) = crossed_group {
+                        source_node_scope_path.push(g);
+                    }
+                    let source_layer_id = param_string(n, "layer").filter(|s| !s.is_empty());
+                    let source_missing = source_layer_id
+                        .as_ref()
+                        .is_some_and(|id| !layer_id_set.contains(id.as_str()));
+                    SkinVm {
+                        source_node_id: n.id,
+                        source_node_scope_path,
+                        source_layer_id,
+                        target_map: target,
+                        source_missing,
+                    }
+                })
+        });
 
     // Modifier chain (D6, re-anchored per D12): walk backward from the
     // scene_object's OWN `vertices` input instead of a group output's
@@ -774,6 +868,7 @@ fn trace_scene_object(
         transform_chain_parseable,
         modifier_chain: chain,
         modifier_chain_parseable: parseable,
+        skin,
     }));
     (row, source_vertex_count)
 }
