@@ -1,0 +1,190 @@
+{
+  "version": 2,
+  "name": "Time Scrub",
+  "description": "SCENE_FX P3 scene-mod preset: gltf animation driven by a beat-synced ramp. node.gltf_animation_source's progress input is port-shadowed; node.beat_ramp is wired into it so the imported object's keyframes scrub through time with the tempo. Wire the source's pos/rot/scale outputs straight into node.transform_3d.",
+  "presetMetadata": {
+    "id": "TimeScrub",
+    "displayName": "Time Scrub",
+    "category": "Geometry",
+    "oscPrefix": "timescrub",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": [],
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "mesh",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": { "type": "Float", "value": 3.0 },
+        "fov_y": { "type": "Float", "value": 0.9 },
+        "look_y": { "type": "Float", "value": 0.5 },
+        "orbit": { "type": "Float", "value": 0.7 },
+        "tilt": { "type": "Float", "value": 0.25 }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": { "type": "Float", "value": 0.3 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 0.0 },
+        "pos_y": { "type": "Float", "value": 7.0 },
+        "pos_z": { "type": "Float", "value": 7.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "range": { "type": "Float", "value": 30.0 }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "mesh",
+      "typeId": "node.gltf_mesh_source",
+      "handle": "mesh",
+      "params": {
+        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb" },
+        "fit": { "type": "Enum", "value": 1 },
+        "recenter": { "type": "Bool", "value": true },
+        "material_index": { "type": "Int", "value": -1 },
+        "mesh_index": { "type": "Int", "value": -1 },
+        "primitive_index": { "type": "Int", "value": -1 },
+        "max_capacity": { "type": "Int", "value": 8000000 }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "anim",
+      "typeId": "node.gltf_animation_source",
+      "handle": "anim",
+      "params": {
+        "path": { "type": "String", "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/rt/apricot_tl05.glb" },
+        "translation_node": { "type": "Int", "value": -1 },
+        "rotation_node": { "type": "Int", "value": -1 },
+        "scale_node": { "type": "Int", "value": -1 },
+        "duration_s": { "type": "Float", "value": 2.0 },
+        "rate": { "type": "Float", "value": 1.0 },
+        "clip_index": { "type": "Int", "value": 0 },
+        "loop_mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "scrub",
+      "typeId": "node.beat_ramp",
+      "handle": "scrub",
+      "params": {
+        "rate": { "type": "Float", "value": 0.25 },
+        "attack": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "xform",
+      "typeId": "node.transform_3d",
+      "handle": "xform"
+    },
+    {
+      "id": 8,
+      "nodeId": "mat",
+      "typeId": "node.phong_material",
+      "handle": "mat",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.9 },
+        "color_g": { "type": "Float", "value": 0.9 },
+        "color_b": { "type": "Float", "value": 0.9 },
+        "ambient": { "type": "Float", "value": 0.4 },
+        "emission_intensity": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "object",
+      "typeId": "node.scene_object",
+      "handle": "object"
+    },
+    {
+      "id": 10,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 10, "toPort": "camera" },
+    { "fromNode": 2, "fromPort": "envmap", "toNode": 10, "toPort": "envmap" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 10, "toPort": "light_0" },
+    { "fromNode": 4, "fromPort": "vertices", "toNode": 9, "toPort": "vertices" },
+    { "fromNode": 5, "fromPort": "pos_x", "toNode": 7, "toPort": "pos_x" },
+    { "fromNode": 5, "fromPort": "pos_y", "toNode": 7, "toPort": "pos_y" },
+    { "fromNode": 5, "fromPort": "pos_z", "toNode": 7, "toPort": "pos_z" },
+    { "fromNode": 5, "fromPort": "rot_x", "toNode": 7, "toPort": "rot_x" },
+    { "fromNode": 5, "fromPort": "rot_y", "toNode": 7, "toPort": "rot_y" },
+    { "fromNode": 5, "fromPort": "rot_z", "toNode": 7, "toPort": "rot_z" },
+    { "fromNode": 5, "fromPort": "scale_x", "toNode": 7, "toPort": "scale_x" },
+    { "fromNode": 5, "fromPort": "scale_y", "toNode": 7, "toPort": "scale_y" },
+    { "fromNode": 5, "fromPort": "scale_z", "toNode": 7, "toPort": "scale_z" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 5, "toPort": "progress" },
+    { "fromNode": 7, "fromPort": "transform", "toNode": 9, "toPort": "transform" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "material" },
+    { "fromNode": 9, "fromPort": "object", "toNode": 10, "toPort": "object_0" },
+    { "fromNode": 10, "fromPort": "color", "toNode": 11, "toPort": "in" }
+  ]
+}

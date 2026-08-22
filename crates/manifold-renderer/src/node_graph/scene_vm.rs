@@ -74,6 +74,10 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
     "node.noise_displace",
     "node.glitch_jitter",
 ];
+/// The curated Transform-chain modifier vocabulary (P3): single-Transform-in/
+/// Transform-out atoms that may sit between `node.transform_3d` and
+/// `node.scene_object`'s `transform` input.
+const TRANSFORM_MODIFIER_TYPE_IDS: &[&str] = &["node.transform_shake"];
 /// A write address for one editable value: the exact addressing
 /// `SetGraphNodeParamCommand::with_scope` takes.
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +155,13 @@ pub struct SceneObjectKnownRow {
     pub visible_driven: bool,
     pub transform: Option<TransformVm>,
     pub material: MaterialVm,
+    /// Chain of single-Transform-in/Transform-out nodes between the
+    /// `node.transform_3d` source and the scene_object's `transform` input,
+    /// in wire order (P3). Empty when there are no transform modifiers.
+    pub transform_chain: Vec<ModifierVm>,
+    /// `false` when the scene_object's `transform` chain couldn't be walked
+    /// at all — mirrors `modifier_chain_parseable` for the transform wire.
+    pub transform_chain_parseable: bool,
     /// Chain of single-mesh-input/mesh-output nodes between the mesh source
     /// and the scene_object's `vertices` input, in wire order (D6's
     /// modifier stack, re-anchored per D12).
@@ -589,6 +600,74 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjec
     (out, vertex_count, vertex_count_exact)
 }
 
+/// Walk the P3 Transform modifier chain feeding `scene_object.transform`,
+/// backward to the `node.transform_3d` source. Collects any
+/// `TRANSFORM_MODIFIER_TYPE_IDS` atoms in wire order (source → … → object)
+/// and returns the traced `TransformVm` plus parseability. Mirrors the mesh
+/// modifier walk's group-crossing tolerance: a bare group that re-exports
+/// `transform` is transparent, not a modifier itself.
+fn walk_transform_chain(
+    level: &Level,
+    scope_path: Vec<u32>,
+    object_node_id: u32,
+) -> (Option<TransformVm>, Vec<ModifierVm>, bool) {
+    let mut chain = Vec::new();
+    let mut current_level = Level { nodes: level.nodes, wires: level.wires };
+    let mut sp = scope_path;
+    let mut cursor = current_level.producer(object_node_id, "transform");
+    let mut parseable = cursor.is_some();
+    let mut transform_vm = None;
+    let mut guard = 0;
+    while let Some((node_id, port)) = cursor {
+        guard += 1;
+        if guard > 64 {
+            parseable = false; // cycle guard.
+            break;
+        }
+        let Some(n) = current_level.node(node_id) else {
+            parseable = false;
+            break;
+        };
+        if n.type_id == GROUP_TYPE_ID {
+            let Some(group) = n.group.as_ref() else {
+                parseable = false;
+                break;
+            };
+            let inner = Level { nodes: &group.nodes, wires: &group.wires };
+            let Some(out_node) = inner.nodes.iter().find(|gn| gn.type_id == GROUP_OUTPUT_TYPE_ID)
+            else {
+                parseable = false;
+                break;
+            };
+            let Some((inner_id, inner_port)) = inner.producer(out_node.id, port) else {
+                parseable = false;
+                break;
+            };
+            sp.push(node_id);
+            current_level = inner;
+            cursor = Some((inner_id, inner_port));
+            continue;
+        }
+        if n.type_id == TRANSFORM_3D_TYPE_ID {
+            transform_vm = Some(trace_transform(&current_level, sp, n.id));
+            break;
+        }
+        if TRANSFORM_MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
+            chain.push(ModifierVm { node_doc_id: n.id, type_id: n.type_id.clone() });
+            cursor = current_level.producer(n.id, "transform");
+            continue;
+        }
+        parseable = false; // producer is neither transform_3d nor a known modifier.
+        break;
+    }
+    chain.reverse(); // wire order: transform_3d → … → scene_object.
+    let transform = transform_vm;
+    // A chain of Transform modifiers that never reaches a transform_3d
+    // source is not a complete, splicable stack.
+    let parseable = parseable && transform.is_some();
+    (transform, chain, parseable)
+}
+
 /// Traces one `node.scene_object`'s full editable surface (D12): name,
 /// visible, transform, material, modifier chain, map-presence — everything
 /// addressed at `scope_path` (empty for a bare/ungrouped scene_object,
@@ -608,15 +687,8 @@ fn trace_scene_object(
     let visible_value = param_f32(node, "visible", 1.0) > 0.5;
     let visible_driven = level.producer(object_node_id, "visible").is_some();
 
-    let transform = resolve_producer_through_group(level, object_node_id, "transform")
-        .filter(|(_, _, n, _)| n.type_id == TRANSFORM_3D_TYPE_ID)
-        .map(|(lvl, crossed_group, n, _)| {
-            let mut sp = scope_path.clone();
-            if let Some(g) = crossed_group {
-                sp.push(g);
-            }
-            trace_transform(&lvl, sp, n.id)
-        });
+    let (transform, transform_chain, transform_chain_parseable) =
+        walk_transform_chain(level, scope_path.clone(), object_node_id);
 
     let material = resolve_producer_through_group(level, object_node_id, "material")
         .filter(|(_, _, n, _)| MATERIAL_TYPE_IDS.contains(&n.type_id.as_str()))
@@ -693,6 +765,8 @@ fn trace_scene_object(
         visible_driven,
         transform,
         material,
+        transform_chain,
+        transform_chain_parseable,
         modifier_chain: chain,
         modifier_chain_parseable: parseable,
     }));
@@ -1814,5 +1888,85 @@ mod tests {
         let grouped_def = def(vec![group], vec![]);
         assert!(is_param_driven(&grouped_def, 10, "roughness"), "must find wires at the level inside a group body");
         assert!(!is_param_driven(&grouped_def, 10, "metallic"), "unwired grouped param must not be driven");
+    }
+
+    /// P3: the transform wire can carry `node.transform_shake` between the
+    /// `node.transform_3d` source and `node.scene_object.transform`. The
+    /// walk resolves the underlying transform_3d and records the modifier.
+    #[test]
+    fn transform_chain_captures_transform_shake_before_scene_object() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.cube_mesh", Some("mesh"));
+        let transform = node(2, TRANSFORM_3D_TYPE_ID, Some("transform"));
+        let shake = node(3, "node.transform_shake", Some("shake"));
+        let scene_obj = node(4, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(5, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, transform, shake, scene_obj, gout],
+            wires: vec![
+                wire(1, "vertices", 4, "vertices"),
+                wire(2, "transform", 3, "transform"),
+                wire(3, "out", 4, "transform"),
+                wire(4, "object", 5, "object"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) => {
+                assert!(row.transform.is_some(), "transform_3d resolves through the shake atom");
+                assert_eq!(row.transform.as_ref().unwrap().node_doc_id, 2);
+                assert!(row.transform_chain_parseable);
+                assert_eq!(row.transform_chain.len(), 1);
+                assert_eq!(row.transform_chain[0].type_id, "node.transform_shake");
+                assert_eq!(row.transform_chain[0].node_doc_id, 3);
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
+
+    /// P3: a genuinely unparseable transform wire (no transform_3d at the
+    /// source end) degrades gracefully — `transform` is None but the walk
+    /// still reports it as unparseable.
+    #[test]
+    fn transform_chain_without_transform_3d_is_unparseable() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.cube_mesh", Some("mesh"));
+        let shake = node(3, "node.transform_shake", Some("shake"));
+        let scene_obj = node(4, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(5, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, shake, scene_obj, gout],
+            wires: vec![
+                wire(1, "vertices", 4, "vertices"),
+                wire(3, "out", 4, "transform"),
+                wire(4, "object", 5, "object"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) => {
+                assert!(row.transform.is_none(), "no transform_3d source — transform row absent");
+                assert!(!row.transform_chain_parseable, "chain without a transform_3d source is unparseable");
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
     }
 }
