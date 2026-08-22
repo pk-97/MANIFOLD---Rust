@@ -29,10 +29,15 @@ mod gpu_tests {
     use crate::node_graph::freeze::codegen::standalone_for_spec;
     use crate::node_graph::primitives::{
         bend_mesh::BendMesh,
+        fold_mesh::FoldMesh,
         glitch_jitter::GlitchJitter,
+        melt_mesh::MeltMesh,
         morph_mesh::MorphMesh,
         noise_displace::NoiseDisplace,
         push_along_normals::PushAlongNormals,
+        ripple_mesh::RippleMesh,
+        shatter_mesh::ShatterMesh,
+        slice_mesh::SliceMesh,
         taper_mesh::TaperMesh,
         twist_mesh::TwistMesh,
         voxelize_mesh::VoxelizeMesh,
@@ -269,6 +274,73 @@ mod gpu_tests {
                 assert_position_identity("node.glitch_jitter", &src, &out)
             }))
             .map_err(|_| failures.push("node.glitch_jitter".into()));
+        }
+
+        // shatter_mesh: amount=0, seed=0, weights_len=0, dispatch_count=N.
+        {
+            let wgsl = standalone_for_spec::<ShatterMesh>().expect("shatter_mesh codegen");
+            let uniforms = &[u(0.0), u(0.0), 0u32, count];
+            let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
+            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_position_identity("node.shatter_mesh", &src, &out)
+            }))
+            .map_err(|_| failures.push("node.shatter_mesh".into()));
+        }
+
+        // slice_mesh: axis=0, cut=1000.0 (far past all test vertices), weights_len=0,
+        // dispatch_count=N.
+        {
+            let wgsl = standalone_for_spec::<SliceMesh>().expect("slice_mesh codegen");
+            let uniforms = &[0u32, u(1000.0), 0u32, count];
+            let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
+            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_position_identity("node.slice_mesh", &src, &out)
+            }))
+            .map_err(|_| failures.push("node.slice_mesh".into()));
+        }
+
+        // ripple_mesh: amplitude=0, frequency=1, speed=1, axis=1, time=0,
+        // weights_len=0, dispatch_count=N, pad.
+        {
+            let wgsl = standalone_for_spec::<RippleMesh>().expect("ripple_mesh codegen");
+            let uniforms = &[
+                u(0.0), u(1.0), u(1.0), 1u32, u(0.0), 0u32, count, 0u32,
+            ];
+            let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
+            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_position_identity("node.ripple_mesh", &src, &out)
+            }))
+            .map_err(|_| failures.push("node.ripple_mesh".into()));
+        }
+
+        // fold_mesh: axis=1, amount=0, weights_len=0, dispatch_count=N.
+        {
+            let wgsl = standalone_for_spec::<FoldMesh>().expect("fold_mesh codegen");
+            let uniforms = &[1u32, u(0.0), 0u32, count];
+            let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
+            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_position_identity("node.fold_mesh", &src, &out)
+            }))
+            .map_err(|_| failures.push("node.fold_mesh".into()));
+        }
+
+        // melt_mesh: amount=0, frequency=1, seed=0, weights_len=0, dispatch_count=N,
+        // pad x3.
+        {
+            let wgsl = standalone_for_spec::<MeltMesh>().expect("melt_mesh codegen");
+            let uniforms = &[
+                u(0.0), u(1.0), u(0.0), 0u32, count, 0u32, 0u32, 0u32,
+            ];
+            let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
+            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_position_identity("node.melt_mesh", &src, &out)
+            }))
+            .map_err(|_| failures.push("node.melt_mesh".into()));
         }
 
         assert!(

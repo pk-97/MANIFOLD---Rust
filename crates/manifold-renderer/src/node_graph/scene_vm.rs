@@ -73,6 +73,11 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
     "node.voxelize_mesh",
     "node.noise_displace",
     "node.glitch_jitter",
+    "node.shatter_mesh",
+    "node.slice_mesh",
+    "node.ripple_mesh",
+    "node.fold_mesh",
+    "node.melt_mesh",
 ];
 /// A write address for one editable value: the exact addressing
 /// `SetGraphNodeParamCommand::with_scope` takes.
