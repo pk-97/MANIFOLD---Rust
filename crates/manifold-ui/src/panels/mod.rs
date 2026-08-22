@@ -24,6 +24,7 @@ pub mod scrub;
 pub mod perf_hud;
 pub mod rt_quality_panel;
 pub mod scene_setup_panel;
+pub mod scene_setup_skin;
 pub mod settings_popup;
 pub mod popup_shell;
 pub mod toast;

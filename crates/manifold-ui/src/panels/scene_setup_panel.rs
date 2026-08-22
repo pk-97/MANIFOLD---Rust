@@ -55,6 +55,9 @@ const KEY_OUTLINER_LIGHTS: u64 = 80_018;
 const KEY_OUTLINER_OBJECTS: u64 = 80_019;
 /// Frame button offset: use offset 33 to avoid collision with Remove (20), Duplicate (21), and mod buttons (22..32)
 const OBJ_OFF_FRAME: u64 = 33;
+/// P4b Skin row source/target dropdown buttons.
+const OBJ_OFF_SKIN_SOURCE: u64 = 34;
+const OBJ_OFF_SKIN_TARGET: u64 = 35;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
 /// Objects are a variable-length list (unlike the four fixed Environment/Fog
@@ -328,6 +331,11 @@ pub struct ModifierKnownRow {
     pub display_name: String,
 }
 
+// P4b: the Skin row's payload types live in `scene_setup_skin.rs` (this file
+// is under the godfile line ceiling); re-exported here so panel-qualified
+// paths stay put.
+pub use super::scene_setup_skin::{SkinRowVm, SkinTargetMap};
+
 /// Payload for [`ObjectRowVm::Known`], boxed so the enum's footprint tracks
 /// the small `Custom` variant instead of this one (clippy
 /// `large_enum_variant` — same convention as `LightRow`/`OrbitCameraRow` in
@@ -367,6 +375,9 @@ pub struct ObjectKnownRow {
     /// different strings for the same node kind). Filters the unified
     /// properties card down to exactly this object's rows.
     pub sections: Vec<String>,
+    /// P4b: the object's layer-skin row. `None` when no `node.layer_source`
+    /// is wired into the object's material maps.
+    pub skin: Option<SkinRowVm>,
 }
 
 /// One Objects-section row (D3/D4).
@@ -891,6 +902,13 @@ pub struct ScenePanel {
     /// entry per chip — the click now opens the shared dropdown instead of
     /// resolving directly, so there's at most one entry and no `type_id`).
     add_modifier_button_id: Option<(NodeId, u32)>,
+    /// P4b: `(button_node_id, scene_object_id, SkinRowVm)` for the Skin row's
+    /// source picker. The click opens the shared dropdown; selection dispatches
+    /// `SceneSetupSkinSourceSet`.
+    skin_source_ids: Vec<(NodeId, u32, SkinRowVm)>,
+    /// P4b: `(button_node_id, scene_object_id, SkinRowVm)` for the Skin row's
+    /// target-map picker.
+    skin_target_ids: Vec<(NodeId, u32, SkinRowVm)>,
     /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
     /// header's "Remove" button, when a Known light is selected this frame —
     /// resolves to `PanelAction::SceneSetupRemoveLight`. At most one entry
@@ -941,6 +959,8 @@ impl Default for ScenePanel {
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
             add_modifier_button_id: None,
+            skin_source_ids: Vec::new(),
+            skin_target_ids: Vec::new(),
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -1126,6 +1146,8 @@ impl ScenePanel {
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.add_modifier_button_id = None;
+        self.skin_source_ids.clear();
+        self.skin_target_ids.clear();
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
         let inner_x = x + PAD;
@@ -2018,6 +2040,11 @@ impl ScenePanel {
         row: &ObjectKnownRow,
     ) -> f32 {
         cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+        // P4b: Skin row sits between the object's manifest params and the
+        // modifier stack — one row, two dropdown buttons.
+        if let Some(skin) = &row.skin {
+            cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
+        }
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Modifiers", label_style());
         cy += ROW_H;
         if row.modifiers_addable {
@@ -2049,6 +2076,73 @@ impl ScenePanel {
             cy += ROW_H;
         }
         cy + ROW_GAP
+    }
+
+    /// P4b: one Skin row per Known object — source layer dropdown + target-map
+    /// dropdown. Each half is a clickable button (not a bare label) so the
+    /// affordance rule is met. A missing source layer shows a trailing chip.
+    fn build_skin_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        row: &ObjectKnownRow,
+        skin: &SkinRowVm,
+    ) -> f32 {
+        let label_w = crate::slider::label_width_for_row(inner_w);
+        tree.add_label(Some(self.content_parent), inner_x, cy, label_w, ROW_H, "Skin", label_style());
+        let btn_gap = 4.0f32;
+        let remaining = (inner_w - label_w).max(0.0);
+        let chip_w = if skin.source_missing { 80.0f32 } else { 0.0f32 };
+        let chip_gap = if skin.source_missing { btn_gap } else { 0.0f32 };
+        let btn_w = ((remaining - chip_w - chip_gap - btn_gap) / 2.0).max(0.0);
+        let source_label = skin
+            .source
+            .as_ref()
+            .and_then(|id| skin.source_options.iter().find(|(lid, _)| lid == id).map(|(_, name)| name.clone()))
+            .unwrap_or_else(|| "None".to_string());
+        let source_btn = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + label_w,
+            cy,
+            btn_w,
+            ROW_H,
+            btn_style(),
+            &format!("Source: {source_label}"),
+            obj_key(row.index, OBJ_OFF_SKIN_SOURCE),
+        );
+        tree.set_name(source_btn, "scene_setup.skin.source");
+        self.skin_source_ids.push((source_btn, row.object_node_id, skin.clone()));
+        let target_btn = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + label_w + btn_w + btn_gap,
+            cy,
+            btn_w,
+            ROW_H,
+            btn_style(),
+            &format!("Map: {}", skin.target_map.label()),
+            obj_key(row.index, OBJ_OFF_SKIN_TARGET),
+        );
+        tree.set_name(target_btn, "scene_setup.skin.target");
+        self.skin_target_ids.push((target_btn, row.object_node_id, skin.clone()));
+        if skin.source_missing {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + label_w + btn_w * 2.0 + btn_gap * 2.0,
+                cy,
+                chip_w,
+                ROW_H,
+                "missing layer",
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
+        }
+        cy + ROW_H + ROW_GAP
     }
 
     /// Light properties header: editable name (NEW, P5) + Remove (D11's
@@ -2462,6 +2556,29 @@ impl ScenePanel {
                             group_node_id,
                             *node_id,
                         )));
+                    } else if let Some((_, scene_object_id, skin)) =
+                        self.skin_source_ids.iter().find(|(id, _, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupSkinSourceClicked {
+                            layer_id: vm.layer_id.clone(),
+                            scope_path: skin.source_scope_path.clone(),
+                            scene_object_id: *scene_object_id,
+                            source_node_id: skin.source_node_id,
+                            target_map: skin.target_map,
+                            source_options: skin.source_options.clone(),
+                            button_node_id: *node_id,
+                        }));
+                    } else if let Some((_, scene_object_id, skin)) =
+                        self.skin_target_ids.iter().find(|(id, _, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupSkinTargetMapClicked {
+                            layer_id: vm.layer_id.clone(),
+                            scope_path: skin.source_scope_path.clone(),
+                            scene_object_id: *scene_object_id,
+                            source_node_id: skin.source_node_id,
+                            current_target_map: skin.target_map,
+                            button_node_id: *node_id,
+                        }));
                     } else if let Some((_, group_node_id, modifier_node_id)) =
                         self.modifier_remove_ids.iter().find(|(id, _, _)| *id == *node_id)
                     {
@@ -3013,6 +3130,7 @@ mod tests {
                     }],
                     modifiers_addable: true,
                     sections: Vec::new(),
+                    skin: None,
                 })),
                 ObjectRowVm::Custom { index: 1 },
             ],

@@ -1,0 +1,105 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "■ QS1694-W02-1-1" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "ScrollTo": { "target": { "Query": { "name": "scene_setup.skin.source" } } }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.skin.source" } },
+      "check": { "TextEquals": "Source: None" }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.skin.source" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "None", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": { "text": "cc0__oomurasaki_azalea_r._x_pulchrum", "type": "Button" }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": { "text": "cc0__oomurasaki_azalea_r._x_pulchrum", "type": "Button" }
+      },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.skin.source" } },
+      "check": { "TextEquals": "Source: cc0__oomurasaki_azalea_r._x_pulchrum" }
+    }
+  },
+  {
+    "Key": { "key": "Z", "modifiers": { "command": true } }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.skin.source" } },
+      "check": { "TextEquals": "Source: None" }
+    }
+  },
+  {
+    "Key": { "key": "Z", "modifiers": { "command": true, "shift": true } }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.skin.source" } },
+      "check": { "TextEquals": "Source: cc0__oomurasaki_azalea_r._x_pulchrum" }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.skin.target" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Base Color", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Base Color", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.skin.target" } },
+      "check": { "TextEquals": "Map: Base Color" }
+    }
+  }
+]

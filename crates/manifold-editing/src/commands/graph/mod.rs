@@ -38,6 +38,8 @@ mod scene;
 pub use scene::*;
 mod modifiers;
 pub use modifiers::*;
+mod skin;
+pub use skin::*;
 mod paste;
 pub use paste::*;
 

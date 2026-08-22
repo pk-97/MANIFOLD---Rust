@@ -452,6 +452,7 @@ mod tests {
             transform_chain_parseable: true,
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
+            skin: None,
         }))
     }
 
@@ -529,6 +530,7 @@ mod tests {
             transform_chain_parseable: true,
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
+            skin: None,
         }));
         let scene = scene_with(vec![row]);
         let target = gizmo_target_for(&scene, 5).unwrap();

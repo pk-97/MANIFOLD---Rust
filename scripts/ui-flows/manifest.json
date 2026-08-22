@@ -5,7 +5,8 @@
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
       "scene-card",
-      "scene-panel"
+      "scene-panel",
+      "scene-skin"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
@@ -25,7 +26,8 @@
       "inspector",
       "select-and-inspect",
       "set-param",
-      "calibrated-param"
+      "calibrated-param",
+      "scene-skin"
     ],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "scene-setup",
@@ -100,6 +102,7 @@
     "scene-setup-modifier-stack": "gltfscene",
     "scene-setup-numeric-typein-box": "gltfscene",
     "scene-setup-select-updates": "gltfscene",
+    "scene-skin": "gltfscene",
     "scene-setup-shadow-softness-dropdown": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",
