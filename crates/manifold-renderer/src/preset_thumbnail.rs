@@ -14,6 +14,7 @@
 //! one-shot dev bin (`src/bin/generate_preset_thumbnails.rs`).
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -200,6 +201,43 @@ fn render_generator(
         // Commit each frame so state-accumulating generators see the prior
         // frame's GPU writes before computing the next.
         enc.commit_and_wait_completed();
+    }
+
+    // The fixed 60-frame warm-up is enough to trigger background initialization
+    // (GLB mesh parse, texture decode, HDRI upload, etc.), but a heavy decode can
+    // still be in flight when the loop ends. Capturing while initialization is
+    // pending produces a black thumbnail that looks like a broken graph.
+    // `io_pending()` covers the IoBridge file sources; `warmup_pending()` covers
+    // `node.gltf_mesh_source`'s background GLB parse, which reports through the
+    // warmup channel. Pump frames until both settle, or a hard wall-clock timeout
+    // passes so we never hang silently.
+    const IO_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+    let io_wait_start = Instant::now();
+    let mut io_wait_frame = 0u32;
+    while runtime.io_pending() || runtime.warmup_pending() {
+        if io_wait_start.elapsed() >= IO_WAIT_TIMEOUT {
+            let pending: Vec<String> = runtime
+                .graph
+                .nodes()
+                .filter(|n| n.node.io_pending() || n.node.warmup_pending())
+                .map(|n| format!("{} ({})", n.node_id, n.node.type_id().as_str()))
+                .collect();
+            return Err(format!(
+                "render timed out waiting for async IO/warmup after {}s; still pending: {}",
+                IO_WAIT_TIMEOUT.as_secs(),
+                pending.join(", ")
+            ));
+        }
+        let frame = WARMUP_FRAMES + io_wait_frame;
+        let ctx = make_ctx(frame);
+        let mut enc = device.create_encoder("preset-thumb-gen-io-wait");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+        io_wait_frame += 1;
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     let png = if linear {
