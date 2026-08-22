@@ -13,20 +13,30 @@
 //!   blocks render" invariant). This is also the demo: it dumps PNGs to
 //!   /tmp/p4a_layer_skin_demo/ and prints the probe numbers.
 
+#[cfg(feature = "gpu-proofs")]
 use manifold_core::BlendMode;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use crate::compositor::{Compositor, CompositorFrame, CompositeLayerDescriptor};
+#[cfg(feature = "gpu-proofs")]
+use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+#[cfg(feature = "gpu-proofs")]
 use crate::gpu_encoder::GpuEncoder;
+#[cfg(feature = "gpu-proofs")]
 use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+#[cfg(feature = "gpu-proofs")]
 use crate::preset_context::PresetContext;
 use crate::preset_runtime::PresetRuntime;
+#[cfg(feature = "gpu-proofs")]
 use crate::render_target::RenderTarget;
+#[cfg(feature = "gpu-proofs")]
 use crate::tonemap::TonemapSettings;
 
+#[cfg(feature = "gpu-proofs")]
 const W: u32 = 320;
+#[cfg(feature = "gpu-proofs")]
 const H: u32 = 180;
 const LAYER_A: &str = "p4a-layer-a";
+#[cfg(feature = "gpu-proofs")]
 const LAYER_B: &str = "p4a-layer-b";
 
 fn glb_path() -> String {
@@ -42,6 +52,7 @@ fn glb_path() -> String {
 /// Layer A as a pure skin pass-through: emits layer B's previous frame.
 /// The mutual-skin loop is A(t) = B(t-1), B(t) = scene whose emissive map
 /// is A(t-1) — the design's legal one-frame feedback.
+#[cfg(feature = "gpu-proofs")]
 fn pass_through_json(layer_param: &str) -> String {
     format!(
         r#"{{
@@ -62,6 +73,7 @@ fn pass_through_json(layer_param: &str) -> String {
 }
 
 /// Layer A as a bright 2D generator: a checkerboard at `scale`.
+#[cfg(feature = "gpu-proofs")]
 fn checkerboard_json(scale: f32) -> String {
     format!(
         r#"{{
@@ -179,6 +191,7 @@ fn layer_param_survives_serde_round_trip() {
 /// textures, then composite — the compositor's end-of-frame publish is
 /// what layer_source reads NEXT frame. Mirrors the content-pipeline order
 /// (generators commit before the compositor).
+#[cfg(feature = "gpu-proofs")]
 #[allow(clippy::too_many_arguments)]
 fn render_two_layer_frame(
     device: &manifold_gpu::GpuDevice,
@@ -320,6 +333,7 @@ fn render_two_layer_frame(
 /// screen position with the fixture camera), decoded from Rgba16Float.
 /// Returns the region pixels; `region_mean`/`mean_abs_delta` derive the
 /// probe numbers.
+#[cfg(feature = "gpu-proofs")]
 fn region_luma_pixels(
     device: &manifold_gpu::GpuDevice,
     texture: &manifold_gpu::GpuTexture,
@@ -352,10 +366,12 @@ fn region_luma_pixels(
     out
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn region_mean(region: &[f32]) -> f32 {
     region.iter().sum::<f32>() / region.len() as f32
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn mean_abs_delta(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
 }

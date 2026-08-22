@@ -83,6 +83,12 @@ impl LayerSkinRegistry {
         self.textures.len()
     }
 
+    /// Whether no layer textures are stored.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
+
     /// Format of textures stored in this registry.
     pub fn format(&self) -> GpuTextureFormat {
         self.format
