@@ -1,6 +1,6 @@
 # Scene FX — performable deformers, scene mods, and layer skins for 3D scenes
 
-**Status:** IN PROGRESS — P0 SHIPPED 2026-08-22 (`5b6ccc43d`); P1 SHIPPED 2026-08-22 (voxelize/boil/glitch-jitter + zero-amount passthrough check, `a2d62080d`; passthrough compares positions only — taper/morph renormalize normals at every amount, documented in scene_fx_default_passthrough.rs). P2–P4 not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
+**Status:** IN PROGRESS — P0+P1+P2 SHIPPED 2026-08-22 (all eight glitch deformers on main + zero-amount passthrough check; latest merge lane/scene-fx-p2). P3 (shake + presets) in flight, P4 (layer skins) not built. · APPROVED 2026-08-21 · k3 (lead), design session with Peter
 **Prerequisites:** none hard — every consumed substrate is shipped in-tree (audit below).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
