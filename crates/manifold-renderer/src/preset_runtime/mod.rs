@@ -150,6 +150,10 @@ mod amount_zero_passthrough_tests;
 #[path = "tests/generator_runtime.rs"]
 mod generator_runtime_tests;
 
+#[cfg(test)]
+#[path = "tests/layer_skin.rs"]
+mod layer_skin_tests;
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/chain_fusion.rs"]
 mod chain_fusion_tests;

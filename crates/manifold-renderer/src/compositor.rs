@@ -285,6 +285,15 @@ pub trait Compositor: Send {
     /// Default no-op for compositors without RT chains.
     fn set_rt_quality(&mut self, _q: crate::node_graph::RtQuality) {}
 
+    /// SCENE_FX P4a — the compositor's layer-skin registry: previous-frame
+    /// composited output per layer, published at end of frame. The host
+    /// hands this to the generator renderer so `node.layer_source` can
+    /// emit it during graph execution. Default `None` for compositors
+    /// without one.
+    fn layer_skin_registry(&self) -> Option<&crate::layer_skin::LayerSkinRegistry> {
+        None
+    }
+
     /// Force the serial composite path even with 2+ active layers
     /// (PERF_BUDGET_GATE_DESIGN D6 correction): profiled mode needs one
     /// shared compositor command buffer to attach the dispatch-profiling

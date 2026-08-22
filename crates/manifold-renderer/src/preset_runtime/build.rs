@@ -640,6 +640,7 @@ impl PresetRuntime {
             type_id: Some(type_id),
             target_format: None,
             string_bindings,
+            layer_skin_registry: None,
         };
         g.apply_string_defaults();
         Ok(g)

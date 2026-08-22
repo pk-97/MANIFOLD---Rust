@@ -179,6 +179,10 @@ pub struct GeneratorRenderer {
     /// `dispatch_chain`) so runtimes installed after the last push still
     /// render at the current quality.
     rt_quality: crate::node_graph::RtQuality,
+    /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry
+    /// for this frame. Set by the host before `render_all`; a raw pointer is
+    /// used because the renderer's lifetime is independent of the registry.
+    layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -223,6 +227,7 @@ impl GeneratorRenderer {
             preview_layer: None,
             profiling_enabled: false,
             rt_quality: crate::node_graph::RtQuality::default(),
+            layer_skin_registry: None,
         }
     }
 
@@ -282,6 +287,13 @@ impl GeneratorRenderer {
             state.generator.set_preview_node(None);
             state.generator.clear_dump_set();
         }
+    }
+
+    /// SCENE_FX P4a — set the borrowed layer-skin registry for this frame.
+    /// The registry must outlive `render_all` (content thread guarantee).
+    /// `None` clears the pointer.
+    pub fn set_layer_skin_registry(&mut self, registry: Option<&crate::layer_skin::LayerSkinRegistry>) {
+        self.layer_skin_registry = registry.map(crate::layer_skin::LayerSkinPtr::new);
     }
 
     /// Set the per-node thumbnail-atlas dump to the editor's currently-visible
@@ -820,6 +832,9 @@ impl GeneratorRenderer {
                     .generator
                     .set_relight_params(&relight_params);
                 layer_state.generator.set_rt_quality(self.rt_quality);
+                layer_state
+                    .generator
+                    .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,

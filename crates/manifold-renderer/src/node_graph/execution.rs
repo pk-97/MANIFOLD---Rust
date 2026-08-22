@@ -15,6 +15,7 @@
 //! [`MetalBackend`]: crate::node_graph::MetalBackend
 
 use crate::gpu_encoder::GpuEncoder;
+use crate::layer_skin::LayerSkinRegistry;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
@@ -116,6 +117,12 @@ pub struct Executor {
     /// so tests and non-RT graphs run unchanged. Set per frame via
     /// [`set_rt_quality`]; consumed by `render_scene` through the context.
     rt_quality: crate::node_graph::RtQuality,
+    /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry,
+    /// set each frame before the executor runs. A raw pointer is used because
+    /// the executor's lifetime is independent of the registry; the content
+    /// thread guarantees the pointer is valid for the frame. `None` when no
+    /// registry is available (mock-backend tests, standalone validation).
+    layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
     /// The Texture2D output resource of `preview_target`, recorded during the
     /// step loop. After `execute_frame_*`, the integration layer reads its
     /// texture via [`Backend::slot_for`] + [`Backend::texture_2d`] and
@@ -423,6 +430,7 @@ impl Executor {
             empty_resources: ahash::AHashSet::default(),
             empty_resources_prev: ahash::AHashSet::default(),
             live_scalar_inputs: Vec::new(),
+            layer_skin_registry: None,
         }
     }
 
@@ -571,6 +579,14 @@ impl Executor {
     /// project column (realtime vs export). Cheap — stores by value, no allocation.
     pub fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
         self.rt_quality = q;
+    }
+
+    /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
+    /// Call once per frame before `execute_frame_*`. The registry must outlive
+    /// the `execute_frame_*` call (the content thread guarantees this). `None`
+    /// clears the pointer.
+    pub fn set_layer_skin_registry(&mut self, registry: Option<&LayerSkinRegistry>) {
+        self.layer_skin_registry = registry.map(crate::layer_skin::LayerSkinPtr::new);
     }
 
     /// The preview target's Texture2D output resource from the last frame, if
@@ -929,6 +945,11 @@ impl Executor {
         // borrows (e.g. the chain source slot's per-frame
         // `replace_texture_2d`) are untouched.
         self.backend.clear_skip_aliases();
+
+        // SCENE_FX P4a: dereference the raw pointer the host set this frame.
+        // The content thread guarantees the registry outlives this call.
+        let layer_skin_registry: Option<&LayerSkinRegistry> =
+            self.layer_skin_registry.map(|ptr| unsafe { ptr.get() });
 
         // Pre-acquire persistent resources before the step loop.
         // These are wires that close a per-frame feedback loop through
@@ -1322,6 +1343,7 @@ impl Executor {
                             owner_key,
                             self.rebuild_epoch,
                             self.rt_quality,
+                            layer_skin_registry,
                         )
                         .with_errors(&mut self.error_scratch);
                         let has_gpu_binding = ctx.gpu.is_some();
@@ -1681,6 +1703,7 @@ impl Executor {
                     owner_key,
                     self.rebuild_epoch,
                     self.rt_quality,
+                    layer_skin_registry,
                 )
                 .with_errors(&mut self.error_scratch);
                 inst.node.late_capture(&mut ctx);

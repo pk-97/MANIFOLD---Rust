@@ -600,6 +600,9 @@ pub struct LayerCompositor {
     /// one shared compositor command buffer to attach the dispatch sampler
     /// to). Set via [`Self::set_force_serial`].
     force_serial: bool,
+    /// SCENE_FX P4a — registry of previous-frame layer composited outputs,
+    /// published after all layer renders and read by graph execution next frame.
+    layer_skin_registry: crate::layer_skin::LayerSkinRegistry,
 }
 
 /// This chain's profiled-tag scope for a screen/LED per-layer effect chain:
@@ -713,6 +716,10 @@ impl LayerCompositor {
             profiling_enabled: false,
             rt_quality: crate::node_graph::RtQuality::default(),
             force_serial: false,
+            layer_skin_registry: crate::layer_skin::LayerSkinRegistry::new(
+                device,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+            ),
         }
     }
 
@@ -2461,6 +2468,30 @@ impl LayerCompositor {
         }
     }
 
+    /// SCENE_FX P4a (section 3.3): publish every surviving layer's composite
+    /// into the layer-skin registry. Called from `render` after the blend —
+    /// all layer renders and the group fold are done, so what sits in
+    /// `layer_outputs_scratch` is each layer's (or folded group's) final
+    /// post-effect texture. Graph execution reads the registry next frame,
+    /// which is what makes layer→layer skins one-frame-delay feedback
+    /// instead of a render-order hazard.
+    fn publish_layer_skins(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        self.layer_skin_registry.ensure_fallback_cleared(gpu);
+        self.layer_skin_registry.clear();
+        for output in &self.layer_outputs_scratch {
+            let Some(desc) = frame.find_layer(output.layer_index) else {
+                continue;
+            };
+            // The scratch holds raw pointers into chain/layer-buf textures
+            // that are valid for this frame's encoder scope; cloning keeps
+            // each texture alive into next frame without copying pixels
+            // (the design's "no new allocation" rule).
+            let texture = unsafe { (*output.texture).clone() };
+            self.layer_skin_registry
+                .publish(desc.layer_id.clone(), texture);
+        }
+    }
+
     /// Serial composite path: single encoder for all work.
     /// Used when only 1 active layer (no parallel benefit).
     fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
@@ -3109,6 +3140,12 @@ impl Compositor for LayerCompositor {
         #[cfg(not(target_os = "macos"))]
         self.composite_serial(gpu, frame);
 
+        // SCENE_FX P4a: publish every layer's post-effect output into the
+        // layer-skin registry so next frame's graph execution can read it.
+        // This runs after all layer renders complete and before tonemap /
+        // master effects overwrite `main.source`.
+        self.publish_layer_skins(gpu, frame);
+
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before
         // tonemap and master effects overwrite it.
@@ -3403,6 +3440,10 @@ impl Compositor for LayerCompositor {
             return Vec::new();
         };
         crate::node_graph::outer_routings_from_view(view)
+    }
+
+    fn layer_skin_registry(&self) -> Option<&crate::layer_skin::LayerSkinRegistry> {
+        Some(&self.layer_skin_registry)
     }
 
     fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {

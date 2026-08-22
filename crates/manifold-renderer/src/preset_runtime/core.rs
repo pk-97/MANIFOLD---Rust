@@ -174,6 +174,10 @@ pub struct PresetRuntime {
     /// String-typed outer-card → inner-node bindings. Generators only — the
     /// shared float `apply` loop can't carry `String` params. Empty for chains.
     pub(super) string_bindings: Vec<StringBindingResolution>,
+    /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry
+    /// for this frame. Set by the host before `run`/`render`. A raw pointer is
+    /// used because the runtime's lifetime is independent of the registry.
+    pub(super) layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
 }
 
 /// Input/output model for a [`PresetRuntime`]. The one genuine difference
@@ -1293,6 +1297,7 @@ impl PresetRuntime {
             type_id: None,
             target_format: None,
             string_bindings: chain_string_bindings,
+            layer_skin_registry: None,
         };
         // Seed each String binding's declared default into its inner node, the
         // same one-shot the generator path does at construction (a no-op when
@@ -1563,6 +1568,13 @@ impl PresetRuntime {
                 == compute_topology_hash(effects, groups, width, height, preview_effect)
     }
 
+    /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
+    /// The registry must outlive the `run`/`render` call (content thread
+    /// guarantee). `None` clears the pointer.
+    pub fn set_layer_skin_registry(&mut self, registry: Option<&crate::layer_skin::LayerSkinRegistry>) {
+        self.layer_skin_registry = registry.map(crate::layer_skin::LayerSkinPtr::new);
+    }
+
     /// Run the cached chain graph against the upstream input texture.
     /// Returns a reference to the chain's output texture, or `None`
     /// if the executor couldn't be set up (should be unreachable in
@@ -1765,6 +1777,9 @@ impl PresetRuntime {
             // PresetRuntime fast path can throttle correctly.
             frame_count: ctx.frame_count,
         };
+        // SCENE_FX P4a: forward the layer-skin registry to the executor.
+        self.executor
+            .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         // Use the StateStore-aware execute path so stateful primitives
         // that key per-owner state off `(node_id, owner_key)` — today
         // only `temporal::Feedback`, but any future primitive using the
@@ -2047,6 +2062,9 @@ impl PresetRuntime {
             delta: Seconds(ctx.dt as f64),
             frame_count: ctx.frame_count,
         };
+        // SCENE_FX P4a: forward the layer-skin registry to the executor.
+        self.executor
+            .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         self.refresh_plan_if_forced_outputs_changed();
         self.executor.execute_frame_with_state(
             &mut self.graph,

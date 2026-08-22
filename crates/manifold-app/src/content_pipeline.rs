@@ -1898,6 +1898,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
+        // SCENE_FX P4a: hand the generator renderer the compositor's
+        // layer-skin registry (previous-frame per-layer composites) so
+        // node.layer_source can emit it during this frame's graph
+        // execution. The compositor republishes at end of frame, after all
+        // layer renders — execution always reads the prior frame.
+        {
+            let layer_skins = self.compositor.layer_skin_registry();
+            let (renderers, _) = engine.split_renderer_project();
+            for renderer in renderers.iter_mut() {
+                if let Some(generator) = renderer
+                    .as_any_mut()
+                    .downcast_mut::<GeneratorRenderer>()
+                {
+                    generator.set_layer_skin_registry(layer_skins);
+                }
+            }
+        }
+
         // Extract timing values before split borrow. Time/beat stay f64 from
         // the playback clock all the way to the GPU uniform boundary — no f32
         // round-trip — so beat phase stays exact over a long show.
