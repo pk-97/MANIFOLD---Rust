@@ -15,19 +15,13 @@ lead_seat = "kimi"
 # Old seat names. `check` fails on any live bare-token reference to these in
 # mechanism files (configs + hooks). Model-name prefixes (glm-4.7) are never
 # seat tokens and are not matched.
-retired_names = ["glm", "kimi-code"]
+retired_names = ["glm", "kimi-code", "zai"]
 
 [seat.kimi]
 account = "Kimi"          # statusline display name
 env_key = "KIMI_KEY"      # start-proxy.sh export + config.yaml os.environ/<env_key>
 hue = "95"                # ANSI color in the statusline provider hue map
 role = "lead"
-
-[seat.zai]
-account = "Z.AI"
-env_key = "ZAI_KEY"
-hue = "38;5;208"
-role = "dispatch"
 
 # Row name = account name. "Zen" is only OpenCode's API endpoint and "Go" its
 # plan tier — neither is the account, so neither names the seat.
