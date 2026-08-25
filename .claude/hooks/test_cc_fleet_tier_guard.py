@@ -46,7 +46,7 @@ check(
 # D-48: `cc-fleet spawn` is a dead path — denied for every tier, lead
 # included, even with no identifiable caller model.
 for model in ("claude-fable-5", "k3", "glm-4.7", "deepseek-v4-flash", ""):
-    r = hook.decide("cc-fleet spawn zai --as w1 --team t --json", model)
+    r = hook.decide("cc-fleet spawn opencode --as w1 --team t --json", model)
     check(f"spawn dead-path denied: {model or '(no model)'}", bool(r) and "dead" in r)
 
 # Non-spawn cc-fleet commands: never denied for anyone.
@@ -73,10 +73,10 @@ for cmd in (
 
 # Command-position variants still caught.
 for cmd in (
-    "cc-fleet spawn zai --as w --team t",
-    "git status && cc-fleet spawn zai --as w",
-    "FOO=1 cc-fleet spawn zai",
-    "/Users/x/.local/bin/cc-fleet spawn zai",
+    "cc-fleet spawn opencode --as w --team t",
+    "git status && cc-fleet spawn opencode --as w",
+    "FOO=1 cc-fleet spawn opencode",
+    "/Users/x/.local/bin/cc-fleet spawn opencode",
 ):
     check(f"command position caught: {cmd[:40]}...",
           bool(hook.decide(cmd, "claude-fable-5")))

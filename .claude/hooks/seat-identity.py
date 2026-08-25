@@ -48,14 +48,6 @@ SEATS = {
         "prefix: haiku -> flash-*, sonnet -> k27-*, opus -> pro-*, "
         "fable -> k3-* (agent-launch-guard denies anything else).",
     ),
-    "zai": (
-        "DISPATCHER",
-        "You hold the dispatcher seat: clerical only — pop the queue, brief "
-        "lanes, run exit-code gates, accept/reject, escalate. Drive executors "
-        "via `cc-fleet subagent opencode` ONLY. You never land, never design; "
-        "decisions flow up to the lead. Lane names must carry the model-slot "
-        "prefix (haiku -> flash-*) or agent-launch-guard denies the spawn.",
-    ),
     "opencode": (
         "EXECUTOR",
         "You hold the executor seat: execute your brief exactly as written. "
