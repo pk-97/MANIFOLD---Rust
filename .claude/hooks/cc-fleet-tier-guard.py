@@ -9,7 +9,7 @@ Flash-over-Flash is one bash call away.
 Caller tier comes from the payload's `transcript_path`: the last assistant entry's
 `message.model`.
 
-Tier rules (model strings: deepseek-v4-flash, glm-4.7, k3, claude-*):
+Tier rules (model strings: deepseek-v4-flash, deepseek-v4-pro, kimi-for-coding, k3, claude-*):
 - cc-fleet spawn (tmux teammates): denied for EVERY tier incl. lead — dead path on CC >= 2.1.218 (native Agent-tool lanes instead).
 - cc-fleet subagent/run/workflow: denied for EVERY tier (Peter 2026-08-02: "We use team lanes native — they provide a reliable messaging system"). Headless lanes are invisible, unmessageable, and outside the lane-health-check. Lanes spawn as native Agent-tool teammates via the slot map. `cc-fleet subagent-status` polls pass (not a spawn verb).
 
@@ -103,9 +103,10 @@ def decide(command: str, model: str) -> str:
         "teammates only (Peter 2026-08-02) — headless cc-fleet spawns are "
         "invisible in the UI, unreachable via SendMessage, and outside the "
         "lane-health-check. Spawn a native lane instead: model \"haiku\" = "
-        "DeepSeek Flash, \"sonnet\" = GLM-4.7, \"opus\" = GLM-5.2 "
+        "DeepSeek Flash, \"sonnet\" = Kimi K2.7 (classifier slot — never "
+        "lanes), \"opus\" = DeepSeek Pro "
         "(escalation seat), \"fable\" = k3, named with the slot prefix "
-        "(flash-*/glm47-*/glm52-*/k3-*). `cc-fleet subagent-status <job>` "
+        "(flash-*/k27-*/pro-*/k3-*). `cc-fleet subagent-status <job>` "
         "polls of already-running jobs are unaffected."
     )
 
