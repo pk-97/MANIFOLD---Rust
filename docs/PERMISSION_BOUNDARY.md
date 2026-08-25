@@ -46,6 +46,14 @@ and a demotion now stays on DeepSeek. Prior state for context: glm-4.7 held
 the sonnet slot 2026-07-27→08-04 for reliability, until ZAI ran out of weekly
 quota and every classifier call froze.
 
+**Classifier auth ignores `apiKeyHelper` (2.1.219, found 2026-08-25).** The
+main loop authenticates through the seat profile's `apiKeyHelper`, but the
+auto-mode classifier's calls go out without it — keyless against the litellm
+proxy → 401 → fails closed, and because fallback never fires on 401 the pane
+freezes instead of demoting. Fix: every seat profile's `env` carries a literal
+`ANTHROPIC_API_KEY` (from `cc-fleet keyget <seat>`). If a virtual key is
+regenerated, refresh the profiles or the classifier dies again.
+
 Oracle: `claude --debug -p '…' --permission-mode auto`, then grep
 `~/.claude/debug/latest` for `classifier_request_started` (prints the model).
 
