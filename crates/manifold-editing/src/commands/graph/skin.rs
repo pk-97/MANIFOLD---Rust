@@ -976,7 +976,7 @@ mod tests {
         );
     }
 
-    fn float_param(name: &str, v: f32) -> SerializedParamValue {
+    fn float_param(_name: &str, v: f32) -> SerializedParamValue {
         SerializedParamValue::Float { value: v }
     }
 
@@ -1125,7 +1125,7 @@ mod tests {
             .as_ref()
             .unwrap();
         let skin = def.nodes.iter().find(|n| n.type_id == "node.layer_source").unwrap();
-        assert!(skin.params.get("displaced_emission").is_none(), "no emission record without a material");
+        assert!(!skin.params.contains_key("displaced_emission"), "no emission record without a material");
     }
 
     /// Removal: baked wire re-appears, emission restored, layer_source node
@@ -1253,6 +1253,6 @@ mod tests {
             Some(&SerializedParamValue::String { value: "22:out".to_string() }),
             "base_color displacement recorded"
         );
-        assert!(skin.params.get("displaced_emission").is_none(), "emission record cleared after leave");
+        assert!(!skin.params.contains_key("displaced_emission"), "emission record cleared after leave");
     }
 }
