@@ -93,7 +93,13 @@ fn compute_occluded_layer_indices(
         if l.default_blend_mode != BlendMode::Opaque || l.opacity < 1.0 {
             continue;
         }
-        if !ready_clips.iter().any(|c| c.layer_index == l.index) {
+        // Only a visible clip makes the layer an occluder — a layer whose
+        // ready clips are all muted draws nothing and must not black out
+        // the layers below.
+        if !ready_clips
+            .iter()
+            .any(|c| c.layer_index == l.index && c.is_visible())
+        {
             continue;
         }
         cutoff = Some(l.index);
@@ -3916,6 +3922,27 @@ mod occlusion_tests {
         let mut out = Vec::new();
         compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
         assert!(out.is_empty(), "a hidden (muted) layer must not occlude below");
+    }
+
+    #[test]
+    fn muted_clip_does_not_occlude_below() {
+        // Clip-level mute is presentational: the clip stays in ready_clips,
+        // but a layer whose ready clips are all muted draws nothing, so it
+        // must not become the opaque cutoff and black out the layers below.
+        let layers = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
+        let mut muted_top = clip(0);
+        muted_top.is_muted = true;
+        let clips = vec![muted_top.clone(), clip(1)];
+        let mut out = Vec::new();
+        compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
+        assert!(out.is_empty(), "a muted clip must not make its layer an occluder");
+        // Mixed: one muted, one visible — the layer still occludes.
+        let clips = vec![muted_top, clip(0), clip(1)];
+        compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
+        assert_eq!(out, vec![1], "a visible clip on the opaque layer still occludes");
     }
 }
 
