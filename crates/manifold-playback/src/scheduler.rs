@@ -53,6 +53,15 @@ impl ActiveClipRef {
         self.start_beat + self.duration_beats
     }
 
+    /// The one clip-visibility predicate: does this clip contribute pixels
+    /// this frame? Anything gating on "visible content" (occlusion cutoff,
+    /// idle gates, activity counts) must call this, never read `is_muted`
+    /// directly. Mirrors `TimelineClip::is_visible`.
+    #[inline]
+    pub fn is_visible(&self) -> bool {
+        !self.is_muted
+    }
+
     /// Whether this is a live slot clip (not in the project timeline).
     #[inline]
     pub fn is_live_slot(&self) -> bool {
