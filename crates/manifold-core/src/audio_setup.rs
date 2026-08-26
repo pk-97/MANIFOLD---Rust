@@ -117,8 +117,9 @@ pub struct AudioSend {
     pub id: AudioSendId,
     /// User-facing name ("Kick", "Bass", "Vocals").
     pub label: String,
-    /// Device input channels (0-based) downmixed to mono for analysis. Empty
-    /// means the send produces silence until the user routes it.
+    /// Device input channels (0-based) downmixed to mono for analysis. A
+    /// capture-fed send is always stereo (`[0, 1]` by default); empty means
+    /// layer-only (no capture).
     #[serde(default)]
     pub channels: Vec<u16>,
     /// Input gain trim in **decibels**, applied to the downmixed signal before
@@ -159,12 +160,15 @@ pub struct AudioSend {
 }
 
 impl AudioSend {
-    /// Create a new send with a freshly minted id and the given label.
+    /// Create a new send with a freshly minted id and the given label. Defaults
+    /// to stereo capture (`channels: [0, 1]`) — capture-fed sends are always
+    /// stereo now, so a new send is live as soon as the device is pointed at
+    /// it. An empty `channels` vec still means layer-only (no capture).
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             id: AudioSendId::new(short_id()),
             label: label.into(),
-            channels: Vec::new(),
+            channels: vec![0, 1],
             gain_db: 0.0,
             floor_db: FLOOR_DB_OFF,
             analysis: SendAnalysisConfig::default(),
@@ -223,6 +227,9 @@ pub enum AudioSourceKind {
     /// A hardware / aggregate / virtual input device, keyed by `uid`.
     #[default]
     InputDevice,
+    /// No capture at all — the device stays dark and sends are fed by
+    /// timeline audio layers only. Serializes as `"none"`.
+    None,
     /// The system-wide audio output mix, tapped (no per-process filter).
     SystemAudio,
     /// One application's audio output, tapped. `uid` holds the app's stable
@@ -272,6 +279,12 @@ impl AudioDeviceRef {
         Self { uid: uid.into(), name: name.into(), kind: AudioSourceKind::InputDevice }
     }
 
+    /// No capture source — the device stays dark and sends are fed by timeline
+    /// audio layers only (the "None (layers only)" device option).
+    pub fn none() -> Self {
+        Self { uid: String::new(), name: "None".to_string(), kind: AudioSourceKind::None }
+    }
+
     /// The system-audio tap source (whole-system output mix).
     pub fn system_audio() -> Self {
         Self { uid: String::new(), name: "System Audio".to_string(), kind: AudioSourceKind::SystemAudio }
@@ -290,9 +303,10 @@ impl AudioDeviceRef {
 
     /// Whether this ref points at a tap source (system or app) rather than a
     /// hardware input device. Tap sources expose a synthetic stereo channel
-    /// layout instead of a hardware device's channels.
+    /// layout instead of a hardware device's channels. `None` (no capture) is
+    /// neither a tap nor a hardware device.
     pub fn is_tap(&self) -> bool {
-        !matches!(self.kind, AudioSourceKind::InputDevice)
+        matches!(self.kind, AudioSourceKind::SystemAudio | AudioSourceKind::App)
     }
 }
 
@@ -391,6 +405,20 @@ impl AudioSetup {
     /// Display name of the chosen device, if any.
     pub fn device_display_name(&self) -> Option<&str> {
         self.device.as_ref().map(|d| d.name.as_str())
+    }
+
+    /// Upgrade legacy single-channel sends to the stereo default. The per-send
+    /// channel picker is gone — a capture-fed send is always stereo — so a send
+    /// saved with exactly one channel (`[0]`, `[3]`, …) becomes `[0, 1]`.
+    /// Empty-channel sends (layer-only, no capture) stay untouched, and an
+    /// already-stereo send is a no-op. Idempotent; called once from
+    /// `Project::on_after_deserialize`.
+    pub fn migrate_legacy_send_channels(&mut self) {
+        for send in &mut self.sends {
+            if send.channels.len() == 1 {
+                send.channels = vec![0, 1];
+            }
+        }
     }
 
     pub fn find_send(&self, id: &AudioSendId) -> Option<&AudioSend> {
@@ -652,8 +680,11 @@ mod tests {
         assert!(back.is_layer_fed());
 
         // has_capture is DERIVED from device channels (no flag) — a send taps the
-        // device iff it has channels assigned.
+        // device iff it has channels assigned. A fresh send defaults to stereo
+        // capture; clearing its channels makes it layer-only.
         let mut dev = AudioSend::new("Mic");
+        assert!(dev.has_capture(), "default send is stereo capture");
+        dev.channels.clear();
         assert!(!dev.has_capture(), "no channels → no device input");
         dev.channels = vec![0];
         assert!(dev.has_capture(), "channels assigned → device feeds it");
@@ -694,5 +725,60 @@ mod tests {
         };
         setup.migrate_legacy_device();
         assert_eq!(setup.device.as_ref().unwrap().name, "Modern");
+    }
+
+    #[test]
+    fn none_kind_round_trips_and_is_not_a_tap() {
+        let dev = AudioDeviceRef::none();
+        assert_eq!(dev.kind, AudioSourceKind::None);
+        assert_eq!(dev.name, "None");
+        assert!(dev.uid.is_empty());
+        assert!(!dev.is_tap(), "none is neither a tap nor a hardware device");
+
+        let json = serde_json::to_string(&dev).unwrap();
+        assert!(json.contains("\"kind\":\"none\""), "kind serializes camelCase: {json}");
+        let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(dev, back);
+
+        // `None` (no capture) round-trips as a chosen device on the setup.
+        let setup = AudioSetup {
+            device: Some(AudioDeviceRef::none()),
+            ..Default::default()
+        };
+        let back: AudioSetup = serde_json::from_str(&serde_json::to_string(&setup).unwrap()).unwrap();
+        assert_eq!(back.device, Some(AudioDeviceRef::none()));
+    }
+
+    #[test]
+    fn migrate_legacy_send_channels_upgrades_single_channel_to_stereo() {
+        let mut setup = AudioSetup::default();
+        let mut mono = AudioSend::new("Mono");
+        mono.channels = vec![0];
+        let mut other = AudioSend::new("Ch 3");
+        other.channels = vec![3];
+        let mut layer_only = AudioSend::new("Layers");
+        layer_only.channels = Vec::new();
+        let mut stereo = AudioSend::new("Stereo");
+        stereo.channels = vec![0, 1];
+        setup.sends = vec![mono, other, layer_only, stereo];
+
+        setup.migrate_legacy_send_channels();
+
+        assert_eq!(setup.sends[0].channels, vec![0, 1], "1-channel send → stereo");
+        assert_eq!(setup.sends[1].channels, vec![0, 1], "any single channel → stereo");
+        assert!(setup.sends[2].channels.is_empty(), "layer-only send stays untouched");
+        assert_eq!(setup.sends[3].channels, vec![0, 1], "stereo send unchanged");
+
+        // Idempotent — a second run changes nothing.
+        setup.migrate_legacy_send_channels();
+        assert_eq!(setup.sends[0].channels, vec![0, 1]);
+        assert!(setup.sends[2].channels.is_empty());
+    }
+
+    #[test]
+    fn new_send_defaults_to_stereo() {
+        let send = AudioSend::new("Kick");
+        assert_eq!(send.channels, vec![0, 1]);
+        assert!(send.has_capture(), "a fresh send is capture-fed stereo");
     }
 }

@@ -36,6 +36,8 @@ mod groups;
 pub use groups::*;
 mod scene;
 pub use scene::*;
+mod layer_plane;
+pub use layer_plane::*;
 mod modifiers;
 pub use modifiers::*;
 mod skin;

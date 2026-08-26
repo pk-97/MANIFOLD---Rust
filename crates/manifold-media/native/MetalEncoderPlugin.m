@@ -511,6 +511,41 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         // integer fps. (frameIndex * fpsDen) as the CMTime value with fpsNum
         // as the timescale gives exactly that quotient.
         CMTime presentTime = CMTimeMake((int64_t)frameIndex * state->fpsDen, state->fpsNum);
+
+        // BUG-fli4: the export loop feeds frames at max GPU speed; under load
+        // the writer falls behind and appendPixelBuffer fails fatally mid-export.
+        // Treat not-ready as backpressure: wait (bounded) for the input to
+        // drain, fail only on genuine timeout or writer failure.
+        const int maxWaitMs = 10000;
+        int waitedMs = 0;
+        while (!state->adaptor.assetWriterInput.readyForMoreMediaData && waitedMs < maxWaitMs)
+        {
+            if (state->assetWriter.status == AVAssetWriterStatusFailed ||
+                state->assetWriter.status == AVAssetWriterStatusCancelled)
+            {
+                NSLog(@"[MetalEncoder] writer failed while waiting for readiness at frame %d: %@",
+                      frameIndex, state->assetWriter.error);
+                CFRelease(cvMetalTexture);
+                CVPixelBufferRelease(pixelBuffer);
+                return ME_ERR_APPEND_FAILED;
+            }
+            [NSThread sleepForTimeInterval:0.001];
+            waitedMs++;
+        }
+        if (waitedMs > 0)
+        {
+            NSLog(@"[MetalEncoder] writer backpressure at frame %d: waited %dms",
+                  frameIndex, waitedMs);
+        }
+        if (!state->adaptor.assetWriterInput.readyForMoreMediaData)
+        {
+            NSLog(@"[MetalEncoder] writer still not ready after %dms at frame %d: %@",
+                  maxWaitMs, frameIndex, state->assetWriter.error);
+            CFRelease(cvMetalTexture);
+            CVPixelBufferRelease(pixelBuffer);
+            return ME_ERR_APPEND_FAILED;
+        }
+
         BOOL appended = [state->adaptor appendPixelBuffer:pixelBuffer
                                      withPresentationTime:presentTime];
 

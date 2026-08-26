@@ -35,13 +35,15 @@ pub fn sync_inspector_data(
         use manifold_core::AudioSourceKind;
         use manifold_ui::panels::audio_setup_panel::AudioSendRow;
         let dir = manifold_audio::directory::system_directory();
-        // Tap sources (system / app output) don't live in the input-device list,
-        // so resolving them there would always read "missing". Only resolve a
-        // hardware device; a tap's liveness is checked separately below.
-        let is_tap = project.audio_setup.device.as_ref().is_some_and(|d| d.is_tap());
+        // Only a hardware input device resolves to a DeviceInfo. Tap sources
+        // (system / app output) don't live in the input-device list, and "none"
+        // (no capture) has nothing to resolve — a tap's liveness is checked
+        // separately below.
         let device = match &project.audio_setup.device {
-            Some(d) if !d.is_tap() => dir.resolve(d.uid_opt(), Some(&d.name)),
-            Some(_) => None, // a tap — no DeviceInfo
+            Some(d) if d.kind == AudioSourceKind::InputDevice => {
+                dir.resolve(d.uid_opt(), Some(&d.name))
+            }
+            Some(_) => None, // a tap or "none" — no DeviceInfo
             None => dir.list_input_devices().into_iter().find(|d| d.is_default),
         };
         let sends = project
@@ -51,10 +53,8 @@ pub fn sync_inspector_data(
             .map(|s| {
                 // Read-only source view: the full routing lines (capture device +
                 // each feeding layer) for the Inputs section. Routing is edited
-                // elsewhere — layers from the layer header, channels from the
-                // channel control (the row-level "Cap" chip and its click-to-reveal
-                // dropdown are gone; this is the one place the detail lives now).
-                let ch_label = channel_label(device.as_ref(), is_tap, &s.channels);
+                // elsewhere — layers from the layer header; channels are always
+                // stereo now, so there is no per-send channel control to resolve.
                 let cap = s.has_capture();
                 let layer_name = |lid: &manifold_core::LayerId| {
                     project
@@ -67,10 +67,12 @@ pub fn sync_inspector_data(
                             manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
                         })
                 };
-                // Full routing lines for the read-only Inputs section.
+                // Full routing lines for the read-only Inputs section. A
+                // capture-fed send is always stereo, so its line reads
+                // "Capture • Stereo" rather than naming individual channels.
                 let mut routings: Vec<String> = Vec::new();
                 if cap {
-                    routings.push(format!("Capture \u{2022} {ch_label}"));
+                    routings.push("Capture \u{2022} Stereo".to_string());
                 }
                 for lid in s.layers() {
                     routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
@@ -98,7 +100,6 @@ pub fn sync_inspector_data(
                 AudioSendRow {
                     id: s.id.clone(),
                     label: s.label.clone(),
-                    channel_label: ch_label,
                     channels: s.channels.clone(),
                     gain_db: s.gain_db,
                     floor_db: s.floor_db,
@@ -123,6 +124,8 @@ pub fn sync_inspector_data(
                     }
                     _ => None,
                 },
+                // No capture is a deliberate choice, not a warning.
+                AudioSourceKind::None => None,
                 AudioSourceKind::SystemAudio => (!dir.tap_capabilities().system_audio)
                     .then(|| "\u{26A0} System audio capture needs macOS 14.4+".to_string()),
                 AudioSourceKind::App => dir
@@ -1580,35 +1583,6 @@ mod param_mod_lookup_tests {
         assert!(!modulation[0].envelope_active);
         assert!(!audio.rows[0].active);
     }
-}
-
-/// Resolve a send's routed channels to a human label for the Audio Setup row:
-/// the channel name(s) joined with " + ", or "Not routed" when empty. Falls
-/// back to a 1-based index when no device metadata is available.
-fn channel_label(
-    device: Option<&manifold_audio::directory::DeviceInfo>,
-    is_tap: bool,
-    channels: &[u16],
-) -> String {
-    if channels.is_empty() {
-        return "Not routed".to_string();
-    }
-    let name_of = |ch: u16| -> String {
-        // A tap is a fixed stereo mixdown — channel 0/1 are Left/Right, matching
-        // the tap channel picker. A hardware device uses its platform names.
-        if is_tap {
-            return match ch {
-                0 => "Left".to_string(),
-                1 => "Right".to_string(),
-                n => format!("Channel {}", n + 1),
-            };
-        }
-        device
-            .and_then(|d| d.channels.get(ch as usize))
-            .map(|c| c.display_name())
-            .unwrap_or_else(|| format!("Channel {}", ch + 1))
-    };
-    channels.iter().map(|&ch| name_of(ch)).collect::<Vec<_>>().join(" + ")
 }
 
 /// Map a base BeatDivision to its button index (0-10).

@@ -3,7 +3,7 @@
 //!
 //! A non-dimming overlay docked to the viewport's right edge (D6 —
 //! `docs/AUDIO_SENDS_UX_DESIGN.md` section 2/section 3.3), full height, with an input-device
-//! picker and one row per send: channel, gain, and delete, plus an "Add send"
+//! picker and one row per send: routing, gain, and delete, plus an "Add send"
 //! button. The show stays visible underneath and outside clicks pass through
 //! (it's a calibration surface used while performing — accidental dismissal
 //! is the failure mode); Escape and the header Audio button still close it.
@@ -13,9 +13,9 @@
 //! already routed through `ui_bridge`). See
 //! `docs/AUDIO_MODULATION_DESIGN.md` section 10.1.
 //!
-//! v1 scope: device cycle, add/remove send, per-send single-channel routing and
-//! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
-//! rename lands; multi-channel downmix and the v2 analysis toggles are future.
+//! Capture-fed sends are always stereo (the per-send channel picker is gone),
+//! so a send row shows a static "Stereo" / routing label rather than a channel
+//! dropdown.
 
 use crate::{AudioSetupAction, LayerAction, RootAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::types::AudioDeviceRef;
@@ -56,8 +56,8 @@ const KEY_FLOOR_MINUS: u64 = 70_012;
 const KEY_FLOOR_PLUS: u64 = 70_013;
 
 /// Per-send row controls (dynamic list, indexed by the send's position in
-/// `self.sends`): swatch, label, delete, gain_minus, gain_plus, ch_dropdown.
-/// Stride 20 leaves headroom; offsets 3 and 6 are
+/// `self.sends`): swatch, label, delete, gain_minus, gain_plus. Stride 20
+/// leaves headroom; offsets 3, 6, and 7 (the retired channel dropdown) are
 /// retired, not reused.
 const KEY_SEND_ROW_BASE: u64 = 71_000;
 const KEY_SEND_ROW_STRIDE: u64 = 20;
@@ -66,7 +66,6 @@ const SEND_OFF_LABEL: u64 = 1;
 const SEND_OFF_DELETE: u64 = 2;
 const SEND_OFF_GAIN_MINUS: u64 = 4;
 const SEND_OFF_GAIN_PLUS: u64 = 5;
-const SEND_OFF_CH_DROPDOWN: u64 = 7;
 
 /// Stable key for a per-send row control at index `i` with the given
 /// control offset (`SEND_OFF_*`).
@@ -108,12 +107,9 @@ pub const MISSING_LAYER_LABEL: &str = "(missing layer)";
 pub struct AudioSendRow {
     pub id: AudioSendId,
     pub label: String,
-    /// Routed channels (0-based). One channel = mono; two = a stereo pair.
+    /// Routed device channels (0-based). Empty means layer-only (no capture);
+    /// non-empty means a capture-fed stereo pair.
     pub channels: Vec<u16>,
-    /// Pre-resolved channel label for the trigger, e.g. "BH_IN_L", "BH_IN_L +
-    /// BH_IN_R", or "Not routed". Resolved against the device directory by the
-    /// data layer so the panel stays free of platform queries.
-    pub channel_label: String,
     /// Input gain trim in decibels (0 = unity). Shown on the row's −/＋ stepper.
     pub gain_db: f32,
     /// Pre-analysis noise floor (dB) for the spectrogram squelch. `<= FLOOR_DB_OFF`
@@ -218,7 +214,6 @@ struct SendRowIds {
     /// Identity-colour swatch — clicking it selects the send for the scope.
     swatch: NodeId,
     label: NodeId,
-    ch_dropdown: NodeId,
     gain_minus: NodeId,
     gain_plus: NodeId,
     /// The gain value label between the steppers — a D7 horizontal drag zone
@@ -238,7 +233,6 @@ impl Default for SendRowIds {
         Self {
             swatch: NodeId::PLACEHOLDER,
             label: NodeId::PLACEHOLDER,
-            ch_dropdown: NodeId::PLACEHOLDER,
             gain_minus: NodeId::PLACEHOLDER,
             gain_plus: NodeId::PLACEHOLDER,
             gain_value: NodeId::PLACEHOLDER,
@@ -801,24 +795,24 @@ impl AudioSetupPanel {
             tree.set_name(self.send_ids[i].gain_plus, "audio_setup.gain_plus");
             tree.set_name(self.send_ids[i].gain_value, "audio_setup.gain_value");
 
-            // Channel dropdown fills the row (Cap chip removed, section 7.2 item 7,
-            // P8, 2026-07-11 — device-vs-layer-fed detail lives in the
-            // read-only Inputs section now, not a row-level chip), showing
-            // the resolved channel name(s).
+            // Static routing label fills the row where the channel dropdown used
+            // to sit (the per-send channel picker is gone — capture-fed sends are
+            // always stereo). A capture-fed send reads "Stereo"; a layer-only
+            // send shows its routing line; an unrouted send reads "Not routed".
+            // The level meter below tracks the send's live level.
             let ch_x = label_x + LABEL_W + 4.0;
             let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
-            self.send_ids[i].ch_dropdown = tree.add_button_keyed(
+            tree.add_label(
                 Some(self.content_parent),
                 ch_x,
                 cy,
                 ch_w,
                 ROW_H,
-                dropdown_trigger_style(),
-                &send.channel_label,
-                send_row_key(i, SEND_OFF_CH_DROPDOWN),
+                &send_routing_label(send),
+                label_style(),
             );
 
-            // Level meter: a thin track under the channel dropdown with a fill
+            // Level meter: a thin track under the routing label with a fill
             // node resized each frame from the live send level. Identity-colored.
             let meter_h = 2.0;
             let meter_x = ch_x;
@@ -1494,7 +1488,6 @@ impl AudioSetupPanel {
         if self.send_ids.iter().any(|r| {
             id == r.swatch
                 || id == r.label
-                || id == r.ch_dropdown
                 || id == r.gain_minus
                 || id == r.gain_plus
                 || id == r.gain_value
@@ -1721,8 +1714,6 @@ impl AudioSetupPanel {
                 Some((i, RowControl::Select))
             } else if id == ids.label {
                 Some((i, RowControl::Label))
-            } else if id == ids.ch_dropdown {
-                Some((i, RowControl::Channel))
             } else if id == ids.gain_minus {
                 Some((i, RowControl::GainDown))
             } else if id == ids.gain_plus {
@@ -1749,10 +1740,6 @@ impl AudioSetupPanel {
             RowControl::Label => {
                 self.delete_armed = None;
                 Some(PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)))
-            }
-            RowControl::Channel => {
-                self.delete_armed = None;
-                Some(PanelAction::Root(RootAction::AudioSendChannelClicked(send_id)))
             }
             RowControl::GainDown => {
                 self.delete_armed = None;
@@ -1784,10 +1771,22 @@ impl AudioSetupPanel {
 enum RowControl {
     Select,
     Label,
-    Channel,
     GainDown,
     GainUp,
     Delete,
+}
+
+/// The send row's static routing label, shown where the channel dropdown used
+/// to sit. A capture-fed send is always stereo; a layer-only send shows its
+/// routing line(s); an unrouted send reads "Not routed".
+fn send_routing_label(send: &AudioSendRow) -> String {
+    if !send.channels.is_empty() {
+        "Stereo".to_string()
+    } else if send.routings.is_empty() {
+        "Not routed".to_string()
+    } else {
+        send.routings.join("  \u{00B7}  ")
+    }
 }
 
 /// Format a send's gain trim for the row stepper. Unity reads "0 dB"; non-zero
@@ -2061,12 +2060,11 @@ mod tests {
                 AudioSendRow {
                     id: AudioSendId::new("s1"),
                     label: "Audio 1".into(),
-                    channels: vec![0],
-                    channel_label: "Channel 1".into(),
+                    channels: vec![0, 1],
                     gain_db: 0.0,
                     floor_db: crate::types::FLOOR_DB_OFF,
                     driven_count: 0,
-                    routings: vec!["Capture: Channel 1".into()],
+                    routings: vec!["Capture \u{2022} Stereo".into()],
                     has_clip_triggers: false,
                     feeding_layers: Vec::new(),
                     consumers: Vec::new(),
@@ -2074,12 +2072,11 @@ mod tests {
                 AudioSendRow {
                     id: AudioSendId::new("s2"),
                     label: "Audio 2".into(),
-                    channels: vec![2],
-                    channel_label: "MacBook Mic".into(),
+                    channels: vec![0, 1],
                     gain_db: 0.0,
                     floor_db: crate::types::FLOOR_DB_OFF,
                     driven_count: 0,
-                    routings: vec!["Capture: Channel 1".into()],
+                    routings: vec!["Capture \u{2022} Stereo".into()],
                     has_clip_triggers: false,
                     feeding_layers: Vec::new(),
                     consumers: Vec::new(),
@@ -2104,13 +2101,6 @@ mod tests {
             p.handle_click(p.device_dropdown_id),
             Some(PanelAction::Root(RootAction::AudioSetupDeviceClicked))
         ));
-
-        // Channel trigger on send 2 opens its channel dropdown.
-        let ch_dropdown = p.send_ids[1].ch_dropdown;
-        match p.handle_click(ch_dropdown) {
-            Some(PanelAction::Root(RootAction::AudioSendChannelClicked(id))) => assert_eq!(id.as_str(), "s2"),
-            other => panic!("expected channel dropdown open, got {other:?}"),
-        }
 
         // Delete send 1.
         let del = p.send_ids[0].delete;
@@ -2297,6 +2287,37 @@ mod tests {
     }
 
     #[test]
+    fn routing_label_is_stereo_for_capture_and_routing_for_layers() {
+        let capture = AudioSendRow {
+            id: AudioSendId::new("s1"),
+            label: "Audio 1".into(),
+            channels: vec![0, 1],
+            gain_db: 0.0,
+            floor_db: crate::types::FLOOR_DB_OFF,
+            driven_count: 0,
+            routings: vec!["Capture \u{2022} Stereo".into()],
+            has_clip_triggers: false,
+            feeding_layers: Vec::new(),
+            consumers: Vec::new(),
+        };
+        assert_eq!(send_routing_label(&capture), "Stereo");
+
+        let layer_only = AudioSendRow {
+            channels: Vec::new(),
+            routings: vec!["Layer \u{2022} Drums".into()],
+            ..capture.clone()
+        };
+        assert_eq!(send_routing_label(&layer_only), "Layer \u{2022} Drums");
+
+        let unrouted = AudioSendRow {
+            channels: Vec::new(),
+            routings: Vec::new(),
+            ..capture.clone()
+        };
+        assert_eq!(send_routing_label(&unrouted), "Not routed");
+    }
+
+    #[test]
     fn in_use_send_delete_requires_confirm() {
         let mut p = panel_with_two_sends();
         // Mark send 1 as driving two params.
@@ -2321,10 +2342,10 @@ mod tests {
         p.build_docked(&mut tree, test_dock_rect());
 
         assert!(p.handle_click(p.send_ids[0].delete).is_none()); // arm
-        // Clicking the channel dropdown clears the arm instead of deleting.
+        // Clicking another row control clears the arm instead of deleting.
         assert!(matches!(
-            p.handle_click(p.send_ids[0].ch_dropdown),
-            Some(PanelAction::Root(RootAction::AudioSendChannelClicked(_)))
+            p.handle_click(p.send_ids[0].gain_minus),
+            Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(..)))
         ));
         assert!(p.active_notice().is_none());
     }
@@ -2451,12 +2472,11 @@ mod tests {
             vec![AudioSendRow {
                 id: AudioSendId::new("s1"),
                 label: "Kick".into(),
-                channels: vec![0],
-                channel_label: "Channel 1".into(),
+                channels: vec![0, 1],
                 gain_db: 0.0,
                 floor_db: crate::types::FLOOR_DB_OFF,
                 driven_count: 0,
-                routings: vec!["Capture: Channel 1".into()],
+                routings: vec!["Capture \u{2022} Stereo".into()],
                 has_clip_triggers: false,
                 feeding_layers: feeding,
                 consumers,
@@ -2496,12 +2516,11 @@ mod tests {
             vec![AudioSendRow {
                 id: AudioSendId::new("s1"),
                 label: "Kick".into(),
-                channels: vec![0],
-                channel_label: "Channel 1".into(),
+                channels: vec![0, 1],
                 gain_db: 0.0,
                 floor_db: crate::types::FLOOR_DB_OFF,
                 driven_count: 0,
-                routings: vec!["Capture: Channel 1".into()],
+                routings: vec!["Capture \u{2022} Stereo".into()],
                 has_clip_triggers: false,
                 feeding_layers: feeding,
                 consumers,

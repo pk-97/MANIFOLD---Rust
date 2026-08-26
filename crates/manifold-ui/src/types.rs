@@ -242,6 +242,7 @@ impl AudioFeature {
 pub enum AudioSourceKind {
     #[default]
     InputDevice,
+    None,
     SystemAudio,
     App,
 }
@@ -265,6 +266,16 @@ impl AudioDeviceRef {
             uid: uid.into(),
             name: name.into(),
             kind: AudioSourceKind::InputDevice,
+        }
+    }
+
+    /// No capture source — the device stays dark and sends are fed by timeline
+    /// audio layers only.
+    pub fn none() -> Self {
+        Self {
+            uid: String::new(),
+            name: "None".to_string(),
+            kind: AudioSourceKind::None,
         }
     }
 
@@ -293,9 +304,9 @@ impl AudioDeviceRef {
     }
 
     /// Whether this ref points at a tap source (system or app) rather than a
-    /// hardware input device.
+    /// hardware input device. `None` (no capture) is neither.
     pub fn is_tap(&self) -> bool {
-        !matches!(self.kind, AudioSourceKind::InputDevice)
+        matches!(self.kind, AudioSourceKind::SystemAudio | AudioSourceKind::App)
     }
 }
 

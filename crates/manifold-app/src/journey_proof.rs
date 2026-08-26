@@ -143,7 +143,7 @@ fn tiny_export_config(output_path: &Path, fps: f32) -> ExportConfig {
         audio_path: None,
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
-        split_at_section_markers: false,
+        split_at_markers: false,
     }
 }
 
@@ -379,9 +379,10 @@ fn audio_reactive_project(click_wav_path: &str) -> Project {
         Seconds((CLICK_BEATS as f32 * (60.0 / CLICK_BPM)) as f64),
     ));
 
-    // Layer-fed send (D2: NOT capture-fed — `channels` stays empty) so
+    // Layer-fed send (D2: NOT capture-fed — `channels` emptied) so
     // `AudioSend::has_capture()` is false and `is_layer_fed()` is true.
     let mut send = AudioSend::new("Click Send");
+    send.channels.clear();
     send.source.layers.push(audio_layer_id);
     let send_id = send.id.clone();
 
@@ -601,13 +602,13 @@ mod tests {
     }
 
     /// SECTION_EXPORT_DESIGN acceptance demo (P1 gate, real-export half): one
-    /// project, two section markers (named "Drop" at beat 2, unnamed at beat
-    /// 5) over the 8-beat content range, `split_at_section_markers = true`.
-    /// Produces three files — `export--section-1`, `export--Drop`,
-    /// `export--section-3` — whose ffprobe durations match their beat ranges
-    /// within one frame, and whose muxed audio starts at ~0 (each section's
-    /// audio slice is zero-offset, D8). The flag-off run on the same project
-    /// must produce exactly one file at the unmodified path.
+    /// project, two markers (named "Drop" at beat 2, unnamed at beat 5) over
+    /// the 8-beat content range, `split_at_markers = true`. Produces three
+    /// files — `export--section-1`, `export--Drop`, `export--section-3` —
+    /// whose ffprobe durations match their beat ranges within one frame, and
+    /// whose muxed audio starts at ~0 (each section's audio slice is
+    /// zero-offset, D8). The setting-off run on the same project must produce
+    /// exactly one file at the unmodified path.
     #[test]
     fn section_export_splits() {
         let dir = out_dir("section_export_splits");
@@ -628,17 +629,17 @@ mod tests {
             project.timeline.layers.push(audio_layer);
             project.timeline.layers.push(star_field_generator_layer(1));
             project.timeline.add_marker(
-                TimelineMarker::new(Beats(2.0)).with_name("Drop").as_section(),
+                TimelineMarker::new(Beats(2.0)).with_name("Drop"),
             );
             project
                 .timeline
-                .add_marker(TimelineMarker::new(Beats(5.0)).as_section());
+                .add_marker(TimelineMarker::new(Beats(5.0)));
             project
         };
 
         let video_path = dir.join("export.mp4");
         let mut cfg = tiny_export_config(&video_path, CLICK_FPS);
-        cfg.split_at_section_markers = true;
+        cfg.split_at_markers = true;
         run_headless_export(build_project(), cfg).expect("section export should succeed");
 
         // 120 BPM → 0.5s/beat: [0,2)=1.0s, [2,5)=1.5s, [5,8)=1.5s.
@@ -670,7 +671,7 @@ mod tests {
             "section mode must not also write the unsuffixed base path"
         );
 
-        // Flag off on the same project: today's single-export behavior,
+        // Setting off on the same project: today's single-export behavior,
         // unmodified output path.
         let single_path = dir.join("single.mp4");
         run_headless_export(build_project(), tiny_export_config(&single_path, CLICK_FPS))
@@ -680,7 +681,7 @@ mod tests {
         println!("[journey-proof] single export: duration={dur:.3}s (expect 4.0)");
         assert!(
             (dur - 4.0).abs() <= one_frame,
-            "flag-off export must cover the whole range: {dur:.3}s"
+            "setting-off export must cover the whole range: {dur:.3}s"
         );
     }
 

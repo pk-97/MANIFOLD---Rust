@@ -138,6 +138,7 @@ pub fn audio_feature_to_core(v: UiAudioFeature) -> AudioFeature {
 pub fn audio_source_kind_to_core(v: UiAudioSourceKind) -> AudioSourceKind {
     match v {
         UiAudioSourceKind::InputDevice => AudioSourceKind::InputDevice,
+        UiAudioSourceKind::None => AudioSourceKind::None,
         UiAudioSourceKind::SystemAudio => AudioSourceKind::SystemAudio,
         UiAudioSourceKind::App => AudioSourceKind::App,
     }
@@ -146,6 +147,7 @@ pub fn audio_source_kind_to_core(v: UiAudioSourceKind) -> AudioSourceKind {
 pub fn audio_source_kind_to_ui(v: AudioSourceKind) -> UiAudioSourceKind {
     match v {
         AudioSourceKind::InputDevice => UiAudioSourceKind::InputDevice,
+        AudioSourceKind::None => UiAudioSourceKind::None,
         AudioSourceKind::SystemAudio => UiAudioSourceKind::SystemAudio,
         AudioSourceKind::App => UiAudioSourceKind::App,
     }
@@ -425,7 +427,6 @@ pub fn marker_to_ui(m: &TimelineMarker) -> UiMarker {
         beat: m.beat,
         name: m.name.clone(),
         color: marker_color_to_ui(m.color),
-        is_section_boundary: m.is_section_boundary,
     }
 }
 

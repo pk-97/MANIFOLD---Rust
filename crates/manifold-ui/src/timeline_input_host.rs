@@ -267,10 +267,6 @@ pub trait TimelineInputHost {
     /// Add a marker at the current playhead beat (snapped to grid).
     fn add_marker_at_playhead(&mut self);
 
-    /// Add a section-boundary marker at the playhead (snapped to grid) —
-    /// ⌘M. Same as `add_marker_at_playhead` plus the section flag.
-    fn add_section_marker_at_playhead(&mut self);
-
     /// Delete all currently selected markers.
     fn delete_selected_markers(&mut self);
 

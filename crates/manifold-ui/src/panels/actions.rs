@@ -176,6 +176,12 @@ pub enum ProjectAction {
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),
+    /// BUG-hlw8 "+ Plane" button: `(layer_id, render_scene_node_doc_id,
+    /// next_index)`. Dispatches `AddSceneLayerPlaneCommand` — the layer-plane
+    /// gesture: a plane mesh + unlit material + transform + an empty
+    /// `node.layer_source` wired to `base_color_map` so the panel's Skin row
+    /// can pick a source layer.
+    SceneSetupAddLayerPlane(LayerId, u32, u32),
     /// P5 properties-header "Duplicate" button (Object selection):
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
     /// existing `DuplicateSceneObjectCommand` (D11).
@@ -581,15 +587,9 @@ pub enum AudioSetupAction {
     AudioRemoveSend(AudioSendId),
     /// Rename a send (commit with the new label).
     AudioRenameSend(AudioSendId, String),
-    /// Set a send's input channels (downmixed to mono for analysis). The
-    /// channel dropdown enumerates stereo pairs AND single channels directly
-    /// (section 7.2 item 7, P8, 2026-07-11), so this carries any length channel vec
-    /// — mono falls out of a one-channel pick, no separate toggle needed.
-    /// `AudioSendStereoToggle`, `AudioSendAddLayerClicked`, and
-    /// `AudioSendRoutingsClicked` are deleted the same phase (items 6/7):
-    /// the St/Mo toggle, the Inputs section's "+ Layer" authoring, and the
-    /// Cap chip's click-to-reveal routings popup are all gone outright.
-    AudioSetSendChannels(AudioSendId, Vec<u16>),
+    // `AudioSetSendChannels` (the per-send channel picker) is deleted —
+    // capture-fed sends are always stereo, so no action edits a send's
+    // channels anymore.
     /// Step a send's input gain trim by a dB delta (the panel's −/＋ buttons).
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
@@ -767,8 +767,8 @@ pub enum RootAction {
     },
     /// Open the input-device dropdown (anchored to the clicked trigger).
     AudioSetupDeviceClicked,
-    /// Open a send's input-channel dropdown (anchored to the clicked trigger).
-    AudioSendChannelClicked(AudioSendId),
+    // `AudioSendChannelClicked` (the per-send channel dropdown trigger) is
+    // deleted with the channel picker — capture-fed sends are always stereo.
     /// Begin inline editing of a send's label (clicked its name).
     AudioSendLabelClicked(AudioSendId),
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8, audio-dock sibling):

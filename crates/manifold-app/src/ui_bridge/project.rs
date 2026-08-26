@@ -37,7 +37,7 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         ProjectAction::ToggleSplitSections => {
-            let old_split = project.settings.split_at_section_markers;
+            let old_split = project.settings.split_at_markers;
             let cmd =
                 manifold_editing::commands::settings::ToggleSplitSectionsCommand::new(old_split);
             {
@@ -46,8 +46,8 @@ pub(super) fn dispatch_project(
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
             log::info!(
-                "Split export at section markers → {}",
-                project.settings.split_at_section_markers
+                "Split export at markers → {}",
+                project.settings.split_at_markers
             );
             DispatchResult::handled()
         }
@@ -348,6 +348,37 @@ pub(super) fn dispatch_project(
                     *next_index,
                     centroid,
                     manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        // BUG-hlw8 "+ Plane" button: mirrors `SceneSetupAddObject` above but
+        // dispatches `AddSceneLayerPlaneCommand`, which builds a grouped plane
+        // mesh + unlit material + transform + empty `node.layer_source` wired
+        // to `base_color_map`. Width/height come from the project's configured
+        // output resolution (height fixed at 1.0, width = aspect) so the
+        // skinned layer composite is undistorted on the sheet.
+        ProjectAction::SceneSetupAddLayerPlane(layer_id, render_scene_node_id, next_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let centroid = (900.0, 200.0 + 40.0 * *next_index as f32);
+                let output_height = project.settings.output_height.max(1) as f32;
+                let aspect = project.settings.output_width as f32 / output_height;
+                let cmd = manifold_editing::commands::graph::AddSceneLayerPlaneCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    *next_index,
+                    centroid,
+                    aspect,
+                    1.0,
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.unlit_material"),
                     manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
                     manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
                     default,
@@ -1119,6 +1150,58 @@ mod tests {
         );
         assert!(result.structural_change, "adding a light is a structural graph edit");
         assert_eq!(lights_param(&project, &layer_id, render_scene_id), before + 1.0);
+    }
+
+    /// BUG-hlw8: the "+ Plane" button dispatches `AddSceneLayerPlaneCommand`
+    /// through the same `dispatch_project` entry point, bumping the scene's
+    /// `objects` count by one and stamping the new grouped plane + skin into
+    /// the graph.
+    #[test]
+    fn scene_setup_add_layer_plane_dispatches_add_scene_layer_plane_command() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let before = objects_param(&project, &layer_id, render_scene_id);
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let action =
+            ProjectAction::SceneSetupAddLayerPlane(layer_id.clone(), render_scene_id, before as u32);
+        let result = dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(result.structural_change, "adding a layer plane is a structural graph edit");
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+
+        let def = effective_def(&project, &layer_id);
+        let added_group = def
+            .nodes
+            .iter()
+            .find(|n| {
+                n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID
+                    && n.group.as_ref().is_some_and(|g| {
+                        g.nodes.iter().any(|n| n.type_id == "node.plane_mesh")
+                            && g.nodes.iter().any(|n| n.type_id == "node.layer_source")
+                    })
+            })
+            .expect("the new layer plane group is present");
+        let body = added_group.group.as_ref().expect("is a group");
+        assert!(body.nodes.iter().any(|n| n.type_id == "node.plane_mesh"));
+        assert!(body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
+        let scene_object = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.scene_object")
+            .expect("scene_object inside group");
+        assert!(body
+            .wires
+            .iter()
+            .any(|w| w.from_node == scene_object.id && w.from_port == "object"));
     }
 
     /// scene-panel-ux gate: the properties-header "Frame" button drives the
