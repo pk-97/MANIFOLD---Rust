@@ -612,7 +612,7 @@ impl Command for ToggleExportHdrCommand {
     }
 }
 
-/// Toggle the "split export at section markers" setting. Shaped like
+/// Toggle the "split export at markers" setting. Shaped like
 /// `ToggleExportHdrCommand` (docs/SECTION_EXPORT_DESIGN.md D4).
 #[derive(Debug)]
 pub struct ToggleSplitSectionsCommand {
@@ -627,15 +627,15 @@ impl ToggleSplitSectionsCommand {
 
 impl Command for ToggleSplitSectionsCommand {
     fn execute(&mut self, project: &mut Project) {
-        project.settings.split_at_section_markers = !self.old_split;
+        project.settings.split_at_markers = !self.old_split;
     }
 
     fn undo(&mut self, project: &mut Project) {
-        project.settings.split_at_section_markers = self.old_split;
+        project.settings.split_at_markers = self.old_split;
     }
 
     fn description(&self) -> &str {
-        "Toggle Split Export at Section Markers"
+        "Toggle Split Export at Markers"
     }
 }
 

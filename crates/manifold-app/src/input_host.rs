@@ -1418,11 +1418,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── Timeline markers ─────────────────────────────────────────
 
     fn add_marker_at_playhead(&mut self) {
-        self.add_marker_at_playhead_impl(false);
-    }
-
-    fn add_section_marker_at_playhead(&mut self) {
-        self.add_marker_at_playhead_impl(true);
+        self.add_marker_at_playhead_impl();
     }
 
     fn delete_selected_markers(&mut self) {
@@ -1671,10 +1667,9 @@ impl AppInputHost<'_> {
         }
     }
 
-    /// Shared body for `add_marker_at_playhead` (`section = false`) and
-    /// `add_section_marker_at_playhead` (`section = true`): snap the playhead
-    /// to the grid, mint a marker, and execute an `AddMarkerCommand`.
-    fn add_marker_at_playhead_impl(&mut self, section: bool) {
+    /// Snap the playhead to the grid, mint a marker, and execute an
+    /// `AddMarkerCommand`.
+    fn add_marker_at_playhead_impl(&mut self) {
         use manifold_core::marker::TimelineMarker;
         use manifold_editing::commands::marker::AddMarkerCommand;
 
@@ -1684,10 +1679,7 @@ impl AppInputHost<'_> {
             .viewport
             .mapper()
             .snap_beat_to_grid(self.content_state.current_beat, bpb);
-        let mut marker = TimelineMarker::new(snapped);
-        if section {
-            marker = marker.as_section();
-        }
+        let marker = TimelineMarker::new(snapped);
 
         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
             Box::new(AddMarkerCommand::new(marker));

@@ -13,16 +13,16 @@ use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, ExportFinishedEvent};
 use crate::content_thread::ContentThread;
 
-/// Derive export sections from section-flagged markers. Sections are
-/// `[range_start, m₁)`, `[m₁, m₂)`, …, `[mₙ, range_end)` where each m is a
-/// sorted, deduplicated section-boundary marker strictly inside the range.
-/// Each section is named by the marker at its start; the first section
-/// (starting at `range_start`) carries the name of a section marker exactly on
-/// `range_start` when one exists, and an empty name otherwise — which the
+/// Derive export sections from timeline markers. Every marker inside the
+/// export range is a cut — sections are `[range_start, m₁)`, `[m₁, m₂)`, …,
+/// `[mₙ, range_end)` over the sorted, deduplicated markers strictly inside
+/// the range. Each section is named by the marker at its start; the first
+/// section (starting at `range_start`) carries the name of a marker exactly
+/// on `range_start` when one exists, and an empty name otherwise — which the
 /// filename logic turns into `section-N`.
 ///
 /// A marker exactly on `range_start` does not cut: it names the first section
-/// (so Peter can put a section marker at the export-in point to name the intro).
+/// (so Peter can put a marker at the export-in point to name the intro).
 /// A marker exactly on `range_end` is excluded (it sits outside the half-open
 /// range). Returns empty when there are no relevant markers (no marker on
 /// `range_start`, none strictly inside) → the caller takes the single-export
@@ -36,7 +36,6 @@ fn derive_sections(
     let mut cuts: Vec<(Beats, String)> = timeline
         .markers
         .iter()
-        .filter(|m| m.is_section_boundary)
         .filter(|m| m.beat > range_start && m.beat < range_end)
         .map(|m| (m.beat, m.name.clone()))
         .collect();
@@ -45,12 +44,11 @@ fn derive_sections(
     // would produce an empty section); the stable sort keeps the first name.
     cuts.dedup_by(|a, b| a.0 == b.0);
 
-    // A section marker exactly on `range_start` names the first section
-    // (doesn't cut). First in list order wins when several share the beat.
+    // A marker exactly on `range_start` names the first section (doesn't
+    // cut). First in list order wins when several share the beat.
     let first_name = timeline
         .markers
         .iter()
-        .filter(|m| m.is_section_boundary)
         .filter(|m| m.beat == range_start)
         .map(|m| m.name.clone())
         .next();
@@ -142,7 +140,7 @@ impl ContentThread {
     /// delta, renders each frame, and encodes via the native Metal encoder at
     /// maximum GPU speed (no frame pacing / sleep).
     ///
-    /// With `split_at_section_markers`, this runs one full export per derived
+    /// With `split_at_markers`, this runs one full export per derived
     /// section, sequentially (docs/SECTION_EXPORT_DESIGN.md D1). A cancelled or
     /// failed section aborts the remaining sections.
     ///
@@ -204,9 +202,9 @@ impl ContentThread {
         base_config.start_beat = start_beat;
         base_config.end_beat = end_beat;
 
-        // Derive sections from timeline markers. Empty when the flag is off or
-        // no section markers fall inside the range → single-export path below.
-        let sections: Vec<(Beats, Beats, String)> = if base_config.split_at_section_markers {
+        // Derive sections from timeline markers. Empty when the setting is off or
+        // no markers fall inside the range → single-export path below.
+        let sections: Vec<(Beats, Beats, String)> = if base_config.split_at_markers {
             derive_sections(
                 &project.timeline,
                 Beats::from_f32(start_beat),
@@ -937,49 +935,49 @@ mod tests {
 
     // ── Section export (docs/SECTION_EXPORT_DESIGN.md section 4) ──
 
-    /// P2 round-trip gate: a project saved with section markers and the
-    /// split-export setting reloads with both intact. Exercises the full
-    /// `Project` serde shape (the marker flag and the `ProjectSettings`
-    /// toggle, both `#[serde(default)]`).
+    /// P2 round-trip gate: a project saved with the split-export setting and
+    /// plain markers reloads with both intact. Exercises the full `Project`
+    /// serde shape (the `ProjectSettings` `split_at_markers` toggle and the
+    /// marker list). The field's `split_at_section_markers` alias keeps the
+    /// one-day-old name loading too (docs/SECTION_EXPORT_DESIGN.md D3).
     #[test]
-    fn section_markers_and_split_setting_survive_project_roundtrip() {
+    fn markers_and_split_setting_survive_project_roundtrip() {
         use manifold_core::project::Project;
 
         let mut project = Project::default();
         project.timeline.add_marker(
-            manifold_core::marker::TimelineMarker::new(Beats::from_f32(4.0))
-                .with_name("Drop")
-                .as_section(),
+            manifold_core::marker::TimelineMarker::new(Beats::from_f32(4.0)).with_name("Drop"),
         );
         project.timeline.add_marker(
             manifold_core::marker::TimelineMarker::new(Beats::from_f32(8.0)).with_name("Break"),
         );
-        project.settings.split_at_section_markers = true;
+        project.settings.split_at_markers = true;
 
         let json = serde_json::to_string(&project).expect("serialize project");
         let reloaded: Project = serde_json::from_str(&json).expect("reload project");
 
         assert!(
-            reloaded.settings.split_at_section_markers,
+            reloaded.settings.split_at_markers,
             "split setting must survive the round-trip"
         );
         assert_eq!(reloaded.timeline.markers.len(), 2);
         let drop = &reloaded.timeline.markers[0];
-        assert!(drop.is_section_boundary, "section flag must survive");
         assert_eq!(drop.name, "Drop");
+        assert_eq!(drop.beat, Beats::from_f32(4.0));
         let brk = &reloaded.timeline.markers[1];
-        assert!(!brk.is_section_boundary, "plain marker must stay plain");
         assert_eq!(brk.name, "Break");
+        assert_eq!(brk.beat, Beats::from_f32(8.0));
+
+        // Projects saved during the one-day flavor carry the old name; serde
+        // must load them, not fail.
+        let old_name = r#"{"settings":{"splitAtSectionMarkers":true}}"#;
+        let old_project: Project = serde_json::from_str(old_name).expect("old-name setting loads");
+        assert!(old_project.settings.split_at_markers);
     }
 
     #[cfg(target_os = "macos")]
     fn plain_marker(beat: f32, name: &str) -> manifold_core::marker::TimelineMarker {
         manifold_core::marker::TimelineMarker::new(Beats::from_f32(beat)).with_name(name)
-    }
-
-    #[cfg(target_os = "macos")]
-    fn section_marker(beat: f32, name: &str) -> manifold_core::marker::TimelineMarker {
-        plain_marker(beat, name).as_section()
     }
 
     #[cfg(target_os = "macos")]
@@ -993,19 +991,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn derive_sections_returns_empty_without_in_range_section_markers() {
-        // Invariant (b): flag on but no in-range section markers → empty →
-        // the caller takes the single-export path (one file at output_path).
-        // Non-section markers and out-of-range section markers must not slice.
-        let t = timeline_with(vec![
-            plain_marker(2.0, "plain"),
-            section_marker(20.0, "outside"),
-        ]);
+    fn derive_sections_returns_empty_without_in_range_markers() {
+        // Invariant (b): setting on but no in-range markers → empty → the
+        // caller takes the single-export path (one file at output_path).
+        // Out-of-range markers must not slice.
+        let t = timeline_with(vec![plain_marker(20.0, "outside")]);
         assert!(derive_sections(&t, Beats::from_f32(4.0), Beats::from_f32(16.0)).is_empty());
 
-        // No section markers at all → empty over any range.
-        let t = timeline_with(vec![plain_marker(2.0, "plain")]);
-        assert!(derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(100.0)).is_empty());
+        // No markers at all → empty over any range.
+        let t = timeline_with(vec![plain_marker(2.0, "below-range")]);
+        assert!(derive_sections(&t, Beats::from_f32(4.0), Beats::from_f32(16.0)).is_empty());
     }
 
     #[cfg(target_os = "macos")]
@@ -1013,17 +1008,19 @@ mod tests {
     fn derive_sections_splits_chapter_style() {
         // D2: sections are [in, m₁), [m₁, m₂), …, [mₙ, out); each section named
         // by the marker at its start; the leading [in, m₁) section is unnamed.
+        // Every marker in range cuts — there is no flavor.
         let t = timeline_with(vec![
-            section_marker(4.0, "Drop"),
-            section_marker(8.0, "Break"),
-            plain_marker(6.0, "not-a-section"),
+            plain_marker(4.0, "Drop"),
+            plain_marker(5.0, "Half"),
+            plain_marker(8.0, "Break"),
         ]);
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
             sections,
             vec![
                 (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
-                (Beats::from_f32(4.0), Beats::from_f32(8.0), "Drop".to_string()),
+                (Beats::from_f32(4.0), Beats::from_f32(5.0), "Drop".to_string()),
+                (Beats::from_f32(5.0), Beats::from_f32(8.0), "Half".to_string()),
                 (Beats::from_f32(8.0), Beats::from_f32(16.0), "Break".to_string()),
             ]
         );
@@ -1036,8 +1033,8 @@ mod tests {
         // it must not cut and must not name. Marker exactly on `in` names the
         // first section (see `derive_sections_names_first_section_from_marker_on_in`).
         let t = timeline_with(vec![
-            section_marker(8.0, "Mid"),
-            section_marker(16.0, "OnOut"),
+            plain_marker(8.0, "Mid"),
+            plain_marker(16.0, "OnOut"),
         ]);
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
@@ -1054,9 +1051,9 @@ mod tests {
         // `add_marker`'s insert-before-equal placement.
         let mut t = manifold_core::timeline::Timeline::default();
         t.markers = vec![
-            section_marker(4.0, "First"),
-            section_marker(4.0, "Second"),
-            section_marker(8.0, "Next"),
+            plain_marker(4.0, "First"),
+            plain_marker(4.0, "Second"),
+            plain_marker(8.0, "Next"),
         ];
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
@@ -1072,12 +1069,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_names_first_section_from_marker_on_in() {
-        // A section marker exactly on `in` names the first section (doesn't
-        // cut), so Peter can place one at the export-in point to name the intro
-        // instead of getting `section-1`.
+        // A marker exactly on `in` names the first section (doesn't cut), so
+        // Peter can place one at the export-in point to name the intro instead
+        // of getting `section-1`.
         let t = timeline_with(vec![
-            section_marker(0.0, "Intro"),
-            section_marker(8.0, "Drop"),
+            plain_marker(0.0, "Intro"),
+            plain_marker(8.0, "Drop"),
         ]);
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
@@ -1089,7 +1086,7 @@ mod tests {
         );
 
         // Marker on `in` with no interior cuts → one named section (no split).
-        let t = timeline_with(vec![section_marker(0.0, "Only")]);
+        let t = timeline_with(vec![plain_marker(0.0, "Only")]);
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
             sections,
@@ -1099,9 +1096,9 @@ mod tests {
         // Two markers on `in` → first in list order wins.
         let mut t = manifold_core::timeline::Timeline::default();
         t.markers = vec![
-            section_marker(0.0, "First"),
-            section_marker(0.0, "Second"),
-            section_marker(8.0, "Drop"),
+            plain_marker(0.0, "First"),
+            plain_marker(0.0, "Second"),
+            plain_marker(8.0, "Drop"),
         ];
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
@@ -1120,8 +1117,8 @@ mod tests {
         // depend on that: hand it an unsorted `markers` vec directly.
         let mut t = manifold_core::timeline::Timeline::default();
         t.markers = vec![
-            section_marker(8.0, "Break"),
-            section_marker(4.0, "Drop"),
+            plain_marker(8.0, "Break"),
+            plain_marker(4.0, "Drop"),
         ];
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
