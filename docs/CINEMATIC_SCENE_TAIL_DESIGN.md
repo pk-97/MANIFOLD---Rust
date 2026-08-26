@@ -1,7 +1,7 @@
 # Cinematic Scene Tail — DoF + motion blur back into 3D scene graphs
 
 **Status:** IN PROGRESS — P0 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; see the audit addendum) · P1–P3 open · k3 (lead)
-**Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) open is P0 of this doc)
+**Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) root-caused in P0 of this doc)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 GLB-imported 3D scenes have no depth-of-field or motion-blur nodes at all — the import graph was made SSAO-only in `72135693` (2026-07-12), one day *before* the dof-polish batches landed the fixes (CoC dilation, occlusion-aware bokeh gather) for the "blocky 2001 blur" look that motivated the removal. Peter has never seen the polished chain. Meanwhile the Scene Setup panel surfaces `focus_distance` / `f_stop` / `shutter_angle` rows that write lens params nothing consumes, and `node.motion_blur` is live-tracked as BUG-136 (no visible effect despite proven-correct inputs).
