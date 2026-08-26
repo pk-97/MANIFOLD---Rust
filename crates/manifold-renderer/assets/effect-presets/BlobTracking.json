@@ -51,7 +51,7 @@
         "name": "Smoothing",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.7,
+        "defaultValue": 0.4,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -114,7 +114,7 @@
       {
         "id": "smoothing",
         "label": "Smoothing",
-        "defaultValue": 0.7,
+        "defaultValue": 0.4,
         "target": {
           "kind": "node",
           "nodeId": "smoothing_remap",
@@ -169,7 +169,7 @@
       "params": {
         "a": {
           "type": "Float",
-          "value": 0.7
+          "value": 0.4
         },
         "offset": {
           "type": "Float",
@@ -265,6 +265,10 @@
             {
               "name": "detections",
               "portType": "Array(Detection)"
+            },
+            {
+              "name": "cut",
+              "portType": ""
             }
           ]
         },
@@ -293,7 +297,7 @@
               },
               "update_interval": {
                 "type": "Float",
-                "value": 3.0
+                "value": 1.0
               }
             },
             "title": "Blob Detection"
@@ -343,7 +347,7 @@
             "params": {
               "grace_frames": {
                 "type": "Float",
-                "value": 3.0
+                "value": 1.0
               },
               "match_radius": {
                 "type": "Float",
@@ -373,6 +377,18 @@
             "fromPort": "out",
             "toNode": 2,
             "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cut",
+            "toNode": 2,
+            "toPort": "cut"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cut",
+            "toNode": 21,
+            "toPort": "cut"
           },
           {
             "fromNode": 20,
@@ -1016,6 +1032,12 @@
       "fromPort": "out",
       "toNode": 19,
       "toPort": "source"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "cut",
+      "toNode": 4,
+      "toPort": "cut"
     },
     {
       "fromNode": 19,

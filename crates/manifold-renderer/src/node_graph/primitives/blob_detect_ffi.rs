@@ -72,6 +72,9 @@ struct BlobResponse {
     /// Up to `MAX_BLOB_CAP` blobs; the worker also returns the
     /// inferenced count via the slice length.
     blobs: Vec<BlobRect>,
+    /// Mean-abs-diff scene-change score (0..1) between this analysis
+    /// frame and the previous one submitted to the worker.
+    cut_score: f32,
 }
 
 struct BlobState {
@@ -88,6 +91,9 @@ struct BlobState {
     staging_texture: manifold_gpu::GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
+    /// Last cut score received from the worker (0 until the second
+    /// analyzed frame).
+    cut_score: f32,
 }
 
 crate::primitive! {
@@ -104,6 +110,7 @@ crate::primitive! {
         // user wgsl_compute shaders) declare the same signature
         // and the validator matches by hash.
         blobs: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32],
+        cut: ScalarF32,
     },
     params: [
         ParamDef {
@@ -148,7 +155,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "max_capacity is read by the chain build at allocation time (set once when authoring the preset). threshold sets the brightness cutoff in 0..1; sensitivity controls how aggressively bright regions merge into one blob. Until the first inference completes, the output buffer is all zeros — downstream consumers should skip zero-size entries.",
+    composition_notes: "max_capacity is read by the chain build at allocation time (set once when authoring the preset). threshold sets the brightness cutoff in 0..1; sensitivity controls how aggressively bright regions merge into one blob. Until the first inference completes, the output buffer is all zeros — downstream consumers should skip zero-size entries. cut is a mean-abs-diff scene-change score (0..1) computed on the analysis frames the worker already reads — wire to track_persist.cut / one_euro_filter.cut so hard cuts flush tracks and snap smoothing on the same frame the post-cut detections land.",
     examples: [],
     picker: { label: "Blob Tracker", category: Atom },
     summary: "Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals.",
@@ -179,6 +186,7 @@ impl BlobDetectFfi {
         self.blob_worker = BackgroundWorker::try_new(|| {
             let detector =
                 manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOB_CAP as i32)?;
+            let mut prev_frame: Option<Vec<u8>> = None;
             log::info!(
                 "[node.blob_tracker] Blob detector worker spawned (max {} blobs)",
                 MAX_BLOB_CAP
@@ -193,6 +201,24 @@ impl BlobDetectFfi {
                     req.sensitivity,
                     &mut raw,
                 );
+                // Scene-change score: mean |Δ| over RGB bytes against
+                // the previous submitted frame. Lives here because the
+                // worker already holds both analysis frames on CPU —
+                // the score lands on the same frame as the post-cut
+                // detections, which is exactly when downstream
+                // flush/snap consumers need it.
+                let cut_score = match prev_frame.as_ref() {
+                    Some(prev) if prev.len() == req.pixel_data.len() => {
+                        let sum: u64 = prev
+                            .iter()
+                            .zip(req.pixel_data.iter())
+                            .map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs() as u64)
+                            .sum();
+                        sum as f32 / (prev.len() as f32 * 255.0)
+                    }
+                    _ => 0.0,
+                };
+                prev_frame = Some(req.pixel_data.clone());
                 let n = (count.max(0) as usize).min(MAX_BLOB_CAP);
                 let mut blobs = Vec::with_capacity(n);
                 for i in 0..n {
@@ -214,7 +240,7 @@ impl BlobDetectFfi {
                         height: sh,
                     });
                 }
-                BlobResponse { blobs }
+                BlobResponse { blobs, cut_score }
             })
         });
         if self.blob_worker.is_none() {
@@ -267,6 +293,7 @@ impl BlobDetectFfi {
             staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
+            cut_score: 0.0,
         });
     }
 }
@@ -309,6 +336,17 @@ impl Primitive for BlobDetectFfi {
         let blob_size = std::mem::size_of::<BlobRect>() as u64;
         let capacity = (out_buf.size / blob_size) as u32;
 
+        // Emit the latest worker cut score every frame (stale between
+        // completions — consumers compare against a threshold, so a
+        // held value for a frame or two is fine).
+        let cut_score = self
+            .blob_state
+            .as_ref()
+            .map(|bs| bs.cut_score)
+            .unwrap_or(0.0);
+        ctx.outputs
+            .set_scalar("cut", ParamValue::Float(cut_score));
+
         let gpu = ctx.gpu_encoder();
 
         // COMPILE_CONTRACT_DESIGN P2: create pipelines AFTER gpu_encoder is available
@@ -349,6 +387,7 @@ impl Primitive for BlobDetectFfi {
             // Poll worker result → mark dirty.
             if let Some(response) = bw.try_recv() {
                 bs.blobs = response.blobs;
+                bs.cut_score = response.cut_score;
                 bs.blobs_dirty = true;
             }
 
@@ -459,9 +498,10 @@ mod tests {
         assert_eq!(BlobDetectFfi::TYPE_ID, "node.blob_tracker");
         assert_eq!(BlobDetectFfi::INPUTS.len(), 1);
         assert_eq!(BlobDetectFfi::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(BlobDetectFfi::OUTPUTS.len(), 1);
+        assert_eq!(BlobDetectFfi::OUTPUTS.len(), 2);
         assert_eq!(BlobDetectFfi::OUTPUTS[0].name, "blobs");
         assert_eq!(BlobDetectFfi::OUTPUTS[0].ty, PortType::Array(expected));
+        assert_eq!(BlobDetectFfi::OUTPUTS[1].name, "cut");
     }
 
     #[test]

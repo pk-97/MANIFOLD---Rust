@@ -1873,6 +1873,10 @@
         {
           "name": "blobs",
           "type": "Array"
+        },
+        {
+          "name": "cut",
+          "type": "f32"
         }
       ],
       "params": [
@@ -12691,6 +12695,11 @@
           "name": "beta",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "cut",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "One Euro Filter",
@@ -12732,6 +12741,16 @@
             "10"
           ],
           "tooltip": "Smoothing on the speed estimate itself. Usually left alone.",
+          "type": "float"
+        },
+        {
+          "default": "0.25",
+          "label": "Cut Threshold",
+          "name": "cut_threshold",
+          "range": [
+            "0.01",
+            "1"
+          ],
           "type": "float"
         }
       ],
@@ -21241,6 +21260,11 @@
           "name": "match_radius",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "cut",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Track Persist",
@@ -21272,6 +21296,16 @@
           ],
           "tooltip": "How many frames to keep holding a blob after it drops out, measured in frames. Raise it to ride through flickery detections, lower it to clear stale blobs fast.",
           "type": "int"
+        },
+        {
+          "default": "0.25",
+          "label": "Cut Threshold",
+          "name": "cut_threshold",
+          "range": [
+            "0.01",
+            "1"
+          ],
+          "type": "float"
         }
       ],
       "purpose": "Greedy nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y). Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
@@ -24955,7 +24989,7 @@
           "name": "Sensitivity"
         },
         {
-          "default": "0.7",
+          "default": "0.4",
           "id": "smoothing",
           "max": "1",
           "min": "0",

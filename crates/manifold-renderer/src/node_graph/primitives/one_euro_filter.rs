@@ -34,6 +34,7 @@ crate::primitive! {
         in: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
         min_cutoff: ScalarF32 optional,
         beta: ScalarF32 optional,
+        cut: ScalarF32 optional,
     },
     outputs: {
         out: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32],
@@ -63,9 +64,17 @@ crate::primitive! {
             range: Some((0.1, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("cut_threshold"),
+            label: "Cut Threshold",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.25),
+            range: Some((0.01, 1.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire after any noisy Channels producer (blob_detect_ffi, depth_estimate_midas, audio analyzer). min_cutoff sets the baseline smoothing when the signal is still — lower = more smoothing. beta controls how aggressively the filter opens up during fast motion — higher = more responsive to speed. d_cutoff is the derivative filter's cutoff — rarely needs changing. All three are port-shadows-param so control wires can modulate them per-frame.",
+    composition_notes: "Wire after any noisy Channels producer (blob_detect_ffi, depth_estimate_midas, audio analyzer). min_cutoff sets the baseline smoothing when the signal is still — lower = more smoothing. beta controls how aggressively the filter opens up during fast motion — higher = more responsive to speed. d_cutoff is the derivative filter's cutoff — rarely needs changing. All three are port-shadows-param so control wires can modulate them per-frame. cut (e.g. from a temporal→compose(Difference)→luminance chain) snaps the filter state to the current input when it exceeds cut_threshold — hard cuts pass through unsmoothed instead of easing over from the old scene.",
     examples: [],
     picker: { label: "One Euro Filter", category: Driver },
     summary: "Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor input.",
@@ -157,6 +166,22 @@ impl Primitive for OneEuroFilter {
             return;
         }
 
+        // Hard-cut snap: reset filter state to the current input and
+        // pass through unsmoothed. Easing from the old scene's values
+        // after a cut reads as lag; the cut signal means the input
+        // stream has legitimately jumped.
+        let cut_threshold = match ctx.params.get("cut_threshold") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.25,
+        };
+        if ctx.scalar_or_param("cut", 0.0) > cut_threshold {
+            self.prev.copy_from_slice(in_slice);
+            self.dx.fill(0.0);
+            out_slice.copy_from_slice(in_slice);
+            self.last_output_all_zero = Some(out_slice.iter().all(|v| *v == 0.0));
+            return;
+        }
+
         let d_alpha = one_euro_alpha(dt, d_cutoff);
 
         for i in 0..n_floats {
@@ -201,7 +226,7 @@ mod tests {
     fn one_euro_filter_declares_channels_io_and_params() {
         use crate::node_graph::ports::PortType;
         assert_eq!(OneEuroFilter::TYPE_ID, "node.one_euro_filter");
-        assert_eq!(OneEuroFilter::INPUTS.len(), 3);
+        assert_eq!(OneEuroFilter::INPUTS.len(), 4);
         assert_eq!(OneEuroFilter::INPUTS[0].name, "in");
         assert!(matches!(OneEuroFilter::INPUTS[0].ty, PortType::Array(_)));
         assert!(OneEuroFilter::INPUTS[0].required);
@@ -209,10 +234,12 @@ mod tests {
         assert!(!OneEuroFilter::INPUTS[1].required);
         assert_eq!(OneEuroFilter::INPUTS[2].name, "beta");
         assert!(!OneEuroFilter::INPUTS[2].required);
+        assert_eq!(OneEuroFilter::INPUTS[3].name, "cut");
+        assert!(!OneEuroFilter::INPUTS[3].required);
         assert_eq!(OneEuroFilter::OUTPUTS.len(), 1);
         assert_eq!(OneEuroFilter::OUTPUTS[0].name, "out");
         let names: Vec<&str> = OneEuroFilter::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["min_cutoff", "beta", "d_cutoff"]);
+        assert_eq!(names, vec!["min_cutoff", "beta", "d_cutoff", "cut_threshold"]);
     }
 
     #[test]
