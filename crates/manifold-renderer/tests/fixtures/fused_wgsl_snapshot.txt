@@ -42,7 +42,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:BlobTracking node:18 ===
+=== effect:BlobTracking node:19 ===
 struct Element {
     x: f32,
     y: f32,
@@ -137,15 +137,16 @@ fn n0_body(
     thickness_px: f32,
 ) -> vec4<f32> {
     let dpi_scale = dims.y / 1080.0;
-    let thickness = thickness_px * (1.0 / dims.x) * dpi_scale;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
 
     var coverage = 0.0;
     let n = arrayLength(&src_1);
     for (var i: u32 = 0u; i < n; i = i + 1u) {
         let d = src_1[i];
         if d.width < 0.0001 && d.height < 0.0001 { continue; }
-        let half_size = vec2<f32>(d.width, d.height) * 0.5;
-        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
         let arm = min(half_size.x, half_size.y) * size_fraction;
 
         if symbol == 0u {
@@ -154,17 +155,17 @@ fn n0_body(
             let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
             let br = center + half_size;
 
-            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(0.0, arm), thickness));
-            coverage = max(coverage, line_seg(uv, tr, tr - vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, tr, tr + vec2<f32>(0.0, arm), thickness));
-            coverage = max(coverage, line_seg(uv, bl, bl + vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, bl, bl - vec2<f32>(0.0, arm), thickness));
-            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
         } else {
-            coverage = max(coverage, line_seg(uv, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
         }
     }
 
@@ -183,15 +184,16 @@ fn n1_body(
     thickness_px: f32,
 ) -> vec4<f32> {
     let dpi_scale = dims.y / 1080.0;
-    let thickness = thickness_px * (1.0 / dims.x) * dpi_scale;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
 
     var coverage = 0.0;
     let n = arrayLength(&src_1);
     for (var i: u32 = 0u; i < n; i = i + 1u) {
         let d = src_1[i];
         if d.width < 0.0001 && d.height < 0.0001 { continue; }
-        let half_size = vec2<f32>(d.width, d.height) * 0.5;
-        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
         let arm = min(half_size.x, half_size.y) * size_fraction;
 
         if symbol == 0u {
@@ -200,17 +202,17 @@ fn n1_body(
             let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
             let br = center + half_size;
 
-            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(0.0, arm), thickness));
-            coverage = max(coverage, line_seg(uv, tr, tr - vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, tr, tr + vec2<f32>(0.0, arm), thickness));
-            coverage = max(coverage, line_seg(uv, bl, bl + vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, bl, bl - vec2<f32>(0.0, arm), thickness));
-            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
         } else {
-            coverage = max(coverage, line_seg(uv, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
-            coverage = max(coverage, line_seg(uv, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
         }
     }
 
@@ -227,15 +229,16 @@ fn n2_body(
     radius_px: f32,
 ) -> vec4<f32> {
     let dpi_scale = dims.y / 1080.0;
-    let radius = radius_px * (1.0 / dims.x) * dpi_scale;
+    let radius = radius_px * dpi_scale;
+    let p = uv * dims;
 
     var coverage = 0.0;
     let n = arrayLength(&src_1);
     for (var i: u32 = 0u; i < n; i = i + 1u) {
         let d = src_1[i];
         if d.width < 0.0001 && d.height < 0.0001 { continue; }
-        let center = vec2<f32>(d.x + d.width * 0.5, d.y + d.height * 0.5);
-        let dist = length(uv - center);
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let dist = length(p - center);
         coverage = max(coverage, 1.0 - saturate(dist / radius));
     }
 
@@ -306,25 +309,27 @@ fn n4_body(
     thickness_px: f32,
 ) -> vec4<f32> {
     let dpi_scale = dims.y / 1080.0;
-    let px_u = (1.0 / dims.x) * dpi_scale;
-    let thickness = thickness_px * px_u;
-    let right_offset = right_offset_px * px_u;
+    let thickness = thickness_px * dpi_scale;
+    let right_offset = right_offset_px * dpi_scale;
+    let long_tick = long_tick_px * dpi_scale;
+    let short_tick = short_tick_px * dpi_scale;
+    let p = uv * dims;
 
     var coverage = 0.0;
     let n = arrayLength(&src_1);
     for (var i: u32 = 0u; i < n; i = i + 1u) {
         let d = src_1[i];
         if d.width < 0.0001 && d.height < 0.0001 { continue; }
-        let half_size = vec2<f32>(d.width, d.height) * 0.5;
-        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
 
         let tick_base = vec2<f32>(center.x + half_size.x + right_offset, center.y - half_size.y);
         let tick_spacing = half_size.y * 0.5;
 
         for (var t: u32 = 0u; t < 4u; t = t + 1u) {
             let tick_start = tick_base + vec2<f32>(0.0, tick_spacing * f32(t));
-            let tick_len = select(short_tick_px * px_u, long_tick_px * px_u, (t % 2u) == 0u);
-            coverage = max(coverage, line_seg(uv, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);
+            let tick_len = select(short_tick, long_tick, (t % 2u) == 0u);
+            coverage = max(coverage, line_seg(p, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);
         }
     }
 
@@ -344,10 +349,10 @@ fn n5_body(
     midpoint_radius_px: f32,
 ) -> vec4<f32> {
     let dpi_scale = dims.y / 1080.0;
-    let px_u = (1.0 / dims.x) * dpi_scale;
-    let thickness = thickness_px * px_u;
-    let dash_period = dash_period_px * px_u;
-    let mid_radius = midpoint_radius_px * px_u;
+    let thickness = thickness_px * dpi_scale;
+    let dash_period = dash_period_px * dpi_scale;
+    let mid_radius = midpoint_radius_px * dpi_scale;
+    let p = uv * dims;
     let det_count = arrayLength(&src_1);
 
     var line_cov = 0.0;
@@ -359,23 +364,23 @@ fn n5_body(
         if e.a_index >= det_count || e.b_index >= det_count { continue; }
         let da = src_1[e.a_index];
         let db = src_1[e.b_index];
-        let center_a = vec2<f32>(da.x + da.width * 0.5, da.y + da.height * 0.5);
-        let center_b = vec2<f32>(db.x + db.width * 0.5, db.y + db.height * 0.5);
+        let center_a = (vec2<f32>(da.x, da.y) + vec2<f32>(da.width, da.height) * 0.5) * dims;
+        let center_b = (vec2<f32>(db.x, db.y) + vec2<f32>(db.width, db.height) * 0.5) * dims;
 
         let ba = center_b - center_a;
         let len_sq = dot(ba, ba);
         if len_sq < 0.000001 { continue; }
-        let pa = uv - center_a;
+        let pa = p - center_a;
         let t_val = saturate(dot(pa, ba) / len_sq);
         let len = sqrt(len_sq);
         let dash_phase = fract(t_val * len / dash_period);
         let dash_mask = step(dash_fill, dash_phase);
 
-        line_cov = max(line_cov, line_seg(uv, center_a, center_b, thickness) * 0.5 * dash_mask);
+        line_cov = max(line_cov, line_seg(p, center_a, center_b, thickness) * 0.5 * dash_mask);
 
         if mid_radius > 0.0 {
             let mid = (center_a + center_b) * 0.5;
-            let mid_dist = length(uv - mid);
+            let mid_dist = length(p - mid);
             mid_cov = max(mid_cov, (1.0 - saturate(mid_dist / mid_radius)) * 0.4);
         }
     }

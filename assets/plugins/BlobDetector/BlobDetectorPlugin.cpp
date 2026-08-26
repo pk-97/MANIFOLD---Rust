@@ -89,6 +89,14 @@ int BlobDetector_Process(
     // Convert to grayscale
     cv::cvtColor(rgba, state->gray, cv::COLOR_RGBA2GRAY);
 
+    // Near-flat frame gate: on an empty/dark frame equalizeHist would
+    // stretch sensor/compression noise to full contrast and Canny would
+    // box the noise — phantom blobs that keep dead tracks alive. If the
+    // original frame has almost no dynamic range, there is no subject.
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(state->gray, mean, stddev);
+    if (stddev[0] < 2.0) return 0;
+
     // Normalize global contrast before edge detection. The Canny
     // thresholds below are absolute gradient magnitudes, so without
     // this a given `threshold` setting means something different on
