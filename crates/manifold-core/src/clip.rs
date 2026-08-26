@@ -160,6 +160,15 @@ impl TimelineClip {
         beat >= self.start_beat && beat < self.end_beat()
     }
 
+    /// The one clip-visibility predicate: does this clip contribute pixels?
+    /// Mute is presentational — a muted clip still schedules and modulates.
+    /// Anything asking "is there visible content here" must call this, never
+    /// read `is_muted` directly (occlusion, idle gates, compositor activity).
+    #[must_use]
+    pub fn is_visible(&self) -> bool {
+        !self.is_muted
+    }
+
     pub fn overlaps_with(&self, other: &TimelineClip) -> bool {
         self.start_beat < other.end_beat() && self.end_beat() > other.start_beat
     }

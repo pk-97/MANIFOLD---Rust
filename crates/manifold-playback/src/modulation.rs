@@ -940,7 +940,7 @@ fn compute_active_clip_timing(
         let mut elapsed = Beats(-1.0);
         let mut duration = Beats::ZERO;
         for clip in &layer.clips {
-            if clip.is_muted {
+            if !clip.is_visible() {
                 continue;
             }
             let e = current_beat - clip.start_beat;

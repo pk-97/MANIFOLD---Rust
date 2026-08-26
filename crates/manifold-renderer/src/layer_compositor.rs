@@ -30,6 +30,15 @@ pub struct CompositeClipDescriptor<'a> {
     pub effect_groups: &'a [EffectGroup],
 }
 
+impl CompositeClipDescriptor<'_> {
+    /// The one clip-visibility predicate — mirrors `TimelineClip::is_visible`.
+    /// Blend sites must call this, never read `is_muted` directly.
+    #[inline]
+    pub fn is_visible(&self) -> bool {
+        !self.is_muted
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlendUniforms {
@@ -1835,7 +1844,7 @@ impl LayerCompositor {
 
                 // Clip-level mute is presentational: the clip stays active
                 // (scheduled, modulating) but contributes no pixels.
-                if clip.is_muted {
+                if !clip.is_visible() {
                     continue;
                 }
 
@@ -1871,7 +1880,7 @@ impl LayerCompositor {
                 // Clip-level mute is presentational: skip the muted clip but
                 // keep the layer (and its effects) active for unmuted clips.
                 for clip in group {
-                    if clip.is_muted {
+                    if !clip.is_visible() {
                         continue;
                     }
                     let uniforms = BlendUniforms {

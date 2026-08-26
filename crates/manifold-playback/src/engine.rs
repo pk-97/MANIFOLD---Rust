@@ -1049,6 +1049,9 @@ impl PlaybackEngine {
             let layers = &project.timeline.layers;
             let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
             ready.iter().any(|clip| {
+                if !clip.is_visible() {
+                    return false;
+                }
                 let layer_index = clip.layer_index as usize;
                 layers.get(layer_index).is_some_and(|layer| {
                     let parent = manifold_core::layer::Layer::find_parent_layer(layers, layer_index)

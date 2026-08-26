@@ -254,7 +254,7 @@ impl ActiveTimelineClipWindow {
 
         self.visible_scratch.clear();
         for clip in &self.active_by_id_values {
-            if clip.is_muted {
+            if !clip.is_visible() {
                 continue;
             }
             let layer_index = self.layer_id_to_index.get(&clip.layer_id).copied();
