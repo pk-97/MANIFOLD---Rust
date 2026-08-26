@@ -1,6 +1,6 @@
 # Cinematic Scene Tail — DoF + motion blur back into 3D scene graphs
 
-**Status:** IN PROGRESS — P0+P1 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; import tail wired, all gates green, I4 tail cost ~1–2 ms at 1080p) · P2 executed 2026-08-26 (v1.13.0 migration: existing projects gain the tail at load — layer graphs included; SceneLadders verified end-to-end) · P3 (Peter look-pass) open · k3 (lead)
+**Status:** IN PROGRESS — P0+P1+P2 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; import tail wired; v1.13.0 migration upgrades existing projects) · P3 look-pass RUNNING (Peter) · P4 briefed 2026-08-26 night (cinematic camera params v2 + 4K perf — see section 5 (Phasing)) · k3 (lead)
 **Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) root-caused in P0 of this doc)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -118,10 +118,28 @@ This is CinematicScene.json's wiring transcribed; the import assembler and the m
 - **Gate:** Peter, L4. No agent gate.
 - **Demo:** the rig.
 
+### P4 — Cinematic camera params v2 + 4K perf (added 2026-08-26 night, from Peter's first live look-pass)
+
+Peter's live findings and directives, verbatim:
+- "the slider ranges are so extreme they act as on-off toggles" → tightened: focus_distance 0–100, f_stop 0.5–32 (`camera_lens.rs` ParamDefs — DONE, first commit on `lane/lens-slider-ranges`; flows to fresh-import stamps via `metadata_for_node_type` reading `pd.range` live).
+- "add the motion blur strength as a slider in the camera params and any other useful params for these cinematic camera params in the scene setup panel" → stamp `node.motion_blur`'s params (`max_blur_px`, and `enabled` below) with section "Camera" in the import assembly; extend the panel's `camera_sections` id list to the tail node (see the scene_vm/inspector path below).
+- "set the near camera clip plane to 0 and the default shutter angle to 180" → near: ⚠ CHECK FIRST — standard perspective divides by near; if `perspective_rh` (or its caller) doesn't clamp, near=0 makes NaNs. Dissent registered once: if 0 is unsafe, use the smallest safe value (0.01) and tell Peter. Shutter default 0→180: amend the atom default, the P1 assembly stamp (`scene.rs` inserts `shutter_angle` 0.0 explicitly), and the P2 migration's inserted lens (landed migration — value change, not schema; no user file has a meaningfully-chosen shutter 0 from it). This amends D1's neutral-default story: fresh imports now smear motion by default. I1's byte-identity gate survives (static scene → zero velocity → taps collapse) but MUST be re-verified, and its doc text updated.
+- "some buttons or toggles or something to enable and disable DoF and Motion Blur would also be useful incase performance is being hit too hard or the user wants the effect 100% off" → this OVERRIDES D1's rejected toggle (his call, quoted). Shape: `enabled` Bool param (default true) on `node.motion_blur` AND `node.bokeh_gather`; host-side skip → texture copy when false (the gather is the cost; coc/dilate are cheap). motion_blur additionally auto-skips at shutter==0 (exact pass-through, no UI needed). Stamp both `enabled` toggles + `max_blur_px` into the Camera section.
+- "the blur does have a pretty huge hit to FPS even with just 4K raster scenes... can't render 4K 60 with it?" → 4K quadruples the full-res gathers, paid even at neutral defaults. The enabled toggles + shutter-0 auto-skip fix "off costs money"; the deferred half-res DoF phase (section 7) is REVIVED for "4K60 with DoF on" — its revival trigger (I4 budget binding on the heaviest show project) fired with this report. Measure the real 4K tail number first (I4 harness at 3840×2160) so the phase has a figure, not a vibe.
+
+Implementation notes the next session needs (lead analysis, 2026-08-26 night):
+- The panel's Camera section draws from EXPOSURE STAMPS via `sections_for_doc_ids(def, [cam_id, lens_id])` (`inspector.rs:779-797`); `LensRowVm` is vestigial, never drawn. New sliders = new stamps + extending that id list: `scene_vm::LensRow` gains `motion_blur_doc_id: Option<u32>` (top-level scan — the tail's motion_blur is top-level in BOTH the P1 assembly and the P2 migration shape), `trace_lens` populates it, `inspector.rs` appends it to the `ids` vec.
+- Stamping is generic: `stamp_scene_node_exposures_into` (called in `gltf_import/scene.rs` with section "Camera" for the lens) + `metadata_for_node_type("node.motion_blur")` (reads the atom's ParamDefs live — ranges come free).
+- **Bokeh radius is DEFERRED** (not in this batch): the bokeh node lives INSIDE the `dof` group, and group-internal card bindings flatten to `group/handle` nodeIds (see `ao/mask_mix` in the I1 test's strip code) — an unprefixed stamp would dangle. f-stop is the photographic DoF control anyway. Revive only with a verified group-internal binding story.
+- The P2 migration (on main) must ALSO stamp `max_blur_px`/`enabled` for graphs it migrates: append `ParamSpecDef`+`BindingDef` JSON to `graph.presetMetadata` (camelCase wire shape — see `/tmp/inspect_metadata.py` output or the file itself: `{"id": "{docid}_max_blur_px", "name": ..., "section": "Camera", ...}`, binding `{"target": {"kind": "node", "nodeId": "motion_blur", "param": "max_blur_px"}}`). Update the migration's tests.
+- Where the layer's panel reads metadata: `graph.presetMetadata.params/bindings` (verified in SceneLadders: 21 params/22 bindings on the layer graph itself).
+- Tests to touch: gltf_import tests asserting the new stamps; migration tests (shutter 180 + metadata entries); I1 doc text. Gates: `-p manifold-renderer -p manifold-io` nextest, clippy, gpu_proofs_gate (atom changes), graph-tool validate.
+- Branch `lane/lens-slider-ranges` (slot-1) holds the first commit (ranges). Continue there or fresh-branch from main — either, the commit is tiny and self-contained.
+
 ## 6. Decided — do not reopen
 
 1. The tail is the shipped CINEMATIC_POST atoms (lens → coc → dilate → bokeh → motion_blur), never a new kernel (D1 and the forbidden-turn paragraph in section 2 (Decisions)).
-2. Neutral lens defaults = pass-through = no toggle (D1).
+2. ~~Neutral lens defaults = pass-through = no toggle~~ AMENDED by Peter 2026-08-26 night (P4): shutter defaults to 180, and explicit `enabled` toggles ship on motion_blur and bokeh_gather. The pass-through invariants (shutter=0 exact, pinhole exact) still hold as shader/host behavior; the DEFAULT changed.
 3. BUG-136 blocks the tail (D2); headless output-diff is the oracle, live probe loops are banned (Peter).
 4. Existing projects migrate at load, skip-loudly, idempotent (D3).
 5. Dead sliders are fixed by giving params consumers, plus the I2 guard — never by hiding rows (D4).
@@ -129,5 +147,7 @@ This is CinematicScene.json's wiring transcribed; the import assembler and the m
 ## 7. Deferred
 
 - **Traced DoF / motion blur** — RAYTRACING_DESIGN D5 already defers it; revival trigger: measured spare ray budget after RT P3.
-- **Per-scene tail removal (a real off switch)** — revival trigger: I4's 3 ms budget ever measured binding on the heaviest show project; until then neutral defaults are the off state.
+- ~~Per-scene tail removal (a real off switch)~~ SHIPPED in P4 as the `enabled` toggles (Peter's directive).
+- **Half-res DoF** — REVIVED 2026-08-26 night (Peter's 4K60 report): the design phase for "4K60 with DoF on". Needs the downsample/upsample leg designed properly (the P1 ruling rejected improvising it); measure the 4K tail cost first.
+- **Bokeh radius slider** — blocked on group-internal card bindings (P4 implementation notes), not on intent.
 - **Bokeh shape controls (blade count, anamorphic squeeze)** — atoms don't support them; revival trigger: Peter asking for a specific lens character after the P3 look-pass.
