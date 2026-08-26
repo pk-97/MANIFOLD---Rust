@@ -37,7 +37,7 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         ProjectAction::ToggleSplitSections => {
-            let old_split = project.settings.split_at_section_markers;
+            let old_split = project.settings.split_at_markers;
             let cmd =
                 manifold_editing::commands::settings::ToggleSplitSectionsCommand::new(old_split);
             {
@@ -46,8 +46,8 @@ pub(super) fn dispatch_project(
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
             log::info!(
-                "Split export at section markers → {}",
-                project.settings.split_at_section_markers
+                "Split export at markers → {}",
+                project.settings.split_at_markers
             );
             DispatchResult::handled()
         }

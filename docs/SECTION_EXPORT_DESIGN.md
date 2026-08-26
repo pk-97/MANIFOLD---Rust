@@ -25,7 +25,7 @@ complexity while N sequential exports are acceptable).
 
 | Piece | Where | State |
 |---|---|---|
-| `TimelineMarker` (beat, name, color; serialized camelCase) | `crates/manifold-core/src/marker.rs` | exists — extend with a flag |
+| `TimelineMarker` (beat, name, color; serialized camelCase) | `crates/manifold-core/src/marker.rs` | exists — unmodified (flavor flag added then retired, D3) |
 | Marker storage, kept sorted by beat on insert | `crates/manifold-core/src/timeline.rs:26` (`Timeline::markers`), `timeline.rs:518` (`add_marker`) | exists |
 | Marker undo commands | `crates/manifold-editing/src/commands/marker.rs` (`AddMarkerCommand`, `DeleteMarkerCommand`) | exists — extend or add toggle command |
 | Export range (⌘I/⌘O), serialized on timeline | `crates/manifold-core/src/timeline.rs:18-22` (`export_in_beat`, `export_out_beat`, `export_range_enabled`) | exists |
@@ -36,8 +36,8 @@ complexity while N sequential exports are acceptable).
 | ⌘I/⌘O keybindings | `crates/manifold-app/src/window_input.rs:2531-2536` | exists; no `"m"` binding found (⚠ VERIFY-AT-IMPL: `rg -n '"m"' crates/manifold-app/src/window_input.rs` — must still be zero hits) |
 | Export settings UI (HDR toggle lives in settings popup) | `crates/manifold-ui/src/panels/settings_popup.rs:251` | exists — checkbox lands wherever the export action's settings surface is |
 
-Everything load-bearing exists. This design is wiring plus one new flag —
-nothing here is genuinely new except the section-derivation rule.
+Everything load-bearing exists. This design is wiring plus the
+section-derivation rule — nothing here is genuinely new.
 
 ## 2. Decisions
 
@@ -45,19 +45,24 @@ nothing here is genuinely new except the section-derivation rule.
   export with its own `start_beat`/`end_beat`. Consequences, stated honestly:
   N sections = N render passes, so export wall-time scales with section count.
   Accepted: render time instead of Peter's time; runs unattended.
-- **D2 — Chapter-style sections; a section marker means "cut here", never
-  "end here".** Sections derive from sorted section-flagged markers inside
+- **D2 — Chapter-style sections; every marker means "cut here", never
+  "end here".** Sections derive from sorted markers inside
   `[export_in_beat, export_out_beat)`: sections are `[in, m₁)`, `[m₁, m₂)`, …,
-  `[mₙ, out)`. No pairing, so no broken/orphan end markers. Section markers
-  outside the export range are ignored.
-- **D3 — New field `is_section_boundary: bool` on `TimelineMarker`**,
-  `#[serde(default)]` (camelCase `isSectionBoundary`). Old projects and old
-  markers load with it `false` — existing markers never slice an export.
-- **D4 — One export settings surface with a "Split at section markers"
-  checkbox** (Peter: *"checkbox probably makes sense here"*). Zero section
-  markers in range = today's single-export behavior, unchanged.
+  `[mₙ, out)`. No pairing, so no broken/orphan end markers. Markers outside
+  the export range are ignored. There is no per-marker flavor: plain bare-M
+  markers are the only kind.
+- **D3 — Retired same-day: the per-marker `is_section_boundary` flag shipped
+  on `TimelineMarker` with `#[serde(default)]` (camelCase `isSectionBoundary`)
+  and was removed the same day, superseded by "every marker cuts" (D2).
+  Peter: *"Surely M and I and O are enough."* The field is gone; serde
+  ignores the stale key in projects saved during that one-day window. The
+  export setting retains the old `split_at_section_markers` JSON name as a
+  load alias so those projects still open.
+- **D4 — One export settings surface with a "Split at Markers"
+  checkbox** (Peter: *"checkbox probably makes sense here"*). Zero markers
+  in range = today's single-export behavior, unchanged.
 - **D5 — Section derivation happens on the content thread**, owner of the
-  `Project`. `ExportConfig` gains `split_at_section_markers: bool`; the export
+  `Project`. `ExportConfig` gains `split_at_markers: bool`; the export
   handler derives the section list from `project.timeline` at export start.
   The UI never computes sections. Rejected: UI sends a precomputed section
   list — two homes for the same derivation, and the zero-new-systems test.
@@ -65,11 +70,10 @@ nothing here is genuinely new except the section-derivation rule.
   sanitized (whitespace/punctuation → `-`, empty → `section-N` where N counts
   sections from 1). Duplicate names get `-2`, `-3`. The export's `output_path`
   becomes the base; single-export naming is untouched.
-- **D7 — ⌘M drops a section-flagged marker at the playhead** (⌘M currently
-  unbound — verified 2026-08-26, re-verify at impl). Plain marker creation
-  keeps its existing path; section markers render distinctly (different glyph
-  or color treatment — executor picks from existing marker-render code, no new
-  rendering infrastructure).
+- **D7 — Bare M is the only marker key.** ⌘M shipped same-day as a
+  section-flagged marker shortcut and was removed with the flag (D3).
+  Plain marker creation at the playhead is bare M, unchanged; no distinct
+  rendering (paragraph two marked "superseded" in git history if needed).
 - **D8 — Audio per section uses the existing mux path**: each section export
   sets `audio_start_beat = section start`, which the current muxer already
   turns into a zero-offset slice of the master audio
@@ -77,24 +81,21 @@ nothing here is genuinely new except the section-derivation rule.
 
 ## 3. Data model & seams
 
-- `TimelineMarker` (`crates/manifold-core/src/marker.rs`): add
-  `pub is_section_boundary: bool` with `#[serde(default)]`. `TimelineMarker::new`
-  sets `false`; add `as_section(mut self) -> Self` builder, shaped like the
-  existing `with_name`/`with_color`.
-- New editing command `ToggleMarkerSectionCommand { marker_id }` in
-  `crates/manifold-editing/src/commands/marker.rs`, shaped like
-  `DeleteMarkerCommand` (stores old flag value for undo). All marker mutation
-  routes through `EditingService` — no direct writes.
-- `ExportConfig` (`crates/manifold-media/src/export_config.rs`): add
-  `pub split_at_section_markers: bool`. ExportConfig is constructed fresh per
+- `TimelineMarker` (`crates/manifold-core/src/marker.rs`): the field that the
+  one-day flavor added, `is_section_boundary`, was removed (D3). Markers carry
+  just id/beat/name/color — every marker is a cut.
+- Editing command: `ToggleMarkerSectionCommand` was removed with the flag.
+  Marker mutation routes through `EditingService` — no direct writes.
+- `ExportConfig` (`crates/manifold-media/src/export_config.rs`):
+  `pub split_at_markers: bool`. ExportConfig is constructed fresh per
   export (not serialized into projects) — no load migration.
 - Section derivation, in `content_export.rs` at export start:
 
   ```
   fn derive_sections(timeline: &Timeline) -> Vec<(Beats, Beats, String)>
-  // in/out from timeline.export_*; flag-filtered markers inside range;
-  // returns one (start, end, name) per section; empty vec when flag off
-  // or no section markers in range (→ existing single-export path).
+  // in/out from timeline.export_*; all markers inside range;
+  // returns one (start, end, name) per section; empty vec when the
+  // setting is off or no markers in range (→ existing single-export path).
   ```
 
 - Export loop: the existing single-export body becomes a function called once
@@ -114,14 +115,15 @@ practice instead of building it.
 
 ## 4. Invariants & enforcement
 
-- Existing markers never become section boundaries on load.
-  Enforcement: round-trip test — project with markers saved pre-flag loads
-  with `is_section_boundary == false` on all markers (fixture: canonical
-  Liveschool project, which carries markers).
-- `split_at_section_markers` with zero in-range section markers is
-  byte-identical behavior to today's export. Enforcement: P1 gate test —
-  one section run with flag on + no section markers produces exactly one file
-  at the unmodified `output_path`.
+- Projects saved during the one-day flavor still load: the stale
+  `isSectionBoundary` marker key is ignored by serde (unknown field) and the
+  `split_at_section_markers` setting name is a load alias. Enforcement:
+  `marker_with_retired_flavor_key_still_loads` in `marker.rs`; the round-trip
+  alias check in `content_export.rs`.
+- `split_at_markers` with zero in-range markers is byte-identical behavior to
+  today's export. Enforcement: derive_sections empty-path tests — setting on
+  + no in-range markers produces exactly one file at the unmodified
+  `output_path`.
 - Every section file's duration matches its beat range within one frame.
   Enforcement: P1 gate — ffprobe on each output, duration compared against
   `beat_to_seconds` of the section range.
@@ -131,15 +133,15 @@ practice instead of building it.
 
 ## 5. Phasing
 
-### P1 — engine: flag, derivation, section loop (one session)
+### P1 — engine: derivation, section loop (one session)
 
 - **Entry state:** anchors above re-verified; `cargo nextest run -p manifold-core -p manifold-media` green.
-- **Read-back:** this doc's D1–D6, D8 + forbidden moves; `marker.rs`,
-  `timeline.rs:518`, `export_config.rs`, `content_export.rs` whole.
-- **Deliverables:** `is_section_boundary` on `TimelineMarker`;
-  `ToggleMarkerSectionCommand`; `split_at_section_markers` on `ExportConfig`;
-  `derive_sections` + section loop in `content_export.rs`; filename
-  sanitizing + collision suffixes; section progress prefix.
+- **Read-back:** this doc's D1–D8 + forbidden moves; `timeline.rs:518`,
+  `export_config.rs`, `content_export.rs` whole.
+- **Deliverables:** `split_at_markers` on `ExportConfig` + `derive_sections`
+  and the section loop in `content_export.rs`; filename sanitizing +
+  collision suffixes; section progress prefix. (The flag and toggle command
+  originally built here were retired same-day, D3.)
 - **Gate:** the four invariant tests of section 4 (Invariants & enforcement) pass; a headless export
   (journey-proof harness pattern) of a 2-section range produces 2 files whose
   ffprobe durations match the beat ranges within one frame; audio in each
@@ -148,25 +150,19 @@ practice instead of building it.
 - **Test scope:** `cargo nextest run -p manifold-core -p manifold-editing -p manifold-media -p manifold-app`; clippy same crates.
 - **Forbidden moves:** storing sections on Project; UI-side derivation;
   parallel section rendering; touching the encoder `.m`.
-- **Invariant deliverable:** the round-trip and no-markers byte-identity tests
-  named in section 4 (Invariants & enforcement).
+- **Invariant deliverable:** the aliased round-trip and no-markers
+  byte-identity tests named in section 4 (Invariants & enforcement).
 
-### P2 — UI: ⌘M, marker rendering, checkbox (one session)
+### P2 — UI: checkbox (one session)
 
-- **Entry state:** P1 on the branch, gates green; `rg -n '"m"' crates/manifold-app/src/window_input.rs` returns zero hits (else escalate for a different key).
-- **Read-back:** D3, D4, D7 + forbidden moves; `window_input.rs:2531-2536`
-  (the ⌘I/⌘O pattern to copy); marker rendering in the timeline viewport;
-  the export settings surface.
-- **Deliverables:** ⌘M adds section-flagged marker at playhead via
-  `AddMarkerCommand` + section toggle; section markers visually distinct;
-  "Split at section markers" checkbox wired to `ExportConfig`.
-- **Gate:** L3 — a `scripts/ui-flows/` flow: place playhead, ⌘M, assert a
-  section marker exists at the beat; tick the checkbox; run a short export;
-  assert per-section files exist. Round-trip: save project, reload, section
-  flags intact.
-- **Demo:** the flow's assertion output + a PNG of section markers on the
-  timeline (Peter looks) — L3 target.
-- **Performer gesture:** scrub playhead to a drop, hit ⌘M twice two bars
+- **Deliverables:** "Split at Markers" checkbox wired to `ExportConfig`.
+- **Gate:** L3 — a `scripts/ui-flows/` flow: place playhead, M, assert a
+  marker exists at the beat; tick the checkbox; run a short export;
+  assert per-section files exist. Round-trip: save project, reload, markers
+  and the setting intact.
+- **Demo:** the flow's assertion output + a PNG of markers on the timeline
+  (Peter looks) — L3 target.
+- **Performer gesture:** scrub playhead to a drop, hit M twice two bars
   apart, export — two clips land, named, right lengths.
 - **Test scope:** same crates + `-p manifold-ui`; clippy same.
 - **Forbidden moves:** new marker-rendering infrastructure (extend what
@@ -176,11 +172,11 @@ practice instead of building it.
 
 1. Re-export per section, sequential — no keyframe or codec schemes (Peter, 2026-08-26).
 2. Chapter-style: marker = cut point; no start/end pairs.
-3. Flag on `TimelineMarker`, serde-defaulted off; old projects unaffected.
+3. No per-marker flavor — every marker cuts; the one-day flag is retired (D3).
 4. Checkbox in the existing export settings surface, not a new dialog.
 5. Section derivation on the content thread only; UI sends no section math.
 6. Filenames `<base>--<marker-name>.mov`, `section-N` fallback, `-2` collisions.
-7. ⌘M for section marker at playhead (re-verify binding is free at impl).
+7. Bare M is the only marker key; ⌘M section-marker binding retired (D7).
 
 ## 7. Deferred
 

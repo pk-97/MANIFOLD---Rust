@@ -29,12 +29,13 @@ pub struct ProjectSettings {
     pub vsync_enabled: bool,
     #[serde(default)]
     pub export_hdr: bool,
-    /// Split the video export into one file per section marker inside the
-    /// export range (docs/SECTION_EXPORT_DESIGN.md D4). A UI setting read into
-    /// `ExportConfig.split_at_section_markers` at export start; the derived
-    /// sections themselves never live on the project.
-    #[serde(default)]
-    pub split_at_section_markers: bool,
+    /// Split the video export into one file per marker inside the export
+    /// range (docs/SECTION_EXPORT_DESIGN.md D4). A UI setting read into
+    /// `ExportConfig.split_at_markers` at export start; the derived sections
+    /// themselves never live on the project. Alias keeps projects saved
+    /// during the one-day `splitAtSectionMarkers` naming loading.
+    #[serde(default, alias = "splitAtSectionMarkers")]
+    pub split_at_markers: bool,
 
     #[serde(default)]
     pub video_library_paths: Vec<String>,
@@ -262,7 +263,7 @@ impl Default for ProjectSettings {
             frame_rate: 60.0,
             vsync_enabled: true,
             export_hdr: false,
-            split_at_section_markers: false,
+            split_at_markers: false,
             video_library_paths: Vec::new(),
             video_player_pool_size: 10,
             max_layers: 8,

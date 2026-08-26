@@ -609,9 +609,6 @@ pub const MARKER_LABEL_WIDTH: f32 = 60.0;
 pub const MARKER_LABEL_HEIGHT: f32 = 12.0;
 pub const MARKER_LABEL_BG: Color32 = Color32::new(40, 40, 40, 200);
 pub const MARKER_SELECTED_OUTLINE: Color32 = Color32::new(255, 255, 255, 200);
-/// Persistent outline for a section-boundary marker ("cut here").
-pub const MARKER_SECTION_OUTLINE: Color32 = Color32::new(255, 196, 64, 255);
-
 pub fn marker_color_to_color32(color: crate::types::MarkerColor) -> Color32 {
     use crate::types::MarkerColor;
     match color {
