@@ -351,7 +351,7 @@ pub fn push_state(
             ));
         ui.settings_popup.set_hdr(project.settings.export_hdr);
         ui.settings_popup
-            .set_split_sections(project.settings.split_at_section_markers);
+            .set_split_sections(project.settings.split_at_markers);
 
         // RT Quality panel — feed the current settings
         ui.rt_quality_panel.configure(project.settings.rt_quality);
