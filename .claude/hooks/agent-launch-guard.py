@@ -41,6 +41,7 @@ SLOT_ENV = {
 # extend when onboarding a model (seat_tool assign warns on a miss).
 SHORT_LABEL = {
     "deepseek-v4-flash": "flash",
+    "ox-alpha-free": "ox",
     "deepseek-v4-pro": "pro",
     "glm-4.7": "glm47",
     "glm-5.2": "glm52",
