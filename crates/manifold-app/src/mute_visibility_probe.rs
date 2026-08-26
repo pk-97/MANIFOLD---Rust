@@ -230,3 +230,136 @@ fn mute_visibility_pixel_probe() {
         mean_a, mean_b, mean_c
     );
 }
+
+const PATH_D: &str = "/tmp/mute_probe_d.png";
+const PATH_E: &str = "/tmp/mute_probe_e.png";
+const PATH_F: &str = "/tmp/mute_probe_f.png";
+
+/// The show-case regression (2026-08-26): a layer whose only clip is muted,
+/// blending Opaque at full opacity WITH an enabled layer effect, must not
+/// black out the layers below. The compositor's all-muted-group skip is the
+/// only thing standing between this config and a full-frame black output.
+///
+/// The middle layer matters: with only one visible-clip layer the old code
+/// took the serial path and the bug never fired. Two visible-clip layers
+/// forced the parallel path, whose layer loop had no mute handling at all —
+/// exactly the show configuration.
+///
+/// D: top visible. E: top clip muted. F: top clip deleted. E must equal F
+/// (muted == absent), and D must differ from both.
+#[test]
+fn clip_mute_opaque_layer_pixel_probe() {
+    for p in [PATH_D, PATH_E, PATH_F] {
+        let _ = std::fs::remove_file(p);
+    }
+
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(120.0);
+
+    // Bottom: bright pattern, Normal blend.
+    let mut bottom = Layer::new_generator(
+        "Plasma".to_string(),
+        PresetTypeId::from_string("Plasma".to_string()),
+        0,
+    );
+    bottom.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    project.timeline.layers.push(bottom);
+
+    // Middle: second always-visible layer, so the frame keeps 2+ visible-clip
+    // layers after the top clip is muted.
+    let mut middle = Layer::new_generator(
+        "Lissajous".to_string(),
+        PresetTypeId::from_string("Lissajous".to_string()),
+        1,
+    );
+    middle.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    project.timeline.layers.push(middle);
+
+    // Top: solid shape, OPAQUE blend, one enabled layer effect (takes the
+    // multi-clip/layer-effects compositor branch — the one that pushed an
+    // empty buffer for all-muted groups).
+    let mut top = Layer::new_generator(
+        "BasicShapes".to_string(),
+        PresetTypeId::from_string("BasicShapes".to_string()),
+        2,
+    );
+    top.default_blend_mode = manifold_core::BlendMode::Opaque;
+    top.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    let mut fx = manifold_core::preset_definition_registry::create_default(
+        &PresetTypeId::MIRROR,
+    );
+    if let Some(p) = fx.params.iter_mut().next() {
+        p.value = 1.0;
+    }
+    top.effects_mut().push(fx);
+    let top_layer_id = top.layer_id.clone();
+    let top_clip_id = top.clips[0].id.clone();
+    project.timeline.layers.push(top);
+
+    let mut ct = headless_content_thread(project, W, H);
+    let (state_tx, _state_rx) = state_channel();
+    ct.timer.set_frame_clocked(true);
+    drive_frames(&mut ct, 10, &state_tx);
+
+    // D: both layers live.
+    request_export(&mut ct, PATH_D);
+    drive_frames(&mut ct, 4, &state_tx);
+    let (_w, _h, img_d) = wait_for_png(PATH_D, Duration::from_secs(30));
+
+    // E: mute the top layer's CLIP.
+    let id = top_layer_id.clone();
+    let cid = top_clip_id.clone();
+    ct.handle_command(ContentCommand::MutateProject(Box::new(move |p| {
+        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
+            for c in &mut layer.clips {
+                if c.id == cid {
+                    c.is_muted = true;
+                }
+            }
+        }
+    })));
+    drive_frames(&mut ct, 5, &state_tx);
+    request_export(&mut ct, PATH_E);
+    drive_frames(&mut ct, 4, &state_tx);
+    let (_w, _h, img_e) = wait_for_png(PATH_E, Duration::from_secs(30));
+
+    // F: delete the top clip outright.
+    let id2 = top_layer_id.clone();
+    ct.handle_command(ContentCommand::MutateProject(Box::new(move |p| {
+        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id2) {
+            layer.clips.retain(|c| c.id != top_clip_id);
+        }
+    })));
+    drive_frames(&mut ct, 5, &state_tx);
+    request_export(&mut ct, PATH_F);
+    drive_frames(&mut ct, 4, &state_tx);
+    let (_w, _h, img_f) = wait_for_png(PATH_F, Duration::from_secs(30));
+
+    let mean_d = frame_mean_rgba(&img_d);
+    let mean_e = frame_mean_rgba(&img_e);
+    let mean_f = frame_mean_rgba(&img_f);
+
+    let tolerance = 1.0 / 255.0;
+    for ch in 0..4 {
+        let diff_ef = (mean_e[ch] - mean_f[ch]).abs();
+        assert!(
+            diff_ef <= tolerance,
+            "E/F channel {ch} differs by {diff_ef} — a muted clip on an Opaque \
+             layer still blocks the layers below (E={mean_e:?} F={mean_f:?})",
+        );
+    }
+
+    let min_visible_margin = 0.05;
+    let mut visible_channels = 0;
+    for ch in 0..4 {
+        if (mean_d[ch] - mean_e[ch]).abs() > min_visible_margin {
+            visible_channels += 1;
+        }
+    }
+    assert!(
+        visible_channels >= 1,
+        "top layer made no detectable contribution when visible: D={mean_d:?} E={mean_e:?}",
+    );
+
+    eprintln!("[clip-mute-opaque-probe] means D={mean_d:?} E={mean_e:?} F={mean_f:?}");
+}

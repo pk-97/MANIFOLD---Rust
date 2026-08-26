@@ -260,31 +260,6 @@ fn group_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
     (hasher.finish() | (1 << 62)) as i64
 }
 
-/// Count active (visible, non-transparent, with at least one unmuted clip) layers in the frame.
-fn count_active_layers(frame: &CompositorFrame) -> usize {
-    let clips = frame.clips;
-    let mut count = 0;
-    let mut i = 0;
-    while i < clips.len() {
-        let layer_idx = clips[i].layer_index;
-        let start = i;
-        let layer_desc = frame.find_layer(layer_idx);
-        while i < clips.len() && clips[i].layer_index == layer_idx {
-            i += 1;
-        }
-        if let Some(ld) = layer_desc
-            && (ld.hidden || ld.opacity <= 0.0)
-        {
-            continue;
-        }
-        let has_visible_clip = clips[start..i].iter().any(|c| !c.is_muted);
-        if has_visible_clip {
-            count += 1;
-        }
-    }
-    count
-}
-
 /// Check if an effect slice has any enabled effects with non-zero amount.
 /// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
 fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
@@ -497,7 +472,7 @@ pub struct LayerCompositor {
     /// and master effects before the LED pipeline reads it.
     led_tap: Option<RenderTarget>,
     /// Pre-allocated scratch buffer for per-layer output descriptors.
-    /// Cleared and populated each frame by generate_layers / composite_parallel
+    /// Cleared and populated each frame by generate_layers
     /// to avoid per-frame heap allocation.
     layer_outputs_scratch: Vec<LayerOutput>,
     /// section 24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
@@ -507,16 +482,6 @@ pub struct LayerCompositor {
     /// clip texture. Raw pointers valid for the frame (like `LayerOutput`); read
     /// only on the content thread, same frame. Cleared each `generate_layers`.
     clip_post_fx_scratch: Vec<ClipPostFx>,
-    /// Shared event for async compute synchronization.
-    /// Layer command buffers signal this with incrementing values;
-    /// compositor command buffer waits for the final value.
-    /// Created lazily on first parallel frame.
-    #[cfg(target_os = "macos")]
-    async_event: Option<manifold_gpu::GpuEvent>,
-    /// Base signal value for the current frame's async compute.
-    /// Each layer signals base + layer_index; compositor waits for base + layer_count.
-    #[cfg(target_os = "macos")]
-    async_signal_base: u64,
     /// Per-group scratch buffers (lazy, transparent black init),
     /// keyed by the group container's `LayerId`. One per active
     /// group — each group needs its own buffer because LayerOutput
@@ -605,10 +570,6 @@ pub struct LayerCompositor {
     /// forwarded to every chain's executor through dispatch_chain. Default = live
     /// constants so tests and non-RT graphs run unchanged.
     rt_quality: crate::node_graph::RtQuality,
-    /// Force the serial composite path (D6 correction: profiled mode needs
-    /// one shared compositor command buffer to attach the dispatch sampler
-    /// to). Set via [`Self::set_force_serial`].
-    force_serial: bool,
     /// SCENE_FX P4a — registry of previous-frame layer composited outputs,
     /// published after all layer renders and read by graph execution next frame.
     layer_skin_registry: crate::layer_skin::LayerSkinRegistry,
@@ -703,10 +664,6 @@ impl LayerCompositor {
             led_tap: None,
             layer_outputs_scratch: Vec::new(),
             clip_post_fx_scratch: Vec::new(),
-            #[cfg(target_os = "macos")]
-            async_event: None,
-            #[cfg(target_os = "macos")]
-            async_signal_base: 0,
             group_bufs: AHashMap::default(),
             group_buf_last_used_frame: AHashMap::default(),
             group_effect_chains: AHashMap::default(),
@@ -724,7 +681,6 @@ impl LayerCompositor {
             dump_request: None,
             profiling_enabled: false,
             rt_quality: crate::node_graph::RtQuality::default(),
-            force_serial: false,
             layer_skin_registry: crate::layer_skin::LayerSkinRegistry::new(
                 device,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -2538,277 +2494,6 @@ impl LayerCompositor {
         let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
         self.blend_layers(gpu, outputs, frame.occluded_layers);
     }
-
-    /// Parallel composite path: one command buffer per layer for generation,
-    /// then a serial blend on the original command buffer.
-    ///
-    /// Each layer's generation encodes into its own MTLCommandBuffer, signals
-    /// a GpuEvent, and commits. The GPU schedules these for concurrent execution.
-    /// The original command buffer (passed as `compositor_gpu`) waits on all
-    /// layer completions before blending.
-    ///
-    /// Safety: per-layer effect chains and scratch buffers use raw pointer access
-    /// (unique index per layer, no aliasing). LayerOutput textures are valid for
-    /// the frame duration since they're owned by effect chains, layer bufs, or
-    /// clip render targets that aren't reallocated between generate and blend.
-    #[cfg(target_os = "macos")]
-    fn composite_parallel(
-        &mut self,
-        compositor_gpu: &mut GpuEncoder,
-        frame: &CompositorFrame,
-    ) {
-        let clips = frame.clips;
-        let width = self.main.width();
-        let height = self.main.height();
-
-        let device = compositor_gpu.device;
-        let pool = compositor_gpu.pool;
-
-        // Watched effect (if any) — owned clone usable inside the per-layer
-        // loop below without re-borrowing `self`. Forces its chain unfused so
-        // the authoring-time preview can sample inner node outputs.
-        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
-
-        self.uniform_arena.reset();
-
-        // Ensure async event exists
-        if self.async_event.is_none() {
-            self.async_event = Some(device.create_event());
-        }
-        // Raw pointer to avoid borrow conflict with &mut self later.
-        // Safety: async_event lives for the duration of this method and
-        // is not modified (only signal values change, which is interior mutation).
-        let async_event: *const manifold_gpu::GpuEvent = self.async_event.as_ref().unwrap();
-
-        // Pre-scan: see `generate_layers` for the structural
-        // rationale behind keying chains + bufs by `LayerId`.
-        self.active_layer_ids_scratch.clear();
-        self.active_layer_buf_ids_scratch.clear();
-        {
-            let mut ci = 0;
-            while ci < clips.len() {
-                let layer_idx = clips[ci].layer_index;
-                let layer_desc = frame.find_layer(layer_idx);
-                let start = ci;
-                while ci < clips.len() && clips[ci].layer_index == layer_idx {
-                    ci += 1;
-                }
-                if let Some(ld) = layer_desc && ld.hidden {
-                    continue;
-                }
-                let clip_count = ci - start;
-                let has_layer_effects =
-                    layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
-                if let Some(ld) = layer_desc {
-                    self.active_layer_ids_scratch.push(ld.layer_id.clone());
-                    if clip_count > 1 || has_layer_effects {
-                        self.active_layer_buf_ids_scratch.push(ld.layer_id.clone());
-                    }
-                }
-            }
-        }
-
-        // Pre-insert all needed chain + buf entries.
-        for i in 0..self.active_layer_ids_scratch.len() {
-            let id = self.active_layer_ids_scratch[i].clone();
-            self.ensure_chain_for_layer(&id);
-        }
-        for i in 0..self.active_layer_buf_ids_scratch.len() {
-            let id = self.active_layer_buf_ids_scratch[i].clone();
-            self.ensure_layer_buf(&id, device, pool);
-        }
-
-        // Split-borrow: disjoint &muts so safe `get_mut(id)` works
-        // inside the loop without fighting the borrow checker.
-        let chains = &mut self.effect_chains;
-        let layer_bufs = &mut self.layer_bufs;
-        let base_signal = self.async_signal_base;
-
-        self.layer_outputs_scratch.clear();
-        let mut layer_signal_idx = 0u64;
-
-        // Process each layer on its own command buffer.
-        let mut i = 0;
-        while i < clips.len() {
-            let layer_idx = clips[i].layer_index;
-            let layer_desc = frame.find_layer(layer_idx);
-
-            // Check hidden
-            if let Some(ld) = layer_desc && ld.hidden {
-                while i < clips.len() && clips[i].layer_index == layer_idx {
-                    i += 1;
-                }
-                continue;
-            }
-
-            let group_start = i;
-            while i < clips.len() && clips[i].layer_index == layer_idx {
-                i += 1;
-            }
-            let group = &clips[group_start..i];
-
-            let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
-            let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
-
-            // Skip fully transparent layers — no GPU work needed
-            if layer_opacity <= 0.0 {
-                continue;
-            }
-
-            let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
-
-            // Render-skip (parallel path mirror of `generate_layers`): skip
-            // hidden-behind-opaque leaves entirely — no encoder, no output.
-            if frame.render_skip.contains(&layer_idx) {
-                continue;
-            }
-
-            // Create per-layer command buffer
-            let mut layer_enc = device.create_encoder("Layer");
-
-            // Scope the GpuEncoder wrapper so it drops before signal+commit
-            {
-                let mut gpu = if let Some(p) = pool {
-                    GpuEncoder::with_pool(&mut layer_enc, device, p)
-                } else {
-                    GpuEncoder::new(&mut layer_enc, device)
-                };
-
-                if group.len() == 1 && !has_layer_effects {
-                    // Single clip with NO layer effects — pass texture straight through
-                    let clip = &group[0];
-
-                    self.layer_outputs_scratch.push(LayerOutput {
-                        texture: clip.texture,
-                        blend_mode: layer_blend,
-                        opacity: layer_opacity * clip.opacity,
-                        layer_index: layer_idx,
-                        blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
-                    });
-                } else {
-                    // See `generate_layers` for the no-descriptor rationale.
-                    let Some(ld) = layer_desc else {
-                        continue;
-                    };
-                    let layer_id = ld.layer_id;
-                    let layer_buf = layer_bufs
-                        .get_mut(layer_id)
-                        .expect("buf pre-inserted in active scan");
-
-                    layer_buf.clear_source(&mut gpu, false);
-
-                    for clip in group {
-                        let uniforms = BlendUniforms {
-                            blend_mode: BlendMode::Normal as u32,
-                            opacity: clip.opacity,
-                            _pad0: 0,
-                            _pad1: 0,
-                        };
-                        self.blend.blend_pass(
-                            &mut gpu,
-                            &mut self.uniform_arena,
-                            layer_buf.source_texture(),
-                            clip.texture,
-                            layer_buf.target_texture(),
-                            &uniforms,
-                        );
-                        layer_buf.swap();
-                    }
-
-                    // Layer-level effects
-                    let layer_source = if let Some(ld) = layer_desc
-                        && has_enabled_effects(ld.effects)
-                    {
-                        // Look up this layer's chain by LayerId. Pre-inserted
-                        // above, so unwrap is safe.
-                        let effect_chain = chains
-                            .get_mut(ld.layer_id)
-                            .expect("chain pre-inserted in active scan");
-                        let ctx = PresetContext {
-                            time: frame.time,
-                            beat: frame.beat,
-                            dt: frame.dt,
-                            width,
-                            height,
-                            output_width: frame.output_width,
-                            output_height: frame.output_height,
-                            aspect: if height > 0 {
-                                width as f32 / height as f32
-                            } else {
-                                1.0
-                            },
-                            owner_key: layer_id_owner_key(ld.layer_id),
-                            is_clip_level: false,
-                            frame_count: frame.frame_count as i64,
-                            anim_progress: 0.0,
-                            trigger_count: ld.trigger_count,
-                        };
-                        Self::apply_effects(
-                            effect_chain,
-                            &mut gpu,
-                            layer_buf.source_texture(),
-                            ld.effects,
-                            ld.effect_groups,
-                            &ctx,
-                            preview_fx.as_ref(),
-                            &fx_scope(ld.layer_id),
-                            self.profiling_enabled,
-                            self.rt_quality,
-                        )
-                    } else {
-                        None
-                    };
-
-                    let effective_layer_tex: *const GpuTexture =
-                        layer_source.unwrap_or(layer_buf.source_texture());
-
-                    self.layer_outputs_scratch.push(LayerOutput {
-                        texture: effective_layer_tex,
-                        blend_mode: layer_blend,
-                        opacity: layer_opacity,
-                        layer_index: layer_idx,
-                        blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
-                    });
-                }
-            } // gpu wrapper drops here, releasing borrow on layer_enc
-
-            // Signal completion for this layer and commit
-            layer_signal_idx += 1;
-            let signal_value = base_signal + layer_signal_idx;
-            layer_enc.signal_event_value(unsafe { &*async_event }, signal_value);
-            layer_enc.commit();
-        }
-
-        // Update base for next frame
-        self.async_signal_base = base_signal + layer_signal_idx;
-
-        // Compositor command buffer waits for all layer completions
-        let final_signal = base_signal + layer_signal_idx;
-        if layer_signal_idx > 0 {
-            compositor_gpu
-                .native_enc
-                .wait_event(unsafe { &*async_event }, final_signal);
-        }
-
-        // Route LED-flagged layers BEFORE folding groups so child layers inside
-        // a group route via their own blit_to_led flag.
-        // Safety: same as below — outputs are valid for frame duration.
-        let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
-        let pre_fold_outputs_len = self.layer_outputs_scratch.len();
-        let pre_fold_outputs =
-            unsafe { std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len) };
-        self.blend_layers_to_led(compositor_gpu, pre_fold_outputs, frame);
-
-        // Fold group children into single outputs before blending.
-        self.fold_groups(compositor_gpu, frame);
-
-        // Serial blend phase on the compositor command buffer.
-        // Safety: layer_outputs_scratch is populated above and not modified during blend.
-        let outputs_ptr = self.layer_outputs_scratch.as_ptr();
-        let outputs_len = self.layer_outputs_scratch.len();
-        let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
-        self.blend_layers(compositor_gpu, outputs, frame.occluded_layers);
-    }
 }
 
 impl Compositor for LayerCompositor {
@@ -2977,13 +2662,6 @@ impl Compositor for LayerCompositor {
         }
     }
 
-    /// D6 correction: profiled mode needs one shared compositor command
-    /// buffer to attach the dispatch sampler to; `composite_parallel` gives
-    /// each layer its own. Checked at the serial-vs-parallel decision point.
-    fn set_force_serial(&mut self, on: bool) {
-        self.force_serial = on;
-    }
-
     fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
         let mut out = Vec::new();
         for chain in self.effect_chains.values_mut().flatten() {
@@ -3139,24 +2817,11 @@ impl Compositor for LayerCompositor {
         // this frame.
         self.frame_counter = self.frame_counter.wrapping_add(1);
 
-        // Choose serial vs parallel composite path.
-        // Parallel path creates per-layer command buffers for GPU-concurrent
-        // generation. Only activated with 2+ active layers (no overhead for
-        // single-layer frames).
-        #[cfg(target_os = "macos")]
-        {
-            let active_layers = count_active_layers(frame);
-            // D6 correction: profiled mode forces serial so there is one
-            // compositor command buffer to attach the dispatch sampler to —
-            // composite_parallel gives each layer its own command buffer,
-            // which the sampler can't span.
-            if active_layers >= 2 && !self.force_serial {
-                self.composite_parallel(gpu, frame);
-            } else {
-                self.composite_serial(gpu, frame);
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
+        // Single composite path: one command buffer, layers generated in
+        // order, then the serial blend. The parallel per-layer-command-buffer
+        // variant was deleted (2026-08-26): its upside only materialized on
+        // frames light enough not to need it, and the duplicated layer loop
+        // drifted from this one twice (clip-mute black-out class).
         self.composite_serial(gpu, frame);
 
         // SCENE_FX P4a: publish every layer's post-effect output into the

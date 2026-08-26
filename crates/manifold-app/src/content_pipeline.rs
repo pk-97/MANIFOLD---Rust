@@ -1027,16 +1027,15 @@ pub struct ContentPipeline {
     /// profiling is off or unsupported on this device.
     #[cfg(target_os = "macos")]
     profiling_sampler: Option<manifold_gpu::GpuTimestampSampler>,
-    /// Whether `--profile` mode is on this run. Forces `composite_serial`
-    /// (via `compositor.set_force_serial`) and switches both command-buffer
+    /// Whether `--profile` mode is on this run. Switches both command-buffer
     /// commits to the `_profiled` variant. Off by default — zero cost on the
-    /// live path (no sampler attached, no extra wait).
+    /// live path (no sampler attached, no extra wait). The compositor has a
+    /// single serial path, so the dispatch sampler always spans one command
+    /// buffer (the old D6 forced-serial constraint is structural now).
     profiling_enabled: bool,
     /// Resolved [`manifold_gpu::GpuFrameProfile`]s from the last profiled
     /// frame: `(command_buffer_label, profile)` — `"Generators"` and
-    /// `"Compositor"`, since D6's forced-serial mode still runs them as two
-    /// separate command buffers (only the compositor's internal per-layer
-    /// buffers collapse to one). Drained by [`Self::take_gpu_profiles`].
+    /// `"Compositor"`. Drained by [`Self::take_gpu_profiles`].
     #[cfg(target_os = "macos")]
     last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
 }
@@ -1182,15 +1181,12 @@ impl ContentPipeline {
     /// sizes the sampler (two counter samples per span) — the caller (the
     /// `--profile` xtask) verifies this against the fixture's actual span
     /// count and reports overflow rather than silently truncating (D6's
-    /// capacity check). Forces `composite_serial` in the compositor (D6
-    /// correction) and fans profiling out to every effect chain + generator
+    /// capacity check). Fans profiling out to every effect chain + generator
     /// via `Compositor::set_profiling` / `GeneratorRenderer::set_profiling`.
-    /// Turning this off drops the sampler and un-forces serial compositing.
     #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn set_profiling(&mut self, on: bool, max_spans: usize) {
         self.profiling_enabled = on;
         self.compositor.set_profiling(on);
-        self.compositor.set_force_serial(on);
         self.profiling_sampler = if on {
             self.native_device
                 .as_ref()

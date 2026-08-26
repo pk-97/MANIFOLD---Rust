@@ -294,13 +294,6 @@ pub trait Compositor: Send {
         None
     }
 
-    /// Force the serial composite path even with 2+ active layers
-    /// (PERF_BUDGET_GATE_DESIGN D6 correction): profiled mode needs one
-    /// shared compositor command buffer to attach the dispatch-profiling
-    /// sampler to, and `composite_parallel` gives each layer its own command
-    /// buffer. Default no-op for compositors without a parallel path.
-    fn set_force_serial(&mut self, _on: bool) {}
-
     /// Warm up the per-layer post-fx chain for `layer` so its first active
     /// frame does not pay the `PresetRuntime` construction cost on stage.
     /// Default no-op for compositors without effect chains.
