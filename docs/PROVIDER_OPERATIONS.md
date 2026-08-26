@@ -56,6 +56,12 @@ swap changes what gates every permission decision — say so in the commit.
 
 ### Add or repoint an upstream
 
+Adding a MODEL to an existing provider is `scripts/seat_tool.py onboard
+<model> --provider <seat> [--label L] [--slot S] [--costs IN OUT CACHE]` —
+it does the config entry, retry policy, key allow-lists, proxy restart, live
+verification call, and guard maps in one run; `offboard <model>` reverses it.
+The steps below remain the procedure for a NEW provider upstream.
+
 1. `config.yaml` model_list: copy the nearest sibling entry; set `api_base`,
    `api_key: os.environ/<KEY>`, list-rate pricing, `supports_reasoning` if
    the model reasons.
