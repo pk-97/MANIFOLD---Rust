@@ -165,3 +165,7 @@ mod segment_prewarm_tests;
 #[cfg(test)]
 #[path = "tests/bound_param_survives_rebuild.rs"]
 mod bound_param_survives_rebuild_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/blob_grain_probe.rs"]
+mod blob_grain_probe_tests;
