@@ -793,6 +793,24 @@ pub fn sync_inspector_data(
                                 if let Some(id) = lens_id {
                                     ids.push(id);
                                 }
+                                // P4: the tail's motion_blur/bokeh doc ids —
+                                // their stamped Camera-section params
+                                // (max_blur_px, both `enabled` toggles)
+                                // render with the lens rows.
+                                let tail_ids = match &vm.camera {
+                                    CameraVm::Orbit(c) => c.lens.as_ref(),
+                                    CameraVm::Free(c) => c.lens.as_ref(),
+                                    CameraVm::LookAt(c) => c.lens.as_ref(),
+                                    CameraVm::Custom { .. } | CameraVm::None => None,
+                                };
+                                if let Some(lens) = tail_ids {
+                                    if let Some(id) = lens.motion_blur_doc_id {
+                                        ids.push(id);
+                                    }
+                                    if let Some(id) = lens.bokeh_doc_id {
+                                        ids.push(id);
+                                    }
+                                }
                                 sections_for_doc_ids(def.as_ref(), &ids)
                             };
                             let world_sections = {

@@ -55,6 +55,8 @@ const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
 const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
 const LOOK_AT_CAMERA_TYPE_ID: &str = "node.look_at_camera";
 const CAMERA_LENS_TYPE_ID: &str = "node.camera_lens";
+const MOTION_BLUR_TYPE_ID: &str = "node.motion_blur";
+const BOKEH_GATHER_TYPE_ID: &str = "node.bokeh_gather";
 /// PBR/phong/unlit/cel — the four material atoms (D3's Objects material row).
 const MATERIAL_TYPE_IDS: &[&str] = &[
     "node.pbr_material",
@@ -324,6 +326,15 @@ pub enum SceneLightVm {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LensRow {
     pub node_doc_id: u32,
+    /// P4: the tail's top-level `node.motion_blur` / `node.bokeh_gather`
+    /// doc ids, when present — the inspector appends them to the Camera
+    /// section's doc-id list so their stamped params (max_blur_px, the two
+    /// `enabled` toggles) render next to the lens rows. `None` on pre-tail
+    /// graphs. Bokeh lives inside the `dof` group in import-assembled
+    /// graphs, so its scan spans group bodies; motion_blur is always
+    /// top-level (both the P1 assembly and the P2 migration shapes).
+    pub motion_blur_doc_id: Option<u32>,
+    pub bokeh_doc_id: Option<u32>,
 }
 
 /// Payload for [`CameraVm::Orbit`], boxed for the same reason as
@@ -963,10 +974,32 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
 /// Builds a [`LensRow`] for `node.camera_lens` at `node_id` — identity only;
 /// its four port-shadowed scalar params (focus_distance/f_stop/shutter_angle/
 /// exposure_ev) are read generically through `state_sync`'s manifest closures
-/// keyed on this node id (D3's "the lens node's own row beneath").
+/// keyed on this node id (D3's "the lens node's own row beneath"). Also
+/// scans for the cinematic tail's motion_blur / bokeh nodes (P4) — same
+/// identity-only treatment.
 fn trace_lens(level: &Level, node_id: u32) -> Option<LensRow> {
     level.node(node_id)?;
-    Some(LensRow { node_doc_id: node_id })
+    fn find_typed(
+        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+        type_id: &str,
+    ) -> Option<u32> {
+        for n in nodes {
+            if n.type_id == type_id {
+                return Some(n.id);
+            }
+            if let Some(g) = &n.group
+                && let Some(found) = find_typed(&g.nodes, type_id)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    Some(LensRow {
+        node_doc_id: node_id,
+        motion_blur_doc_id: find_typed(level.nodes, MOTION_BLUR_TYPE_ID),
+        bokeh_doc_id: find_typed(level.nodes, BOKEH_GATHER_TYPE_ID),
+    })
 }
 
 /// Trace THROUGH single-camera-in/camera-out nodes (the importer's

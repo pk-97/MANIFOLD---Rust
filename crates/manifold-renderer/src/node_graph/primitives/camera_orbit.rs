@@ -29,8 +29,11 @@ use crate::node_graph::primitive::Primitive;
 /// Single source of truth for `near`'s default (also the `ParamDef` default
 /// below) — `gltf_import.rs` reads this to scale the clip plane for
 /// small-scale imported objects (BUG-165/BUG-169) instead of duplicating
-/// the magic number.
-pub const DEFAULT_NEAR: f32 = 0.05;
+/// the magic number. 0.01, not 0: Peter's P4 directive asked for 0, but
+/// `perspective_rh` computes `clip.w = range * z_near * z`, so z_near = 0
+/// zeroes clip.w for every vertex — NaN NDC across the whole frame. 0.01
+/// is the smallest safe value (design doc's dissent path).
+pub const DEFAULT_NEAR: f32 = 0.01;
 
 /// Same single-source role as `DEFAULT_NEAR`, for `far` — the import
 /// camera scales it to the framed object (large posed assets clip to black

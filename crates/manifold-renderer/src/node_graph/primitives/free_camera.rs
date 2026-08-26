@@ -95,7 +95,10 @@ crate::primitive! {
             name: Cow::Borrowed("near"),
             label: "Near",
             ty: ParamType::Float,
-            default: ParamValue::Float(0.05),
+            // 0.01, not 0 (Peter's P4 ask): z_near = 0 zeroes clip.w in
+            // `perspective_rh` → NaN NDC everywhere. Mirrors
+            // camera_orbit's DEFAULT_NEAR.
+            default: ParamValue::Float(0.01),
             range: Some((0.001, 10.0)),
             enum_values: &[],
         },
@@ -130,7 +133,7 @@ impl Primitive for FreeCamera {
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
         let near = match ctx.params.get("near") {
             Some(ParamValue::Float(f)) => *f,
-            _ => 0.05,
+            _ => 0.01,
         };
         let far = match ctx.params.get("far") {
             Some(ParamValue::Float(f)) => *f,

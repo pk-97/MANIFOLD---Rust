@@ -7620,7 +7620,7 @@
           "type": "angle"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "label": "Near",
           "name": "near",
           "range": [
@@ -12979,7 +12979,7 @@
           "type": "angle"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "label": "Near",
           "name": "near",
           "range": [
@@ -23648,7 +23648,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
@@ -26235,7 +26235,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
@@ -26996,7 +26996,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
@@ -29127,7 +29127,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
@@ -30039,7 +30039,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
@@ -30573,7 +30573,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
@@ -31394,7 +31394,7 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
