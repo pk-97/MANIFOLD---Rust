@@ -1,6 +1,7 @@
 # Section Export — mark cut points on the beat grid, export one clip per section
 
 **Status:** SHIPPED 2026-08-26 (P1+P2 + journey-proof, all gates green) · design: k3 (lead), with Peter
+**Lifecycle:** contract — section semantics (D2 chapter rule, D6 naming, D5 derivation ownership) are the spec future export work is held to; code comments cite this doc.
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 **Bead:** BUG-1lv6 (Section export: mark beat-grid sections, one export per section)
