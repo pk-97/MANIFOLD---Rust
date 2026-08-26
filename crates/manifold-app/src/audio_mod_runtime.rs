@@ -499,6 +499,10 @@ impl AudioModRuntime {
             return Some((CaptureSource::DefaultInput, "System Default".to_string()));
         };
         match dev_ref.kind {
+            // No capture at all — sends are fed by layers only, so the device
+            // stays dark. (The worker runs from layer taps regardless; this just
+            // never opens a capture backend.)
+            AudioSourceKind::None => None,
             AudioSourceKind::InputDevice => {
                 match self.directory.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
                     Some(info) => {

@@ -302,7 +302,6 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             // chain, which no handler claimed, so they returned `unhandled()`;
             // preserve that exactly.
             RootAction::AudioSetupDeviceClicked
-            | RootAction::AudioSendChannelClicked(_)
             | RootAction::OpenAbletonPickerForParam(..) => DispatchResult::unhandled(),
         },
 

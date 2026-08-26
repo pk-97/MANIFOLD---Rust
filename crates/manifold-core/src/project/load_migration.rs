@@ -38,6 +38,11 @@ impl Project {
         // `docs/AUDIO_INFRASTRUCTURE.md` section 5.
         self.audio_setup.migrate_legacy_device();
 
+        // Stereo-by-default: the per-send channel picker is gone, so a send
+        // saved with a single channel upgrades to the stereo `[0, 1]` pair.
+        // Layer-only sends (empty channels) stay as they are.
+        self.audio_setup.migrate_legacy_send_channels();
+
         // P2: drain each send's legacy `TriggerRoute`s (pre-unification
         // trigger matrix) into `LayerClipTrigger`s on the resolved target
         // layer. Cross-struct (send -> layer), so — unlike the U5
