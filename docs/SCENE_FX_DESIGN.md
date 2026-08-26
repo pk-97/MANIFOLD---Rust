@@ -3,6 +3,7 @@
 **Status:** SHIPPED — P0–P4 all on main 2026-08-22 (P4b landing = wave complete). Owed: BUG-j42e (camera-wire shake atom), BUG-ffis (cold-touch flake class), BUG-z56k (P0 fixture emissive), BUG-rb52 (composite order oddity). · APPROVED 2026-08-21 · k3 (lead), design session with Peter
 **Prerequisites:** none hard — every consumed substrate is shipped in-tree (audit below).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
+Lifecycle: contract — documents live shipped behavior (scene mods, layer-skin registry, `node.layer_source`) that future 3D work (depth-relight, BUG-j42e (camera-wire shake atom)) builds against.
 
 Peter, 2026-08-21, the ask: mesh modifiers and scene mods on glb imports that are
 performable, plus *"integrating 2D generator outputs from other layers into the
