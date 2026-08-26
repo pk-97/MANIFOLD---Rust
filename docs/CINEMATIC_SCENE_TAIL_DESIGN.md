@@ -1,6 +1,6 @@
 # Cinematic Scene Tail — DoF + motion blur back into 3D scene graphs
 
-**Status:** PROPOSED — awaiting Peter's read · 2026-08-26 · k3 (lead)
+**Status:** IN PROGRESS — P0 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; see the audit addendum) · P1–P3 open · k3 (lead)
 **Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) open is P0 of this doc)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -29,6 +29,8 @@ Binding constraints: **persistence** (every existing 3D project must load and ga
 
 Classification: every atom **exists**; the import-graph tail and the migration are **one wire away** (template + injector); **genuinely new**: nothing. This design is wiring plus one bug fix.
 
+**Audit addendum (2026-08-26, P0 execution — the BUG-136 (motion blur no visible effect) verdict).** The bug was never in the code. SceneLadders.manifold has ONE timeline layer whose `gen_params.graph` — the graph the renderer actually builds (`layer.rs:133-136`, graph-home unification) — contains `camera_lens` + `render_scene` and **no motion_blur, no DoF chain at all**. The five chain-bearing graphs live in `embeddedPresets[9-12,16]`, which no layer instantiates. The July repro is explained by the pre-BUG-237 (scene-setup scrub writes dead) bound-row write path (fixed 2026-07-18); today's repro by the missing chain. The fused-route suspect died structurally: every shipped motion_blur has a gather (`variable_blur`) or group upstream, never a pointwise producer, so the freeze compiler refuses the chain (confirmed in the new gpu proof) — the `camera_ext` zero-fill path is unreachable. New gpu proof `motion_blur_visibility` (raw route): blur visible under motion with shutter 180, bit-clean static control — kernel, wiring, velocity, and lens-derived shutter all healthy. **Consequence for D3: the migration MUST cover `timeline.layers[].gen_params.graph`, not only `embeddedPresets` — the layer graphs are where the chain is missing.**
+
 Section 2.5 audit (DECOMPOSING_GENERATORS.md section 2.5 (primitive audit)): no new primitive is proposed; the chain is the shipped CINEMATIC_POST atoms exactly as CinematicScene composes them.
 
 ## 2. Decisions
@@ -43,7 +45,7 @@ Shipping a tail whose last atom does nothing would repeat the dead-sliders failu
 Rejected: live-app println probing as the method of first resort — banned by Peter's directive; the headless output-diff is cheaper and is also the regression test.
 
 **D3 — Existing 3D projects gain the tail by load-migration, not by hand.**
-New versioned migration `scene_cinematic_tail_vNNNN` in `crates/manifold-io/src/migrations/`, shaped like `scene_transform_v1120.rs`: any scene graph containing `node.render_scene` but no `node.bokeh_gather`/`node.motion_blur` consumer gets the D1 tail injected with neutral defaults. Round-trip is the gate (save → reload → modulate after reload), per DESIGN_DOC_STANDARD.md section 5 (round-trip gate rule).
+New versioned migration `scene_cinematic_tail_vNNNN` in `crates/manifold-io/src/migrations/`, shaped like `scene_transform_v1120.rs`: any scene graph containing `node.render_scene` but no `node.bokeh_gather`/`node.motion_blur` consumer gets the D1 tail injected with neutral defaults — **where "any scene graph" means BOTH `embeddedPresets[].def` AND every `timeline.layers[].gen_params.graph` (the audit addendum's convicted case: layer graphs are per-instance overrides and the renderer builds THEM, so a preset-only migration leaves the playing layers untouched).** Round-trip is the gate (save → reload → modulate after reload), per DESIGN_DOC_STANDARD.md section 5 (round-trip gate rule).
 Consequences, stated honestly: migration must find the same insertion point the import assembler uses in graphs it didn't build; graphs Peter has hand-edited since import may not match the expected shape. Default: insert immediately upstream of the graph's `final` sink regardless of SSAO presence; if no `final` sink is found, skip that scene loudly (load-time repair toast, the BUG-079 (missing-preset-fails-silently) pattern) — never silently drop, never invent a second insertion heuristic.
 
 **D4 — The dead sliders are fixed by construction, then guarded.**
