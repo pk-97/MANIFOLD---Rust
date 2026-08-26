@@ -102,6 +102,11 @@ pub struct LoadReport {
     /// (keep-don't-drop) rather than dropped. Was console-only (`eprintln!`
     /// in `effects.rs` / `preset_runtime.rs`) before this field existed.
     pub unresolved_preset_templates: usize,
+    /// Pre-deserialize migrations' human-readable notes (skip-loudly
+    /// signals, upgrade summaries — e.g. the v1.13.0 cinematic-tail
+    /// migration skipping a graph it can't place safely), handed off via
+    /// `manifold-io`'s migrations note sink. Empty on a clean load.
+    pub migration_notes: Vec<String>,
 }
 
 impl LoadReport {
@@ -112,6 +117,7 @@ impl LoadReport {
             && self.orphaned_midi_purged == 0
             && self.missing_media_files.is_empty()
             && self.unresolved_preset_templates == 0
+            && self.migration_notes.is_empty()
     }
 
     /// One human line per non-zero entry, e.g. "3 unknown effects removed".
@@ -168,6 +174,7 @@ impl LoadReport {
                 plural(self.unresolved_preset_templates, "reference", "references")
             ));
         }
+        lines.extend(self.migration_notes.iter().cloned());
         lines
     }
 }

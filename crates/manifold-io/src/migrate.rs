@@ -109,6 +109,20 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.12.0".to_string());
     }
 
+    // v1.12.0 -> v1.13.0: CINEMATIC_SCENE_TAIL_DESIGN.md D3 — inject the
+    // cinematic tail (coc_from_depth → coc_dilate → bokeh_gather →
+    // motion_blur) into every 3D scene graph that predates it: timeline
+    // layer genParams.graph (the convicted missing-chain location — the
+    // renderer builds the LAYER's graph), effect/clip instance graphs, and
+    // embeddedPresets defs. Neutral lens params only; skip-loudly notes ride
+    // the migrations note sink into LoadReport::migration_notes.
+    if is_version_less_than(&version, "1.13.0") {
+        crate::migrations::scene_cinematic_tail_v1130::migrate(&mut root);
+        // Literal "1.13.0" — see the "1.11.0" rung above for why this must
+        // NOT be `CURRENT_PROJECT_VERSION`.
+        root["projectVersion"] = Value::String("1.13.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 
@@ -793,7 +807,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.12.0")
+            Some(manifold_core::project::CURRENT_PROJECT_VERSION)
         );
     }
 
@@ -829,7 +843,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.12.0")
+            Some(manifold_core::project::CURRENT_PROJECT_VERSION)
         );
     }
 
@@ -844,7 +858,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.12.0")
+            Some(manifold_core::project::CURRENT_PROJECT_VERSION)
         );
     }
 
@@ -888,7 +902,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.12.0")
+            Some(manifold_core::project::CURRENT_PROJECT_VERSION)
         );
     }
 
@@ -1136,7 +1150,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some(manifold_core::project::CURRENT_PROJECT_VERSION));
         assert_eq!(
             v["settings"]["masterEffects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
@@ -1192,7 +1206,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some(manifold_core::project::CURRENT_PROJECT_VERSION));
 
         // Corrupted generator: effectType → generatorType, effectType removed.
         let gp0 = &v["timeline"]["layers"][0]["genParams"];
@@ -1266,7 +1280,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some(manifold_core::project::CURRENT_PROJECT_VERSION));
 
         let master = &v["settings"]["masterEffects"][0]["audioMods"];
         assert_eq!(master[0]["source"]["feature"]["kind"].as_str(), Some("centroid"));
@@ -1317,7 +1331,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some(manifold_core::project::CURRENT_PROJECT_VERSION));
         let sends = v["audioSetup"]["sends"].as_array().unwrap();
 
         // Legacy layer → layer set.
