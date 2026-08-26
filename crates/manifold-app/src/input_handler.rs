@@ -438,6 +438,12 @@ impl InputHandler {
             return true;
         }
 
+        // ── Cmd+M — add section marker at playhead (docs/SECTION_EXPORT_DESIGN.md D7) ──
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "m") && m.is_command_only() {
+            host.add_section_marker_at_playhead();
+            return true;
+        }
+
         // ── Export markers: Alt variants first (Unity lines 461-481) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "i") && m.is_alt_only() {
             host.clear_export_in();
@@ -652,6 +658,7 @@ mod b14_keyboard_layer_tests {
             self.zoom_back_calls += 1;
         }
         fn add_marker_at_playhead(&mut self) {}
+        fn add_section_marker_at_playhead(&mut self) {}
         fn delete_selected_markers(&mut self) {}
         fn has_selected_markers(&self) -> bool {
             false

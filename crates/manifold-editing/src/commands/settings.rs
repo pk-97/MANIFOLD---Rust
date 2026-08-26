@@ -612,6 +612,33 @@ impl Command for ToggleExportHdrCommand {
     }
 }
 
+/// Toggle the "split export at section markers" setting. Shaped like
+/// `ToggleExportHdrCommand` (docs/SECTION_EXPORT_DESIGN.md D4).
+#[derive(Debug)]
+pub struct ToggleSplitSectionsCommand {
+    old_split: bool,
+}
+
+impl ToggleSplitSectionsCommand {
+    pub fn new(old_split: bool) -> Self {
+        Self { old_split }
+    }
+}
+
+impl Command for ToggleSplitSectionsCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.split_at_section_markers = !self.old_split;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.split_at_section_markers = self.old_split;
+    }
+
+    fn description(&self) -> &str {
+        "Toggle Split Export at Section Markers"
+    }
+}
+
 /// Change a layer's MIDI channel assignment.
 #[derive(Debug)]
 pub struct ChangeLayerMidiChannelCommand {

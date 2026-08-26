@@ -723,6 +723,7 @@ impl TimelineViewportPanel {
 
             let mc = color::marker_color_to_color32(marker.color);
             let is_selected = self.selected_marker_ids.contains(&marker.id);
+            let is_section = marker.is_section_boundary;
 
             let flag_color = if is_selected {
                 color::lighten(mc, 40)
@@ -745,7 +746,14 @@ impl TimelineViewportPanel {
             }
             self.marker_node_ids.push(flag_id);
 
-            // Selection outline — always allocated, hidden if not selected
+            // Outline — always allocated. White when selected; amber when a
+            // section-boundary marker (persistent, so section markers read as
+            // "cut here" at a glance); hidden otherwise.
+            let outline_color = if is_selected {
+                color::MARKER_SELECTED_OUTLINE
+            } else {
+                color::MARKER_SECTION_OUTLINE
+            };
             let outline_id = tree.add_panel(
                 self.viewport_clip_id,
                 flag_x - 1.0,
@@ -753,11 +761,11 @@ impl TimelineViewportPanel {
                 flag_w + 2.0,
                 flag_h + 2.0,
                 UIStyle {
-                    bg_color: color::MARKER_SELECTED_OUTLINE,
+                    bg_color: outline_color,
                     ..UIStyle::default()
                 },
             );
-            if !is_selected || !in_view {
+            if (!is_selected && !is_section) || !in_view {
                 tree.set_visible(outline_id, false);
             }
             self.marker_node_ids.push(outline_id);
@@ -1118,6 +1126,7 @@ impl TimelineViewportPanel {
 
             let mc = color::marker_color_to_color32(marker.color);
             let is_selected = self.selected_marker_ids.contains(&marker.id);
+            let is_section = marker.is_section_boundary;
 
             // Flag
             tree.set_visible(group.flag_id, in_view);
@@ -1140,12 +1149,26 @@ impl TimelineViewportPanel {
                 );
             }
 
-            // Outline
-            tree.set_visible(group.outline_id, in_view && is_selected);
-            if in_view && is_selected {
+            // Outline — mirrors build_markers: white when selected, amber when
+            // a section marker, hidden otherwise.
+            let outline_visible = in_view && (is_selected || is_section);
+            tree.set_visible(group.outline_id, outline_visible);
+            if outline_visible {
+                let outline_color = if is_selected {
+                    color::MARKER_SELECTED_OUTLINE
+                } else {
+                    color::MARKER_SECTION_OUTLINE
+                };
                 tree.set_bounds(
                     group.outline_id,
                     Rect::new(flag_x - 1.0, flag_y - 1.0, flag_w + 2.0, flag_h + 2.0),
+                );
+                tree.set_style(
+                    group.outline_id,
+                    UIStyle {
+                        bg_color: outline_color,
+                        ..UIStyle::default()
+                    },
                 );
             }
 

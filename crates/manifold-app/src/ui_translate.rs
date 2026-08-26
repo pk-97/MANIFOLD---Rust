@@ -425,6 +425,7 @@ pub fn marker_to_ui(m: &TimelineMarker) -> UiMarker {
         beat: m.beat,
         name: m.name.clone(),
         color: marker_color_to_ui(m.color),
+        is_section_boundary: m.is_section_boundary,
     }
 }
 
