@@ -17,13 +17,16 @@ use crate::content_thread::ContentThread;
 /// `[range_start, m₁)`, `[m₁, m₂)`, …, `[mₙ, range_end)` where each m is a
 /// sorted, deduplicated section-boundary marker strictly inside the range.
 /// Each section is named by the marker at its start; the first section
-/// (starting at `range_start`, which has no marker) carries an empty name,
-/// which the filename logic turns into `section-N`.
+/// (starting at `range_start`) carries the name of a section marker exactly on
+/// `range_start` when one exists, and an empty name otherwise — which the
+/// filename logic turns into `section-N`.
 ///
-/// A marker exactly on `range_start` or `range_end` is excluded (it would
-/// produce an empty leading section, or sit outside the half-open range).
-/// Returns empty when there are no in-range section markers → the caller
-/// takes the single-export path. See docs/SECTION_EXPORT_DESIGN.md D2.
+/// A marker exactly on `range_start` does not cut: it names the first section
+/// (so Peter can put a section marker at the export-in point to name the intro).
+/// A marker exactly on `range_end` is excluded (it sits outside the half-open
+/// range). Returns empty when there are no relevant markers (no marker on
+/// `range_start`, none strictly inside) → the caller takes the single-export
+/// path. See docs/SECTION_EXPORT_DESIGN.md D2.
 #[cfg(target_os = "macos")]
 fn derive_sections(
     timeline: &manifold_core::timeline::Timeline,
@@ -39,15 +42,25 @@ fn derive_sections(
         .collect();
     cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     // Duplicate beats collapse to one cut (a second cut at the same beat
-    // would produce an empty section).
+    // would produce an empty section); the stable sort keeps the first name.
     cuts.dedup_by(|a, b| a.0 == b.0);
 
-    if cuts.is_empty() {
+    // A section marker exactly on `range_start` names the first section
+    // (doesn't cut). First in list order wins when several share the beat.
+    let first_name = timeline
+        .markers
+        .iter()
+        .filter(|m| m.is_section_boundary)
+        .filter(|m| m.beat == range_start)
+        .map(|m| m.name.clone())
+        .next();
+
+    if cuts.is_empty() && first_name.is_none() {
         return Vec::new();
     }
 
     let mut boundaries: Vec<(Beats, String)> = Vec::with_capacity(cuts.len() + 1);
-    boundaries.push((range_start, String::new()));
+    boundaries.push((range_start, first_name.unwrap_or_default()));
     boundaries.extend(cuts);
 
     let mut sections = Vec::with_capacity(boundaries.len());
@@ -984,11 +997,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_edge_cases() {
-        // Marker exactly on `in` is excluded (would produce an empty leading
-        // section); marker exactly on `out` is excluded (outside the half-open
-        // range). Both must not appear as cuts.
+        // A marker exactly on `out` is excluded (outside the half-open range):
+        // it must not cut and must not name. Marker exactly on `in` names the
+        // first section (see `derive_sections_names_first_section_from_marker_on_in`).
         let t = timeline_with(vec![
-            section_marker(0.0, "OnIn"),
             section_marker(8.0, "Mid"),
             section_marker(16.0, "OnOut"),
         ]);
@@ -1018,6 +1030,50 @@ mod tests {
                 (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
                 (Beats::from_f32(4.0), Beats::from_f32(8.0), "First".to_string()),
                 (Beats::from_f32(8.0), Beats::from_f32(16.0), "Next".to_string()),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn derive_sections_names_first_section_from_marker_on_in() {
+        // A section marker exactly on `in` names the first section (doesn't
+        // cut), so Peter can place one at the export-in point to name the intro
+        // instead of getting `section-1`.
+        let t = timeline_with(vec![
+            section_marker(0.0, "Intro"),
+            section_marker(8.0, "Drop"),
+        ]);
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![
+                (Beats::from_f32(0.0), Beats::from_f32(8.0), "Intro".to_string()),
+                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Drop".to_string()),
+            ]
+        );
+
+        // Marker on `in` with no interior cuts → one named section (no split).
+        let t = timeline_with(vec![section_marker(0.0, "Only")]);
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![(Beats::from_f32(0.0), Beats::from_f32(16.0), "Only".to_string())]
+        );
+
+        // Two markers on `in` → first in list order wins.
+        let mut t = manifold_core::timeline::Timeline::default();
+        t.markers = vec![
+            section_marker(0.0, "First"),
+            section_marker(0.0, "Second"),
+            section_marker(8.0, "Drop"),
+        ];
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![
+                (Beats::from_f32(0.0), Beats::from_f32(8.0), "First".to_string()),
+                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Drop".to_string()),
             ]
         );
     }
