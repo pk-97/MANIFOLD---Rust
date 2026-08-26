@@ -52,9 +52,9 @@ Consequences, stated honestly: migration must find the same insertion point the 
 The Scene Setup rows already write the right lens params; once D1/D3 give those params consumers, the rows go live with zero UI changes. The guard is a test: for an import-assembled graph and a migrated graph, every surfaced lens param (`focus_distance`, `f_stop`, `shutter_angle`) has a downstream consumer path to `final`.
 Rejected: hiding the rows when consumers are absent — masks the bug class instead of killing it, and adds UI state for a condition that should not exist.
 
-**D5 — DoF runs at half resolution; motion blur full-res, single dispatch.**
-`bokeh_gather` and the CoC chain at half-res (upsampled on composite — large defocus is low-frequency by definition); `motion_blur` is one full-res gather. Frame-cost budget: the whole tail ≤ 3 ms at 1920×1080 on the rig, measured with `MANIFOLD_RENDER_TRACE=1` (DESIGN_DOC_STANDARD.md section 5 (content-thread work gate)). If the measurement breaks budget, the fix is resolution, not deleting atoms.
-Consequences, stated honestly: half-res DoF can halo on razor-thin in-focus silhouettes against deep defocus; accepted — the alternative (full-res gather) doubles cost for a defect visible only in stills at extreme settings.
+**D5 — DoF runs full-res, template-faithful; half-res is deferred, not improvised.**
+Amended 2026-08-26 (P1 lane escalation, ruled by k3 (lead)): the original D5 assumed CinematicScene carried a half-res mechanism for the CoC/bokeh leg — the ⚠ VERIFY-AT-IMPL caught that it does not; every node in the preset's DoF group is full-res, and the codebase has no clean upsample atom to pair with `node.downsample`. Building a downsample/upsample leg would be improvising a mechanism the template lacks — exactly what the VERIFY-AT-IMPL forbids. So the tail ships FULL-RES like the reference preset, and the I4 measurement (≤ 3 ms at 1920×1080, `MANIFOLD_RENDER_TRACE=1`) decides whether resolution work is ever needed. If the measurement breaks budget, half-res becomes its own designed phase with the mechanism designed, not improvised.
+Consequences, stated honestly: full-res `bokeh_gather` (32 taps) costs more than the half-res leg D5 originally priced; the honest-cost halo note is moot unless the deferred phase ever ships.
 
 **Plausible-wrong architecture, forbidden by name:** writing a *new* DoF or motion-blur kernel "tuned for imports" instead of wiring the shipped atoms. Every kernel in this chain has gpu-proofs against CPU references; a new one restarts that proof burden and forks the look. The second forbidden turn: an `Arc<Mutex>`-cached "scene has tail" flag — the graph itself is the record; query it, don't mirror it.
 
@@ -72,7 +72,7 @@ lens.out ─────────────────────> motion
 motion_blur.out ──────────────> final
 ```
 
-This is CinematicScene.json's wiring transcribed; the import assembler and the migration MUST produce this same shape (the migration's insertion point is the `final` upstream edge, D3). Half-res marker on the CoC/bokeh leg per D5 — ⚠ VERIFY-AT-IMPL: the exact half-res mechanism CinematicScene uses (read the preset's size/resolution params, do not invent one).
+This is CinematicScene.json's wiring transcribed; the import assembler and the migration MUST produce this same shape (the migration's insertion point is the `final` upstream edge, D3). Full-res per the amended D5 (the VERIFY-AT-IMPL fired 2026-08-26: the preset has no half-res mechanism — ruled full-res, half-res deferred).
 
 ## 4. Invariants & enforcement
 
