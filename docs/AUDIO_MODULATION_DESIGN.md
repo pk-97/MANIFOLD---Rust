@@ -241,7 +241,7 @@ Separate from the per-slider drawer, a central **Audio Setup** panel edits the `
 **No new UI infra required — this is composition of what ships:**
 - **The modal shell** follows [browser_popup.rs](../crates/manifold-ui/src/panels/browser_popup.rs) — a floating `UITree` modal over the main UI with a search bar and a `ScrollContainer` list. The Settings panel is the same skeleton; Audio Setup is one section/tab inside it.
 - **Send-label text entry** uses the existing [text_input.rs](../crates/manifold-app/src/text_input.rs) session editor (caret/selection/blink/anchored overlay) — the same path as layer/macro/group renames. The work is one `TextInputField::AudioSendLabel(send_id)` variant, one commit arm in `app.rs`, and a `begin()` on label click.
-- **Device/channel pickers and per-send analysis toggles** are the existing dropdown/button widgets.
+- **Device picker and per-send analysis toggles** are the existing dropdown/button widgets. (The per-send channel picker was retired 2026-08-26 — capture-fed sends are always stereo.)
 
 The earlier `mapping_popover` "no text field on this surface" note is specific to the immediate-mode graph canvas and does not apply here — `UITree` panels have full text editing.
 

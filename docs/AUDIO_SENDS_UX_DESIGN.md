@@ -44,7 +44,7 @@ Extend, don't redesign. No new crates, no new threads, no new shared state anywh
 
 The selected send's detail area (today: scope + trigger matrix) gains two sections, laid out with the existing imperative row builders in `audio_setup_panel.rs` — no new widget kinds:
 
-- **Inputs** (above the scope): one row per source. Capture row = the existing channel dropdown + stereo toggle, unchanged. Layer rows = layer name + remove (×). Final row = "+ layer" dropdown listing audio layers not already feeding this send.
+- **Inputs** (above the scope): one row per source. Capture row = a static stereo label (the channel dropdown + stereo toggle were retired 2026-08-26 — capture-fed sends are always stereo). Layer rows = layer name + remove (×). Final row = "+ layer" dropdown listing audio layers not already feeding this send.
 - **Consumers** (below the trigger matrix): one row per audio mod and per enabled trigger route, label + jump. Rows are plain buttons; click emits a `PanelAction` that selects the owning layer.
 
 View-model extension (in `manifold-ui`, filled by `state_sync` like every other `AudioSendRow` field):
