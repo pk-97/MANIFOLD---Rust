@@ -23,6 +23,7 @@ pub mod param_slider_shared;
 pub mod scrub;
 pub mod perf_hud;
 pub mod rt_quality_panel;
+pub mod scene_setup_actions;
 pub mod scene_setup_panel;
 pub mod scene_setup_skin;
 pub mod settings_popup;

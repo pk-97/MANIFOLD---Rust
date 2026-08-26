@@ -45,12 +45,10 @@ const KEY_ADD_ENVIRONMENT: u64 = 80_010;
 const KEY_ADD_FOG: u64 = 80_011;
 const KEY_NEW_SCENE: u64 = 80_012;
 const KEY_OPEN_GRAPH_EDITOR: u64 = 80_013;
-const KEY_ADD_OBJECT: u64 = 80_014;
-const KEY_ADD_LIGHT: u64 = 80_015;
+// KEY_ADD_OBJECT / KEY_ADD_LIGHT / KEY_ADD_PLANE live in
+// `scene_setup_actions.rs` with the row they build (godfile ceiling).
 /// "Import Model…" (P4, D4/D5) — merges a second glb into this scene.
 const KEY_IMPORT_MODEL: u64 = 80_016;
-/// BUG-hlw8 "+ Plane" button — dispatches `AddSceneLayerPlaneCommand`.
-const KEY_ADD_PLANE: u64 = 80_020;
 /// Outliner fold header keys (scene-panel-ux lane): Scene, Lights, Objects
 const KEY_OUTLINER_SCENE: u64 = 80_017;
 const KEY_OUTLINER_LIGHTS: u64 = 80_018;
@@ -152,8 +150,8 @@ const fn modifier_add_button_key(object_index: usize) -> u64 {
 
 const PANEL_W_MIN: f32 = 320.0;
 const TITLE_H: f32 = 26.0;
-const ROW_H: f32 = 24.0;
-const ROW_GAP: f32 = 4.0;
+pub(crate) const ROW_H: f32 = 24.0;
+pub(crate) const ROW_GAP: f32 = 4.0;
 const PAD: f32 = 10.0;
 const STEP_W: f32 = 22.0;
 
@@ -1442,45 +1440,20 @@ impl ScenePanel {
         }
         cy += ROW_GAP;
 
-        // D6/BUG-hlw8: compact action row — Object, Light, and the new
-        // Layer Plane (a skinned plane mesh) all share the same live
-        // `next_index` source (`vm.object_count`). The compact Import Model
-        // button that used to render here was unreachable: `import_model_id`
-        // is overwritten by the Objects section header's Import button below,
-        // so it emitted no action. The reachable Import affordance lives in
-        // the header.
-        let action_w = (inner_w - 2.0 * ROW_GAP) / 3.0;
-        self.add_object_id = Some(tree.add_button_keyed(
+        // D6/BUG-hlw8: compact action row — built in `scene_setup_actions.rs`
+        // (this file is under the godfile line ceiling; the row's doc there
+        // explains the dead compact Import Model button it replaced).
+        let (ids, cy) = super::scene_setup_actions::build_add_action_row(
+            tree,
             Some(self.content_parent),
             inner_x,
+            inner_w,
             cy,
-            action_w,
-            ROW_H,
-            btn_style(),
-            "+ Object",
-            KEY_ADD_OBJECT,
-        ));
-        self.add_light_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + action_w + ROW_GAP,
-            cy,
-            action_w,
-            ROW_H,
-            btn_style(),
-            "+ Light",
-            KEY_ADD_LIGHT,
-        ));
-        self.add_plane_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + 2.0 * (action_w + ROW_GAP),
-            cy,
-            action_w,
-            ROW_H,
-            btn_style(),
-            "+ Plane",
-            KEY_ADD_PLANE,
-        ));
-        cy + ROW_H
+        );
+        self.add_object_id = Some(ids.object);
+        self.add_light_id = Some(ids.light);
+        self.add_plane_id = Some(ids.plane);
+        cy
     }
 
     /// One selectable outliner row: a name button, plus the trailing
@@ -2530,24 +2503,14 @@ impl ScenePanel {
                         )));
                     } else if self.add_fog_id == Some(*node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupAddFog(vm.layer_id.clone(), vm.scene_root_node_id)));
-                    } else if self.add_object_id == Some(*node_id) {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddObject(
-                            vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            vm.object_count as u32,
-                        )));
-                    } else if self.add_light_id == Some(*node_id) {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddLight(
-                            vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            vm.light_count as u32,
-                        )));
-                    } else if self.add_plane_id == Some(*node_id) {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(
-                            vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                            vm.object_count as u32,
-                        )));
+                    } else if let Some(act) = super::scene_setup_actions::add_row_click(
+                        self.add_object_id,
+                        self.add_light_id,
+                        self.add_plane_id,
+                        *node_id,
+                        vm,
+                    ) {
+                        actions.push(act);
                     } else if self.import_model_id == Some(*node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(
                             vm.layer_id.clone(),
@@ -2947,7 +2910,7 @@ fn scrollbar_style() -> ScrollbarStyle {
     }
 }
 
-fn btn_style() -> UIStyle {
+pub(crate) fn btn_style() -> UIStyle {
     UIStyle { font_size: color::FONT_LABEL, ..crate::chrome::components::segment_style(false) }
 }
 
