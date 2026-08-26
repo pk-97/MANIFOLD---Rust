@@ -2,33 +2,29 @@
 """PreToolUse hook for Agent: background spawns require an armed lane health check.
 
 Rule (docs/AGENT_ROUTING.md — "Lane health is scheduled, never Peter's job"): whenever
-the lead runs Agent-tool lanes detached, a lane health check must be armed first. Today
-that relies on the lead remembering; this hook makes forgetting a deterministic deny.
+the lead runs Agent-tool lanes detached, a lane health check must be armed first.
 
-Mechanic: session-only CronCreate jobs live in the harness's in-memory store and are
-INVISIBLE outside the session, so the enforced form is a DURABLE job — durable jobs
-persist to .claude/scheduled_tasks.json (schema: {"tasks": [{id, cron, prompt,
-createdAt, recurring?, ...}]}; the harness reads a missing or unparseable file as zero
-tasks). A job counts as armed when some task has `recurring: true` and its prompt
-contains the literal marker string MARKER.
+Mechanic (2026-08-26, k3 lead, Peter-approved): this CC build removed durable cron —
+CronCreate's durable flag is gone and ALL jobs are session-only in the harness's
+in-memory store, which a hook process cannot read. Verification of arming is therefore
+impossible from here, so the hook WARNS instead of denying: every background spawn
+without a parseable armed marker in .claude/scheduled_tasks.json passes with an
+additionalContext reminder carrying the exact session CronCreate to arm. The actual
+protection lives in the lead honoring that reminder (the session job fires while the
+session is idle) plus completion notifications. A legacy durable marker in the store
+still counts as armed and silences the warning (forward-compat if durability returns).
 
 Scope: fires only on BACKGROUND spawns — tool_input.run_in_background absent (the
-harness default) or true. Explicit run_in_background=false passes: a synchronous agent
-cannot stall silently. No subagent_type exemptions: a background fork or consult seat
-stalls the same as any lane. cc-fleet subagents/teammates are headless CLI runs, not
-Agent-tool calls — unaffected (their --timeout/--max-budget-usd bound silent failure).
+harness default) or true. Explicit run_in_background=false passes silently: a
+synchronous agent cannot stall silently. cc-fleet subagents/teammates are headless CLI
+runs, not Agent-tool calls — unaffected.
 
-Fail modes: missing store, zero matching tasks, or an unparseable store all DENY —
-an unparseable store is indistinguishable from an unarmed one (the harness itself reads
-it as zero jobs), so the message says so and names the fix. Unexpected hook-internal
-errors fail open: a guard must never be able to block a session on its own bug.
+Fail modes: hook-internal errors fail open — a guard must never block a session on its
+own bug.
 
-Store location: the payload's cwd is tried first, then $CLAUDE_PROJECT_DIR, then the
-process cwd — first dir whose .claude/scheduled_tasks.json exists wins. That mirrors
-the harness, which reads exactly one store relative to the project dir.
-
-Obsolete when: the harness exposes session cron state to hooks (then session-only
-arming can count too), or the lane-health rule in AGENT_ROUTING.md is retired.
+Obsolete when: the harness exposes session cron state to hooks (then arming can be
+verified and the deny restored), or the lane-health rule in AGENT_ROUTING.md is
+retired.
 """
 import json
 import os
@@ -37,17 +33,15 @@ import sys
 MARKER = "lane-health-check"
 
 CORRECTED_FORM = (
-    "arm a durable recurring CronCreate whose prompt contains the literal string "
-    f"'{MARKER}', e.g. CronCreate(cron='7-59/10 * * * *', durable=true, "
+    "arm a SESSION recurring CronCreate whose prompt contains the literal string "
+    f"'{MARKER}', e.g. CronCreate(cron='7-59/10 * * * *', "
     f"prompt='{MARKER}: per lane — is a build/test process running; has the worktree "
     "moved (files, commits)? two consecutive idle checks with no report = stalled: "
     "message once, then stop the lane and escalate per the seat ladder. No lane "
     "processes AND no live lane to escalate = the fleet is down: CronDelete this job "
-    "(re-arming is hook-enforced on the next spawn)'), then respawn "
-    "the Agent call. Session-only (durable=false) jobs are invisible to this hook. "
-    "The self-cancel clause is mandatory: a durable job outlives the session that "
-    "armed it, and an orphaned check burns a lead wakeup every 10 minutes "
-    "(2026-08-04, fired all morning against an empty fleet)."
+    "(re-arm on the next spawn)'). Durable cron no longer exists in this harness "
+    "build — the session job is the enforcement; it dies with the session, so re-arm "
+    "whenever this reminder appears. Delete it only when the fleet is idle for good."
 )
 
 
@@ -83,36 +77,28 @@ def armed_job_present(store_path: str) -> tuple[bool, str]:
 
 
 def decide(tool_input: dict, candidate_dirs: list[str]) -> str:
-    """Deny reason, or '' to allow. Only background spawns are checked."""
+    """Warning reason, or '' when armed/sync. Only background spawns are checked.
+
+    Never denies: durable cron is gone from the harness, so an empty or missing
+    store is indistinguishable from a correctly armed session job. The warning
+    carries the exact session CronCreate so the lead can self-correct.
+    """
     if tool_input.get("run_in_background") is False:
         return ""
     store = find_store(candidate_dirs)
-    if store is None:
-        checked = ", ".join(
-            os.path.join(d or ".", ".claude", "scheduled_tasks.json")
-            for d in candidate_dirs
-            if d
-        ) or ".claude/scheduled_tasks.json"
-        return (
-            "Background Agent spawn denied: no lane health check is armed — no durable "
-            f"cron store exists (checked: {checked}). The lane-health rule "
-            "(docs/AGENT_ROUTING.md — lane health is scheduled, never Peter's job) is "
-            f"hook-enforced: {CORRECTED_FORM}"
-        )
-    armed, problem = armed_job_present(store)
-    if armed:
-        return ""
-    if problem:
-        return (
-            f"Background Agent spawn denied: {store} {problem} — the harness reads a "
-            "corrupt store as zero jobs, so any health check you armed is already lost. "
-            f"Fix or delete the file, then {CORRECTED_FORM}"
-        )
+    if store is not None:
+        armed, problem = armed_job_present(store)
+        if armed:
+            return ""
+        if problem:
+            return (
+                f"lane-health-guard: {store} {problem} — no verifiable health check. "
+                f"If you have not armed one this session, {CORRECTED_FORM}"
+            )
     return (
-        "Background Agent spawn denied: no lane health check is armed — "
-        f"{store} has no recurring task whose prompt contains '{MARKER}'. The "
-        "lane-health rule (docs/AGENT_ROUTING.md — lane health is scheduled, never "
-        f"Peter's job) is hook-enforced: {CORRECTED_FORM}"
+        "lane-health-guard: no verifiable lane health check (session cron is "
+        "invisible to hooks in this build). If you have not armed one this session, "
+        f"{CORRECTED_FORM}"
     )
 
 
@@ -124,16 +110,15 @@ def main() -> None:
             os.environ.get("CLAUDE_PROJECT_DIR", ""),
             os.getcwd(),
         ]
-        deny = decide(payload.get("tool_input") or {}, candidates)
-        if not deny:
+        warning = decide(payload.get("tool_input") or {}, candidates)
+        if not warning:
             sys.exit(0)
         print(
             json.dumps(
                 {
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": deny,
+                        "additionalContext": warning,
                     }
                 }
             )
