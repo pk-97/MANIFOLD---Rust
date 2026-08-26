@@ -937,6 +937,41 @@ mod tests {
 
     // ── Section export (docs/SECTION_EXPORT_DESIGN.md section 4) ──
 
+    /// P2 round-trip gate: a project saved with section markers and the
+    /// split-export setting reloads with both intact. Exercises the full
+    /// `Project` serde shape (the marker flag and the `ProjectSettings`
+    /// toggle, both `#[serde(default)]`).
+    #[test]
+    fn section_markers_and_split_setting_survive_project_roundtrip() {
+        use manifold_core::project::Project;
+
+        let mut project = Project::default();
+        project.timeline.add_marker(
+            manifold_core::marker::TimelineMarker::new(Beats::from_f32(4.0))
+                .with_name("Drop")
+                .as_section(),
+        );
+        project.timeline.add_marker(
+            manifold_core::marker::TimelineMarker::new(Beats::from_f32(8.0)).with_name("Break"),
+        );
+        project.settings.split_at_section_markers = true;
+
+        let json = serde_json::to_string(&project).expect("serialize project");
+        let reloaded: Project = serde_json::from_str(&json).expect("reload project");
+
+        assert!(
+            reloaded.settings.split_at_section_markers,
+            "split setting must survive the round-trip"
+        );
+        assert_eq!(reloaded.timeline.markers.len(), 2);
+        let drop = &reloaded.timeline.markers[0];
+        assert!(drop.is_section_boundary, "section flag must survive");
+        assert_eq!(drop.name, "Drop");
+        let brk = &reloaded.timeline.markers[1];
+        assert!(!brk.is_section_boundary, "plain marker must stay plain");
+        assert_eq!(brk.name, "Break");
+    }
+
     #[cfg(target_os = "macos")]
     fn plain_marker(beat: f32, name: &str) -> manifold_core::marker::TimelineMarker {
         manifold_core::marker::TimelineMarker::new(Beats::from_f32(beat)).with_name(name)

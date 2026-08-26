@@ -36,6 +36,21 @@ pub(super) fn dispatch_project(
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
         }
+        ProjectAction::ToggleSplitSections => {
+            let old_split = project.settings.split_at_section_markers;
+            let cmd =
+                manifold_editing::commands::settings::ToggleSplitSectionsCommand::new(old_split);
+            {
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            log::info!(
+                "Split export at section markers → {}",
+                project.settings.split_at_section_markers
+            );
+            DispatchResult::handled()
+        }
         ProjectAction::ToggleLiveRecording
         | ProjectAction::SelectAudioInputDevice
         | ProjectAction::SetAudioInputDevice(_)
