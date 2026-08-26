@@ -522,6 +522,7 @@ impl Backend for MetalBackend {
         // acquire within the same frame), return the existing slot
         // rather than pulling a fresh one from the pool.
         if let Some(&slot) = self.bound.get(&id) {
+            self.clear_skip_alias_for_new_tenant(slot);
             return slot;
         }
         let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
@@ -533,6 +534,7 @@ impl Backend for MetalBackend {
             s
         });
         self.bound.insert(id, slot);
+        self.clear_skip_alias_for_new_tenant(slot);
 
         // Lazily allocate a real backing resource for fresh Texture2D
         // slots. Reused slots already have their RenderTarget retained.
@@ -752,6 +754,25 @@ impl Backend for MetalBackend {
 
     fn clear_skip_aliases(&mut self) {
         for slot in self.skip_aliased_slots.drain(..) {
+            self.borrowed_2d.remove(&slot);
+        }
+    }
+}
+
+impl MetalBackend {
+    /// Drop an executor-installed skip-alias borrow when a slot changes
+    /// tenant. Lifetime-disjoint resources share physical slots (the
+    /// chain build's ping-pong assignment), and a borrow installed by
+    /// one resource's skip-passthrough alias must not shadow the slot
+    /// for the next resource's writer: `NodeOutputs::texture_2d`
+    /// resolves through `borrowed_2d`, so a stale borrow would dispatch
+    /// the write into the borrowed upstream texture — the
+    /// [BlobTracking → FilmGrain] master chain rendering grain over
+    /// grain. Host-installed borrows (never in `skip_aliased_slots`)
+    /// are deliberate routing and stay.
+    fn clear_skip_alias_for_new_tenant(&mut self, slot: Slot) {
+        if let Some(pos) = self.skip_aliased_slots.iter().position(|&s| s == slot) {
+            self.skip_aliased_slots.swap_remove(pos);
             self.borrowed_2d.remove(&slot);
         }
     }
