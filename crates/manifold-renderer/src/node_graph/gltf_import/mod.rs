@@ -37,6 +37,7 @@ use super::gltf_load;
 mod animation;
 mod assembly;
 mod cards;
+mod cinematic_tail;
 mod materials;
 mod merge;
 mod object_group;

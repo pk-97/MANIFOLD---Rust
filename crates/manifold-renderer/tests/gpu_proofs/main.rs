@@ -23,6 +23,7 @@ mod harness;
 mod alpha_contract;
 mod bug237_light_camera_commit_render_proof;
 mod camera_conformance;
+mod cinematic_scene_tail;
 mod film_grain_decorrelation;
 mod fragment_storage;
 mod gbuffer_depth;

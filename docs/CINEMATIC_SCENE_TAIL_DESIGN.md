@@ -1,6 +1,6 @@
 # Cinematic Scene Tail — DoF + motion blur back into 3D scene graphs
 
-**Status:** IN PROGRESS — P0 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; see the audit addendum) · P1–P3 open · k3 (lead)
+**Status:** IN PROGRESS — P0 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; see the audit addendum) · P1 executed 2026-08-26 (import tail wired, all gates green, I4 tail cost ~1–2 ms at 1080p) · P2–P3 open · k3 (lead)
 **Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) root-caused in P0 of this doc)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -65,7 +65,7 @@ render_scene.out(color) ──┬──> ssao_mix (existing) ──> bokeh_gathe
 render_scene.depth ───────┴──> coc_from_depth.depth
 lens.out ─────────────────────> coc_from_depth.camera
 coc_from_depth.out ───────────> coc_dilate.in
-coc_dilate.out ───────────────> bokeh_gather.coc
+coc_dilate.out ───────────────> bokeh_gather.width   (the atom's CoC input port is named `width` — verified against the primitive ABI and the preset at P1 execution; this doc's original `.coc` label was wrong)
 bokeh_gather.out ─────────────> motion_blur.in
 render_scene.velocity ────────> motion_blur.velocity
 lens.out ─────────────────────> motion_blur.camera

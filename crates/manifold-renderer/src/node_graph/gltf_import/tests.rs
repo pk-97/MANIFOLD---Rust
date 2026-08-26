@@ -7,6 +7,7 @@ use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TY
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use crate::preset_runtime::PresetRuntime;
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::BindingTarget;
 use super::synthetic_glbs::*;
 use manifold_core::effect_graph_def::{EffectGraphNode, GROUP_TYPE_ID, SerializedParamValue};
@@ -657,12 +658,21 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
         "camera tilt spans the ParamDef +/-360 range"
     );
 
-    // GTAO and the lens are wired into the spine. No motion blur
-    // (BUG-136 + fusion cost, see the removal comment in
-    // `build_import_graph`), no depth-of-field group (Peter, 2026-07-15:
-    // buggy visuals), no atmosphere node (fog + god rays removed,
-    // Peter 2026-07-15).
-    for present in ["node.ssao_gtao", "node.bilateral_blur", "node.camera_lens"] {
+    // GTAO, the lens, the polished DoF chain (coc → coc_dilate →
+    // bokeh_gather) and the motion-blur tail are all wired into the spine
+    // (CINEMATIC_SCENE_TAIL D1/section 3 — reinstated after BUG-136 was
+    // root-caused as missing chains, never a kernel defect). `node.variable_blur`
+    // and `node.atmosphere` stay absent (P4's superseded DoF blur stage;
+    // fog + god rays removed, Peter 2026-07-15).
+    for present in [
+        "node.ssao_gtao",
+        "node.bilateral_blur",
+        "node.camera_lens",
+        "node.coc_from_depth",
+        "node.coc_dilate",
+        "node.bokeh_gather",
+        "node.motion_blur",
+    ] {
         assert!(
             def.nodes.iter().any(|n| n.type_id == present)
                 || def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
@@ -671,19 +681,7 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
             "imported graph must carry `{present}`"
         );
     }
-    // `node.motion_blur` was removed (BUG-136: no visible effect live,
-    // despite correct wiring — see the removal comment above);
-    // `node.variable_blur` was P4's superseded DoF blur stage; and the
-    // DoF chain itself (`coc_from_depth`/`coc_dilate`/`bokeh_gather`)
-    // was removed 2026-07-15 for buggy visuals. None is reintroduced.
-    for absent in [
-        "node.motion_blur",
-        "node.variable_blur",
-        "node.coc_from_depth",
-        "node.coc_dilate",
-        "node.bokeh_gather",
-        "node.atmosphere",
-    ] {
+    for absent in ["node.variable_blur", "node.atmosphere"] {
         assert!(
             !def.nodes.iter().any(|n| n.type_id == absent)
                 && !def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
@@ -852,10 +850,11 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
     assert_eq!(report.textures_wired, 1);
 
     // Top level: two per-object group boxes PLUS the "ao" presentation
-    // group, no bare producer
+    // group PLUS the "dof" group (CINEMATIC_SCENE_TAIL D1/section 3 —
+    // coc_from_depth → coc_dilate → bokeh_gather), no bare producer
     // nodes.
     let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
-    assert_eq!(groups.len(), 3, "2 object groups + ao");
+    assert_eq!(groups.len(), 4, "2 object groups + ao + dof");
     assert!(groups.iter().all(|g| g.group.is_some()));
     for bare in [
         "node.gltf_mesh_source",
@@ -990,7 +989,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         .expect("editor snapshot builds from the grouped def");
     let snap_groups: Vec<_> =
         snap.nodes.iter().filter(|n| n.group.is_some()).collect();
-    assert_eq!(snap_groups.len(), 3, "editor snapshot shows 2 object + ao group boxes");
+    assert_eq!(snap_groups.len(), 4, "editor snapshot shows 2 object + ao + dof group boxes");
     let snap_object_groups: Vec<_> = snap_groups
         .iter()
         .filter(|g| g.group.as_ref().unwrap().nodes.iter().any(|inner| inner.type_id == "node.pbr_material"))
@@ -1001,6 +1000,153 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
     let registry = PrimitiveRegistry::with_builtin();
     PresetRuntime::from_def(def, &registry, None)
         .expect("grouped import graph must build through PresetRuntime::from_def");
+}
+
+/// CINEMATIC_SCENE_TAIL I2 (D4): every surfaced lens param — the ones the
+/// Scene Setup panel's Lens rows bind (`focus_distance` / `f_stop` /
+/// `shutter_angle`, surfaced on the import card as `{lens_doc_id}_…`) — has
+/// a directed consumer path to `final` in an import-assembled graph. Dead
+/// sliders are the bug D4 kills by construction: once the tail exists,
+/// focus_distance/f_stop reach final via lens → coc_from_depth → coc_dilate
+/// → bokeh_gather → motion_blur, and shutter_angle via lens →
+/// motion_blur.camera.
+#[test]
+fn scene_lens_params_have_consumers() {
+    // Synthetic single-material import — fast and fixture-free, same shape
+    // every real import takes (the dof/motion_blur tail is added regardless).
+    let mut mat = full_material(0, "Mat", 100);
+    mat.own_center = [0.0, 0.0, 0.0];
+    let summary = GltfImportSummary {
+        materials: vec![mat],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_lens_consumers_test.glb");
+    let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+    // The lens node must exist (the tail reuses it, never adds a second).
+    let lens_nid = "lens";
+    let lens_list: Vec<_> = def.nodes.iter().filter(|n| n.node_id == lens_nid).collect();
+    assert_eq!(lens_list.len(), 1, "exactly one camera_lens node, reused by the tail");
+    let lens_id = lens_list[0].id;
+
+    // Every surfaced lens binding targets lens.<param> and has a path to final.
+    let meta = def.preset_metadata.as_ref().expect("v2 metadata");
+    let binds: Vec<_> = meta
+        .bindings
+        .iter()
+        .filter(|b| matches!(&b.target, BindingTarget::Node { node_id, .. } if node_id == lens_nid))
+        .collect();
+    let lens_params: Vec<&str> = binds
+        .iter()
+        .map(|b| match &b.target {
+            BindingTarget::Node { param, .. } => param.as_str(),
+            _ => unreachable!("filtered above"),
+        })
+        .collect();
+    for want in ["focus_distance", "f_stop", "shutter_angle"] {
+        assert!(
+            lens_params.contains(&want),
+            "lens binding for `{want}` must exist (surfaced on the card)"
+        );
+    }
+
+    // Directed-graph reachability: node id -> outgoing (to_node, to_port).
+    let mut out_edges: std::collections::HashMap<u32, Vec<(u32, &str)>> =
+        std::collections::HashMap::new();
+    for w in &def.wires {
+        out_edges
+            .entry(w.from_node)
+            .or_default()
+            .push((w.to_node, w.to_port.as_str()));
+    }
+    let final_id = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == FINAL_OUTPUT_TYPE_ID)
+        .expect("import graph has a final node")
+        .id;
+    // BFS over node ids (not flattened): groups are wired at the top level,
+    // so a group input node's consumer is found via the group node's outward
+    // wires. The tail's inner-chain connectivity is pinned by a direct look
+    // below; reachability here proves the OUTER path from lens to final.
+    fn reaches_final(
+        start: u32,
+        final_id: u32,
+        out_edges: &std::collections::HashMap<u32, Vec<(u32, &str)>>,
+    ) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec![start];
+        while let Some(n) = stack.pop() {
+            if n == final_id {
+                return true;
+            }
+            if !seen.insert(n) {
+                continue;
+            }
+            if let Some(edges) = out_edges.get(&n) {
+                for (to, _port) in edges {
+                    stack.push(*to);
+                }
+            }
+        }
+        false
+    }
+    for param in lens_params {
+        assert!(
+            reaches_final(lens_id, final_id, &out_edges),
+            "surfaced lens param `{param}`'s target node lense must have a consumer path to final"
+        );
+    }
+
+    // The chain itself, node-for-node on CinematicScene's dof group +
+    // motion_blur tail (CINEMATIC_SCENE_TAIL section 3). The dof group exists
+    // as ONE top-level group node; its inner wiring is asserted by reading
+    // the group's own node/wire lists.
+    let dof_group = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_TYPE_ID && n.node_id == NodeId::new("dof"))
+        .expect("dof group present in the import graph");
+    let inner = dof_group.group.as_ref().expect("dof group has inner nodes");
+    let inner_types: Vec<&str> = inner.nodes.iter().map(|n| n.type_id.as_str()).collect();
+    for want in ["node.coc_from_depth", "node.coc_dilate", "node.bokeh_gather"] {
+        assert!(
+            inner_types.contains(&want),
+            "dof group must contain `{want}` (got {inner_types:?})"
+        );
+    }
+    let mb = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.motion_blur")
+        .expect("motion_blur tail present in the import graph");
+    let mb_fed: Vec<(&str, &str)> = def
+        .wires
+        .iter()
+        .filter(|w| w.to_node == mb.id)
+        .map(|w| {
+            (
+                def.nodes.iter().find(|n| n.id == w.from_node).map(|n| n.node_id.as_str()).unwrap_or("?"),
+                w.from_port.as_str(),
+            )
+        })
+        .collect();
+    for (from, port) in [("dof", "out"), ("render", "velocity"), ("lens", "out")] {
+        assert!(
+            mb_fed.contains(&(from, port)),
+            "motion_blur must be fed by `{from}.{port}` (got {mb_fed:?})"
+        );
+    }
 }
 
 /// A synthetic [`GltfMaterialInfo`] carrying every texture kind F-P4

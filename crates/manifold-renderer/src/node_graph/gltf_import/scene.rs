@@ -317,15 +317,20 @@ pub(super) fn build_import_graph(
     }
 
     // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera
-    // and render_scene/ao. No depth-of-field consumer wired anymore
-    // and no motion_blur consumer either (see the motion_blur removal note below),
-    // so `shutter_angle`/`focus_distance`/`f_stop` are along for the ride
-    // only insofar as `node.camera_lens` requires them — nothing downstream
-    // reads them today.
+    // and render_scene/ao/dof/motion_blur. Focus distance defaults to the
+    // bbox framing distance — a real, scene-aware rack-focus starting point
+    // (the CinematicScene preset's 4.0 default has no meaning for an
+    // arbitrary imported model). f_stop and shutter_angle stay at their
+    // NEUTRAL primitives (1000 / 0): CINEMATIC_SCENE_TAIL D1 — a fresh
+    // import must render byte-identical to the pre-tail SSAO look until
+    // Peter dials the lens. f_stop = 1000 zeroes the CoC buffer (1/f_stop
+    // law); shutter_angle = 0 collapses every motion-blur tap onto the
+    // center texel. Both nodes read these via the same wired lens.
     let lens_id = fresh_id();
     let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
     lens_node.params.insert("focus_distance".to_string(), float(distance));
-    lens_node.params.insert("f_stop".to_string(), float(32.0));
+    lens_node.params.insert("f_stop".to_string(), float(1000.0));
+    lens_node.params.insert("shutter_angle".to_string(), float(0.0));
     let lens_node_params = lens_node.params.clone();
     nodes.push(lens_node);
     stamp_scene_node_exposures_into(
@@ -711,25 +716,17 @@ pub(super) fn build_import_graph(
     }));
     nodes.push(ao_group_node);
 
-    // Depth of Field group removed: the coc_dilate/
-    // bokeh_gather chain read as buggy in practice and made imported scenes
-    // hard to look at. `render_scene → ao → final` now, no dof stage; the
-    // "lens" node stays — it still feeds render_scene's/ao's `camera` input
-    // and the FOV card knob.
+    // Depth of Field + motion-blur tail (CINEMATIC_SCENE_TAIL_DESIGN.md
+    // D1/section 3): the polished DoF chain plus velocity-directed motion
+    // blur, templated on the CinematicScene reference preset. Construction
+    // lives in `cinematic_tail.rs` (god-file ceiling); the lens node above
+    // feeds both the DoF chain and motion_blur so depth-of-field and
+    // shutter read the SAME lens the exposure and FOV card knob surface.
+    let tail = super::cinematic_tail::build_cinematic_tail(&mut fresh_id);
+    let dof_group_id = tail.dof_group_id;
+    let motion_blur_id = tail.motion_blur_id;
+    nodes.extend(tail.nodes);
 
-    // No `node.motion_blur` tail: it's live-tracked as BUG-136 (MED-HIGH,
-    // `docs/BUG_BACKLOG.md`) — orbiting the camera in the running app
-    // produces no visible blur despite the wiring, shader math, and
-    // velocity buffer all having been runtime-confirmed correct through
-    // exhaustive headless probing. The unresolved suspects live in the
-    // live app's UI-thread param propagation / render-loop scheduling,
-    // outside what this assembler controls. It's also disproportionately
-    // expensive for a no-op: `graph_tool fusion` on the assembled import
-    // graph shows the whole GTAO/DoF chain (and this node too, had it
-    // stayed) failing to fuse into anything but one 2-node region — every
-    // atom pays its own dispatch (BUG-141, also open) — so a broken,
-    // always-on 32px gather was pure cost with no visual payoff. Retry
-    // once BUG-136 lands a root cause.
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
 
@@ -747,12 +744,18 @@ pub(super) fn build_import_graph(
     wires.push(wire(env_select_id, "out", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
 
-    // render_scene → ao (contact AO) → final.
+    // render_scene → ao (contact AO) → dof → motion_blur → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
     wires.push(wire(lens_id, "out", ao_group_id, "camera"));
     wires.push(wire(render_id, "color", ao_group_id, "color"));
     wires.push(wire(render_id, "ao_mask", ao_group_id, "ao_mask"));
-    wires.push(wire(ao_group_id, "out", final_id, "in"));
+    wires.push(wire(ao_group_id, "out", dof_group_id, "color"));
+    wires.push(wire(render_id, "depth", dof_group_id, "depth"));
+    wires.push(wire(lens_id, "out", dof_group_id, "camera"));
+    wires.push(wire(dof_group_id, "out", motion_blur_id, "in"));
+    wires.push(wire(render_id, "velocity", motion_blur_id, "velocity"));
+    wires.push(wire(lens_id, "out", motion_blur_id, "camera"));
+    wires.push(wire(motion_blur_id, "out", final_id, "in"));
 
     // P1: scene-vocabulary atoms (camera, lens, sun, envmap) are already
     // exposed above from their primitive ParamDefs. This block keeps the
