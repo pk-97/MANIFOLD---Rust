@@ -139,3 +139,80 @@ impl Command for RenameMarkerCommand {
         "Rename Marker"
     }
 }
+
+// ── Toggle Section Marker ───────────────────────────────────────
+
+/// Toggle a marker's `is_section_boundary` flag. Shaped like
+/// `DeleteMarkerCommand`: execute flips the flag and stores the old value so
+/// undo restores it exactly (docs/SECTION_EXPORT_DESIGN.md P1, D3).
+#[derive(Debug)]
+pub struct ToggleMarkerSectionCommand {
+    marker_id: MarkerId,
+    old_flag: Option<bool>,
+}
+
+impl ToggleMarkerSectionCommand {
+    pub fn new(marker_id: MarkerId) -> Self {
+        Self {
+            marker_id,
+            old_flag: None,
+        }
+    }
+}
+
+impl Command for ToggleMarkerSectionCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
+            self.old_flag = Some(marker.is_section_boundary);
+            marker.is_section_boundary = !marker.is_section_boundary;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(old) = self.old_flag
+            && let Some(marker) = project.timeline.find_marker_mut(&self.marker_id)
+        {
+            marker.is_section_boundary = old;
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Toggle Section Marker"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::marker::TimelineMarker;
+
+    fn marker_at(beat: f32) -> TimelineMarker {
+        TimelineMarker::new(Beats::from_f32(beat))
+    }
+
+    #[test]
+    fn toggle_flips_flag_and_undo_restores() {
+        let mut project = Project::default();
+        let m = marker_at(4.0).with_name("Drop");
+        let id = m.id.clone();
+        project.timeline.add_marker(m);
+
+        let mut cmd = ToggleMarkerSectionCommand::new(id.clone());
+        cmd.execute(&mut project);
+        assert!(
+            project.timeline.find_marker(&id).unwrap().is_section_boundary,
+            "execute must set the flag"
+        );
+
+        cmd.undo(&mut project);
+        assert!(
+            !project.timeline.find_marker(&id).unwrap().is_section_boundary,
+            "undo must restore the stored false"
+        );
+
+        // Toggling again from false → true stores the pre-toggle value each time.
+        cmd.execute(&mut project);
+        cmd.undo(&mut project);
+        assert!(!project.timeline.find_marker(&id).unwrap().is_section_boundary);
+    }
+}

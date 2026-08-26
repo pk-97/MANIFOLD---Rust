@@ -13,12 +13,125 @@ use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, ExportFinishedEvent};
 use crate::content_thread::ContentThread;
 
+/// Derive export sections from section-flagged markers. Sections are
+/// `[range_start, m₁)`, `[m₁, m₂)`, …, `[mₙ, range_end)` where each m is a
+/// sorted, deduplicated section-boundary marker strictly inside the range.
+/// Each section is named by the marker at its start; the first section
+/// (starting at `range_start`, which has no marker) carries an empty name,
+/// which the filename logic turns into `section-N`.
+///
+/// A marker exactly on `range_start` or `range_end` is excluded (it would
+/// produce an empty leading section, or sit outside the half-open range).
+/// Returns empty when there are no in-range section markers → the caller
+/// takes the single-export path. See docs/SECTION_EXPORT_DESIGN.md D2.
+#[cfg(target_os = "macos")]
+fn derive_sections(
+    timeline: &manifold_core::timeline::Timeline,
+    range_start: Beats,
+    range_end: Beats,
+) -> Vec<(Beats, Beats, String)> {
+    let mut cuts: Vec<(Beats, String)> = timeline
+        .markers
+        .iter()
+        .filter(|m| m.is_section_boundary)
+        .filter(|m| m.beat > range_start && m.beat < range_end)
+        .map(|m| (m.beat, m.name.clone()))
+        .collect();
+    cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Duplicate beats collapse to one cut (a second cut at the same beat
+    // would produce an empty section).
+    cuts.dedup_by(|a, b| a.0 == b.0);
+
+    if cuts.is_empty() {
+        return Vec::new();
+    }
+
+    let mut boundaries: Vec<(Beats, String)> = Vec::with_capacity(cuts.len() + 1);
+    boundaries.push((range_start, String::new()));
+    boundaries.extend(cuts);
+
+    let mut sections = Vec::with_capacity(boundaries.len());
+    for window in boundaries.windows(2) {
+        sections.push((window[0].0, window[1].0, window[0].1.clone()));
+    }
+    let last = boundaries.last().expect("boundaries is non-empty");
+    sections.push((last.0, range_end, last.1.clone()));
+    sections
+}
+
+/// Sanitize a marker name into a filename-safe stem: every run of
+/// non-alphanumeric characters (whitespace, punctuation) collapses to a
+/// single `-`, with leading/trailing dashes trimmed. See D6.
+#[cfg(target_os = "macos")]
+fn sanitize_section_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut last_was_dash = true;
+    for ch in name.chars() {
+        if ch.is_alphanumeric() {
+            out.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// Per-section output paths from a base `output_path`. Each section's name
+/// is sanitized (empty → `section-N` counting from 1); duplicate stems get
+/// `-2`, `-3`, … suffixes. The base file's directory and extension are
+/// preserved: `<base>--<stem>.<ext>`. See D6.
+#[cfg(target_os = "macos")]
+fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) -> Vec<String> {
+    let path = std::path::Path::new(base_output);
+    let dir = path
+        .parent()
+        .map(|d| format!("{}/", d.display()))
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| base_output.to_string());
+    let ext = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+
+    let mut used: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    sections
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, name))| {
+            let mut key = sanitize_section_name(name);
+            if key.is_empty() {
+                key = format!("section-{}", i + 1);
+            }
+            let count = used.entry(key.clone()).or_insert(0);
+            *count += 1;
+            let suffixed = if *count == 1 {
+                key
+            } else {
+                format!("{key}-{}", *count)
+            };
+            format!("{dir}{stem}--{suffixed}{ext}")
+        })
+        .collect()
+}
+
 impl ContentThread {
     /// Run the offline video export loop.
     ///
     /// Temporarily replaces the normal content loop: ticks the engine with fixed
     /// delta, renders each frame, and encodes via the native Metal encoder at
     /// maximum GPU speed (no frame pacing / sleep).
+    ///
+    /// With `split_at_section_markers`, this runs one full export per derived
+    /// section, sequentially (docs/SECTION_EXPORT_DESIGN.md D1). A cancelled or
+    /// failed section aborts the remaining sections.
     ///
     /// Port of Unity VideoExporter.ExportCoroutine() (offline / generator-only path).
     #[cfg(target_os = "macos")]
@@ -28,9 +141,6 @@ impl ContentThread {
         cmd_rx: &Receiver<ContentCommand>,
         state_tx: &Sender<ContentState>,
     ) {
-        use manifold_core::tempo::TempoMapConverter;
-        use manifold_media::audio_muxer::AudioMuxer;
-
         log::info!("[ContentThread] Starting export: {:?}", config);
 
         // 1. Save playback state for restore
@@ -76,10 +186,112 @@ impl ContentThread {
             return;
         }
 
-        // Build final config with resolved range + audio info from content thread
-        let mut export_config = config;
-        export_config.start_beat = start_beat;
-        export_config.end_beat = end_beat;
+        // Build base config with resolved range + audio info from content thread
+        let mut base_config = config;
+        base_config.start_beat = start_beat;
+        base_config.end_beat = end_beat;
+
+        // Derive sections from timeline markers. Empty when the flag is off or
+        // no section markers fall inside the range → single-export path below.
+        let sections: Vec<(Beats, Beats, String)> = if base_config.split_at_section_markers {
+            derive_sections(
+                &project.timeline,
+                Beats::from_f32(start_beat),
+                Beats::from_f32(end_beat),
+            )
+        } else {
+            Vec::new()
+        };
+
+        // Enter export mode + resize once (resolution is constant across sections).
+        self.engine.stop();
+        self.engine.set_export_mode(true);
+        let (cur_w, cur_h) = self.content_pipeline.dimensions();
+        if cur_w != base_config.width || cur_h != base_config.height {
+            self.content_pipeline.resize(
+                &mut self.engine,
+                base_config.width,
+                base_config.height,
+                1.0,
+            );
+        }
+
+        let section_count = sections.len();
+        if section_count == 0 {
+            // Single export — today's behavior, unmodified output path.
+            self.run_export_section(base_config.clone(), bpm, None, cmd_rx, state_tx);
+        } else {
+            let paths = section_output_paths(&base_config.output_path, &sections);
+            for (i, ((start, end, _name), path)) in sections.iter().zip(paths.iter()).enumerate() {
+                let mut sc = base_config.clone();
+                sc.output_path = path.clone();
+                sc.start_beat = start.as_f32();
+                sc.end_beat = end.as_f32();
+                // D8: audio per section uses the existing mux path — each
+                // section's audio_start_beat is its start, which the muxer
+                // turns into a zero-offset slice of the master audio.
+                sc.audio_start_beat = start.as_f32();
+                let prefix = format!("section {} of {}", i + 1, section_count);
+                let aborted = self.run_export_section(sc, bpm, Some(&prefix), cmd_rx, state_tx);
+                if aborted {
+                    log::info!(
+                        "[ContentThread] Section export aborted — stopping remaining sections"
+                    );
+                    break;
+                }
+            }
+        }
+
+        // Restore playback state (once, after all sections).
+        self.engine.set_export_mode(false);
+        if cur_w != base_config.width || cur_h != base_config.height {
+            let render_scale = self
+                .engine
+                .project()
+                .map_or(1.0, |p| p.settings.render_scale);
+            self.content_pipeline
+                .resize(&mut self.engine, cur_w, cur_h, render_scale);
+        }
+        self.engine.stop();
+        let restore_time = self.engine.beat_to_timeline_time(saved_beat);
+        self.engine.seek_to(restore_time);
+        if was_playing {
+            self.engine.play();
+        }
+    }
+
+    /// Run one export pass for a single (possibly section) range — the original
+    /// single-export body from timing through finalize. The caller owns playback
+    /// save/restore and the export-mode / resize lifecycle; this does the
+    /// per-range work. Returns `true` when the pass aborted (cancelled or
+    /// failed) so the caller stops any remaining sections.
+    #[cfg(target_os = "macos")]
+    fn run_export_section(
+        &mut self,
+        mut export_config: manifold_media::export_config::ExportConfig,
+        bpm: manifold_core::Bpm,
+        progress_prefix: Option<&str>,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) -> bool {
+        use manifold_core::tempo::TempoMapConverter;
+        use manifold_media::audio_muxer::AudioMuxer;
+
+        // Re-fetch the project (the caller's borrow ended before entering
+        // export mode). Defensive: the caller already resolved it.
+        let Some(project) = self.engine.project() else {
+            log::error!("[ContentThread] No project loaded, cannot export");
+            self.send_export_finished(
+                state_tx,
+                false,
+                "No project loaded".into(),
+                &export_config.output_path,
+            );
+            return true;
+        };
+
+        let start_beat = export_config.start_beat;
+        let end_beat = export_config.end_beat;
 
         // Calculate timing
         let mut tempo_map = project.tempo_map.clone();
@@ -99,7 +311,7 @@ impl ContentThread {
                 "Zero frames to export".into(),
                 &export_config.output_path,
             );
-            return;
+            return true;
         }
 
         // Render the audio-layer mix for the export range into a temp WAV, then
@@ -195,7 +407,7 @@ impl ContentThread {
                     format!("Export failed: {reason}"),
                     &export_config.output_path,
                 );
-                return;
+                return true;
             }
         };
 
@@ -225,21 +437,8 @@ impl ContentThread {
             export_config.has_audio(),
         );
 
-        // 3. Enter export mode
-        self.engine.stop();
-        self.engine.set_export_mode(true);
-        // Ensure content pipeline matches export resolution.
-        // Export always renders at full resolution (render_scale = 1.0) for quality.
-        let (cur_w, cur_h) = self.content_pipeline.dimensions();
-        if cur_w != export_config.width || cur_h != export_config.height {
-            self.content_pipeline.resize(
-                &mut self.engine,
-                export_config.width,
-                export_config.height,
-                1.0,
-            );
-        }
-        // Seek to start
+        // Seek to start (export mode was entered and the pipeline resized once
+        // by the caller, before the section loop).
         let start_time = self
             .engine
             .beat_to_timeline_time(Beats::from_f32(start_beat));
@@ -269,17 +468,14 @@ impl ContentThread {
             Ok(s) => s,
             Err(e) => {
                 log::error!("[ContentThread] Failed to create export session: {e}");
-                self.engine.set_export_mode(false);
-                self.engine.stop();
-                let restore_time = self.engine.beat_to_timeline_time(saved_beat);
-                self.engine.seek_to(restore_time);
+                let _ = std::fs::remove_file(&mix_wav_path);
                 self.send_export_finished(
                     state_tx,
                     false,
                     format!("Export failed: {e}"),
                     &export_config.output_path,
                 );
-                return;
+                return true;
             }
         };
 
@@ -345,6 +541,7 @@ impl ContentThread {
                     total_frames,
                     frame_dt,
                     state_tx,
+                    progress_prefix,
                     generator_only,
                     offline_audio_mod.as_mut(),
                 )
@@ -357,6 +554,7 @@ impl ContentThread {
                 total_frames,
                 frame_dt,
                 state_tx,
+                progress_prefix,
                 generator_only,
                 offline_audio_mod.as_mut(),
             );
@@ -369,6 +567,7 @@ impl ContentThread {
 
         // 6. Finalize
         let failed = cancelled || encode_error.is_some();
+        let mut finalize_failed = false;
         if failed {
             if cancelled {
                 log::info!(
@@ -406,6 +605,7 @@ impl ContentThread {
                         format!("Export failed: {e}"),
                         &export_config.output_path,
                     );
+                    finalize_failed = true;
                 }
             }
         }
@@ -413,24 +613,6 @@ impl ContentThread {
         // Remove the temporary audio mixdown WAV (already muxed into the final
         // file; a no-op when no audio was rendered).
         let _ = std::fs::remove_file(&mix_wav_path);
-
-        // 7. Restore playback state
-        self.engine.set_export_mode(false);
-        // Restore content pipeline resolution (and render scale) after export.
-        if cur_w != export_config.width || cur_h != export_config.height {
-            let render_scale = self
-                .engine
-                .project()
-                .map_or(1.0, |p| p.settings.render_scale);
-            self.content_pipeline
-                .resize(&mut self.engine, cur_w, cur_h, render_scale);
-        }
-        self.engine.stop();
-        let restore_time = self.engine.beat_to_timeline_time(saved_beat);
-        self.engine.seek_to(restore_time);
-        if was_playing {
-            self.engine.play();
-        }
 
         if failed {
             let msg = if let Some(err) = encode_error {
@@ -440,6 +622,8 @@ impl ContentThread {
             };
             self.send_export_finished(state_tx, false, msg, &export_config.output_path);
         }
+
+        failed || finalize_failed
     }
 
     /// Render and encode a single export frame. Returns Some(error) on failure.
@@ -451,6 +635,7 @@ impl ContentThread {
         _total_frames: u32,
         frame_dt: f64,
         state_tx: &crossbeam_channel::Sender<ContentState>,
+        progress_prefix: Option<&str>,
         generator_only: bool,
         offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<String> {
@@ -533,7 +718,7 @@ impl ContentThread {
         self.engine.reclaim_tick_result(tick_result);
 
         if frame_idx.is_multiple_of(10) {
-            self.send_export_progress(state_tx, session);
+            self.send_export_progress(state_tx, session, progress_prefix);
         }
 
         None
@@ -558,11 +743,16 @@ impl ContentThread {
         &self,
         state_tx: &Sender<ContentState>,
         session: &manifold_media::export_session::ExportSession,
+        progress_prefix: Option<&str>,
     ) {
+        let status = match progress_prefix {
+            Some(prefix) => format!("{prefix} — {}", session.status_text()),
+            None => session.status_text(),
+        };
         let state = ContentState {
             is_exporting: true,
             export_progress: session.progress(),
-            export_status: Arc::from(session.status_text()),
+            export_status: Arc::from(status),
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
             is_playing: self.engine.is_playing(),
@@ -730,5 +920,166 @@ mod tests {
     fn ffmpeg_preflight_proceeds_when_audio_needs_resolvable_ffmpeg() {
         let result = ContentThread::ffmpeg_preflight(true, || Some("/opt/homebrew/bin/ffmpeg".to_string()));
         assert_eq!(result, Ok(Some("/opt/homebrew/bin/ffmpeg".to_string())));
+    }
+
+    // ── Section export (docs/SECTION_EXPORT_DESIGN.md section 4) ──
+
+    #[cfg(target_os = "macos")]
+    fn plain_marker(beat: f32, name: &str) -> manifold_core::marker::TimelineMarker {
+        manifold_core::marker::TimelineMarker::new(Beats::from_f32(beat)).with_name(name)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn section_marker(beat: f32, name: &str) -> manifold_core::marker::TimelineMarker {
+        plain_marker(beat, name).as_section()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn timeline_with(markers: Vec<manifold_core::marker::TimelineMarker>) -> manifold_core::timeline::Timeline {
+        let mut t = manifold_core::timeline::Timeline::default();
+        for m in markers {
+            t.add_marker(m);
+        }
+        t
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn derive_sections_returns_empty_without_in_range_section_markers() {
+        // Invariant (b): flag on but no in-range section markers → empty →
+        // the caller takes the single-export path (one file at output_path).
+        // Non-section markers and out-of-range section markers must not slice.
+        let t = timeline_with(vec![
+            plain_marker(2.0, "plain"),
+            section_marker(20.0, "outside"),
+        ]);
+        assert!(derive_sections(&t, Beats::from_f32(4.0), Beats::from_f32(16.0)).is_empty());
+
+        // No section markers at all → empty over any range.
+        let t = timeline_with(vec![plain_marker(2.0, "plain")]);
+        assert!(derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(100.0)).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn derive_sections_splits_chapter_style() {
+        // D2: sections are [in, m₁), [m₁, m₂), …, [mₙ, out); each section named
+        // by the marker at its start; the leading [in, m₁) section is unnamed.
+        let t = timeline_with(vec![
+            section_marker(4.0, "Drop"),
+            section_marker(8.0, "Break"),
+            plain_marker(6.0, "not-a-section"),
+        ]);
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![
+                (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
+                (Beats::from_f32(4.0), Beats::from_f32(8.0), "Drop".to_string()),
+                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Break".to_string()),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn derive_sections_edge_cases() {
+        // Marker exactly on `in` is excluded (would produce an empty leading
+        // section); marker exactly on `out` is excluded (outside the half-open
+        // range). Both must not appear as cuts.
+        let t = timeline_with(vec![
+            section_marker(0.0, "OnIn"),
+            section_marker(8.0, "Mid"),
+            section_marker(16.0, "OnOut"),
+        ]);
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![
+                (Beats::from_f32(0.0), Beats::from_f32(8.0), String::new()),
+                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Mid".to_string()),
+            ]
+        );
+
+        // Duplicate beats collapse to a single cut. The surviving name is the
+        // first in marker-list order (stable sort + dedup keeps the first), so
+        // set the list directly to pin the order rather than relying on
+        // `add_marker`'s insert-before-equal placement.
+        let mut t = manifold_core::timeline::Timeline::default();
+        t.markers = vec![
+            section_marker(4.0, "First"),
+            section_marker(4.0, "Second"),
+            section_marker(8.0, "Next"),
+        ];
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![
+                (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
+                (Beats::from_f32(4.0), Beats::from_f32(8.0), "First".to_string()),
+                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Next".to_string()),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn derive_sections_sorts_unsorted_markers() {
+        // `add_marker` keeps `markers` sorted, but `derive_sections` must not
+        // depend on that: hand it an unsorted `markers` vec directly.
+        let mut t = manifold_core::timeline::Timeline::default();
+        t.markers = vec![
+            section_marker(8.0, "Break"),
+            section_marker(4.0, "Drop"),
+        ];
+        let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
+        assert_eq!(
+            sections,
+            vec![
+                (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
+                (Beats::from_f32(4.0), Beats::from_f32(8.0), "Drop".to_string()),
+                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Break".to_string()),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn section_output_paths_sanitize_empty_and_collisions() {
+        use std::path::Path;
+        let base = Path::new("/tmp/export")
+            .join("my show.mp4")
+            .to_string_lossy()
+            .into_owned();
+
+        // Sanitization + the leading unnamed section → `section-1`.
+        let sections = vec![
+            (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
+            (Beats::from_f32(4.0), Beats::from_f32(8.0), "Drop Build Up!".to_string()),
+            (Beats::from_f32(8.0), Beats::from_f32(16.0), "Drop Build Up!".to_string()),
+        ];
+        let paths = section_output_paths(&base, &sections);
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/export/my show--section-1.mp4",
+                "/tmp/export/my show--Drop-Build-Up.mp4",
+                "/tmp/export/my show--Drop-Build-Up-2.mp4",
+            ]
+        );
+
+        // An empty-but-named fallback colliding with an explicit `section-1`.
+        let sections = vec![
+            (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
+            (Beats::from_f32(4.0), Beats::from_f32(8.0), "section-1".to_string()),
+        ];
+        let paths = section_output_paths(&base, &sections);
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/export/my show--section-1.mp4",
+                "/tmp/export/my show--section-1-2.mp4",
+            ]
+        );
     }
 }

@@ -142,6 +142,7 @@ fn tiny_export_config(output_path: &Path, fps: f32) -> ExportConfig {
         audio_path: None,
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
+        split_at_section_markers: false,
     }
 }
 
