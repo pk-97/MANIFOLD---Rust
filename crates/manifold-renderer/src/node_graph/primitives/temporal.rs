@@ -44,7 +44,7 @@ crate::primitive! {
     },
     params: [],
     depth_rule: Warp,
-    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels). When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise seed, reaction-diffusion's spike pattern, etc.). The seed producer runs every frame in v1 but only matters on the first allocation; gating it to first-frame-only is a planner-pass follow-up. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands. `reset_trigger`: wire any integer-counted trigger (clip_trigger, threshold-gated cut_score, beat-1 pulse) — when its rounded integer value advances, the next emission is zero-cleared (rgba 0,0,0,0). First observation arms without firing. To re-seed (rather than zero) on the same trigger event, route the seed-producing atom to also respond to the trigger — the seed atom's own re-emission is the re-seed mechanism, not this primitive's job. BUG-217: if the wire feeding `in` is a non-Lerp `node.mix` (Add/Max, the standard accumulation shape), the blend passes its `a` input's alpha straight through unchanged — trails painted outside `a`'s alpha footprint carry alpha 0 and get culled at display, even though the RGB accumulated correctly. Wire `node.set_alpha` onto the source feeding that `node.mix` BEFORE the blend (force it opaque) so the accumulated trail's alpha is visible; there is no alpha-mode opt-in on `node.mix` yet.",
+    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels); after a `clear_state` reset (idle layer, seek, project load) `out` is zeroed instead, because the back-edge slot still holds the pre-reset frame. When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise seed, reaction-diffusion's spike pattern, etc.). The seed producer runs every frame in v1 but only matters on the first allocation; gating it to first-frame-only is a planner-pass follow-up. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands. `reset_trigger`: wire any integer-counted trigger (clip_trigger, threshold-gated cut_score, beat-1 pulse) — when its rounded integer value advances, the next emission is zero-cleared (rgba 0,0,0,0). First observation arms without firing. To re-seed (rather than zero) on the same trigger event, route the seed-producing atom to also respond to the trigger — the seed atom's own re-emission is the re-seed mechanism, not this primitive's job. BUG-217: if the wire feeding `in` is a non-Lerp `node.mix` (Add/Max, the standard accumulation shape), the blend passes its `a` input's alpha straight through unchanged — trails painted outside `a`'s alpha footprint carry alpha 0 and get culled at display, even though the RGB accumulated correctly. Wire `node.set_alpha` onto the source feeding that `node.mix` BEFORE the blend (force it opaque) so the accumulated trail's alpha is visible; there is no alpha-mode opt-in on `node.mix` yet.",
     examples: ["preset.effect.stylized_feedback"],
     picker: { label: "Feedback", category: Atom },
     summary: "Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through a blend.",
@@ -75,6 +75,13 @@ crate::primitive! {
         // the alloc-frame seed isn't immediately wiped on the same
         // frame. Matches `array_feedback`'s edge-detect shape.
         last_reset_trigger: Option<i32> = None,
+        // Set by `clear_state` (idle-layer / seek / project-load reset).
+        // The StateStore bucket is dropped by the caller, but the
+        // persistent back-edge `in` slot is not — it still holds the
+        // pre-reset frame. The next `run` must zero `out` instead of
+        // seeding from that stale slot, or the reset resurrects a ghost
+        // of the old content that takes frames to wash out.
+        needs_clear: bool = false,
     },
 }
 
@@ -229,22 +236,32 @@ impl Primitive for Feedback {
             None => true,
         };
         if needs_alloc {
-            let init_source = seed_tex.unwrap_or(in_tex);
-            Self::copy_with_format_bridge(
-                gpu,
-                init_source,
-                out_tex,
-                width,
-                height,
-                state_format,
-                &mut self.cross_format_copy_fp32,
-            );
+            if self.needs_clear {
+                // Post-reset re-entry: the back-edge `in` slot still holds
+                // the pre-reset frame, so the seed path would copy a ghost
+                // of the old content into `out`. Zero instead.
+                gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+            } else {
+                let init_source = seed_tex.unwrap_or(in_tex);
+                Self::copy_with_format_bridge(
+                    gpu,
+                    init_source,
+                    out_tex,
+                    width,
+                    height,
+                    state_format,
+                    &mut self.cross_format_copy_fp32,
+                );
+            }
             store.insert(
                 node_id,
                 owner_key,
                 FeedbackState { swap, width, height, just_allocated: true },
             );
+        } else if self.needs_clear {
+            gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
         }
+        self.needs_clear = false;
 
         // Reset-on-trigger: if `reset_trigger` is wired and its
         // integer value has advanced since last frame, zero the
@@ -270,6 +287,14 @@ impl Primitive for Feedback {
         // holds last frame's producer value (the late-capture swap or
         // bridge put it there), so downstream consumers read a true
         // 1-frame delay with zero GPU work here.
+    }
+
+    fn clear_state(&mut self) {
+        // The StateStore bucket is dropped by the caller, but the
+        // persistent `out` / back-edge slots survive with the pre-reset
+        // frame still in them. Flag so the next `run` zeroes `out`
+        // rather than re-seeding from that stale slot.
+        self.needs_clear = true;
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
