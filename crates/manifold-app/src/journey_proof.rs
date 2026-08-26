@@ -379,9 +379,10 @@ fn audio_reactive_project(click_wav_path: &str) -> Project {
         Seconds((CLICK_BEATS as f32 * (60.0 / CLICK_BPM)) as f64),
     ));
 
-    // Layer-fed send (D2: NOT capture-fed — `channels` stays empty) so
+    // Layer-fed send (D2: NOT capture-fed — `channels` emptied) so
     // `AudioSend::has_capture()` is false and `is_layer_fed()` is true.
     let mut send = AudioSend::new("Click Send");
+    send.channels.clear();
     send.source.layers.push(audio_layer_id);
     let send_id = send.id.clone();
 

@@ -138,6 +138,7 @@ pub fn audio_feature_to_core(v: UiAudioFeature) -> AudioFeature {
 pub fn audio_source_kind_to_core(v: UiAudioSourceKind) -> AudioSourceKind {
     match v {
         UiAudioSourceKind::InputDevice => AudioSourceKind::InputDevice,
+        UiAudioSourceKind::None => AudioSourceKind::None,
         UiAudioSourceKind::SystemAudio => AudioSourceKind::SystemAudio,
         UiAudioSourceKind::App => AudioSourceKind::App,
     }
@@ -146,6 +147,7 @@ pub fn audio_source_kind_to_core(v: UiAudioSourceKind) -> AudioSourceKind {
 pub fn audio_source_kind_to_ui(v: AudioSourceKind) -> UiAudioSourceKind {
     match v {
         AudioSourceKind::InputDevice => UiAudioSourceKind::InputDevice,
+        AudioSourceKind::None => UiAudioSourceKind::None,
         AudioSourceKind::SystemAudio => UiAudioSourceKind::SystemAudio,
         AudioSourceKind::App => UiAudioSourceKind::App,
     }

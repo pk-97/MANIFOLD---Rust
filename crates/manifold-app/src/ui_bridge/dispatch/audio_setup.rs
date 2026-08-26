@@ -13,8 +13,7 @@
 
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand,
-    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendFloorCommand,
-    SetAudioSendGainCommand,
+    SetAudioInputDeviceCommand, SetAudioSendFloorCommand, SetAudioSendGainCommand,
 };
 use manifold_editing::commands::layer::{
     AddLayerClipTriggerCommand, RemoveLayerClipTriggerCommand, SetLayerClipTriggerCommand,
@@ -185,21 +184,9 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 Box::new(RenameAudioSendCommand::new(id.clone(), old, label.clone())),
             )
         }
-        AudioSetupAction::AudioSetSendChannels(id, ch) => {
-            let old = ctx.project
-                .audio_setup
-                .find_send(id)
-                .map(|s| s.channels.clone())
-                .unwrap_or_default();
-            audio_setup_command(
-                ctx.project,
-                ctx.content_tx,
-                Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
-            )
-        }
-        // `AudioSendStereoToggle` is deleted (section 7.2 item 6, P8, 2026-07-11) —
-        // the channel dropdown now carries any channel vec directly via
-        // `AudioSetSendChannels` above; mono falls out of picking one channel.
+        // `AudioSetSendChannels` (and `AudioSendStereoToggle` before it) are
+        // deleted — capture-fed sends are always stereo, so no action edits a
+        // send's channels anymore.
         AudioSetupAction::AudioSendGainStep(id, delta_db) => {
             // The project is the source of truth: read current gain, apply the
             // delta, clamp to a sensible trim range, commit old→new. Capture

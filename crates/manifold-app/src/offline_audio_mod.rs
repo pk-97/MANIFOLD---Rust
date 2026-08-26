@@ -547,7 +547,9 @@ mod tests {
         let audio = empty_export_audio(rate, master, 0);
 
         let mut project = Project::default();
-        consumed_send(&mut project, "Unrouted");
+        // Empty channels → layer-only / unrouted, so no capture is read (a fresh
+        // send now defaults to stereo capture; clear it to keep this unrouted).
+        consumed_send(&mut project, "Unrouted").channels.clear();
 
         let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0)
             .expect("driver still builds - the send IS consumed, it just has no source");

@@ -58,99 +58,6 @@ pub(crate) fn build_picker_session(
     AbletonPickerSession { rack_tracks }
 }
 
-/// The `AudioSetSendChannels` action for an explicit channel set (the channel
-/// dropdown carries stereo pairing directly now — no separate St/Mo toggle,
-/// mono falls out of picking a single channel).
-fn send_channels_action(send_id: &manifold_core::AudioSendId, channels: Vec<u16>) -> PanelAction {
-    PanelAction::AudioSetup(AudioSetupAction::AudioSetSendChannels(send_id.clone(), channels))
-}
-
-/// Push one channel run's rows: a "A + B" stereo-pair item for each adjacent
-/// pair, immediately followed by each channel's own single-channel item — so
-/// "Left + Right", "Left", "Right" (or "Ch 3+4", "Ch 3", "Ch 4" for unnamed
-/// channels) read as one group. An odd channel out at the end of the run gets
-/// only its single item (no pair to offer). Shared by the tap and device
-/// dropdown builders so the pairing convention can't drift between them.
-fn push_channel_pair_rows(
-    items: &mut Vec<DropdownItem>,
-    send_id: &manifold_core::AudioSendId,
-    chans: &[manifold_audio::directory::ChannelInfo],
-) {
-    let mut i = 0;
-    while i < chans.len() {
-        if i + 1 < chans.len() {
-            let (a, b) = (&chans[i], &chans[i + 1]);
-            items.push(
-                DropdownItem::new(&format!("{} + {}", a.display_name(), b.display_name()))
-                    .with_action(send_channels_action(send_id, vec![a.index, b.index])),
-            );
-            items.push(
-                DropdownItem::new(&a.display_name())
-                    .with_action(send_channels_action(send_id, vec![a.index])),
-            );
-            items.push(
-                DropdownItem::new(&b.display_name())
-                    .with_action(send_channels_action(send_id, vec![b.index])),
-            );
-            i += 2;
-        } else {
-            let a = &chans[i];
-            items.push(
-                DropdownItem::new(&a.display_name())
-                    .with_action(send_channels_action(send_id, vec![a.index])),
-            );
-            i += 1;
-        }
-    }
-}
-
-/// Channel dropdown for a tap source. Output taps are a fixed stereo mixdown —
-/// "Left + Right", "Left", "Right".
-fn build_tap_channel_dropdown(send_id: &manifold_core::AudioSendId) -> Vec<DropdownItem> {
-    let chans = [
-        manifold_audio::directory::ChannelInfo { index: 0, name: Some("Left".into()) },
-        manifold_audio::directory::ChannelInfo { index: 1, name: Some("Right".into()) },
-    ];
-    let mut items = Vec::new();
-    push_channel_pair_rows(&mut items, send_id, &chans);
-    items
-}
-
-/// Build the send-channel dropdown for `device`, grouped by subdevice with
-/// platform channel names; each subdevice's channels get stereo-pair rows
-/// ("A + B") followed by their single-channel rows, non-selectable headers
-/// between groups. Falls back to a single mono entry when no device metadata
-/// is available.
-fn build_channel_dropdown(
-    device: Option<&manifold_audio::directory::DeviceInfo>,
-    send_id: &manifold_core::AudioSendId,
-) -> Vec<DropdownItem> {
-    let fallback = || {
-        vec![DropdownItem::new("Channel 1").with_action(send_channels_action(send_id, vec![0]))]
-    };
-    let Some(device) = device else {
-        return fallback();
-    };
-    if device.channels.is_empty() {
-        return fallback();
-    }
-
-    let mut items = Vec::new();
-    if device.subdevices.is_empty() {
-        push_channel_pair_rows(&mut items, send_id, &device.channels);
-    } else {
-        for group in &device.subdevices {
-            items.push(DropdownItem::disabled(&group.name));
-            let end = group.channel_start.saturating_add(group.channel_count) as usize;
-            let start = group.channel_start as usize;
-            if let Some(chans) = device.channels.get(start..end.min(device.channels.len())) {
-                push_channel_pair_rows(&mut items, send_id, chans);
-            }
-        }
-    }
-    items
-}
-
 impl UIRoot {
     /// Open a dropdown whose items carry their own actions (2b.11). No
     /// `DropdownContext` is stored — each item returns
@@ -552,6 +459,15 @@ impl UIRoot {
                 // built from the cached metadata; headers stay non-selectable.
                 let mut items: Vec<DropdownItem> = Vec::new();
 
+                // No capture at all — sends are fed by timeline audio layers
+                // only, the device stays dark.
+                items.push(
+                    DropdownItem::new("None (layers only)")
+                        .with_action(PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
+                            manifold_ui::AudioDeviceRef::none(),
+                        )))),
+                );
+
                 items.push(
                     DropdownItem::new("System Default")
                         .with_action(PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(None))),
@@ -602,31 +518,6 @@ impl UIRoot {
                     }
                 }
 
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            PanelAction::Root(RootAction::AudioSendChannelClicked(send_id)) => {
-                // A tap source (system / app output) is a fixed stereo mixdown, so
-                // it has no hardware channel layout — present Left/Right. A device
-                // source builds its true layout, grouped by subdevice, with
-                // platform channel names. Each row carries its typed channel action
-                // (2b.11) — the list itself enumerates stereo pairs AND single
-                // channels, so mono is just picking one.
-                let items = if self
-                    .audio_setup_panel
-                    .current_device()
-                    .is_some_and(|d| d.is_tap())
-                {
-                    build_tap_channel_dropdown(send_id)
-                } else {
-                    let dir = manifold_audio::directory::system_directory();
-                    let device = match self.audio_setup_panel.current_device() {
-                        Some(dev_ref) => dir.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)),
-                        // No explicit device → the system default input.
-                        None => dir.list_input_devices().into_iter().find(|d| d.is_default),
-                    };
-                    build_channel_dropdown(device.as_ref(), send_id)
-                };
                 self.open_dropdown_typed(items, trigger);
                 true
             }
