@@ -205,6 +205,11 @@ pub fn load_project_from_json_with(
     let mut project: Project =
         serde_json::from_str(&migrated).map_err(|e| LoadError::Deserialize(format!("{e}")))?;
 
+    // Fold the pre-deserialize migrations' notes (skip-loudly signals,
+    // upgrade summaries) into the load report so the "opened with repairs"
+    // toast surfaces them (CINEMATIC_SCENE_TAIL D3's I5).
+    project.load_report.migration_notes = crate::migrations::take_migration_notes();
+
     // Install the file's own embedded presets NOW — typed, post-parse. The
     // caller (the app) installs them into the catalog overlay + core
     // definition registry.

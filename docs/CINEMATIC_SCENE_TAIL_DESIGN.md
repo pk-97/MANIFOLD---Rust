@@ -1,6 +1,6 @@
 # Cinematic Scene Tail — DoF + motion blur back into 3D scene graphs
 
-**Status:** IN PROGRESS — P0 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; see the audit addendum) · P1 executed 2026-08-26 (import tail wired, all gates green, I4 tail cost ~1–2 ms at 1080p) · P2–P3 open · k3 (lead)
+**Status:** IN PROGRESS — P0+P1 executed 2026-08-26 (BUG-136 (motion blur no visible effect) root-caused: no code defect; import tail wired, all gates green, I4 tail cost ~1–2 ms at 1080p) · P2 executed 2026-08-26 (v1.13.0 migration: existing projects gain the tail at load — layer graphs included; SceneLadders verified end-to-end) · P3 (Peter look-pass) open · k3 (lead)
 **Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) root-caused in P0 of this doc)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
