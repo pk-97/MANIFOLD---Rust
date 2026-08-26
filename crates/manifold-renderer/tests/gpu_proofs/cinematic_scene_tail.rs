@@ -3,14 +3,18 @@
 //! I1 — neutral-lens pass-through at the ASSEMBLED-graph level (extends
 //! CINEMATIC_POST I2 (pinhole pass-through) from the reference preset to the
 //! import-assembled graph): an import graph carrying the full dof + motion_blur
-//! tail, at the neutral lens defaults the P1 assembler stamps (f_stop = 1000,
-//! shutter_angle = 0), renders byte-identical to the SAME graph with the tail
-//! surgically stripped (the pre-P1 SSAO-only shape). f_stop = 1000 zeroes the
-//! CoC buffer (1/f_stop law) past every early-out in the chain (coc_dilate
-//! neighborhood-max of ~0, bokeh_gather's center_coc < 0.005 pass-through);
-//! shutter_angle = 0 collapses every motion-blur tap onto the center texel.
-//! A fresh import therefore looks exactly like today until Peter dials the
-//! lens — D1's guarantee, proven byte-for-byte on a real import assembly.
+//! tail, at the lens defaults the assembler stamps (f_stop = 1000,
+//! shutter_angle = 180 — the P4 amendment; 0 stopped being the default when
+//! Peter asked for motion to smear out of the box), renders byte-identical
+//! to the SAME graph with the tail surgically stripped (the pre-P1 SSAO-only
+//! shape). f_stop = 1000 zeroes the CoC buffer (1/f_stop law) past every
+//! early-out in the chain (coc_dilate neighborhood-max of ~0, bokeh_gather's
+//! center_coc < 0.005 pass-through); the static scene's zero velocity field
+//! collapses every motion-blur tap onto the center texel even at shutter
+//! 180 (velocity × shutter/360 = 0). A fresh import therefore matches the
+//! pre-tail look on a static frame, proven byte-for-byte on a real import
+//! assembly — DoF stays off until dialed; motion blur is live but invisible
+//! until something moves.
 //!
 //! The strip is surgical: flatten the assembled def, drop the `dof` group node
 //! (its inner coc/coc_dilate/bokeh atoms ride with it) and the top-level
@@ -194,12 +198,13 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     assert_eq!(
         differing,
         0,
-        "import tail is NOT a bit-clean pass-through at neutral lens: {differing} bytes differ \
+        "import tail is NOT a bit-clean pass-through at default lens: {differing} bytes differ \
          between the with-tail and stripped spines (f_stop=1000 must zero the CoC past every \
-         early-out; shutter=0 must collapse every motion-blur tap)"
+         early-out; the static scene's zero velocity must collapse every motion-blur tap even \
+         at the P4 shutter=180 default)"
     );
     eprintln!(
-        "[cinematic-tail-I1] PASS: {} bytes, {} differ (bit-clean pass-through at f_stop=1000, shutter=0)",
+        "[cinematic-tail-I1] PASS: {} bytes, {} differ (bit-clean pass-through at f_stop=1000, shutter=180, zero velocity)",
         a.len(),
         differing
     );
@@ -224,13 +229,91 @@ fn import_tail_frame_cost_within_budget_at_1080p() {
         .join("../../tests/fixtures/gltf/apricot_tl05.glb");
     assert!(glb.exists(), "I4 fixture missing: {glb:?}");
 
-    fn measure(
-        h: &harness::ParityHarness,
-        glb: &std::path::Path,
-        strip_tail: bool,
-        w: u32,
-        hh: u32,
-    ) -> (f64, f64) {
+    // Contention only ever ADDS wall time, so the min-of-reps mean delta is
+    // the robust estimator of the tail's true cost — a busy neighbour's
+    // spike lands in one rep, not all three (the flake observed at P1
+    // review: one >3 ms mean under load, two ~2 ms quiet).
+    let mut best: Option<(f64, f64, f64, f64)> = None;
+    for _ in 0..3 {
+        let (tail_max, tail_mean) = measure_tail(h, &glb, false, W, H, WARMUP, STEADY);
+        let (base_max, base_mean) = measure_tail(h, &glb, true, W, H, WARMUP, STEADY);
+        let delta = tail_mean - base_mean;
+        eprintln!(
+            "[cinematic-tail-I4] 1920x1080 steady-state max/mean ms — with-tail {tail_max:.2}/{tail_mean:.2}, \
+             stripped {base_max:.2}/{base_mean:.2}, tail delta {:+.2}/{delta:+.2}",
+            tail_max - base_max
+        );
+        if best.is_none_or(|(_, _, _, d)| delta < d) {
+            best = Some((tail_max, tail_mean, base_mean, delta));
+        }
+    }
+    let (_, tail_mean, base_mean, tail_delta_mean) = best.expect("three reps ran");
+    // The budget is the tail's STEADY-STATE mean cost (the design's
+    // "frame cost ≤ 3 ms" — one-off max spikes are GPU-contention/graphics-
+    // driver transients that land in BOTH variants and are exactly why the
+    // layer-skin precedent budgets on the measured mean, not the max).
+    assert!(
+        tail_delta_mean <= 3.0,
+        "I4 budget ≤ 3 ms failed: tail delta mean {tail_delta_mean:.2} ms at 1920x1080 \
+         (with-tail mean {tail_mean:.2}, stripped mean {base_mean:.2})"
+    );
+}
+
+/// P4 4K measurement (CINEMATIC_SCENE_TAIL P4: "measure the real 4K tail
+/// number first so the phase has a figure, not a vibe" — Peter's 4K60
+/// report revived the deferred half-res DoF phase). Same harness as the
+/// 1080p budget test at 3840×2160 (4x the pixels, paid even at neutral
+/// defaults — the full-res gathers are the cost). REPORTS the tail delta
+/// for the half-res design phase; the only hard assert is the
+/// content-thread rule (>20 ms any-frame fails).
+#[test]
+fn import_tail_frame_cost_reported_at_4k() {
+    const W: u32 = 3840;
+    const H: u32 = 2160;
+    const WARMUP: u64 = 12;
+    const STEADY: u64 = 40;
+
+    let h = harness::shared();
+    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/apricot_tl05.glb");
+    assert!(glb.exists(), "I4 fixture missing: {glb:?}");
+
+    let mut best: Option<(f64, f64)> = None;
+    for _ in 0..2 {
+        let (tail_max, tail_mean) = measure_tail(h, &glb, false, W, H, WARMUP, STEADY);
+        let (base_max, base_mean) = measure_tail(h, &glb, true, W, H, WARMUP, STEADY);
+        let delta = tail_mean - base_mean;
+        eprintln!(
+            "[cinematic-tail-I4-4K] 3840x2160 steady-state max/mean ms — with-tail {tail_max:.2}/{tail_mean:.2}, \
+             stripped {base_max:.2}/{base_mean:.2}, tail delta {:+.2}/{delta:+.2}",
+            tail_max - base_max
+        );
+        if best.is_none_or(|(_, d)| delta < d) {
+            best = Some((tail_max - base_max, delta));
+        }
+    }
+    let (delta_max, delta_mean) = best.expect("two reps ran");
+    assert!(
+        delta_max <= 20.0 && delta_mean <= 20.0,
+        "4K tail cost broke the content-thread 20 ms any-frame rule: \
+         delta max {delta_max:.2} ms, delta mean {delta_mean:.2} ms at 3840x2160"
+    );
+}
+
+/// The shared I4 measure: build one variant (tail present or surgically
+/// stripped), warm it, then return (max, mean) steady-state per-frame ms.
+/// Per-frame drain (empty commit) makes wall time the true GPU cost.
+#[allow(clippy::too_many_arguments)]
+fn measure_tail(
+    h: &harness::ParityHarness,
+    glb: &std::path::Path,
+    strip_tail: bool,
+    w: u32,
+    hh: u32,
+    warmup: u64,
+    steady: u64,
+) -> (f64, f64) {
+    {
         let (def, _report) = assemble_import_graph(glb).expect("import must succeed");
         let mut flat = flatten_groups(&def).expect("flatten_groups must succeed");
         if strip_tail {
@@ -295,7 +378,7 @@ fn import_tail_frame_cost_within_budget_at_1080p() {
         let mut max_steady_ms = 0.0f64;
         let mut total_steady_ms = 0.0f64;
         let mut steady_frames = 0u64;
-        for frame in 0..(WARMUP + STEADY) {
+        for frame in 0..(warmup + steady) {
             let t = std::time::Instant::now();
             let c = PresetContext {
                 time: frame as f64 / 60.0,
@@ -326,7 +409,7 @@ fn import_tail_frame_cost_within_budget_at_1080p() {
                 .create_encoder("cinematic-tail-I4-drain")
                 .commit_and_wait_completed();
             let ms = t.elapsed().as_secs_f64() * 1000.0;
-            if frame >= WARMUP {
+            if frame >= warmup {
                 max_steady_ms = max_steady_ms.max(ms);
                 total_steady_ms += ms;
                 steady_frames += 1;
@@ -335,33 +418,4 @@ fn import_tail_frame_cost_within_budget_at_1080p() {
         let mean_steady_ms = total_steady_ms / steady_frames as f64;
         (max_steady_ms, mean_steady_ms)
     }
-
-    // Contention only ever ADDS wall time, so the min-of-reps mean delta is
-    // the robust estimator of the tail's true cost — a busy neighbour's
-    // spike lands in one rep, not all three (the flake observed at P1
-    // review: one >3 ms mean under load, two ~2 ms quiet).
-    let mut best: Option<(f64, f64, f64, f64)> = None;
-    for _ in 0..3 {
-        let (tail_max, tail_mean) = measure(h, &glb, false, W, H);
-        let (base_max, base_mean) = measure(h, &glb, true, W, H);
-        let delta = tail_mean - base_mean;
-        eprintln!(
-            "[cinematic-tail-I4] 1920x1080 steady-state max/mean ms — with-tail {tail_max:.2}/{tail_mean:.2}, \
-             stripped {base_max:.2}/{base_mean:.2}, tail delta {:+.2}/{delta:+.2}",
-            tail_max - base_max
-        );
-        if best.is_none_or(|(_, _, _, d)| delta < d) {
-            best = Some((tail_max, tail_mean, base_mean, delta));
-        }
-    }
-    let (_, tail_mean, base_mean, tail_delta_mean) = best.expect("three reps ran");
-    // The budget is the tail's STEADY-STATE mean cost (the design's
-    // "frame cost ≤ 3 ms" — one-off max spikes are GPU-contention/graphics-
-    // driver transients that land in BOTH variants and are exactly why the
-    // layer-skin precedent budgets on the measured mean, not the max).
-    assert!(
-        tail_delta_mean <= 3.0,
-        "I4 budget ≤ 3 ms failed: tail delta mean {tail_delta_mean:.2} ms at 1920x1080 \
-         (with-tail mean {tail_mean:.2}, stripped mean {base_mean:.2})"
-    );
 }
