@@ -917,17 +917,20 @@ fn node_source_vertex_count(node: &EffectGraphNode) -> Option<u32> {
 /// Closed-form vertex counts for procedural mesh generators whose output
 /// size is a pure function of their own declared params — no GPU readback,
 /// no fabricated numbers. section 2.5 audit of every `Array(MeshVertex)`-producing
-/// `Source`-role primitive: only `node.cube_mesh` (a fixed 36-vertex
-/// constant — 6 faces × 2 triangles × 3 vertices, `generate_cube_mesh.rs`)
-/// and `node.grid_mesh` (`resolution_x * resolution_y`, confirmed against
-/// `generate_grid_mesh_body.wgsl`'s own index math) are trivially
-/// closed-form; the rest (`node.revolve_curve`, `node.extrude_curve`,
-/// `node.tube_from_path`, `node.platonic_solid_points`, …) depend on curve
-/// length, topology tables, or a dynamically wired selector — genuinely not
-/// computable from static params alone, so they fall through to `None`.
+/// `Source`-role primitive: `node.cube_mesh` (a fixed 36-vertex
+/// constant — 6 faces × 2 triangles × 3 vertices, `generate_cube_mesh.rs`),
+/// `node.plane_mesh` (a fixed 6-vertex quad — 2 triangles × 3 vertices,
+/// `plane_mesh.rs`), and `node.grid_mesh` (`resolution_x * resolution_y`,
+/// confirmed against `generate_grid_mesh_body.wgsl`'s own index math) are
+/// trivially closed-form; the rest (`node.revolve_curve`,
+/// `node.extrude_curve`, `node.tube_from_path`,
+/// `node.platonic_solid_points`, …) depend on curve length, topology
+/// tables, or a dynamically wired selector — genuinely not computable from
+/// static params alone, so they fall through to `None`.
 fn procedural_vertex_count(node: &EffectGraphNode) -> Option<u32> {
     match node.type_id.as_str() {
         "node.cube_mesh" => Some(36),
+        "node.plane_mesh" => Some(6),
         "node.grid_mesh" => {
             let res_x = param_f32(node, "resolution_x", 256.0).max(2.0).round() as u32;
             let res_y = param_f32(node, "resolution_y", 256.0).max(2.0).round() as u32;

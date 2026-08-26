@@ -308,6 +308,12 @@ crate::param_tooltips!("node.cube_mesh", {
     "size" => "Scales the cube. 1 is the default unit cube, smaller shrinks it, larger grows it.",
 });
 
+crate::param_tooltips!("node.plane_mesh", {
+    "max_capacity" => "How much room to reserve in the vertex buffer, set when the effect is built. 6 holds exactly one plane, and larger values only help if a downstream node expects a bigger buffer.",
+    "width" => "The plane's width in world units. Drive this from the canvas aspect to keep a skinned layer composite undistorted.",
+    "height" => "The plane's height in world units.",
+});
+
 crate::param_tooltips!("node.grid_mesh", {
     "max_capacity" => "The most vertices the grid can ever hold. Set it once when building the effect since changing it rebuilds the graph, and keep it at or above resolution X times resolution Y.",
     "resolution_x" => "How many points across the grid. More points give finer detail at the cost of memory.",
