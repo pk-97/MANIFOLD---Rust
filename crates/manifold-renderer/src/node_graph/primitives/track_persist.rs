@@ -1,10 +1,11 @@
 #![allow(private_interfaces)]
 
-//! `node.track_persist` — greedy nearest-neighbour identity tracking
+//! `node.track_persist` — global nearest-neighbour identity tracking
 //! with grace-period retention for sparse detection arrays.
 //!
 //! Each frame, matches incoming detections against a persistent
-//! tracked set using Euclidean distance on (X, Y). Matched tracks
+//! tracked set using Euclidean distance on (X, Y), assigning pairs
+//! best-first across the whole set (order-independent). Matched tracks
 //! update their position/size; unmatched detections spawn new tracks
 //! (up to capacity); tracks that go unmatched for `grace_frames`
 //! consecutive cycles are removed.
@@ -36,10 +37,51 @@ struct TrackedItem {
     missed_count: u32,
 }
 
+const UNMATCHED: u16 = u16::MAX;
+
+/// Global best-first assignment: score every (detection, track) pair
+/// within match_radius, sort ascending by distance, claim pairs in
+/// order. Per-detection greedy matching let an early detection steal
+/// the track a later detection matched better (arrival order isn't
+/// stable), which read as IDs hopping between blobs.
+/// `assignment[d]` = track index or UNMATCHED. Stack-only, no heap.
+fn assign_global(
+    det_xy: &[[f32; 2]],
+    tracks: &[TrackedItem],
+    match_radius_sq: f32,
+    assignment: &mut [u16],
+) {
+    debug_assert!(det_xy.len() <= MAX_TRACKED && tracks.len() <= MAX_TRACKED);
+    for a in assignment.iter_mut() {
+        *a = UNMATCHED;
+    }
+    let mut pairs = [(0f32, 0u16, 0u16); MAX_TRACKED * MAX_TRACKED];
+    let mut n_pairs = 0usize;
+    for (d, det) in det_xy.iter().enumerate() {
+        for (t, tr) in tracks.iter().enumerate() {
+            let ex = tr.x - det[0];
+            let ey = tr.y - det[1];
+            let dist_sq = ex * ex + ey * ey;
+            if dist_sq < match_radius_sq && n_pairs < pairs.len() {
+                pairs[n_pairs] = (dist_sq, d as u16, t as u16);
+                n_pairs += 1;
+            }
+        }
+    }
+    pairs[..n_pairs].sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut taken = [false; MAX_TRACKED];
+    for &(_, d, t) in &pairs[..n_pairs] {
+        if assignment[d as usize] == UNMATCHED && !taken[t as usize] {
+            assignment[d as usize] = t;
+            taken[t as usize] = true;
+        }
+    }
+}
+
 crate::primitive! {
     name: TrackPersist,
     type_id: "node.track_persist",
-    purpose: "Greedy nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y). Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
+    purpose: "Global nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y), assigning pairs best-first across the whole set so identity doesn't depend on detection arrival order. Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
     inputs: {
         in: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
         match_radius: ScalarF32 optional,
@@ -170,35 +212,39 @@ impl Primitive for TrackPersist {
             self.tracked[i].matched = false;
         }
 
-        // Greedy NN matching: each detection claims the closest
-        // unmatched track within match_radius.
-        for d in 0..detection_count {
-            let dx = in_floats[d * 4];
-            let dy = in_floats[d * 4 + 1];
+        // Global best-first matching replaces per-detection greedy NN:
+        // assignment order no longer depends on detection arrival order.
+        let mut det_xy = [[0f32; 2]; MAX_TRACKED];
+        let mut det_src = [0usize; MAX_TRACKED];
+        let mut det_count = 0usize;
+        for d in 0..detection_count.min(MAX_TRACKED) {
             let dw = in_floats[d * 4 + 2];
             let dh = in_floats[d * 4 + 3];
             if dw <= 0.0001 && dh <= 0.0001 {
                 continue;
             }
+            det_xy[det_count] = [in_floats[d * 4], in_floats[d * 4 + 1]];
+            det_src[det_count] = d;
+            det_count += 1;
+        }
 
-            let mut best_dist_sq = match_radius_sq;
-            let mut best_idx: i32 = -1;
+        let mut assignment = [UNMATCHED; MAX_TRACKED];
+        assign_global(
+            &det_xy[..det_count],
+            &self.tracked[..self.tracked_count],
+            match_radius_sq,
+            &mut assignment[..det_count],
+        );
 
-            for t in 0..self.tracked_count {
-                if self.tracked[t].matched {
-                    continue;
-                }
-                let ex = self.tracked[t].x - dx;
-                let ey = self.tracked[t].y - dy;
-                let dist_sq = ex * ex + ey * ey;
-                if dist_sq < best_dist_sq {
-                    best_dist_sq = dist_sq;
-                    best_idx = t as i32;
-                }
-            }
+        for i in 0..det_count {
+            let d = det_src[i];
+            let dx = in_floats[d * 4];
+            let dy = in_floats[d * 4 + 1];
+            let dw = in_floats[d * 4 + 2];
+            let dh = in_floats[d * 4 + 3];
 
-            if best_idx >= 0 {
-                let idx = best_idx as usize;
+            if assignment[i] != UNMATCHED {
+                let idx = assignment[i] as usize;
                 self.tracked[idx].x = dx;
                 self.tracked[idx].y = dy;
                 self.tracked[idx].width = dw;
@@ -291,44 +337,41 @@ mod tests {
     }
 
     #[test]
-    fn greedy_nn_matching_assigns_closest() {
-        let mut tp = TrackPersist::new();
-        tp.tracked.resize(MAX_TRACKED, TrackedItem::default());
-        tp.tracked[0] = TrackedItem {
-            x: 0.5,
-            y: 0.5,
-            width: 0.1,
-            height: 0.1,
-            matched: false,
-            missed_count: 0,
-        };
-        tp.tracked[1] = TrackedItem {
-            x: 0.8,
-            y: 0.8,
-            width: 0.1,
-            height: 0.1,
-            matched: false,
-            missed_count: 0,
-        };
-        tp.tracked_count = 2;
+    fn global_matching_assigns_closest_pair_first() {
+        // Stealing case: track0 at 0.50, track1 at 0.60. det0 at 0.55
+        // sits between them; det1 at 0.52 is track0's true match.
+        // Arrival-order greedy gives det0→track0, det1→track1
+        // (total dist² 0.0089). Global best-first gives det1→track0,
+        // det0→track1 (total dist² 0.0029).
+        let tracks = [
+            TrackedItem { x: 0.50, y: 0.0, ..Default::default() },
+            TrackedItem { x: 0.60, y: 0.0, ..Default::default() },
+        ];
+        let dets = [[0.55, 0.0], [0.52, 0.0]];
+        let mut assignment = [UNMATCHED; 2];
+        assign_global(&dets, &tracks, 0.1, &mut assignment);
+        assert_eq!(assignment[1], 0, "det1 is track0's best match");
+        assert_eq!(assignment[0], 1, "det0 takes the remaining track");
+    }
 
-        // Detection at (0.52, 0.48) should match track 0 (closer).
-        let det_x = 0.52_f32;
-        let det_y = 0.48_f32;
-        let match_radius_sq = 0.08_f32;
+    #[test]
+    fn global_matching_respects_match_radius() {
+        let tracks = [TrackedItem { x: 0.5, y: 0.5, ..Default::default() }];
+        let dets = [[0.9, 0.9]]; // far outside radius
+        let mut assignment = [UNMATCHED; 1];
+        assign_global(&dets, &tracks, 0.01, &mut assignment);
+        assert_eq!(assignment[0], UNMATCHED, "distant detection spawns a new track");
+    }
 
-        let mut best_dist_sq = match_radius_sq;
-        let mut best_idx: i32 = -1;
-        for t in 0..tp.tracked_count {
-            let ex = tp.tracked[t].x - det_x;
-            let ey = tp.tracked[t].y - det_y;
-            let dist_sq = ex * ex + ey * ey;
-            if dist_sq < best_dist_sq {
-                best_dist_sq = dist_sq;
-                best_idx = t as i32;
-            }
-        }
-        assert_eq!(best_idx, 0, "detection should match track 0 (closest)");
+    #[test]
+    fn global_matching_one_to_one() {
+        // Two detections equidistant-close to one track: only one claims it.
+        let tracks = [TrackedItem { x: 0.5, y: 0.5, ..Default::default() }];
+        let dets = [[0.51, 0.5], [0.49, 0.5]];
+        let mut assignment = [UNMATCHED; 2];
+        assign_global(&dets, &tracks, 0.1, &mut assignment);
+        let claimed = assignment.iter().filter(|a| **a != UNMATCHED).count();
+        assert_eq!(claimed, 1, "one track can only be claimed once");
     }
 
     #[test]

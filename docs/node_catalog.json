@@ -21308,7 +21308,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Greedy nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y). Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
+      "purpose": "Global nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y), assigning pairs best-first across the whole set so identity doesn't depend on detection arrival order. Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
       "role": "Filter",
       "stratum": "driver",
       "summary": "Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around.",
