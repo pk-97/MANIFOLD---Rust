@@ -32,32 +32,38 @@
 //! rotation hash formula, copied verbatim per the synthesis-drift rule —
 //! never re-derived); `motion_blur.rs` (the CPU-reference + I1/I2 gpu_tests
 //! shape for a two-texture-input Gather atom, mirrored below).
+//!
+//! `enabled = false` skips the node entirely — `skip_passthrough` aliases
+//! `in` onto `out` (zero GPU work), the DoF on/off toggle Peter asked for
+//! in CINEMATIC_SCENE_TAIL_DESIGN.md P4.
 
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Generated-codegen uniform layout: the one `max_radius` param, padded to
-/// a 16-byte (4-word) multiple. Mirrors `node.variable_blur`'s
-/// `BlurUniforms` / `node.motion_blur`'s `MotionBlurUniforms` (1-2 real
-/// fields + pad to 16 bytes) layout-note convention.
+/// Generated-codegen uniform layout: the `max_radius` param (f32) then the
+/// `enabled` param (Bool → u32), padded to a 16-byte (4-word) multiple.
+/// `enabled` is host-only: the shader never reads it, but the codegen path
+/// lays every param into the uniform struct. Mirrors `node.variable_blur`'s
+/// `BlurUniforms` / `node.motion_blur`'s `MotionBlurUniforms` layout-note
+/// convention.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BokehGatherUniforms {
     max_radius: f32,
+    enabled: u32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 crate::primitive! {
     name: BokehGather,
     type_id: "node.bokeh_gather",
-    purpose: "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by step(distance_to_center_px, tap_coc_px) — a sample only contributes if its OWN CoC reaches back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc). Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in.",
+    purpose: "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by step(distance_to_center_px, tap_coc_px) — a sample only contributes if its OWN CoC reaches back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc). Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in. `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work).",
     inputs: {
         in: Texture2D required,
         width: Texture2D required,
@@ -72,6 +78,14 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(24.0),
             range: Some((1.0, 64.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("enabled"),
+            label: "Enabled",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(true),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -90,6 +104,25 @@ crate::primitive! {
 }
 
 impl Primitive for BokehGather {
+    /// Param-driven no-op: `enabled = false` aliases `in` onto `out` —
+    /// zero GPU work — instead of running the gather.
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        _wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
+        match params.get("enabled") {
+            Some(ParamValue::Bool(false)) => Some(("in", "out")),
+            _ => None,
+        }
+    }
+
+    /// Static declaration of the alias `skip_passthrough` may install —
+    /// must agree with the dynamic hook (EffectNode contract).
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        Some(("in", "out"))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let max_radius = match ctx.params.get("max_radius") {
             Some(ParamValue::Float(f)) => *f,
@@ -131,9 +164,12 @@ impl Primitive for BokehGather {
 
         let uniforms = BokehGatherUniforms {
             max_radius,
+            // run() only executes when the node is enabled (skip_passthrough
+            // aliases `in` → `out` when `enabled = false`), so the codegen-ABI
+            // `enabled` uniform is always 1 here; the shader never reads it.
+            enabled: 1,
             _pad0: 0.0,
             _pad1: 0.0,
-            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -189,9 +225,31 @@ mod tests {
     }
 
     #[test]
-    fn has_max_radius_param_only() {
+    fn has_max_radius_and_enabled_params() {
         let names: Vec<&str> = BokehGather::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["max_radius"]);
+        assert_eq!(names, vec!["max_radius", "enabled"]);
+        assert!(matches!(BokehGather::PARAMS[1].default, ParamValue::Bool(true)));
+    }
+
+    #[test]
+    fn skip_passthrough_aliases_in_to_out_only_when_enabled_false() {
+        let prim = BokehGather::new();
+        let node: &dyn EffectNode = &prim;
+        // Absent or true → no skip (the node runs).
+        let mut params = ParamValues::default();
+        assert_eq!(node.skip_passthrough(&params, &[]), None);
+        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(true));
+        assert_eq!(node.skip_passthrough(&params, &[]), None);
+        // Explicit false → alias `in` onto `out` (zero GPU work).
+        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(false));
+        assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
+    }
+
+    #[test]
+    fn skip_passthrough_ports_declare_in_to_out() {
+        let prim = BokehGather::new();
+        let node: &dyn EffectNode = &prim;
+        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
     }
 
     #[test]
@@ -442,7 +500,7 @@ mod gpu_tests {
     }
 
     fn bg_uniforms(max_radius: f32) -> BokehGatherUniforms {
-        BokehGatherUniforms { max_radius, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 }
+        BokehGatherUniforms { max_radius, enabled: 1, _pad0: 0.0, _pad1: 0.0 }
     }
 
     #[allow(clippy::too_many_arguments)]

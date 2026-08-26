@@ -149,42 +149,30 @@ pub(super) fn build_import_graph(
     // where the diagonal-based distance genuinely under-frames).
     let distance = (2.2 * radius).max(per_axis_fit);
     // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
-    // P1's `--trace` instrument): `node.orbit_camera`'s `near` clip plane
-    // defaults to a fixed 0.05 (camera_orbit.rs), which was never scaled to
-    // the framed object's own size. `distance = 2.2 * radius` already
-    // scales with the object, so the object's front face sits at
-    // `distance - radius == 1.2 * radius` from the camera — for any object
-    // with `radius` below ~0.042 (BoomBox: 0.0172, MetalRoughSpheresNoTextures:
-    // 0.0056 — both real-world-scale Khronos assets authored in meters),
-    // the fixed near plane sits IN FRONT of the object and the whole frame
-    // clips to black every frame.
+    // P1's `--trace` instrument): `node.orbit_camera`'s `near` default was
+    // never scaled to the framed object, so for any object with `radius`
+    // below ~0.042 (BoomBox, MetalRoughSpheresNoTextures) the fixed near
+    // plane sat IN FRONT of the object and the whole frame clipped to black.
     //
     // Fix: `near` always tracks the object's own front-face distance with a
     // 2x safety margin, in BOTH directions. Down keeps tiny assets rendering
     // (BUG-165/169); up keeps 24-bit depth precision at the object's actual
     // distance — BUG-774a (kuma_heavy_robot: front face ~3300 units out,
-    // near pinned at the 0.05 floor gives ~10 units of depth resolution
-    // there, so the model's two overlapping mesh shells z-fight into a
-    // triangle mosaic). At `front_margin * 0.5` the front face always gets
-    // ~2^23 depth slices per unit distance, at any scene scale. Depth
-    // precision is sub-pixel either way for mid-scale assets, so their
-    // rasterized output is unchanged by the higher near value.
+    // near pinned at the floor gives ~10 units of depth resolution there,
+    // so the model's two overlapping mesh shells z-fight into a triangle
+    // mosaic). At `front_margin * 0.5` the front face always gets ~2^23
+    // depth slices per unit distance, at any scene scale.
     let front_margin = (distance - radius).max(1e-4);
     let near_clip = front_margin * 0.5;
     // `far` is the same class of bug as `near` above, at the opposite end:
     // the orbit camera's fixed default (CAMERA_FAR_DEFAULT, 200) was never
     // scaled to the framed object either, so any asset whose POSED bbox
     // puts geometry past 200 units depth-clips to a black frame at the
-    // default framing (kuma_heavy_robot: Sketchfab FBX-convert with a 100x
-    // armature node, posed radius ~2700, camera distance ~6000 — 100%
-    // black until `far` is raised by hand). The camera sits `distance` from
-    // the bbox center and the farthest corner is at most `radius` behind
-    // the center, so `distance + 1.5 * radius` clears the whole scene with
-    // a half-radius slack. The DEFAULT floor keeps every currently-passing
-    // asset's far IDENTICAL to before (2.2 * radius + 1.5 * radius stays
-    // under 200 whenever radius <= ~54 — every Khronos conformance asset);
-    // the 10000 ceiling is `node.orbit_camera`'s declared range max, past
-    // which the value would clamp at param load anyway.
+    // default framing (kuma_heavy_robot — 100% black until `far` is raised
+    // by hand). The DEFAULT floor keeps every currently-passing asset's far
+    // IDENTICAL to before; the 10000 ceiling is `node.orbit_camera`'s
+    // declared range max, past which the value would clamp at param load
+    // anyway.
     let far_clip = CAMERA_FAR_DEFAULT.max(distance + 1.5 * radius).min(10_000.0);
 
     let path_str = path.to_string_lossy().into_owned();
@@ -320,17 +308,15 @@ pub(super) fn build_import_graph(
     // and render_scene/ao/dof/motion_blur. Focus distance defaults to the
     // bbox framing distance — a real, scene-aware rack-focus starting point
     // (the CinematicScene preset's 4.0 default has no meaning for an
-    // arbitrary imported model). f_stop and shutter_angle stay at their
-    // NEUTRAL primitives (1000 / 0): CINEMATIC_SCENE_TAIL D1 — a fresh
-    // import must render byte-identical to the pre-tail SSAO look until
-    // Peter dials the lens. f_stop = 1000 zeroes the CoC buffer (1/f_stop
-    // law); shutter_angle = 0 collapses every motion-blur tap onto the
-    // center texel. Both nodes read these via the same wired lens.
+    // arbitrary imported model). f_stop stays at its neutral 1000 (DoF off
+    // until dialed — the 1/f_stop law zeroes the CoC buffer); shutter_angle
+    // defaults to 180 per Peter's P4 amendment of D1 — fresh imports smear
+    // motion by default now (shutter 0 remains the exact pass-through).
     let lens_id = fresh_id();
     let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
     lens_node.params.insert("focus_distance".to_string(), float(distance));
     lens_node.params.insert("f_stop".to_string(), float(1000.0));
-    lens_node.params.insert("shutter_angle".to_string(), float(0.0));
+    lens_node.params.insert("shutter_angle".to_string(), float(180.0));
     let lens_node_params = lens_node.params.clone();
     nodes.push(lens_node);
     stamp_scene_node_exposures_into(
@@ -725,7 +711,18 @@ pub(super) fn build_import_graph(
     let tail = super::cinematic_tail::build_cinematic_tail(&mut fresh_id);
     let dof_group_id = tail.dof_group_id;
     let motion_blur_id = tail.motion_blur_id;
+    let bokeh_id = tail.bokeh_id;
+    let motion_blur_params = tail.motion_blur_params.clone();
     nodes.extend(tail.nodes);
+    // P4: motion_blur's max_blur_px + enabled and bokeh's enabled surface
+    // on the Camera card (implementation in cinematic_tail.rs — ceiling).
+    super::cinematic_tail::stamp_tail_camera_sections(
+        &mut card_params,
+        &mut card_bindings,
+        motion_blur_id,
+        bokeh_id,
+        &motion_blur_params,
+    );
 
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));

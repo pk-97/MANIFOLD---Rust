@@ -16,6 +16,11 @@
 //! produces a bit-clean pass-through (invariant I2, the D4 twin of D1's
 //! pinhole CoC invariant).
 //!
+//! `enabled = false` skips the node entirely — `skip_passthrough` aliases
+//! `in` onto `out` (zero GPU work). `shutter_angle = 0` short-circuits
+//! `run()` as a host-side texture copy: the kernel's taps already collapse
+//! at shutter 0, so the copy just skips the dispatch launch cost.
+//!
 //! `velocity` is GBUFFER's `node.render_scene` `velocity` output — Rg16Float
 //! NDC-space `(dx, dy) = (ndc_now - ndc_prev)`, camera + rigid-object motion
 //! only (`GBUFFER_DESIGN.md` section 2 D5's documented v1 limitation: a re-scattered
@@ -58,28 +63,29 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Generated-codegen uniform layout: the `max_blur_px` param (f32, PARAMS
-/// order) then the one DERIVED field (`shutter_angle`), padded to a
-/// 16-byte (4-word) multiple — 2 real words + 2 pad = 16 bytes. Mirrors
-/// `node.variable_blur`'s `BlurUniforms` (2 real + 2 pad) and
+/// order), the `enabled` param (Bool → u32), then the one DERIVED field
+/// (`shutter_angle`), padded to a 16-byte (4-word) multiple (3 real words
+/// plus 1 pad). `enabled` is host-only: the shader never reads it, but the
+/// codegen path lays every param into the uniform struct. Mirrors
 /// `coc_from_depth.rs`/`ssao_from_depth.rs`'s layout-note convention.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MotionBlurUniforms {
     max_blur_px: f32,
+    enabled: u32,
     shutter_angle: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 crate::primitive! {
     name: MotionBlur,
     type_id: "node.motion_blur",
-    purpose: "Velocity-directed gather motion blur (thin-shutter model, docs/CINEMATIC_POST_DESIGN.md D4): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control).",
+    purpose: "Velocity-directed gather motion blur (thin-shutter model, docs/CINEMATIC_POST_DESIGN.md D4): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control). `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work); `shutter_angle = 0` short-circuits to a host-side texture copy (the kernel's taps already collapse at shutter 0, so the copy just skips the dispatch launch cost).",
     inputs: {
         in: Texture2D required,
         velocity: Texture2D required,
@@ -95,6 +101,14 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(32.0),
             range: Some((0.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("enabled"),
+            label: "Enabled",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(true),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -127,6 +141,25 @@ inventory::submit! {
 }
 
 impl Primitive for MotionBlur {
+    /// Param-driven no-op: `enabled = false` aliases `in` onto `out` —
+    /// zero GPU work — instead of running the gather.
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        _wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
+        match params.get("enabled") {
+            Some(ParamValue::Bool(false)) => Some(("in", "out")),
+            _ => None,
+        }
+    }
+
+    /// Static declaration of the alias `skip_passthrough` may install —
+    /// must agree with the dynamic hook (EffectNode contract).
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        Some(("in", "out"))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let max_blur_px = match ctx.params.get("max_blur_px") {
             Some(ParamValue::Float(f)) => *f,
@@ -151,6 +184,14 @@ impl Primitive for MotionBlur {
         }
 
         let gpu = ctx.gpu_encoder();
+        // shutter_angle == 0 collapses the gather taps onto the same texel, so
+        // the kernel's output is already a bit-clean copy — skip the dispatch
+        // and just blit. The skip_passthrough hook can't see the Camera, so
+        // this zero-cost pass-through lives in run().
+        if shutter_angle == 0.0 {
+            gpu.copy_texture_to_texture(src, out_tex, w, h);
+            return;
+        }
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from `wgsl_body` (`in` Gather
             // stencil-fetch, `velocity` CoincidentTexel; generated bindings
@@ -170,9 +211,12 @@ impl Primitive for MotionBlur {
 
         let uniforms = MotionBlurUniforms {
             max_blur_px,
+            // run() only executes when the node is enabled (skip_passthrough
+            // aliases `in` → `out` when `enabled = false`), so the codegen-ABI
+            // `enabled` uniform is always 1 here; the shader never reads it.
+            enabled: 1,
             shutter_angle,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -230,9 +274,31 @@ mod tests {
     }
 
     #[test]
-    fn has_max_blur_px_param_only() {
+    fn has_max_blur_px_and_enabled_params() {
         let names: Vec<&str> = MotionBlur::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["max_blur_px"]);
+        assert_eq!(names, vec!["max_blur_px", "enabled"]);
+        assert!(matches!(MotionBlur::PARAMS[1].default, ParamValue::Bool(true)));
+    }
+
+    #[test]
+    fn skip_passthrough_aliases_in_to_out_only_when_enabled_false() {
+        let prim = MotionBlur::new();
+        let node: &dyn EffectNode = &prim;
+        // Absent or true → no skip (the node runs).
+        let mut params = ParamValues::default();
+        assert_eq!(node.skip_passthrough(&params, &[]), None);
+        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(true));
+        assert_eq!(node.skip_passthrough(&params, &[]), None);
+        // Explicit false → alias `in` onto `out` (zero GPU work).
+        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(false));
+        assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
+    }
+
+    #[test]
+    fn skip_passthrough_ports_declare_in_to_out() {
+        let prim = MotionBlur::new();
+        let node: &dyn EffectNode = &prim;
+        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
     }
 
     #[test]
@@ -517,7 +583,7 @@ mod gpu_tests {
     }
 
     fn mb_uniforms(max_blur_px: f32, shutter_angle: f32) -> MotionBlurUniforms {
-        MotionBlurUniforms { max_blur_px, shutter_angle, _pad0: 0.0, _pad1: 0.0 }
+        MotionBlurUniforms { max_blur_px, enabled: 1, shutter_angle, _pad0: 0.0 }
     }
 
     fn dispatch(

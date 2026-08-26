@@ -35,11 +35,20 @@
 //! `motion_blur.camera` so DoF and shutter read the SAME lens exposure
 //! uses. A graph with no top-level `node.camera_lens` gains one — every
 //! consumer of the camera wire feeding `render_scene.camera` is re-pointed
-//! through it (that is what inserting a lens means) — with NEUTRAL params
-//! (`f_stop` 1000, `shutter_angle` 0: bit-clean pass-through per
-//! CINEMATIC_POST I2 (pinhole pass-through); `focus_distance` from the
-//! orbit camera's `distance` param when present, else 10.0). Existing lens
+//! through it (that is what inserting a lens means) — with `f_stop` 1000
+//! (DoF off until dialed), `shutter_angle` 180 (P4 amendment, Peter
+//! 2026-08-26 night: motion smears by default; shutter 0 remains the exact
+//! pass-through), `exposure_ev` 0, and `focus_distance` from the orbit
+//! camera's `distance` param when present, else 10.0. Existing lens
 //! nodes are reused as-is — their params are never touched.
+//!
+//! When the graph carries `presetMetadata` (every import-era graph does),
+//! the migration also stamps the P4 Camera-section card entries —
+//! motion_blur's `max_blur_px` + `enabled` and bokeh's `enabled` — matching
+//! the import assembly's stamps (`gltf_import/scene.rs`), so migrated
+//! projects get the same Scene Setup rows as fresh imports. A graph with no
+//! `presetMetadata` has no card surface to extend and is left with the
+//! bare tail.
 //!
 //! Idempotence: a migrated graph contains `node.coc_from_depth` +
 //! `node.bokeh_gather` + `node.motion_blur`, so a second load's partial-tail
@@ -189,7 +198,7 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
                 &[
                     ("focus_distance", focus),
                     ("f_stop", 1000.0),
-                    ("shutter_angle", 0.0),
+                    ("shutter_angle", 180.0),
                     ("exposure_ev", 0.0),
                 ],
             ));
@@ -255,7 +264,80 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
             && w.get("toPort").and_then(|p| p.as_str()) == Some("in"))
     });
     wires_arr.extend(new_wires);
+    stamp_tail_metadata(map, mb_id, &mb_node_id, bokeh_id, &bokeh_node_id);
     true
+}
+
+/// P4: append the Camera-section card entries for the injected tail
+/// (motion_blur `max_blur_px` + `enabled`, bokeh `enabled`) to the graph's
+/// `presetMetadata`, mirroring the import assembly's stamps
+/// (`scene_exposure::stamp_scene_node_exposures_into` — same id shape
+/// (`{doc_id}_{param}`), same `defaultMirrorsNodeParam`, same
+/// `cardVisible: false` default-deny the lens rows already use; the Scene
+/// Setup panel reads section metadata independently of that flag). No-op
+/// when the graph has no `presetMetadata` (nothing to extend) or when a
+/// binding for the same target already exists.
+fn stamp_tail_metadata(
+    map: &mut Map<String, Value>,
+    mb_id: u32,
+    mb_node_id: &str,
+    bokeh_id: u32,
+    bokeh_node_id: &str,
+) {
+    let Some(meta) = map.get_mut("presetMetadata").and_then(|m| m.as_object_mut()) else {
+        return;
+    };
+    // Disjoint mutable borrows of the two arrays via one iter_mut pass.
+    let (mut params, mut bindings) = (None, None);
+    for (k, v) in meta.iter_mut() {
+        match k.as_str() {
+            "params" => params = v.as_array_mut(),
+            "bindings" => bindings = v.as_array_mut(),
+            _ => {}
+        }
+    }
+    let (Some(params), Some(bindings)) = (params, bindings) else {
+        return;
+    };
+
+    // (doc_id, node_id, param, label, min, max, default, is_toggle)
+    type StampEntry<'a> = (u32, &'a str, &'a str, &'a str, f64, f64, f64, bool);
+    let entries: [StampEntry<'_>; 3] = [
+        (mb_id, mb_node_id, "max_blur_px", "Max Blur (px)", 0.0, 128.0, 32.0, false),
+        (mb_id, mb_node_id, "enabled", "Enabled", 0.0, 1.0, 1.0, true),
+        (bokeh_id, bokeh_node_id, "enabled", "Enabled", 0.0, 1.0, 1.0, true),
+    ];
+    for (doc_id, node_id, param, label, min, max, default, is_toggle) in entries {
+        let already = bindings.iter().any(|b| {
+            b.get("target").and_then(|t| t.get("nodeId")).and_then(|n| n.as_str()) == Some(node_id)
+                && b.get("target").and_then(|t| t.get("param")).and_then(|p| p.as_str())
+                    == Some(param)
+        });
+        if already {
+            continue;
+        }
+        let id = format!("{doc_id}_{param}");
+        let mut spec = serde_json::json!({
+            "id": id,
+            "name": label,
+            "min": min,
+            "max": max,
+            "defaultValue": default,
+            "section": "Camera",
+            "cardVisible": false,
+        });
+        if is_toggle {
+            spec["isToggle"] = Value::from(true);
+        }
+        params.push(spec);
+        bindings.push(serde_json::json!({
+            "id": id,
+            "label": label,
+            "defaultValue": default,
+            "target": {"kind": "node", "nodeId": node_id, "param": param},
+            "defaultMirrorsNodeParam": true,
+        }));
+    }
 }
 
 fn skip_note(reason: &str) {
@@ -473,15 +555,60 @@ mod tests {
         assert!(has_wire(g, CAMERA_LENS, "out", RENDER_SCENE, "camera"));
         // No direct color->final wire survives.
         assert!(!has_wire(g, RENDER_SCENE, "color", FINAL_OUTPUT, "in"));
-        // Inserted lens: neutral params, focus from the orbit distance.
+        // Inserted lens: f_stop neutral, shutter 180 (P4), focus from the
+        // orbit distance.
         let lens = graph_nodes(g)
             .iter()
             .find(|n| n.get("typeId").and_then(|t| t.as_str()) == Some(CAMERA_LENS))
             .unwrap();
         let p = &lens["params"];
         assert_eq!(p["f_stop"]["value"].as_f64(), Some(1000.0));
-        assert_eq!(p["shutter_angle"]["value"].as_f64(), Some(0.0));
+        assert_eq!(p["shutter_angle"]["value"].as_f64(), Some(180.0));
         assert_eq!(p["focus_distance"]["value"].as_f64(), Some(7.5));
+    }
+
+    #[test]
+    fn migrated_graph_with_preset_metadata_gains_camera_section_stamps() {
+        let mut f = fixture();
+        {
+            let g = &mut f["timeline"]["layers"][0]["genParams"]["graph"];
+            g["presetMetadata"] = serde_json::json!({
+                "id": "some_scene", "displayName": "Some Scene",
+                "category": "Spatial", "oscPrefix": "some_scene",
+                "params": [], "bindings": []
+            });
+        }
+        let out = crate::migrate::migrate_if_needed(&serde_json::to_string(&f).unwrap()).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let g = layer_graph(&v);
+        let meta = &g["presetMetadata"];
+        let params = meta["params"].as_array().unwrap();
+        let bindings = meta["bindings"].as_array().unwrap();
+        assert_eq!(params.len(), 3, "max_blur_px + 2 enabled toggles, got {params:?}");
+        assert_eq!(bindings.len(), 3);
+        let has = |node_id: &str, param: &str| {
+            bindings.iter().any(|b| {
+                b["target"]["nodeId"].as_str() == Some(node_id)
+                    && b["target"]["param"].as_str() == Some(param)
+            })
+        };
+        assert!(has("motion_blur", "max_blur_px"));
+        assert!(has("motion_blur", "enabled"));
+        assert!(has("bokeh", "enabled"));
+        for p in params {
+            assert_eq!(p["section"].as_str(), Some("Camera"));
+        }
+        let toggle = params.iter().find(|p| p["id"].as_str().unwrap().ends_with("_enabled")).unwrap();
+        assert_eq!(toggle["isToggle"].as_bool(), Some(true));
+        assert_eq!(toggle["defaultValue"].as_f64(), Some(1.0));
+        // Idempotence of the stamp itself: a second migration pass over the
+        // already-tailed graph is skipped by the marker check, and even a
+        // direct re-stamp finds the targets present.
+        let twice = crate::migrate::migrate_if_needed(&serde_json::to_string(&v).unwrap()).unwrap();
+        let v2: Value = serde_json::from_str(&twice).unwrap();
+        let meta2 = &layer_graph(&v2)["presetMetadata"];
+        assert_eq!(meta2["params"].as_array().unwrap().len(), 3);
+        assert_eq!(meta2["bindings"].as_array().unwrap().len(), 3);
     }
 
     #[test]

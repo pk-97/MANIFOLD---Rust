@@ -95,6 +95,10 @@ crate::primitive! {
             name: Cow::Borrowed("near"),
             label: "Near",
             ty: ParamType::Float,
+            // Stays 0.05 (Peter's P4 near=0 ask is unsafe — clip.w = 0 →
+            // NaN NDC — and 0.01 breaks two RT byte-identity gpu gates;
+            // see camera_orbit's DEFAULT_NEAR comment). Mirrors
+            // camera_orbit's DEFAULT_NEAR.
             default: ParamValue::Float(0.05),
             range: Some((0.001, 10.0)),
             enum_values: &[],
