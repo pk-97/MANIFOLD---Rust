@@ -176,6 +176,12 @@ pub enum ProjectAction {
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),
+    /// BUG-hlw8 "+ Plane" button: `(layer_id, render_scene_node_doc_id,
+    /// next_index)`. Dispatches `AddSceneLayerPlaneCommand` — the layer-plane
+    /// gesture: a plane mesh + unlit material + transform + an empty
+    /// `node.layer_source` wired to `base_color_map` so the panel's Skin row
+    /// can pick a source layer.
+    SceneSetupAddLayerPlane(LayerId, u32, u32),
     /// P5 properties-header "Duplicate" button (Object selection):
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
     /// existing `DuplicateSceneObjectCommand` (D11).

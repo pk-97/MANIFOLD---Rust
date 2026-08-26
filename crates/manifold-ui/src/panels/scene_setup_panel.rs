@@ -49,6 +49,8 @@ const KEY_ADD_OBJECT: u64 = 80_014;
 const KEY_ADD_LIGHT: u64 = 80_015;
 /// "Import Model…" (P4, D4/D5) — merges a second glb into this scene.
 const KEY_IMPORT_MODEL: u64 = 80_016;
+/// BUG-hlw8 "+ Plane" button — dispatches `AddSceneLayerPlaneCommand`.
+const KEY_ADD_PLANE: u64 = 80_020;
 /// Outliner fold header keys (scene-panel-ux lane): Scene, Lights, Objects
 const KEY_OUTLINER_SCENE: u64 = 80_017;
 const KEY_OUTLINER_LIGHTS: u64 = 80_018;
@@ -838,6 +840,8 @@ pub struct ScenePanel {
     full_params: Option<ParamSurface>,
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
+    /// BUG-hlw8 "+ Plane" — dispatches `SceneSetupAddLayerPlane`.
+    add_plane_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
@@ -946,6 +950,7 @@ impl Default for ScenePanel {
             full_params: None,
             add_object_id: None,
             add_light_id: None,
+            add_plane_id: None,
             import_model_id: None,
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
@@ -1137,6 +1142,7 @@ impl ScenePanel {
         self.open_graph_editor_id = None;
         self.add_object_id = None;
         self.add_light_id = None;
+        self.add_plane_id = None;
         self.import_model_id = None;
         self.outliner_row_ids.clear();
         self.outliner_eye_ids.clear();
@@ -1436,8 +1442,14 @@ impl ScenePanel {
         }
         cy += ROW_GAP;
 
-        // D6: one compact row, two equal-width buttons — was three with Import Model
-        let action_w = (inner_w - ROW_GAP) / 2.0;
+        // D6/BUG-hlw8: compact action row — Object, Light, and the new
+        // Layer Plane (a skinned plane mesh) all share the same live
+        // `next_index` source (`vm.object_count`). The compact Import Model
+        // button that used to render here was unreachable: `import_model_id`
+        // is overwritten by the Objects section header's Import button below,
+        // so it emitted no action. The reachable Import affordance lives in
+        // the header.
+        let action_w = (inner_w - 2.0 * ROW_GAP) / 3.0;
         self.add_object_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
@@ -1458,15 +1470,15 @@ impl ScenePanel {
             "+ Light",
             KEY_ADD_LIGHT,
         ));
-        self.import_model_id = Some(tree.add_button_keyed(
+        self.add_plane_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
             inner_x + 2.0 * (action_w + ROW_GAP),
             cy,
             action_w,
             ROW_H,
             btn_style(),
-            "Import…",
-            KEY_IMPORT_MODEL,
+            "+ Plane",
+            KEY_ADD_PLANE,
         ));
         cy + ROW_H
     }
@@ -2530,6 +2542,12 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             vm.light_count as u32,
                         )));
+                    } else if self.add_plane_id == Some(*node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            vm.object_count as u32,
+                        )));
                     } else if self.import_model_id == Some(*node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(
                             vm.layer_id.clone(),
@@ -3085,6 +3103,7 @@ mod tests {
         assert!(panel.add_fog_id.is_some());
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
+        assert!(panel.add_plane_id.is_some());
     }
 
     /// A synthetic multi-object def (P2 gate): one Known "Azalea" object with
@@ -3203,6 +3222,7 @@ mod tests {
         // `build_filtered_properties_...` tests below for that mechanism.
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
+        assert!(panel.add_plane_id.is_some());
     }
 
     /// W2-A gap fill: the outliner eye toggle (D3's on/off convention) had
@@ -3470,6 +3490,31 @@ mod tests {
         assert!(matches!(
             &actions[0],
             PanelAction::Project(ProjectAction::SceneSetupAddLight(l, 99, 1)) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    /// BUG-hlw8: the "+ Plane" button emits `SceneSetupAddLayerPlane` carrying
+    /// the live `object_count` as its `next_index` — same convention as the
+    /// "+ Object" button, because a layer plane occupies the next object slot.
+    #[test]
+    fn add_plane_button_emits_add_layer_plane_with_object_count_as_next_index() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let add_plane_id = panel.add_plane_id.unwrap();
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: add_plane_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        }, &tree);
+        assert!(consumed);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(l, 99, 2)) if *l == LayerId::new("layer-1")
         ));
     }
 
