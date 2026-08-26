@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 261 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 260 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (59)
+### 3D Geometry (58)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -195,7 +195,6 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
-| Plane Mesh | `node.plane_mesh` | Source | Builds a flat rectangular sheet of mesh ready to skin with another layer's output. The surface for placing live video in a 3D scene. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
