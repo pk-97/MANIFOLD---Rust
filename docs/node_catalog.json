@@ -2218,9 +2218,15 @@
             "64"
           ],
           "type": "float"
+        },
+        {
+          "default": "true",
+          "label": "Enabled",
+          "name": "enabled",
+          "type": "bool"
         }
       ],
-      "purpose": "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by step(distance_to_center_px, tap_coc_px) — a sample only contributes if its OWN CoC reaches back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc). Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in.",
+      "purpose": "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by step(distance_to_center_px, tap_coc_px) — a sample only contributes if its OWN CoC reaches back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc). Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in. `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "A true circular-aperture depth-of-field blur: each out-of-focus pixel gathers from a disc of neighbors sized by its own blur amount, and neighbors only contribute if they're blurry enough to reach back — the photographic 'bokeh' look, in one pass.",
@@ -2322,7 +2328,7 @@
           "name": "focus_distance",
           "range": [
             "0",
-            "1000"
+            "100"
           ],
           "type": "float"
         },
@@ -2332,12 +2338,12 @@
           "name": "f_stop",
           "range": [
             "0.5",
-            "1000"
+            "32"
           ],
           "type": "float"
         },
         {
-          "default": "0",
+          "default": "180",
           "label": "Shutter Angle",
           "name": "shutter_angle",
           "range": [
@@ -2357,7 +2363,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Physical lens for a Camera wire: focus_distance / f_stop / shutter_angle / exposure_ev, all four port-shadowed scalar params. Pure CPU pass-through — takes a Camera in, rewrites ONLY its lens block, passes every other field (position, basis vectors, near/far, projection mode, cached view matrix) through unchanged. Insert once between a camera source (node.orbit_camera / node.free_camera / node.look_at_camera) and its consumers so depth-of-field, motion blur, and node.render_scene's exposure all read the same lens instead of duplicating params. focus_distance is world units along the camera's fwd axis (<= 0 = hyperfocal/neutral); f_stop is the aperture N (large = shallow-DoF off); shutter_angle is degrees 0..=360 (0 = no motion blur); exposure_ev is stops (0 = neutral, render_scene multiplies its final straight rgb by 2^exposure_ev). Defaults reproduce a neutral lens, so an unwired, untouched camera_lens node changes nothing downstream.",
+      "purpose": "Physical lens for a Camera wire: focus_distance / f_stop / shutter_angle / exposure_ev, all four port-shadowed scalar params. Pure CPU pass-through — takes a Camera in, rewrites ONLY its lens block, passes every other field (position, basis vectors, near/far, projection mode, cached view matrix) through unchanged. Insert once between a camera source (node.orbit_camera / node.free_camera / node.look_at_camera) and its consumers so depth-of-field, motion blur, and node.render_scene's exposure all read the same lens instead of duplicating params. focus_distance is world units along the camera's fwd axis (<= 0 = hyperfocal/neutral); f_stop is the aperture N (large = shallow-DoF off); shutter_angle is degrees 0..=360 (0 = no motion blur, 180 = default per P4); exposure_ev is stops (0 = neutral, render_scene multiplies its final straight rgb by 2^exposure_ev). Defaults reproduce a cinematic lens (shutter 180 smears motion by default), so an untouched camera_lens node already carries a 180-degree shutter.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads.",
@@ -12034,9 +12040,15 @@
             "128"
           ],
           "type": "float"
+        },
+        {
+          "default": "true",
+          "label": "Enabled",
+          "name": "enabled",
+          "type": "bool"
         }
       ],
-      "purpose": "Velocity-directed gather motion blur (thin-shutter model, docs/CINEMATIC_POST_DESIGN.md D4): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control).",
+      "purpose": "Velocity-directed gather motion blur (thin-shutter model, docs/CINEMATIC_POST_DESIGN.md D4): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control). `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work); `shutter_angle = 0` short-circuits to a host-side texture copy (the kernel's taps already collapse at shutter 0, so the copy just skips the dispatch launch cost).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object movement instead of a post-process approximation.",

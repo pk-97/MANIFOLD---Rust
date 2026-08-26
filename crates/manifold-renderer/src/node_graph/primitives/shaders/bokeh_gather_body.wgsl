@@ -29,7 +29,10 @@
 // defined by the codegen as real samples for standalone/fused-real-external,
 // or recomputed upstream chains for fused-virtual-source) — the tap UV is
 // body-computed per-iteration from the spiral+CoC math, so neither input can
-// be pre-sampled into a register by the codegen. PARAMS: [max_radius].
+// be pre-sampled into a register by the codegen. PARAMS: [max_radius, enabled].
+// `enabled` is host-only: the codegen path lays every param into the uniform
+// struct, so the body accepts it but never reads it — skip_passthrough aliases
+// `in`→`out` when `enabled = false`, so this body only runs when enabled.
 // Matches bokeh_gather.wgsl (the hand parity oracle) — kept independent (not
 // sharing source) so the gpu_tests parity check is a real cross-check.
 
@@ -43,7 +46,7 @@ fn bokeh_hash_angle(px: vec2<f32>) -> f32 {
     return fract(sin(dot(px, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.283185307;
 }
 
-fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32) -> vec4<f32> {
+fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32) -> vec4<f32> {
     let center = fetch_in(uv);
     let center_coc_frac = clamp(fetch_width(uv).r, 0.0, 1.0);
     if center_coc_frac < 0.005 {

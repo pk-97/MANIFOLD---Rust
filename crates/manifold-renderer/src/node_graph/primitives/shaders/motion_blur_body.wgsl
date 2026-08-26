@@ -47,8 +47,11 @@
 // this dispatch via stencil-fetch, and keeps this atom on the single
 // generated-kernel codegen path (no hand-rolled runtime kernel).
 //
-// PARAMS: [max_blur_px]. DERIVED_UNIFORMS: [shutter_angle]. Matches
-// motion_blur.wgsl (the hand parity oracle).
+// PARAMS: [max_blur_px, enabled]. DERIVED_UNIFORMS: [shutter_angle]. Matches
+// motion_blur.wgsl (the hand parity oracle). `enabled` is host-only: the
+// codegen path lays every param into the uniform struct, so the body accepts
+// it, but never reads it — skip_passthrough aliases `in`→`out` when
+// `enabled = false`, so this body only runs when the node is enabled.
 
 const MOTION_BLUR_SAMPLES: u32 = 8u;
 
@@ -57,6 +60,7 @@ fn body(
     uv: vec2<f32>,
     dims: vec2<f32>,
     max_blur_px: f32,
+    enabled: u32,
     shutter_angle: f32,
 ) -> vec4<f32> {
     let velocity_ndc = c_velocity.rg;

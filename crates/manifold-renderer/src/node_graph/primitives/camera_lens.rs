@@ -13,8 +13,9 @@
 //! four params per consumer.
 //!
 //! Defaults are chosen to make an unwired, untouched `camera_lens` node a
-//! no-op: `focus_distance = 0` (neutral, per `LensParams`'s `<= 0` =
-//! hyperfocal contract), `shutter_angle = 0` (no motion blur), `exposure_ev
+//! near-no-op: `focus_distance = 0` (neutral, per `LensParams`'s `<= 0` =
+//! hyperfocal contract), `shutter_angle = 180` (motion blur on, per Peter's
+//! P4 directive — 0 still means "no motion blur" as behavior), `exposure_ev
 //! = 0` (neutral — `render_scene` multiplies by `exp2(0) = 1`). `f_stop`'s
 //! *param* default is `1000.0`, NOT `LensParams::PINHOLE`'s literal
 //! `f32::INFINITY` — `f32::INFINITY` is safe as a Rust const on the
@@ -37,7 +38,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: CameraLens,
     type_id: "node.camera_lens",
-    purpose: "Physical lens for a Camera wire: focus_distance / f_stop / shutter_angle / exposure_ev, all four port-shadowed scalar params. Pure CPU pass-through — takes a Camera in, rewrites ONLY its lens block, passes every other field (position, basis vectors, near/far, projection mode, cached view matrix) through unchanged. Insert once between a camera source (node.orbit_camera / node.free_camera / node.look_at_camera) and its consumers so depth-of-field, motion blur, and node.render_scene's exposure all read the same lens instead of duplicating params. focus_distance is world units along the camera's fwd axis (<= 0 = hyperfocal/neutral); f_stop is the aperture N (large = shallow-DoF off); shutter_angle is degrees 0..=360 (0 = no motion blur); exposure_ev is stops (0 = neutral, render_scene multiplies its final straight rgb by 2^exposure_ev). Defaults reproduce a neutral lens, so an unwired, untouched camera_lens node changes nothing downstream.",
+    purpose: "Physical lens for a Camera wire: focus_distance / f_stop / shutter_angle / exposure_ev, all four port-shadowed scalar params. Pure CPU pass-through — takes a Camera in, rewrites ONLY its lens block, passes every other field (position, basis vectors, near/far, projection mode, cached view matrix) through unchanged. Insert once between a camera source (node.orbit_camera / node.free_camera / node.look_at_camera) and its consumers so depth-of-field, motion blur, and node.render_scene's exposure all read the same lens instead of duplicating params. focus_distance is world units along the camera's fwd axis (<= 0 = hyperfocal/neutral); f_stop is the aperture N (large = shallow-DoF off); shutter_angle is degrees 0..=360 (0 = no motion blur, 180 = default per P4); exposure_ev is stops (0 = neutral, render_scene multiplies its final straight rgb by 2^exposure_ev). Defaults reproduce a cinematic lens (shutter 180 smears motion by default), so an untouched camera_lens node already carries a 180-degree shutter.",
     inputs: {
         camera: Camera required,
         focus_distance: ScalarF32 optional,
@@ -80,7 +81,11 @@ crate::primitive! {
             name: Cow::Borrowed("shutter_angle"),
             label: "Shutter Angle",
             ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
+            // 180.0 per Peter's P4 directive (CINEMATIC_SCENE_TAIL_DESIGN.md):
+            // fresh imports smear motion by default. 0 still means "no motion
+            // blur" as behavior — the motion_blur atom's shutter-0 pass-through
+            // is unchanged — only the default moved.
+            default: ParamValue::Float(180.0),
             range: Some((0.0, 360.0)),
             enum_values: &[],
         },
@@ -94,7 +99,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "All four params are port-shadowed — wire an LFO into exposure_ev for a strobe, a fader into f_stop to rack focus (once CINEMATIC_POST's coc_from_depth reads it), a drop macro into shutter_angle for a motion-blur smear. Defaults are neutral, so dropping this node with every slider untouched changes nothing downstream. node.render_scene multiplies its final straight rgb by exp2(exposure_ev) every frame (docs/CAMERA_AND_LENS_DESIGN.md D5) — that's live today. focus_distance/f_stop/shutter_angle are read by CINEMATIC_POST's DoF/motion-blur atoms once those ship; wiring this node ahead of time is harmless.",
+    composition_notes: "All four params are port-shadowed — wire an LFO into exposure_ev for a strobe, a fader into f_stop to rack focus (once CINEMATIC_POST's coc_from_depth reads it), a drop macro into shutter_angle for a motion-blur smear. Defaults are cinematic: shutter 180 smears motion by default (P4); set shutter to 0 for a static, blur-free look. node.render_scene multiplies its final straight rgb by exp2(exposure_ev) every frame (docs/CAMERA_AND_LENS_DESIGN.md D5) — that's live today. focus_distance/f_stop/shutter_angle are read by CINEMATIC_POST's DoF/motion-blur atoms once those ship; wiring this node ahead of time is harmless.",
     examples: [],
     picker: { label: "Camera Lens", category: Atom },
     summary: "The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads.",
@@ -111,7 +116,7 @@ impl Primitive for CameraLens {
         };
         let focus_distance = ctx.scalar_or_param("focus_distance", 0.0);
         let f_stop = ctx.scalar_or_param("f_stop", 1000.0);
-        let shutter_angle = ctx.scalar_or_param("shutter_angle", 0.0);
+        let shutter_angle = ctx.scalar_or_param("shutter_angle", 180.0);
         let exposure_ev = ctx.scalar_or_param("exposure_ev", 0.0);
 
         let out = Camera {
@@ -174,9 +179,9 @@ mod run_tests {
     //! `Primitive::run` behavior via `MockBackend` — the same harness shape
     //! as `transform_3d.rs`'s `run_with_params_and_wires` (Camera substituted
     //! for Transform). Proves: (a) the incoming camera's non-lens fields
-    //! pass through unchanged, (b) unwired params write a neutral lens, (c)
-    //! a wired scalar overrides its same-named param (port-shadow
-    //! precedence, D4).
+    //! pass through unchanged, (b) unwired params write the declared lens
+    //! (shutter 180 default), (c) a wired scalar overrides its same-named
+    //! param (port-shadow precedence, D4).
     use super::*;
     use crate::node_graph::MockBackend;
     use crate::node_graph::backend::Backend;
@@ -207,7 +212,7 @@ mod run_tests {
         let defaults: &[(&str, f32)] = &[
             ("focus_distance", 0.0),
             ("f_stop", 1000.0),
-            ("shutter_angle", 0.0),
+            ("shutter_angle", 180.0),
             ("exposure_ev", 0.0),
         ];
 
@@ -273,11 +278,12 @@ mod run_tests {
     }
 
     #[test]
-    fn unwired_defaults_produce_a_neutral_lens_matching_pinhole() {
+    fn unwired_defaults_produce_declared_lens() {
         let input_cam = Camera::default_perspective();
         let out = run_camera_lens(input_cam, &[], &[]);
         assert_eq!(out.lens.focus_distance, 0.0);
-        assert_eq!(out.lens.shutter_angle, 0.0);
+        // P4 default: shutter 180, not the old neutral 0.
+        assert_eq!(out.lens.shutter_angle, 180.0);
         assert_eq!(out.lens.exposure_ev, 0.0);
         // f_stop's serialization-safe param default (1000.0) is not
         // literally infinite, but is optically pinhole-equivalent.
@@ -326,7 +332,7 @@ mod run_tests {
         assert_eq!(out.lens.exposure_ev, 3.0, "wired exposure_ev should override the param");
         // Untouched siblings keep their param/default values.
         assert_eq!(out.lens.focus_distance, 0.0);
-        assert_eq!(out.lens.shutter_angle, 0.0);
+        assert_eq!(out.lens.shutter_angle, 180.0);
     }
 
     #[test]
