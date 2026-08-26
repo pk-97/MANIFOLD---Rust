@@ -2072,4 +2072,57 @@ mod tests {
             other => panic!("expected Known object, got {other:?}"),
         }
     }
+
+    /// BUG-f3qd: a scene_object whose `base_color_map` is fed by a
+    /// `node.layer_source` pointing at a deleted/nonexistent layer id
+    /// yields a `SkinVm` with `source_missing == true` and
+    /// `target_map == BaseColor`. Proves the same discovery path already
+    /// used for emissive skins also covers the layer-plane `base_color_map`
+    /// shape.
+    #[test]
+    fn base_color_skin_with_missing_layer_id_flags_source_missing() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.plane_mesh", Some("mesh"));
+        let mat = node(2, "node.unlit_material", Some("mat"));
+        let transform = node(3, TRANSFORM_3D_TYPE_ID, Some("transform"));
+        let skin = with_param(
+            node(4, "node.layer_source", Some("Skin")),
+            "layer",
+            SerializedParamValue::String { value: "deleted-layer".to_string() },
+        );
+        let scene_obj = node(5, SCENE_OBJECT_TYPE_ID, Some("Plane"));
+        let gout = node(6, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Layer Plane 1"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, mat, transform, skin, scene_obj, gout],
+            wires: vec![
+                wire(1, "vertices", 5, "vertices"),
+                wire(2, "out", 5, "material"),
+                wire(3, "transform", 5, "transform"),
+                wire(4, "out", 5, "base_color_map"),
+                wire(5, "object", 6, "object"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
+        );
+        let existing_layer = LayerId::new("existing-layer");
+        let vm = SceneVm::from_def_with_layers(&d, &[existing_layer]).expect("scene resolves");
+        assert_eq!(vm.objects.len(), 1);
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) => {
+                let skin = row.skin.as_ref().expect("base_color_map skin is discovered");
+                assert_eq!(skin.source_node_id, 4);
+                assert_eq!(skin.source_layer_id.as_deref(), Some("deleted-layer"));
+                assert_eq!(skin.target_map, SkinTargetMap::BaseColor);
+                assert!(skin.source_missing, "a layer id not in the project layer list is flagged missing");
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
 }
