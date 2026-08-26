@@ -43,6 +43,7 @@ crate::primitive! {
     inputs: {
         in: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
         match_radius: ScalarF32 optional,
+        cut: ScalarF32 optional,
     },
     outputs: {
         out: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32],
@@ -64,9 +65,17 @@ crate::primitive! {
             range: Some((0.0, 30.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("cut_threshold"),
+            label: "Cut Threshold",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.25),
+            range: Some((0.01, 1.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire between blob_detect_ffi and one_euro_filter. match_radius is the maximum Euclidean distance (in normalised 0..1 coords) for a detection to claim an existing track — raise for fast-moving blobs, lower for dense scenes. grace_frames controls how long an unmatched track persists before removal — raise for intermittent detections, lower for responsive cleanup. Output capacity matches input capacity; zero-filled slots beyond the active tracked count.",
+    composition_notes: "Wire between blob_detect_ffi and one_euro_filter. match_radius is the maximum Euclidean distance (in normalised 0..1 coords) for a detection to claim an existing track — raise for fast-moving blobs, lower for dense scenes. grace_frames controls how long an unmatched track persists before removal — raise for intermittent detections, lower for responsive cleanup. cut (e.g. from a temporal→compose(Difference)→luminance chain) drops ALL tracks immediately when it exceeds cut_threshold — hard-cut response, no grace. Output capacity matches input capacity; zero-filled slots beyond the active tracked count.",
     examples: [],
     picker: { label: "Track Persist", category: Driver },
     summary: "Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around.",
@@ -113,6 +122,16 @@ impl Primitive for TrackPersist {
             Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
             _ => 3,
         };
+        let cut_threshold = match ctx.params.get("cut_threshold") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.25,
+        };
+        // Hard-cut flush: a scene change invalidates every track at
+        // once — grace retention would only hold ghosts of the old
+        // scene on screen. This frame's detections respawn fresh.
+        if ctx.scalar_or_param("cut", 0.0) > cut_threshold {
+            self.tracked_count = 0;
+        }
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -253,13 +272,15 @@ mod tests {
     fn track_persist_declares_channels_io_and_params() {
         use crate::node_graph::ports::PortType;
         assert_eq!(TrackPersist::TYPE_ID, "node.track_persist");
-        assert_eq!(TrackPersist::INPUTS.len(), 2);
+        assert_eq!(TrackPersist::INPUTS.len(), 3);
         assert_eq!(TrackPersist::INPUTS[0].name, "in");
         assert!(matches!(TrackPersist::INPUTS[0].ty, PortType::Array(_)));
+        assert_eq!(TrackPersist::INPUTS[2].name, "cut");
+        assert!(!TrackPersist::INPUTS[2].required);
         assert_eq!(TrackPersist::OUTPUTS.len(), 1);
         assert_eq!(TrackPersist::OUTPUTS[0].name, "out");
         let names: Vec<&str> = TrackPersist::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["match_radius", "grace_frames"]);
+        assert_eq!(names, vec!["match_radius", "grace_frames", "cut_threshold"]);
     }
 
     #[test]
