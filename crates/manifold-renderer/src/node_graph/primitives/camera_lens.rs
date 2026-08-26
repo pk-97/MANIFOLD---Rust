@@ -54,7 +54,10 @@ crate::primitive! {
             label: "Focus Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((0.0, 1000.0)),
+            // 0–100: imported scenes live at single-to-tens of units from
+            // the camera. The old 0–1000 span squeezed every usable focus
+            // pull into the left few percent of the slider.
+            range: Some((0.0, 100.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -66,7 +69,11 @@ crate::primitive! {
             // corrupts non-finite floats on save/load. 1000 is optically a
             // pinhole for any 1/f_stop CoC formula.
             default: ParamValue::Float(1000.0),
-            range: Some((0.5, 1000.0)),
+            // 0.5–32: the cinematic working band is f/1–f/8; the old 0.5–1000
+            // span made the slider read as an on/off toggle (Peter 2026-08-26).
+            // f/32 is deep focus for screen work; a stored 1000 (the neutral
+            // default) stays valid data and displays pegged at max.
+            range: Some((0.5, 32.0)),
             enum_values: &[],
         },
         ParamDef {
