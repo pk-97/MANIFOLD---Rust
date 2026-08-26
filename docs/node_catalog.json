@@ -569,6 +569,11 @@
           "name": "max_area_frac",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "frame_aspect",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Filter Detections",
@@ -20892,6 +20897,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "BlobTracking",
         "FilmGrain"
       ],
       "fusion": "boundary:non_gpu",

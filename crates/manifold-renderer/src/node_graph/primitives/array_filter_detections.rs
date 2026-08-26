@@ -35,6 +35,7 @@ crate::primitive! {
         min_height: ScalarF32 optional,
         max_aspect: ScalarF32 optional,
         max_area_frac: ScalarF32 optional,
+        frame_aspect: ScalarF32 optional,
     },
     outputs: {
         out: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32],
@@ -98,7 +99,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blob_detect_ffi's `blobs` output → this primitive's `in`, and this primitive's `out` → track_persist's `in`. Bounds are in the detector's normalised 0..1 coordinate space. For naturalistic camera footage, max_aspect ~6 + min_height ~0.02 rejects horizon strips while keeping people-sized boxes; max_area_frac 0.5 reproduces the old hardcoded plugin reject (bbox covering >50% of frame). min_height / max_aspect / max_area_frac are port-shadowed so a control can drive them live.",
+    composition_notes: "Wire blob_detect_ffi's `blobs` output → this primitive's `in`, and this primitive's `out` → track_persist's `in`. Bounds are in the detector's normalised 0..1 coordinate space, except aspect: wire node.texture_size.aspect into `frame_aspect` so the aspect test works in pixel space on any canvas (unwired = legacy UV-space). For naturalistic camera footage, max_aspect ~6 + min_height ~0.02 rejects horizon strips while keeping people-sized boxes; max_area_frac 0.5 reproduces the old hardcoded plugin reject (bbox covering >50% of frame). min_height / max_aspect / max_area_frac are port-shadowed so a control can drive them live.",
     examples: [],
     picker: { label: "Filter Detections", category: Driver },
     summary: "Drops junk detections that are too small, too stretched, or cover too much of the frame, before they reach the tracker. Stops a HUD from locking onto the horizon line or a stray sliver.",
@@ -156,6 +157,11 @@ impl Primitive for ArrayFilterDetections {
         };
         let max_aspect = ctx.scalar_or_param("max_aspect", 1000.0);
         let max_area_frac = ctx.scalar_or_param("max_area_frac", 1.0);
+        // Frame aspect (width/height) corrects the aspect test from
+        // normalised-UV space into pixel space: a square subject is only
+        // w == h in UV on a square canvas. Wire node.texture_size.aspect;
+        // unwired keeps the legacy UV-space behaviour (1.0).
+        let frame_aspect = ctx.scalar_or_param("frame_aspect", 1.0).max(0.0001);
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -199,9 +205,10 @@ impl Primitive for ArrayFilterDetections {
                 continue;
             }
 
-            // aspect = width / height; guard a degenerate zero height.
+            // aspect = pixel width / pixel height; guard a degenerate
+            // zero height.
             if h > 0.0001 {
-                let aspect = w / h;
+                let aspect = (w / h) * frame_aspect;
                 if aspect < min_aspect || aspect > max_aspect {
                     continue;
                 }
@@ -274,6 +281,7 @@ mod tests {
 
     // Pure filtering-predicate check, mirroring the run() loop's logic
     // so the bound arithmetic is covered without a GPU array context.
+    #[allow(clippy::too_many_arguments)]
     fn passes(
         w: f32,
         h: f32,
@@ -284,6 +292,7 @@ mod tests {
         min_a: f32,
         max_a: f32,
         max_area: f32,
+        frame_aspect: f32,
     ) -> bool {
         if w <= 0.0001 && h <= 0.0001 {
             return false;
@@ -292,7 +301,7 @@ mod tests {
             return false;
         }
         if h > 0.0001 {
-            let aspect = w / h;
+            let aspect = (w / h) * frame_aspect;
             if aspect < min_a || aspect > max_a {
                 return false;
             }
@@ -307,12 +316,12 @@ mod tests {
     fn rejects_horizon_strip_keeps_subject() {
         // Horizon strip: very wide, few pixels tall → aspect ~40.
         assert!(
-            !passes(0.8, 0.02, 0.02, 1.0, 0.02, 1.0, 0.167, 6.0, 0.5),
+            !passes(0.8, 0.02, 0.02, 1.0, 0.02, 1.0, 0.167, 6.0, 0.5, 1.0),
             "wide flat horizon strip should be rejected by max_aspect"
         );
         // A person-sized box: roughly 0.2 × 0.6 → aspect 0.33.
         assert!(
-            passes(0.2, 0.6, 0.02, 1.0, 0.02, 1.0, 0.167, 6.0, 0.5),
+            passes(0.2, 0.6, 0.02, 1.0, 0.02, 1.0, 0.167, 6.0, 0.5, 1.0),
             "person-sized box should pass"
         );
     }
@@ -320,8 +329,17 @@ mod tests {
     #[test]
     fn rejects_oversized_and_sliver() {
         // bbox covering 64% of the frame → rejected by max_area_frac 0.5.
-        assert!(!passes(0.8, 0.8, 0.0, 1.0, 0.0, 1.0, 0.0, 1000.0, 0.5));
+        assert!(!passes(0.8, 0.8, 0.0, 1.0, 0.0, 1.0, 0.0, 1000.0, 0.5, 1.0));
         // Vertical sliver: aspect 0.05 → rejected by min_aspect.
-        assert!(!passes(0.01, 0.2, 0.0, 1.0, 0.0, 1.0, 0.167, 6.0, 1.0));
+        assert!(!passes(0.01, 0.2, 0.0, 1.0, 0.0, 1.0, 0.167, 6.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn frame_aspect_corrects_uv_space_aspect() {
+        // A square subject on a 2:1 canvas reads w=0.2, h=0.4 in UV.
+        // UV-space aspect 0.5 would fail a min_aspect of 1; the
+        // pixel-space correction (× 2.0) passes it.
+        assert!(!passes(0.2, 0.4, 0.0, 1.0, 0.0, 1.0, 1.0, 6.0, 1.0, 1.0));
+        assert!(passes(0.2, 0.4, 0.0, 1.0, 0.0, 1.0, 1.0, 6.0, 1.0, 2.0));
     }
 }

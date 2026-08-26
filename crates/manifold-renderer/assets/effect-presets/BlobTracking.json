@@ -361,6 +361,13 @@
             "typeId": "system.group_input"
           },
           {
+            "id": 22,
+            "nodeId": "frame_size",
+            "typeId": "node.texture_size",
+            "handle": "frame_size",
+            "title": "Frame Size"
+          },
+          {
             "id": 21,
             "typeId": "system.group_output"
           }
@@ -389,6 +396,18 @@
             "fromPort": "cut",
             "toNode": 21,
             "toPort": "cut"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "source",
+            "toNode": 22,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "aspect",
+            "toNode": 18,
+            "toPort": "frame_aspect"
           },
           {
             "fromNode": 20,

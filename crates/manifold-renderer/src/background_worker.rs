@@ -156,6 +156,23 @@ impl<Req: Send + 'static, Res: Send + 'static> BackgroundWorker<Req, Res> {
         self.in_flight
     }
 
+    /// Bounded wait for the in-flight result. Latency-sensitive consumers
+    /// (blob tracking) use this to collapse the worker hop into the same
+    /// frame the readback lands; on timeout the caller keeps stale data
+    /// and the request stays in flight.
+    pub fn recv_timeout(&mut self, dur: std::time::Duration) -> Option<Res> {
+        if !self.in_flight {
+            return None;
+        }
+        match self.res_rx.recv_timeout(dur) {
+            Ok(res) => {
+                self.in_flight = false;
+                Some(res)
+            }
+            Err(_) => None,
+        }
+    }
+
     /// Block until the worker finishes its current request and return the result.
     /// Returns None if no request is in-flight.
     /// Used by export mode to ensure deterministic per-frame results.

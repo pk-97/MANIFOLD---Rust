@@ -371,6 +371,7 @@ impl Primitive for BlobDetectFfi {
 
         if let (Some(bs), Some(bw)) = (self.blob_state.as_mut(), self.blob_worker.as_mut()) {
             // Poll readback → submit to worker.
+            let mut submitted_this_frame = false;
             if bs.readback_pending
                 && let Some(pixels) = bs.readback.try_read()
             {
@@ -382,10 +383,21 @@ impl Primitive for BlobDetectFfi {
                     threshold,
                     sensitivity,
                 });
+                submitted_this_frame = true;
             }
 
-            // Poll worker result → mark dirty.
-            if let Some(response) = bw.try_recv() {
+            // Poll worker result → mark dirty. When we just handed the
+            // worker a frame, wait bounded (~2ms) for the detection so
+            // results land ONE frame after the readback submit instead
+            // of two — the detector is sub-ms at analysis res, so the
+            // wait almost always returns immediately. On timeout the
+            // request stays in flight and next frame's try_recv picks
+            // it up.
+            let mut response = bw.try_recv();
+            if response.is_none() && submitted_this_frame {
+                response = bw.recv_timeout(std::time::Duration::from_millis(2));
+            }
+            if let Some(response) = response {
                 bs.blobs = response.blobs;
                 bs.cut_score = response.cut_score;
                 bs.blobs_dirty = true;
