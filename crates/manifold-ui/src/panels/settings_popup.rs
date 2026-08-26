@@ -44,7 +44,7 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 
 /// Number of control rows under the single "Render" section. Kept in lockstep
 /// with `build_rows` so `body_height` matches the imperative layout.
-const ROW_COUNT: f32 = 5.0;
+const ROW_COUNT: f32 = 6.0;
 
 pub struct SettingsPopup {
     open: bool,
@@ -59,6 +59,7 @@ pub struct SettingsPopup {
     render_scale: f32,
     tonemap: TonemapCurve,
     hdr_on: bool,
+    split_sections: bool,
 
     /// The `(x, y)` origin `build_at` last resolved from `Anchor::Centered`
     /// — stashed on every `build_at` (still needed so `build_nodes` has an
@@ -84,6 +85,7 @@ impl SettingsPopup {
             render_scale: 1.0,
             tonemap: TonemapCurve::AcesNarkowicz,
             hdr_on: false,
+            split_sections: false,
             last_placement: None,
         }
     }
@@ -125,6 +127,9 @@ impl SettingsPopup {
     }
     pub fn set_hdr(&mut self, on: bool) {
         self.hdr_on = on;
+    }
+    pub fn set_split_sections(&mut self, on: bool) {
+        self.split_sections = on;
     }
 
     fn body_height(&self) -> f32 {
@@ -261,6 +266,22 @@ impl SettingsPopup {
             if self.hdr_on { "On" } else { "Off" },
         );
         self.actions.push((hdr_id, PanelAction::Project(ProjectAction::ToggleHdr)));
+        cy += ROW_H + ROW_GAP;
+
+        // Split at section markers — one export file per section marker inside
+        // the export range (docs/SECTION_EXPORT_DESIGN.md D4). Wired to
+        // `ExportConfig.split_at_section_markers` at export start.
+        self.row_label(tree, inner_x, cy, "Split Sections");
+        let split_id = tree.add_button(
+            Some(self.bg_id),
+            ctrl_x,
+            cy,
+            ctrl_w,
+            ROW_H,
+            toggle_style(self.split_sections),
+            if self.split_sections { "On" } else { "Off" },
+        );
+        self.actions.push((split_id, PanelAction::Project(ProjectAction::ToggleSplitSections)));
         cy += ROW_H + ROW_GAP;
 
         // RT Quality… opens the floating RT tier panel (RT_QUALITY_SETTINGS_DESIGN.md).

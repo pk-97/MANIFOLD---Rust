@@ -142,6 +142,7 @@ pub enum ProjectAction {
     ExportVideo,
     ExportFrame,
     ToggleHdr,
+    ToggleSplitSections,
     ExportXml,
     ToggleLiveRecording,
     SelectAudioInputDevice,

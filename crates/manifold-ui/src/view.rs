@@ -169,6 +169,7 @@ pub struct UiMarker {
     pub beat: Beats,
     pub name: String,
     pub color: MarkerColor,
+    pub is_section_boundary: bool,
 }
 
 impl UiMarker {
@@ -180,6 +181,7 @@ impl UiMarker {
             beat,
             name: String::new(),
             color: MarkerColor::default(),
+            is_section_boundary: false,
         }
     }
 

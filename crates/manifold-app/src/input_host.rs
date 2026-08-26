@@ -1418,22 +1418,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── Timeline markers ─────────────────────────────────────────
 
     fn add_marker_at_playhead(&mut self) {
-        use manifold_core::marker::TimelineMarker;
-        use manifold_editing::commands::marker::AddMarkerCommand;
+        self.add_marker_at_playhead_impl(false);
+    }
 
-        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self
-            .ui_root
-            .viewport
-            .mapper()
-            .snap_beat_to_grid(self.content_state.current_beat, bpb);
-        let marker = TimelineMarker::new(snapped);
-
-        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-            Box::new(AddMarkerCommand::new(marker));
-        boxed.execute(self.project);
-        ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
-        *self.needs_rebuild = true;
+    fn add_section_marker_at_playhead(&mut self) {
+        self.add_marker_at_playhead_impl(true);
     }
 
     fn delete_selected_markers(&mut self) {
@@ -1680,6 +1669,31 @@ impl AppInputHost<'_> {
             *self.internal_clipboard_change_count =
                 Some(crate::macos_pasteboard::general_change_count());
         }
+    }
+
+    /// Shared body for `add_marker_at_playhead` (`section = false`) and
+    /// `add_section_marker_at_playhead` (`section = true`): snap the playhead
+    /// to the grid, mint a marker, and execute an `AddMarkerCommand`.
+    fn add_marker_at_playhead_impl(&mut self, section: bool) {
+        use manifold_core::marker::TimelineMarker;
+        use manifold_editing::commands::marker::AddMarkerCommand;
+
+        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
+        let snapped = self
+            .ui_root
+            .viewport
+            .mapper()
+            .snap_beat_to_grid(self.content_state.current_beat, bpb);
+        let mut marker = TimelineMarker::new(snapped);
+        if section {
+            marker = marker.as_section();
+        }
+
+        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+            Box::new(AddMarkerCommand::new(marker));
+        boxed.execute(self.project);
+        ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
+        *self.needs_rebuild = true;
     }
 }
 

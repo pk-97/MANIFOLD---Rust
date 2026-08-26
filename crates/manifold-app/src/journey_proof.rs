@@ -49,6 +49,7 @@ use crossbeam_channel::{Receiver, Sender};
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::{ParamId, ParameterDriver};
 use manifold_core::layer::Layer;
+use manifold_core::marker::TimelineMarker;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{AudioBand, AudioFeature, AudioFeatureKind, AudioSend, ParameterAudioMod};
@@ -142,6 +143,7 @@ fn tiny_export_config(output_path: &Path, fps: f32) -> ExportConfig {
         audio_path: None,
         audio_start_beat: 0.0,
         audio_encoder_delay: 0.0,
+        split_at_section_markers: false,
     }
 }
 
@@ -223,6 +225,48 @@ fn ffprobe_has_audio_stream(path: &Path) -> Result<bool, String> {
         .output()
         .map_err(|e| format!("spawn ffprobe: {e}"))?;
     Ok(!output.stdout.is_empty())
+}
+
+/// Total container duration of a media file in seconds (ffprobe
+/// `format=duration`).
+fn ffprobe_duration_seconds(path: &Path) -> Result<f64, String> {
+    let ffprobe = resolve_ffprobe().ok_or_else(|| "ffprobe not found".to_string())?;
+    let output = std::process::Command::new(&ffprobe)
+        .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("spawn ffprobe: {e}"))?;
+    let s = String::from_utf8_lossy(&output.stdout);
+    let s = s.trim();
+    s.parse::<f64>()
+        .map_err(|e| format!("parse ffprobe duration {s:?}: {e}"))
+}
+
+/// Start time of the first audio stream in seconds. For a correct
+/// zero-offset mux (`audio_start_beat == section start`), this reads ~0.
+fn ffprobe_audio_start_seconds(path: &Path) -> Result<f64, String> {
+    let ffprobe = resolve_ffprobe().ok_or_else(|| "ffprobe not found".to_string())?;
+    let output = std::process::Command::new(&ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=start_time",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("spawn ffprobe: {e}"))?;
+    let s = String::from_utf8_lossy(&output.stdout);
+    let s = s.trim();
+    if s.is_empty() || s == "N/A" {
+        return Err(format!("{} has no audio-stream start_time", path.display()));
+    }
+    s.parse::<f64>()
+        .map_err(|e| format!("parse ffprobe audio start {s:?}: {e}"))
 }
 
 // ─── Fixture builders ───────────────────────────────────────────────────────
@@ -553,6 +597,90 @@ mod tests {
         assert!(
             crossings >= 4,
             "a 4-cycle sine LFO over the export must cross its own mean several times, got {crossings}"
+        );
+    }
+
+    /// SECTION_EXPORT_DESIGN acceptance demo (P1 gate, real-export half): one
+    /// project, two section markers (named "Drop" at beat 2, unnamed at beat
+    /// 5) over the 8-beat content range, `split_at_section_markers = true`.
+    /// Produces three files — `export--section-1`, `export--Drop`,
+    /// `export--section-3` — whose ffprobe durations match their beat ranges
+    /// within one frame, and whose muxed audio starts at ~0 (each section's
+    /// audio slice is zero-offset, D8). The flag-off run on the same project
+    /// must produce exactly one file at the unmodified path.
+    #[test]
+    fn section_export_splits() {
+        let dir = out_dir("section_export_splits");
+        let click_wav = dir.join("click.wav");
+        write_click_track_wav(&click_wav);
+
+        let build_project = || {
+            let mut project = Project::default();
+            project.settings.bpm = Bpm(CLICK_BPM);
+            let mut audio_layer = Layer::new_audio("Click".to_string(), 0);
+            audio_layer.clips.push(TimelineClip::new_audio(
+                click_wav.to_str().unwrap().to_string(),
+                Beats(0.0),
+                Beats(CLICK_BEATS as f64),
+                Seconds(0.0),
+                Seconds((CLICK_BEATS as f32 * (60.0 / CLICK_BPM)) as f64),
+            ));
+            project.timeline.layers.push(audio_layer);
+            project.timeline.layers.push(star_field_generator_layer(1));
+            project.timeline.add_marker(
+                TimelineMarker::new(Beats(2.0)).with_name("Drop").as_section(),
+            );
+            project
+                .timeline
+                .add_marker(TimelineMarker::new(Beats(5.0)).as_section());
+            project
+        };
+
+        let video_path = dir.join("export.mp4");
+        let mut cfg = tiny_export_config(&video_path, CLICK_FPS);
+        cfg.split_at_section_markers = true;
+        run_headless_export(build_project(), cfg).expect("section export should succeed");
+
+        // 120 BPM → 0.5s/beat: [0,2)=1.0s, [2,5)=1.5s, [5,8)=1.5s.
+        let one_frame = 1.0 / CLICK_FPS as f64;
+        let expected: [(&str, f64); 3] = [
+            ("export--section-1.mp4", 1.0),
+            ("export--Drop.mp4", 1.5),
+            ("export--section-3.mp4", 1.5),
+        ];
+        for (name, secs) in &expected {
+            let path = dir.join(name);
+            assert!(path.exists(), "missing section file {}", path.display());
+            let dur = ffprobe_duration_seconds(&path).expect("ffprobe duration");
+            let start = ffprobe_audio_start_seconds(&path).expect("ffprobe audio start");
+            println!("[journey-proof] section {}: duration={dur:.3}s (expect {secs}), audio_start={start:.4}", name);
+            assert!(
+                (dur - secs).abs() <= one_frame,
+                "{} duration {dur:.3}s must match its beat range {secs}s within one frame",
+                name
+            );
+            assert!(
+                start.abs() < one_frame,
+                "{} audio must start at ~0 (zero-offset section slice), got {start:.4}",
+                name
+            );
+        }
+        assert!(
+            !video_path.exists(),
+            "section mode must not also write the unsuffixed base path"
+        );
+
+        // Flag off on the same project: today's single-export behavior,
+        // unmodified output path.
+        let single_path = dir.join("single.mp4");
+        run_headless_export(build_project(), tiny_export_config(&single_path, CLICK_FPS))
+            .expect("single export should succeed");
+        assert!(single_path.exists());
+        let dur = ffprobe_duration_seconds(&single_path).expect("ffprobe duration");
+        println!("[journey-proof] single export: duration={dur:.3}s (expect 4.0)");
+        assert!(
+            (dur - 4.0).abs() <= one_frame,
+            "flag-off export must cover the whole range: {dur:.3}s"
         );
     }
 

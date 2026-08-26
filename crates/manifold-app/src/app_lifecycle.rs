@@ -267,6 +267,7 @@ impl Application {
             audio_path: None, // TODO: wire from audio sync controller
             audio_start_beat: 0.0,
             audio_encoder_delay: 0.0,
+            split_at_section_markers: project.settings.split_at_section_markers,
         };
 
         log::info!(
