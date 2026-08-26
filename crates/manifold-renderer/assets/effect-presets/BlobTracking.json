@@ -242,37 +242,6 @@
       "title": "Amount"
     },
     {
-      "id": 23,
-      "nodeId": "prev_frame",
-      "typeId": "node.feedback",
-      "handle": "prev_frame",
-      "title": "Previous Frame"
-    },
-    {
-      "id": 24,
-      "nodeId": "cut_diff",
-      "typeId": "node.mix",
-      "handle": "cut_diff",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 5
-        }
-      },
-      "title": "Cut Diff"
-    },
-    {
-      "id": 25,
-      "nodeId": "cut_level",
-      "typeId": "node.luminance",
-      "handle": "cut_level",
-      "title": "Cut Level"
-    },
-    {
       "id": 17,
       "nodeId": "final_output",
       "typeId": "system.final_output",
@@ -290,16 +259,16 @@
             {
               "name": "source",
               "portType": "Texture2D"
-            },
-            {
-              "name": "cut",
-              "portType": ""
             }
           ],
           "outputs": [
             {
               "name": "detections",
               "portType": "Array(Detection)"
+            },
+            {
+              "name": "cut",
+              "portType": ""
             }
           ]
         },
@@ -410,9 +379,15 @@
             "toPort": "in"
           },
           {
-            "fromNode": 20,
+            "fromNode": 1,
             "fromPort": "cut",
             "toNode": 2,
+            "toPort": "cut"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cut",
+            "toNode": 21,
             "toPort": "cut"
           },
           {
@@ -1059,38 +1034,8 @@
       "toPort": "source"
     },
     {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 23,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 24,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 23,
-      "fromPort": "out",
-      "toNode": 24,
-      "toPort": "b"
-    },
-    {
-      "fromNode": 24,
-      "fromPort": "out",
-      "toNode": 25,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 25,
-      "fromPort": "out",
-      "toNode": 19,
-      "toPort": "cut"
-    },
-    {
-      "fromNode": 25,
-      "fromPort": "out",
+      "fromNode": 19,
+      "fromPort": "cut",
       "toNode": 4,
       "toPort": "cut"
     },
