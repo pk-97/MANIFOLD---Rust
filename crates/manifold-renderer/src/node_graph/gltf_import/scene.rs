@@ -717,71 +717,15 @@ pub(super) fn build_import_graph(
     nodes.push(ao_group_node);
 
     // Depth of Field + motion-blur tail (CINEMATIC_SCENE_TAIL_DESIGN.md
-    // D1/section 3): the polished DoF chain (`coc_from_depth → coc_dilate →
-    // bokeh_gather`) plus the velocity-directed `motion_blur`, templated
-    // node-for-node on the CinematicScene reference preset. Reinstated
-    // after the 2026-07-12 SSAO-only carve-out once BUG-136 (motion blur no
-    // visible effect) was root-caused in P0 of that design: never a code
-    // defect — the playing layers simply lacked the chain. The lens node
-    // above already feeds render_scene's and the ao group's `camera`; it now
-    // also feeds coc_from_depth and motion_blur so depth-of-field and
+    // D1/section 3): the polished DoF chain plus velocity-directed motion
+    // blur, templated on the CinematicScene reference preset. Construction
+    // lives in `cinematic_tail.rs` (god-file ceiling); the lens node above
+    // feeds both the DoF chain and motion_blur so depth-of-field and
     // shutter read the SAME lens the exposure and FOV card knob surface.
-    let mut dof_nodes: Vec<EffectGraphNode> = Vec::new();
-    let mut dof_wires: Vec<EffectGraphWire> = Vec::new();
-    let dof_in_id = fresh_id();
-    dof_nodes.push(plain_node(dof_in_id, "dof_in", GROUP_INPUT_TYPE_ID, "input"));
-    let coc_id = fresh_id();
-    let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
-    coc_node.params.insert("max_radius".to_string(), float(24.0));
-    dof_nodes.push(coc_node);
-    let coc_dilate_id = fresh_id();
-    dof_nodes.push(plain_node(
-        coc_dilate_id,
-        "coc_dilate",
-        "node.coc_dilate",
-        "coc_dilate",
-    ));
-    let bokeh_id = fresh_id();
-    let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
-    bokeh_node.params.insert("max_radius".to_string(), float(24.0));
-    dof_nodes.push(bokeh_node);
-    let dof_out_id = fresh_id();
-    dof_nodes.push(plain_node(dof_out_id, "dof_out", GROUP_OUTPUT_TYPE_ID, "output"));
-    dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
-    dof_wires.push(wire(dof_in_id, "camera", coc_id, "camera"));
-    dof_wires.push(wire(coc_id, "out", coc_dilate_id, "in"));
-    dof_wires.push(wire(coc_dilate_id, "out", bokeh_id, "width"));
-    dof_wires.push(wire(dof_in_id, "color", bokeh_id, "in"));
-    dof_wires.push(wire(bokeh_id, "out", dof_out_id, "out"));
-
-    let dof_group_id = fresh_id();
-    let mut dof_group_node = plain_node(dof_group_id, "dof", GROUP_TYPE_ID, "dof");
-    dof_group_node.title = Some("Depth of Field".to_string());
-    dof_group_node.group = Some(Box::new(GroupDef {
-        interface: GroupInterface {
-            inputs: vec![
-                InterfacePortDef { name: "depth".to_string(), port_type: "Texture2D".to_string() },
-                InterfacePortDef { name: "camera".to_string(), port_type: "Camera".to_string() },
-                InterfacePortDef { name: "color".to_string(), port_type: "Texture2D".to_string() },
-            ],
-            outputs: vec![InterfacePortDef { name: "out".to_string(), port_type: "Texture2D".to_string() }],
-            params: Vec::new(),
-        },
-        nodes: dof_nodes,
-        wires: dof_wires,
-        tint: None,
-    }));
-    nodes.push(dof_group_node);
-
-    // One full-res `node.motion_blur` dispatch at the end of the chain,
-    // exactly as CinematicScene ships it. Its `camera` input is wired to the
-    // SAME lens node the DoF chain reads, so `shutter_angle` drives both the
-    // exposure scale and the smear width.
-    let motion_blur_id = fresh_id();
-    let mut motion_blur_node =
-        plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
-    motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
-    nodes.push(motion_blur_node);
+    let tail = super::cinematic_tail::build_cinematic_tail(&mut fresh_id);
+    let dof_group_id = tail.dof_group_id;
+    let motion_blur_id = tail.motion_blur_id;
+    nodes.extend(tail.nodes);
 
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
