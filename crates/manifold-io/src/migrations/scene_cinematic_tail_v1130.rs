@@ -35,8 +35,13 @@
 //! `motion_blur.camera` so DoF and shutter read the SAME lens exposure
 //! uses. A graph with no top-level `node.camera_lens` gains one — every
 //! consumer of the camera wire feeding `render_scene.camera` is re-pointed
-//! through it (that is what inserting a lens means) — with `f_stop` 1000
-//! (DoF off until dialed), `shutter_angle` 180 (P4 amendment, Peter
+//! through it (that is what inserting a lens means) — with `f_stop` 32
+//! (top of the slider band; the original 1000 seed sat outside the band
+//! and stretched every stamped f-stop slider via the stamper's
+//! range-widen — "DoF off" is NOT an f-stop value, it's bokeh's `enabled`
+//! toggle, seeded false here and in the import assembly),
+//! `shutter_angle` 180 (P4
+//! amendment, Peter
 //! 2026-08-26 night: motion smears by default; shutter 0 remains the exact
 //! pass-through), `exposure_ev` 0, and `focus_distance` from the orbit
 //! camera's `distance` param when present, else 10.0. Existing lens
@@ -197,7 +202,7 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
                 CAMERA_LENS,
                 &[
                     ("focus_distance", focus),
-                    ("f_stop", 1000.0),
+                    ("f_stop", 32.0),
                     ("shutter_angle", 180.0),
                     ("exposure_ev", 0.0),
                 ],
@@ -228,7 +233,12 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
     let mb_node_id = ids.fresh_node_id("motion_blur");
     extra_nodes.push(node_json(coc_id, &coc_node_id, COC, &[("max_radius", 24.0)]));
     extra_nodes.push(node_json(dilate_id, &dilate_node_id, COC_DILATE, &[]));
-    extra_nodes.push(node_json(bokeh_id, &bokeh_node_id, BOKEH, &[("max_radius", 24.0)]));
+    // bokeh enabled=false (2026-08-27): "DoF off" is the labeled toggle, OFF
+    // by default — the tail must not change a migrated project's look (it
+    // never had DoF), and no f-stop value is "off" on close-up scenes.
+    let mut bokeh = node_json(bokeh_id, &bokeh_node_id, BOKEH, &[("max_radius", 24.0)]);
+    bokeh["params"]["enabled"] = serde_json::json!({"type": "Bool", "value": false});
+    extra_nodes.push(bokeh);
     extra_nodes.push(node_json(mb_id, &mb_node_id, MOTION_BLUR, &[("max_blur_px", 32.0)]));
 
     // Rewire: previous final-upstream -> bokeh.in; drop the old ->final.in wire.
@@ -304,8 +314,8 @@ fn stamp_tail_metadata(
     type StampEntry<'a> = (u32, &'a str, &'a str, &'a str, f64, f64, f64, bool);
     let entries: [StampEntry<'_>; 3] = [
         (mb_id, mb_node_id, "max_blur_px", "Max Blur (px)", 0.0, 128.0, 32.0, false),
-        (mb_id, mb_node_id, "enabled", "Enabled", 0.0, 1.0, 1.0, true),
-        (bokeh_id, bokeh_node_id, "enabled", "Enabled", 0.0, 1.0, 1.0, true),
+        (mb_id, mb_node_id, "enabled", "Motion Blur", 0.0, 1.0, 1.0, true),
+        (bokeh_id, bokeh_node_id, "enabled", "Depth of Field", 0.0, 1.0, 0.0, true),
     ];
     for (doc_id, node_id, param, label, min, max, default, is_toggle) in entries {
         let already = bindings.iter().any(|b| {
@@ -562,9 +572,17 @@ mod tests {
             .find(|n| n.get("typeId").and_then(|t| t.as_str()) == Some(CAMERA_LENS))
             .unwrap();
         let p = &lens["params"];
-        assert_eq!(p["f_stop"]["value"].as_f64(), Some(1000.0));
+        assert_eq!(p["f_stop"]["value"].as_f64(), Some(32.0));
         assert_eq!(p["shutter_angle"]["value"].as_f64(), Some(180.0));
         assert_eq!(p["focus_distance"]["value"].as_f64(), Some(7.5));
+        // Inserted bokeh: DoF ships OFF (2026-08-27 — off is the labeled
+        // toggle, never an f-stop value), so migration can't change a
+        // project's look.
+        let bokeh = graph_nodes(g)
+            .iter()
+            .find(|n| n.get("typeId").and_then(|t| t.as_str()) == Some(BOKEH))
+            .unwrap();
+        assert_eq!(bokeh["params"]["enabled"]["value"].as_bool(), Some(false));
     }
 
     #[test]

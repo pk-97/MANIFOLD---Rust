@@ -2221,7 +2221,7 @@
         },
         {
           "default": "true",
-          "label": "Enabled",
+          "label": "Depth of Field",
           "name": "enabled",
           "type": "bool"
         }
@@ -2333,7 +2333,7 @@
           "type": "float"
         },
         {
-          "default": "1000",
+          "default": "32",
           "label": "F-Stop",
           "name": "f_stop",
           "range": [
@@ -12043,7 +12043,7 @@
         },
         {
           "default": "true",
-          "label": "Enabled",
+          "label": "Motion Blur",
           "name": "enabled",
           "type": "bool"
         }

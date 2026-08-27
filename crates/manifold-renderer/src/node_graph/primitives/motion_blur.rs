@@ -105,7 +105,11 @@ crate::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("enabled"),
-            label: "Enabled",
+            // "Motion Blur", not "Enabled": this param is stamped onto the
+            // scene panel's Camera card next to bokeh_gather's own toggle,
+            // and two rows both labeled "Enabled" are indistinguishable
+            // (Peter 2026-08-27).
+            label: "Motion Blur",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),
             range: None,

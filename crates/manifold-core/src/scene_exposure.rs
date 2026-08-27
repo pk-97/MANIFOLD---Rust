@@ -455,6 +455,76 @@ where
         }
     }
 
+    // Repair pass 4: an auto exposure's display metadata (label, min, max) is
+    // a stamp-time copy of the primitive's ParamDef, so range/label tweaks in
+    // code never reached already-saved projects (2026-08-27: f-stop sliders
+    // stuck at 0.5–1000, two Camera-card toggles both labeled "Enabled").
+    // Re-derive all three from the current metadata on every load, keeping
+    // the stamper's widen rule so a seeded value outside the band (a
+    // 300-unit camera distance) still fits. Repair runs over EVERY node with
+    // a stamp, not just the vocabulary — the vocabulary gates STAMPING, but
+    // non-vocab atoms carry stamps too (the cinematic tail's bokeh/motion_blur
+    // Camera-section toggles, stamped by the import assembly and the v1130
+    // migration). The id-shape guard (`{doc_id}_{param}`) excludes curated
+    // fan-out exposures, whose labels and ranges are authored, never copies.
+    // Idempotent: a second run re-derives the same values and writes nothing.
+    fn collect_all_nodes(
+        nodes: &[EffectGraphNode],
+        out: &mut Vec<(u32, NodeId, String)>,
+    ) {
+        for node in nodes {
+            out.push((node.id, node.node_id.clone(), node.type_id.clone()));
+            if let Some(body) = node.group.as_deref() {
+                collect_all_nodes(&body.nodes, out);
+            }
+        }
+    }
+    let mut all_nodes: Vec<(u32, NodeId, String)> = Vec::new();
+    collect_all_nodes(&def.nodes, &mut all_nodes);
+    for (node_doc_id, node_id, type_id) in &all_nodes {
+        let metadata = provider.metadata_for_type(type_id);
+        for meta_entry in &metadata {
+            let stamp_id = format!("{}_{}", node_doc_id, meta_entry.name);
+            let Some(binding) = meta.bindings.iter_mut().find(|b| {
+                !b.user_added
+                    && b.id == stamp_id
+                    && matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id: nid, param }
+                            if nid == node_id && param == &meta_entry.name
+                    )
+            }) else {
+                continue;
+            };
+            if binding.label != meta_entry.label {
+                binding.label = meta_entry.label.clone();
+                changed = true;
+            }
+            let binding_id = binding.id.clone();
+            let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) else {
+                continue;
+            };
+            if spec.name != meta_entry.label {
+                spec.name = meta_entry.label.clone();
+                changed = true;
+            }
+            let widen = !spec.whole_numbers && !spec.is_toggle && !spec.is_trigger;
+            let (min, max) = if widen {
+                (
+                    meta_entry.min.min(spec.default_value),
+                    meta_entry.max.max(spec.default_value),
+                )
+            } else {
+                (meta_entry.min, meta_entry.max)
+            };
+            if spec.min != min || spec.max != max {
+                spec.min = min;
+                spec.max = max;
+                changed = true;
+            }
+        }
+    }
+
     changed
 }
 
@@ -1166,6 +1236,183 @@ mod tests {
 
     /// Minimal `ParamSpecDef` builder for the card-visible repair test —
     /// mirrors the shape of `stale_spec` above without repeating every field.
+    /// Migration repair for display metadata (label + range): a def stamped
+    /// before a ParamDef tweak carries the OLD label and min/max forever
+    /// (2026-08-27: f-stop sliders stuck at 0.5–1000, two Camera-card
+    /// toggles both labeled "Enabled"). Pass 4 re-derives all three from the
+    /// current metadata — and leaves a curated fan-out exposure (custom id,
+    /// custom label and range — authored, never a stamp copy) untouched.
+    /// Second run is a no-op.
+    #[test]
+    fn migrate_refreshes_stale_label_and_range_and_is_idempotent() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.camera_lens" {
+                    vec![SceneParamMetadata {
+                        min: 0.5,
+                        max: 32.0,
+                        default_value: SerializedParamValue::Float { value: 32.0 },
+                        ..float_meta("f_stop", "F-Stop")
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(9, "node.camera_lens");
+        let node_id = node.node_id.clone();
+
+        // Pre-fix stamp: old label, stretched range (the legacy-1000 default
+        // itself is repaired renderer-side before core runs; here the
+        // default is already inside the band).
+        let mut stale_spec = float_spec_default("9_f_stop", "Enabled", "Camera");
+        stale_spec.min = 0.5;
+        stale_spec.max = 1000.0;
+        stale_spec.default_value = 32.0;
+        let stale_binding = BindingDef {
+            id: "9_f_stop".to_string(),
+            label: "Enabled".to_string(),
+            default_value: 32.0,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "f_stop".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+        // A curated fan-out exposure on the same node+param: custom id,
+        // label, and range — pass 4 must not touch it.
+        let mut curated_spec = float_spec_default("aperture_macro", "Aperture", "Camera");
+        curated_spec.min = 1.0;
+        curated_spec.max = 8.0;
+        let curated_binding = BindingDef {
+            id: "aperture_macro".to_string(),
+            label: "Aperture".to_string(),
+            default_value: 2.8,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "f_stop".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec, curated_spec],
+                bindings: vec![stale_binding, curated_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let vocab = ["node.camera_lens"];
+        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "9_f_stop").unwrap();
+        assert_eq!(spec.name, "F-Stop", "stale label refreshed from metadata");
+        assert_eq!((spec.min, spec.max), (0.5, 32.0), "stretched range re-derived from metadata");
+        assert_eq!(
+            meta.bindings.iter().find(|b| b.id == "9_f_stop").unwrap().label,
+            "F-Stop",
+            "binding label refreshed too"
+        );
+        let curated = meta.params.iter().find(|p| p.id == "aperture_macro").unwrap();
+        assert_eq!(curated.name, "Aperture", "curated fan-out label untouched");
+        assert_eq!((curated.min, curated.max), (1.0, 8.0), "curated fan-out range untouched");
+
+        let after_repair = def.clone();
+        assert!(
+            !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
+            "second migration run is a no-op once repaired"
+        );
+        assert_eq!(def, after_repair);
+    }
+
+    /// Pass 4 covers NON-vocabulary nodes too (2026-08-27): the cinematic
+    /// tail's bokeh/motion_blur Camera-section toggles are stamped by the
+    /// import assembly and the v1130 migration, never by the vocabulary
+    /// stamper — but their stamped labels/ranges are the same stamp-time
+    /// copies and drift the same way (two toggles both labeled "Enabled").
+    #[test]
+    fn migrate_refreshes_labels_on_non_vocabulary_stamped_nodes() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.bokeh_gather" {
+                    vec![SceneParamMetadata {
+                        is_toggle: true,
+                        default_value: SerializedParamValue::Bool { value: true },
+                        ..float_meta("enabled", "Depth of Field")
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(5, "node.bokeh_gather");
+        let node_id = node.node_id.clone();
+
+        // The tail stamp as last night's migration wrote it: bare "Enabled".
+        let mut stale_spec = float_spec_default("5_enabled", "Enabled", "Camera");
+        stale_spec.is_toggle = true;
+        stale_spec.default_value = 1.0;
+        let stale_binding = BindingDef {
+            id: "5_enabled".to_string(),
+            label: "Enabled".to_string(),
+            default_value: 1.0,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "enabled".to_string() },
+            convert: ParamConvert::BoolThreshold,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec],
+                bindings: vec![stale_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![make_node(9, "node.camera_lens"), node],
+            wires: vec![],
+        };
+
+        // bokeh_gather is deliberately NOT in the vocabulary — stamping must
+        // never auto-create its rows, but repair must still reach the
+        // existing stamp. (The lens keeps `found` non-empty: every real tail
+        // project has one.)
+        let vocab = ["node.camera_lens"];
+        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "5_enabled").unwrap();
+        assert_eq!(spec.name, "Depth of Field", "non-vocab stamp label refreshed");
+        assert_eq!(
+            meta.bindings.iter().find(|b| b.id == "5_enabled").unwrap().label,
+            "Depth of Field"
+        );
+
+        let after_repair = def.clone();
+        assert!(
+            !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
+            "second migration run is a no-op once repaired"
+        );
+        assert_eq!(def, after_repair);
+    }
+
     fn float_spec_default(id: &str, name: &str, section: &str) -> ParamSpecDef {
         ParamSpecDef {
             id: id.to_string(),

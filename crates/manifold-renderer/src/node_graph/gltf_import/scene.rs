@@ -308,14 +308,16 @@ pub(super) fn build_import_graph(
     // and render_scene/ao/dof/motion_blur. Focus distance defaults to the
     // bbox framing distance — a real, scene-aware rack-focus starting point
     // (the CinematicScene preset's 4.0 default has no meaning for an
-    // arbitrary imported model). f_stop stays at its neutral 1000 (DoF off
-    // until dialed — the 1/f_stop law zeroes the CoC buffer); shutter_angle
-    // defaults to 180 per Peter's P4 amendment of D1 — fresh imports smear
-    // motion by default now (shutter 0 remains the exact pass-through).
+    // arbitrary imported model). f_stop stays at its neutral 32 (top of the
+    // slider band — the old 1000 seed sat outside it and the stamper's
+    // range-widen stretched every f-stop slider to 0.5–1000; "DoF off" is
+    // bokeh's enabled toggle, seeded off in the tail, not an f-stop value);
+    // shutter_angle defaults to 180 per Peter's P4 amendment of D1 — fresh
+    // imports smear motion by default (shutter 0 is the exact pass-through).
     let lens_id = fresh_id();
     let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
     lens_node.params.insert("focus_distance".to_string(), float(distance));
-    lens_node.params.insert("f_stop".to_string(), float(1000.0));
+    lens_node.params.insert("f_stop".to_string(), float(32.0));
     lens_node.params.insert("shutter_angle".to_string(), float(180.0));
     let lens_node_params = lens_node.params.clone();
     nodes.push(lens_node);
@@ -722,6 +724,7 @@ pub(super) fn build_import_graph(
         motion_blur_id,
         bokeh_id,
         &motion_blur_params,
+        &tail.bokeh_params,
     );
 
     let final_id = fresh_id();

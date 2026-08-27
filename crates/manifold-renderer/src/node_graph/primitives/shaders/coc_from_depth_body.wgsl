@@ -50,6 +50,11 @@ fn body(
     let s_mm = focus_distance * WORLD_TO_MM;
     let coc_mm = a_mm * f_mm * abs(d_mm - s_mm) / (d_mm * max(s_mm - f_mm, 1.0));
     let coc_px = clamp(coc_mm / SENSOR_H_MM * dims.y, 0.0, max_radius);
-    let normalized = coc_px / max_radius;
+    // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
+    // exactly 0 CoC. Without this, S_mm = 0 makes the denominator 1 and the
+    // formula degenerates to f_mm^2/f_stop: MAX blur at every aperture
+    // (Peter's 2026-08-27 fully-soft frame after dragging Focus to 0).
+    let coc_q = select(coc_px, 0.0, focus_distance <= 0.0);
+    let normalized = coc_q / max_radius;
     return vec4<f32>(normalized, normalized, normalized, 1.0);
 }

@@ -44,7 +44,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let s_mm = u.focus_distance * WORLD_TO_MM;
     let coc_mm = a_mm * f_mm * abs(d_mm - s_mm) / (d_mm * max(s_mm - f_mm, 1.0));
     let coc_px = clamp(coc_mm / SENSOR_H_MM * f32(dims.y), 0.0, u.max_radius);
-    let normalized = coc_px / u.max_radius;
+    // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
+    // exactly 0 CoC (mirrors coc_from_depth_body.wgsl).
+    let coc_q = select(coc_px, 0.0, u.focus_distance <= 0.0);
+    let normalized = coc_q / u.max_radius;
 
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(normalized, normalized, normalized, 1.0));
 }

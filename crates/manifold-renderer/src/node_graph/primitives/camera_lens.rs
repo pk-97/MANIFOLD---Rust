@@ -17,16 +17,19 @@
 //! hyperfocal contract), `shutter_angle = 180` (motion blur on, per Peter's
 //! P4 directive — 0 still means "no motion blur" as behavior), `exposure_ev
 //! = 0` (neutral — `render_scene` multiplies by `exp2(0) = 1`). `f_stop`'s
-//! *param* default is `1000.0`, NOT `LensParams::PINHOLE`'s literal
+//! *param* default is `32.0`, NOT `LensParams::PINHOLE`'s literal
 //! `f32::INFINITY` — `f32::INFINITY` is safe as a Rust const on the
 //! never-serialized `Camera`/`LensParams` wire types, but this primitive's
 //! params ARE serialized like any other param, and `serde_json` silently
 //! encodes non-finite floats as JSON `null` and then fails to decode `null`
 //! back into an `f32` on load (verified empirically against this
-//! workspace's `serde_json` version — not assumed). An f-stop of 1000 is
-//! optically indistinguishable from a pinhole for any circle-of-confusion
-//! formula (CoC scales with `1/f_stop`) while round-tripping through
-//! project save/load like every other param.
+//! workspace's `serde_json` version — not assumed). 32 is the top of the
+//! slider's working band, and the neutral value must live INSIDE the band:
+//! the exposure stamper widens every stamped slider's range to contain its
+//! seeded value, so the old 1000 seed stretched every f-stop slider to
+//! 0.5–1000 (Peter's 2026-08-27 unusable-ranges report). Note 32 is NOT a
+//! "DoF off" value — no f-stop is, on close-up scenes f/32 blurs visibly
+//! past the focus plane; off is `node.bokeh_gather`'s `enabled` toggle.
 
 use std::borrow::Cow;
 
@@ -65,15 +68,16 @@ crate::primitive! {
             name: Cow::Borrowed("f_stop"),
             label: "F-Stop",
             ty: ParamType::Float,
-            // 1000.0, not f32::INFINITY: see the module doc comment — this
+            // 32.0, not f32::INFINITY: see the module doc comment — this
             // value is serialized like any param, and serde_json silently
-            // corrupts non-finite floats on save/load. 1000 is optically a
-            // pinhole for any 1/f_stop CoC formula.
-            default: ParamValue::Float(1000.0),
+            // corrupts non-finite floats on save/load. 32 is just the top of
+            // the working band — NOT "DoF off" (off is bokeh's enabled
+            // toggle; f/32 still blurs past the focus plane on close-ups).
+            default: ParamValue::Float(32.0),
             // 0.5–32: the cinematic working band is f/1–f/8; the old 0.5–1000
             // span made the slider read as an on/off toggle (Peter 2026-08-26).
-            // f/32 is deep focus for screen work; a stored 1000 (the neutral
-            // default) stays valid data and displays pegged at max.
+            // A stored 1000 from pre-fix projects is rewritten to 32 on load
+            // (the renderer scene_exposure legacy repair).
             range: Some((0.5, 32.0)),
             enum_values: &[],
         },
@@ -115,7 +119,7 @@ impl Primitive for CameraLens {
             return;
         };
         let focus_distance = ctx.scalar_or_param("focus_distance", 0.0);
-        let f_stop = ctx.scalar_or_param("f_stop", 1000.0);
+        let f_stop = ctx.scalar_or_param("f_stop", 32.0);
         let shutter_angle = ctx.scalar_or_param("shutter_angle", 180.0);
         let exposure_ev = ctx.scalar_or_param("exposure_ev", 0.0);
 
@@ -211,7 +215,7 @@ mod run_tests {
     ) -> Camera {
         let defaults: &[(&str, f32)] = &[
             ("focus_distance", 0.0),
-            ("f_stop", 1000.0),
+            ("f_stop", 32.0),
             ("shutter_angle", 180.0),
             ("exposure_ev", 0.0),
         ];
@@ -285,9 +289,9 @@ mod run_tests {
         // P4 default: shutter 180, not the old neutral 0.
         assert_eq!(out.lens.shutter_angle, 180.0);
         assert_eq!(out.lens.exposure_ev, 0.0);
-        // f_stop's serialization-safe param default (1000.0) is not
-        // literally infinite, but is optically pinhole-equivalent.
-        assert!(out.lens.f_stop >= 1000.0);
+        // f_stop's serialization-safe param default (32.0) is the top of the
+        // slider band.
+        assert_eq!(out.lens.f_stop, 32.0);
     }
 
     #[test]
