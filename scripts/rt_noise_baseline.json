@@ -6,8 +6,8 @@
       "ceilings_validated": true,
       "note": "Ceilings = measured median x headroom (mean x2.0 or +0.05, p99.9 x1.8 or +1.0). Regenerate with scripts/rt_noise_gate.py --record --project <fixture> after a legitimate RT improvement and commit this file.",
       "provenance": {
-        "recorded": "2026-07-31",
-        "commit": "3561371948a1",
+        "recorded": "2026-08-27",
+        "commit": "ac445b92ef3e-dirty",
         "project": "RtNoiseTesting.manifold",
         "frames": 300,
         "repeats": 3,
@@ -15,140 +15,155 @@
       },
       "channels": {
         "composite": {
-          "mean": 0.1536,
-          "p999": 10.8,
-          "min_signal_level": 5.2363,
+          "mean": 0.1553,
+          "p999": 11.88,
+          "min_signal_level": 5.2922,
           "measured": {
-            "mean": 0.0768,
-            "mean_min": 0.0765,
-            "mean_max": 0.0773,
-            "p999": 6.0,
-            "p999_min": 6.0,
-            "p999_max": 6.2,
-            "max": 72.2,
-            "level": 20.9453
+            "mean": 0.0776,
+            "mean_min": 0.0771,
+            "mean_max": 0.078,
+            "p999": 6.6,
+            "p999_min": 6.6,
+            "p999_max": 6.8,
+            "max": 86.0,
+            "level": 21.1687
+          }
+        },
+        "irr_accum": {
+          "mean": 0.0889,
+          "p999": 4.68,
+          "min_signal_level": 13.1976,
+          "measured": {
+            "mean": 0.0389,
+            "mean_min": 0.0388,
+            "mean_max": 0.0389,
+            "p999": 2.6,
+            "p999_min": 2.6,
+            "p999_max": 2.6,
+            "max": 181.4,
+            "level": 52.7904
           }
         },
         "irr_full": {
-          "mean": 9.3501,
-          "p999": 255.6,
-          "min_signal_level": 12.8415,
+          "mean": 9.3735,
+          "p999": 261.0,
+          "min_signal_level": 12.841,
           "measured": {
-            "mean": 4.675,
-            "mean_min": 4.6704,
-            "mean_max": 4.6862,
-            "p999": 142.0,
-            "p999_min": 140.4,
-            "p999_max": 142.4,
+            "mean": 4.6867,
+            "mean_min": 4.6794,
+            "mean_max": 4.7002,
+            "p999": 145.0,
+            "p999_min": 144.8,
+            "p999_max": 145.0,
             "max": 255.0,
-            "level": 51.3661
+            "level": 51.3638
           }
         },
         "mask": {
           "mean": 0.0515,
           "p999": 2.0,
-          "min_signal_level": 62.9018,
+          "min_signal_level": 62.8332,
           "measured": {
             "mean": 0.0015,
-            "mean_min": 0.0013,
+            "mean_min": 0.0015,
             "mean_max": 0.0015,
             "p999": 1.0,
             "p999_min": 1.0,
             "p999_max": 1.0,
-            "max": 84.0,
-            "level": 251.6073
+            "max": 38.0,
+            "level": 251.3329
           }
         },
         "mask_half": {
-          "mean": 0.2233,
+          "mean": 0.05,
           "p999": 1.0,
-          "min_signal_level": 62.7736,
+          "min_signal_level": 62.7677,
           "measured": {
-            "mean": 0.1116,
-            "mean_min": 0.1113,
-            "mean_max": 0.1137,
+            "mean": 0.0,
+            "mean_min": 0.0,
+            "mean_max": 0.0,
+            "p999": 0.0,
+            "p999_min": 0.0,
+            "p999_max": 0.0,
+            "max": 0.0,
+            "level": 251.0708
+          }
+        },
+        "moments": {
+          "mean": 0.0941,
+          "p999": 5.4,
+          "min_signal_level": 30.0056,
+          "measured": {
+            "mean": 0.0441,
+            "mean_min": 0.0441,
+            "mean_max": 0.0443,
+            "p999": 3.0,
+            "p999_min": 3.0,
+            "p999_max": 3.2,
+            "max": 231.2,
+            "level": 120.0222
+          }
+        },
+        "refl_history_read": {
+          "mean": 0.2372,
+          "p999": 19.08,
+          "min_signal_level": 9.951,
+          "measured": {
+            "mean": 0.1186,
+            "mean_min": 0.1184,
+            "mean_max": 0.1198,
+            "p999": 10.6,
+            "p999_min": 10.4,
+            "p999_max": 10.6,
+            "max": 107.2,
+            "level": 39.8041
+          }
+        },
+        "refl_history_write": {
+          "mean": 0.2903,
+          "p999": 23.04,
+          "min_signal_level": 9.951,
+          "measured": {
+            "mean": 0.1451,
+            "mean_min": 0.1446,
+            "mean_max": 0.1464,
+            "p999": 12.8,
+            "p999_min": 12.6,
+            "p999_max": 13.0,
+            "max": 127.2,
+            "level": 39.8039
+          }
+        },
+        "refl_raw": {
+          "mean": 1.278,
+          "p999": 55.8,
+          "min_signal_level": 9.9522,
+          "measured": {
+            "mean": 0.639,
+            "mean_min": 0.6383,
+            "mean_max": 0.6398,
+            "p999": 31.0,
+            "p999_min": 31.0,
+            "p999_max": 31.4,
+            "max": 226.4,
+            "level": 39.8089
+          }
+        },
+        "sv_hold": {
+          "mean": 0.0503,
+          "p999": 1.0,
+          "min_signal_level": 0.0001,
+          "measured": {
+            "mean": 0.0003,
+            "mean_min": 0.0003,
+            "mean_max": 0.0003,
             "p999": 0.0,
             "p999_min": 0.0,
             "p999_max": 0.0,
             "max": 255.0,
-            "level": 251.0943
-          }
-        },
-        "moments": {
-          "mean": 0.0955,
-          "p999": 7.2,
-          "min_signal_level": 30.0057,
-          "measured": {
-            "mean": 0.0455,
-            "mean_min": 0.0455,
-            "mean_max": 0.0459,
-            "p999": 4.0,
-            "p999_min": 4.0,
-            "p999_max": 4.0,
-            "max": 231.0,
-            "level": 120.0227
-          }
-        },
-        "refl_history_read": {
-          "mean": 0.2891,
-          "p999": 21.6,
-          "min_signal_level": 9.9591,
-          "measured": {
-            "mean": 0.1445,
-            "mean_min": 0.1443,
-            "mean_max": 0.1469,
-            "p999": 12.8,
-            "p999_min": 12.4,
-            "p999_max": 12.8,
-            "max": 119.4,
-            "level": 39.8363
-          }
-        },
-        "refl_history_write": {
-          "mean": 0.2889,
-          "p999": 21.6,
-          "min_signal_level": 9.9589,
-          "measured": {
-            "mean": 0.1445,
-            "mean_min": 0.1438,
-            "mean_max": 0.1468,
-            "p999": 12.6,
-            "p999_min": 12.4,
-            "p999_max": 12.8,
-            "max": 120.8,
-            "level": 39.8354
-          }
-        },
-        "refl_raw": {
-          "mean": 1.2589,
-          "p999": 52.56,
-          "min_signal_level": 9.9596,
-          "measured": {
-            "mean": 0.6371,
-            "mean_min": 0.6344,
-            "mean_max": 0.6372,
-            "p999": 30.6,
-            "p999_min": 30.6,
-            "p999_max": 31.0,
-            "max": 219.0,
-            "level": 39.8386
+            "level": 0.0006
           }
         }
-      },
-      "motion": {
-        "validated": true,
-        "sv_hold_median": 0.0263,
-        "moments_center_min": 0.0003,
-        "history_ratio_min": 0.1425,
-        "measured": {
-          "sv_hold_median": 0.0081,
-          "sv_hold_max": 0.0492,
-          "moments_center_min": 0.0005,
-          "moments_center_median": 0.0489,
-          "history_ratio_min": 0.285,
-          "refl_hit_min": 0.0682
-        },
-        "note": "Motion-leg ceilings = measured x headroom (sv_hold median x3+0.002, moments floors x0.7, history ratio x0.5 capped 0.3). Regenerate with scripts/rt_noise_gate.py --motion --record --project <fixture> after a legitimate RT change and commit this file. RED-validated against boil-era gate behavior (D-64/tr5o reverted) \u2014 see BUG-sz0u."
       }
     },
     "RtEmissiveStrength": {

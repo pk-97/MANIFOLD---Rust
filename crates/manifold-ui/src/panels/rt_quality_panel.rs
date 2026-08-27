@@ -42,8 +42,8 @@ const SECTION_GAP: f32 = 12.0;
 const COL_LABEL_W: f32 = 120.0;
 const BTN_FONT: u16 = color::FONT_LABEL;
 
-/// Number of setting rows (shadows, AO, GI, reflections, ray resolution).
-const ROW_COUNT: f32 = 5.0;
+/// Number of setting rows (shadows, AO, GI, reflections, ray resolution, spatial denoise).
+const ROW_COUNT: f32 = 6.0;
 
 pub struct RtQualityPanel {
     open: bool,
@@ -210,7 +210,7 @@ impl RtQualityPanel {
         );
         cy += SECTION_H;
 
-        // Build rows: Shadows, AO, GI, Reflections, Ray Resolution
+        // Build rows: Shadows, AO, GI, Reflections, Ray Resolution, Spatial Denoise
         self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Shadows", RtTierField::Shadows);
         cy += ROW_H + ROW_GAP;
         self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "AO", RtTierField::Ao);
@@ -220,6 +220,8 @@ impl RtQualityPanel {
         self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Reflections", RtTierField::Reflections);
         cy += ROW_H + ROW_GAP;
         self.build_resolution_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w);
+        cy += ROW_H + ROW_GAP;
+        self.build_denoise_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w);
     }
 
     /// Build one tier row (shadows/AO/GI/reflections) with two dropdown
@@ -340,6 +342,63 @@ impl RtQualityPanel {
         self.actions.push((
             export_id,
             PanelAction::Root(RootAction::OpenRtQualityResDropdown {
+                realtime: false,
+                anchor: Rect::new(export_x, y, export_w, ROW_H),
+            }),
+        ));
+    }
+
+    /// Build the spatial denoise row with two dropdown trigger columns.
+    fn build_denoise_row(
+        &mut self,
+        tree: &mut UITree,
+        label_x: f32,
+        y: f32,
+        realtime_x: f32,
+        realtime_w: f32,
+        export_x: f32,
+        export_w: f32,
+    ) {
+        // Row label
+        tree.add_label(
+            Some(self.bg_id),
+            label_x,
+            y,
+            COL_LABEL_W,
+            ROW_H,
+            "Spatial Denoise",
+            label_style(),
+        );
+
+        let realtime_id = tree.add_button(
+            Some(self.bg_id),
+            realtime_x,
+            y,
+            realtime_w,
+            ROW_H,
+            dropdown_trigger_style(BTN_FONT),
+            self.settings.realtime.spatial_denoise.label(),
+        );
+        self.actions.push((
+            realtime_id,
+            PanelAction::Root(RootAction::OpenRtQualityDenoiseDropdown {
+                realtime: true,
+                anchor: Rect::new(realtime_x, y, realtime_w, ROW_H),
+            }),
+        ));
+
+        let export_id = tree.add_button(
+            Some(self.bg_id),
+            export_x,
+            y,
+            export_w,
+            ROW_H,
+            dropdown_trigger_style(BTN_FONT),
+            self.settings.export.spatial_denoise.label(),
+        );
+        self.actions.push((
+            export_id,
+            PanelAction::Root(RootAction::OpenRtQualityDenoiseDropdown {
                 realtime: false,
                 anchor: Rect::new(export_x, y, export_w, ROW_H),
             }),

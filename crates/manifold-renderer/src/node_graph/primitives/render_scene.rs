@@ -786,6 +786,17 @@ pub struct RenderScene {
     /// (separate from the other params buffers for the same non-clobbering
     /// reason `rt_atrous_params_buffer` documents).
     rt_firefly_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
+    /// ping-pong pair — `atrous_post` writes into one, the composite binds
+    /// whichever was last written. Same rgba16 + full-res lifecycle as
+    /// `rt_irr_history` (ensured in `ensure_rt_irradiance`). When the
+    /// filter is off this frame, the composite falls back to the raw
+    /// history slot (existing behaviour).
+    rt_irr_filtered: Option<manifold_gpu::GpuTexture>,
+    rt_irr_filtered_b: Option<manifold_gpu::GpuTexture>,
+    /// RT-Stage-3 P4: CPU-mapped `AtrousPostParams` upload buffer —
+    /// separate from the other params buffers (same non-clobbering reason).
+    rt_atrous_post_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// D22: the live MetalFX Temporal scaler — created lazily on this
     /// node's first `temporal_upscale` frame, resized on dimension change
     /// (same lifecycle contract as `crate::metalfx_temporal_upscaler`'s own
@@ -1528,6 +1539,9 @@ impl RenderScene {
             rt_firefly_scratch_width: 0,
             rt_firefly_scratch_height: 0,
             rt_firefly_params_buffer: None,
+            rt_irr_filtered: None,
+            rt_irr_filtered_b: None,
+            rt_atrous_post_params_buffer: None,
             denoiser: None,
             denoiser_unavailable_logged: false,
             denoise_gate_blocked_logged: false,
@@ -2709,6 +2723,11 @@ impl RenderScene {
             make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
         ]
         .map(Some);
+        // RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
+        // pair — same full-res rgba16 + usage lifecycle as `rt_irr_history`.
+        // The composite binds whichever was last written by `atrous_post`.
+        self.rt_irr_filtered = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered (RT-Stage-3 P4)"));
+        self.rt_irr_filtered_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered_b (RT-Stage-3 P4)"));
         self.rt_moments_valid = false;
         self.rt_history_ping = 0;
         self.rt_irr_width = full_w;
@@ -2766,6 +2785,17 @@ impl RenderScene {
         if self.rt_firefly_params_buffer.is_none() {
             self.rt_firefly_params_buffer = Some(device.create_buffer_shared(
                 std::mem::size_of::<manifold_gpu::raytrace::FireflyClampParams>() as u64,
+            ));
+        }
+    }
+
+    /// RT-Stage-3 P4 (BUG-eytk): CPU-mapped `AtrousPostParams` upload
+    /// buffer — separate from the other params buffers (same non-clobbering
+    /// reason).
+    fn ensure_rt_atrous_post_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.rt_atrous_post_params_buffer.is_none() {
+            self.rt_atrous_post_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::AtrousPostParams>() as u64,
             ));
         }
     }
@@ -4247,6 +4277,12 @@ impl EffectNode for RenderScene {
         // Copied out of ctx here — the dispatch code below runs after
         // gpu_encoder() mutable borrows, where ctx is unreadable.
         let rtq = ctx.rt_quality;
+        // RT-Stage-3 P4 (BUG-eytk): denoise strength/iterations copied
+        // out of ctx here — same borrow-lift pattern as rtq itself (the
+        // dispatch code below runs after gpu_encoder() mutable borrows,
+        // where ctx is unreadable).
+        let denoise_strength = rtq.denoise_strength;
+        let denoise_iterations = rtq.denoise_iterations;
         // Trace dispatch dims (D4): one ray-resolution fraction for both
         // dispatches, truncating u64 math per output_canvas_scale discipline.
         let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
@@ -4334,6 +4370,10 @@ impl EffectNode for RenderScene {
         // forbidden move. Declared here (mut, assigned later) so the tail
         // can read it — same pattern as `denoise_active`.
         let mut rt_rendered_this_frame = false;
+        // RT-Stage-3 P4 (BUG-eytk): whether the post-accumulation filter
+        // ran this frame — gates the composite rebind (the composite
+        // binds `rt_irr_filtered` when true, raw history slot when false).
+        let mut irr_filtered_valid = false;
         // RT-Stage-3 P1 (BUG-mkgh): the emissive table's mean power — the
         // firefly clamp's absolute floor anchor (`max(4.0, mean_power)`).
         // Computed inside the RT block (only there is the emissive table
@@ -5109,6 +5149,9 @@ impl EffectNode for RenderScene {
                 // native-res otherwise) — denoise_active disables the
                 // clamp, so its dims are irrelevant there.
                 self.ensure_rt_firefly_params_buffer(gpu.device);
+                // RT-Stage-3 P4 (BUG-eytk): atrous_post params buffer —
+                // same one-buffer lifetime as the other params buffers.
+                self.ensure_rt_atrous_post_params_buffer(gpu.device);
                 if rt_firefly_clamp_enabled {
                     if temporal_upscale {
                         self.ensure_rt_firefly_scratch(gpu.device, width, height);
@@ -6344,6 +6387,82 @@ impl EffectNode for RenderScene {
                 rt_rendered_this_frame = true;
                 gpu.checkpoint();
 
+                // RT-Stage-3 P4 (BUG-eytk): post-accumulation à-trous
+                // spatial filter on the just-accumulated irradiance.
+                // Gate: iterations > 0 (Off tier) AND not denoise_active
+                // (MetalFX owns the tail — D6). The filtered result is
+                // consumed by the composite rebind below (irr_filtered_valid).
+                //
+                // I2 (write-set invariant): `atrous_post` writes ONLY
+                // `rt_irr_filtered` / `rt_irr_filtered_b` — `rt_irr_history`
+                // is never a write target. `rg` negative proof is lead-side;
+                // this comment states the structural fact.
+                //
+                // I5 (denoise_active bypass): when `denoise_active` is true
+                // the entire block is skipped — one boolean in the gate, no
+                // separate test needed (the bypass is trivially correct by
+                // code inspection).
+                if denoise_iterations > 0 && !denoise_active {
+                    let params_buffer = self.rt_atrous_post_params_buffer
+                        .as_ref().expect("ensured above");
+                    let filtered_a = self.rt_irr_filtered
+                        .as_ref().expect("ensured above");
+                    let filtered_b = self.rt_irr_filtered_b
+                        .as_ref().expect("ensured above");
+                    // Depth/normal guides: the RT block's opaque_depth_snapshot
+                    // (the ALWAYS-ENSURED internal depth — NOT the later MSAA
+                    // depth_tex at old line 6349), rt_normal_full (current
+                    // frame), and moments_write (the just-written moments slot).
+                    let depth_guide = self.opaque_depth_snapshot
+                        .as_ref().expect("ensured above");
+                    let normal_guide = self.rt_normal_full
+                        .as_ref().expect("ensured above");
+                    let moments_src = self.rt_moments_history[write_idx]
+                        .as_ref().expect("ensured above");
+
+                    // Ping-pong: source for pass 0 = the just-written
+                    // history slot; later passes read from the previous
+                    // pass's destination. Final destination must be
+                    // `rt_irr_filtered` (the composite's single binding
+                    // point). The write-set is ONLY rt_irr_filtered* —
+                    // rt_irr_history is never a write target (I2).
+                    let mut src = self.rt_irr_history[self.rt_history_ping]
+                        .as_ref().expect("ensured above");
+                    for pass in 0..denoise_iterations {
+                        let step = 1u32 << pass;
+                        let post_params = manifold_gpu::raytrace::AtrousPostParams::new(
+                            [width, height],
+                            step,
+                            denoise_strength,
+                        );
+                        // Destination: for N total passes, pass i writes
+                        // `_b` when (N-1-i) is odd, else `rt_irr_filtered`.
+                        // This guarantees the FINAL pass always writes
+                        // `rt_irr_filtered`.
+                        let write_to_filtered = (denoise_iterations - 1 - pass).is_multiple_of(2);
+                        let dst: &manifold_gpu::GpuTexture = if write_to_filtered {
+                            filtered_a
+                        } else {
+                            filtered_b
+                        };
+                        tracer.atrous_post_pass(
+                            gpu.native_enc,
+                            &post_params,
+                            params_buffer,
+                            depth_guide,
+                            normal_guide,
+                            moments_src,
+                            src,
+                            dst,
+                            "node.render_scene RT-Stage-3 P4 atrous_post",
+                        );
+                        // Next pass reads from this pass's destination.
+                        src = dst;
+                    }
+                    irr_filtered_valid = true;
+                    gpu.checkpoint();
+                }
+
                 // RAYTRACING_DESIGN.md section 5.2 P3 (D5, "emissive-colored
                 // volumetric glow"): every emissive object becomes an
                 // extra Point-mode entry in the SAME march light table
@@ -6388,6 +6507,21 @@ impl EffectNode for RenderScene {
                     if let Some(ref t) = self.rt_irr_full { q.push(RtCaptureSlot {
                         label: "irr_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
+                    // RT-Stage-3 P4 (BUG-eytk): the post-filtered irradiance
+                    // capture — taps `rt_irr_filtered` when the filter ran
+                    // this frame, falls back to the raw history slot when
+                    // not (Off tier / denoise_active). `irr_full` above is
+                    // the PRE-accumulation signal — never moved by the
+                    // filter; this slot is the POST-accumulation output.
+                    if irr_filtered_valid {
+                        if let Some(ref t) = self.rt_irr_filtered { q.push(RtCaptureSlot {
+                            label: "irr_accum".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                        });}
+                    } else {
+                        if let Some(ref t) = self.rt_irr_history[refl_write] { q.push(RtCaptureSlot {
+                            label: "irr_accum".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                        });}
+                    }
                     if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
                         label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
@@ -6582,7 +6716,14 @@ impl EffectNode for RenderScene {
         // always indexes whichever ping-pong slot `accumulate_irradiance`
         // most recently WROTE this frame (dummy when RT isn't active this
         // frame — same ABI-stub discipline as `rt_mask_tex`).
-        let rt_irr_tex = self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        // RT-Stage-3 P4 (BUG-eytk): when the post-accumulation filter ran
+        // this frame, the composite binds the filtered irradiance instead of
+        // the raw history slot — the single rebind seam the filter hangs on.
+        let rt_irr_tex = if irr_filtered_valid {
+            self.rt_irr_filtered.as_ref().unwrap_or(dummy)
+        } else {
+            self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy)
+        };
         // RAYTRACING_DESIGN.md section 9 RD1: the accumulated specular history
         // texture fs_pbr SUBSTITUTES for its prefiltered-env fetch when
         // `rt_flags.x > 0.5` — always bound (ABI-stub discipline), dummy

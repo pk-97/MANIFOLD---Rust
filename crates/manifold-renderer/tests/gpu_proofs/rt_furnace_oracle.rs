@@ -26,6 +26,7 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_renderer::node_graph::RtQuality;
 use manifold_renderer::node_graph::camera::Camera;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
@@ -63,6 +64,12 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
         None,
     )
     .expect("RT furnace scene graph must build");
+    // RT-Stage-3 (BUG-eytk): post-filter pinned off — see build_runtime.
+    runtime.set_rt_quality(manifold_renderer::node_graph::RtQuality {
+        denoise_strength: 0.0,
+        denoise_iterations: 0,
+        ..RtQuality::default()
+    });
 
     let target = h.make_target("rt-furnace-oracle");
     for frame in 0..RT_WARMUP_FRAMES {
@@ -99,7 +106,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
 fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
-    let runtime = PresetRuntime::from_json_str_with_device(
+    let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         &registry,
         std::sync::Arc::clone(&h.device),
@@ -109,6 +116,17 @@ fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
         None,
     )
     .expect("RT furnace scene graph must build");
+    // RT-Stage-3 (BUG-eytk): the furnace certifies the trace-side clamps and
+    // the accumulator — both UPSTREAM of the post-accumulation à-trous.
+    // Pin the post-filter off here: its value proofs live in
+    // rt_atrous_post.rs, and the sun-disc leg's energy bar was calibrated
+    // on a measurement the firefly tail inflated (filtered max 0.32 vs
+    // unfiltered 0.67 — the "preserved energy" included the sparkle).
+    runtime.set_rt_quality(manifold_renderer::node_graph::RtQuality {
+        denoise_strength: 0.0,
+        denoise_iterations: 0,
+        ..RtQuality::default()
+    });
     let target = h.make_target("rt-furnace-oracle");
     (runtime, target)
 }

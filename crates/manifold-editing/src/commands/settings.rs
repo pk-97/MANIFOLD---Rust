@@ -1131,7 +1131,7 @@ impl Command for ChangeRtQualityCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution};
+    use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise};
 
     #[test]
     fn change_rt_quality_execute_undo_redo_round_trip() {
@@ -1145,6 +1145,7 @@ mod tests {
                 gi: RtQualityTier::ExtraHigh,
                 reflections: RtQualityTier::Ultra,
                 ray_resolution: RtRayResolution::Quarter,
+                spatial_denoise: RtSpatialDenoise::Off,
             },
             export: RtQualityColumn {
                 shadows: RtQualityTier::ExtraHigh,
@@ -1152,6 +1153,7 @@ mod tests {
                 gi: RtQualityTier::Ultra,
                 reflections: RtQualityTier::Ultra,
                 ray_resolution: RtRayResolution::ThreeQuarter,
+                spatial_denoise: RtSpatialDenoise::High,
             },
         };
 
