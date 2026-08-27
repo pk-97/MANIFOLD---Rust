@@ -3534,6 +3534,147 @@ kernel void debug_firefly_clamp(
     float4 c = firefly_clamp_center(p, depth_tex, color_tex, uint2(1, 1));
     out[0] = packed_float3(c.rgb);
 }
+
+// RT-Stage-3 P3 (BUG-eytk): post-accumulation à-trous spatial filter —
+// smooths the temporal accumulation's residual Monte-Carlo noise using
+// the same edge-stopped bilateral weights as `atrous_filter`, but driven
+// by temporal output variance (moments .r/.g) + spatial luma spread rather
+// than per-channel history. Writes ONLY `dst_irr` — never touches
+// moments or history (I2: the filter never teaches the accumulator).
+
+struct AtrousPostParams {
+    uint2 size;
+    uint step;
+    float strength;
+};
+
+// Per-texel body shared by `atrous_post` (production) and
+// `debug_atrous_post` (value test). Returns the texel's final rgba —
+// alpha always passes through unchanged (accumulated AO, I2).
+template<typename DepthTex>
+static float4 atrous_post_center(
+    constant AtrousPostParams& p,
+    DepthTex depth_tex,
+    texture2d<float> normal_tex,
+    texture2d<float> moments_read,
+    texture2d<float> src_irr,
+    uint2 tid)
+{
+    // Tuning constants — committed ranges from RT_STAGE3_DENOISE_DESIGN.md
+    // section 3.1 (atrous_post kernel): scale 4.0 (2-8), floor 0.02
+    // (0.01-0.05), spatial gain 2.0 (1-4, anchored to
+    // ATROUS_REFL_VARIANCE_GAIN), early-out 0.004 ≈ 1 8-bit level
+    // (0.002-0.01). Function scope, not program scope — MSL requires
+    // program-scope variables in the constant address space.
+    const float POST_LUMA_SIGMA_SCALE = 4.0;
+    const float POST_LUMA_SIGMA_FLOOR = 0.02;
+    const float POST_SPATIAL_GAIN = 2.0;
+    const float POST_EARLY_OUT = 0.004;
+    float4 src = src_irr.read(tid);
+    float center_depth = read_firefly_depth(depth_tex, tid);
+    if (center_depth >= 1.0 - 1e-6) {
+        return src; // void: bit-exact passthrough (blend-queue void pattern)
+    }
+    float4 mo = moments_read.read(tid);
+    float m1 = mo.r;
+    float m2 = mo.g;
+    float n_eff = max(mo.w, 1.0);
+    float var = max(m2 - m1 * m1, 0.0) / n_eff;
+
+    // Spatial luma spread at this pass's dilation — mirrors
+    // ATROUS_REFL_VARIANCE_GAIN's m1/m2 accumulation, WITHOUT its final
+    // sigma add. sd = sqrt(max(m2 - m1*m1, 0)) over the 3x3 neighborhood.
+    float center_luma = luma(src.rgb);
+    float sm1 = center_luma;
+    float sm2 = center_luma * center_luma;
+    const int2 var_offsets[8] = {
+        int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+        int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
+    };
+    for (uint i = 0u; i < 8u; ++i) {
+        int2 q = clamp(int2(tid) + var_offsets[i] * int(p.step), int2(0), int2(p.size) - 1);
+        float ql = luma(src_irr.read(uint2(q)).rgb);
+        sm1 += ql;
+        sm2 += ql * ql;
+    }
+    sm1 /= 9.0;
+    sm2 /= 9.0;
+    float spatial_sd = sqrt(max(sm2 - sm1 * sm1, 0.0));
+
+    float sigma = max(POST_LUMA_SIGMA_SCALE * sqrt(var), POST_LUMA_SIGMA_FLOOR)
+                + POST_SPATIAL_GAIN * spatial_sd;
+
+    // Early-out: both variance and spatial spread quiet — write src unchanged.
+    if (sqrt(var) < POST_EARLY_OUT && spatial_sd < POST_EARLY_OUT) {
+        return src;
+    }
+
+    float3 center_n = normal_tex.read(tid).xyz;
+    float3 acc = src.rgb;
+    float wsum = 1.0;
+    const int2 offsets[8] = {
+        int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+        int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
+    };
+    for (uint i = 0u; i < 8u; ++i) {
+        int2 q = clamp(int2(tid) + offsets[i] * int(p.step), int2(0), int2(p.size) - 1);
+        uint2 uq = uint2(q);
+        float qd = read_firefly_depth(depth_tex, uq);
+        if (qd >= 1.0 - 1e-6) continue;
+        float4 qn4 = normal_tex.read(uq);
+        float3 qn = qn4.xyz;
+        float4 qr = src_irr.read(uq);
+        float w_depth = exp(-abs(qd - center_depth) / 3e-3);
+        float w_normal = pow(max(dot(center_n, qn), 0.0), 16.0);
+        float w_luma = exp(-abs(luma(qr.rgb) - center_luma) / sigma);
+        float w = w_depth * w_normal * w_luma;
+        acc += qr.rgb * w;
+        wsum += w;
+    }
+    float3 filtered = acc / wsum;
+    float4 out;
+    out.rgb = mix(src.rgb, filtered, p.strength);
+    out.a = src.a; // accumulated AO passthrough (I2)
+    return out;
+}
+
+kernel void atrous_post(
+    constant AtrousPostParams&           p            [[buffer(1)]],
+    depth2d<float>                       depth_tex    [[texture(0)]],
+    texture2d<float>                     normal_tex   [[texture(1)]],
+    texture2d<float>                     moments_read [[texture(2)]],
+    texture2d<float>                     src_irr      [[texture(3)]],
+    texture2d<float, access::write>      dst_irr      [[texture(4)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    if (tid.x >= p.size.x || tid.y >= p.size.y) return;
+    dst_irr.write(atrous_post_center(p, depth_tex, normal_tex, moments_read, src_irr, tid), tid);
+}
+
+// RT-Stage-3 P3 value-test-only surface (`debug_atrous_post`'s only caller)
+// — exercises the EXACT SAME `atrous_post_center` helper the production
+// `atrous_post` kernel calls, against a caller-supplied 3x3 neighborhood.
+// No ray tracing, no full-res pass — not part of the production dispatch
+// path (never called by `render_scene.rs`).
+//
+// The production kernel uses `depth2d<float>`; the debug surface uploads
+// R32Float as `texture2d<float>` (Depth32Float has no CPU-upload path).
+// The atrous_post_center template handles both via read_firefly_depth.
+// For the 3x3 debug surface, step=1 and the dilation reads the full 3x3
+// neighborhood (center (1,1)) — exactly like firefly_debug_surface.
+kernel void debug_atrous_post(
+    constant AtrousPostParams& p [[buffer(0)]],
+    texture2d<float>           depth_tex    [[texture(0)]],
+    texture2d<float>           normal_tex   [[texture(1)]],
+    texture2d<float>           moments_read [[texture(2)]],
+    texture2d<float>           src_irr      [[texture(3)]],
+    device packed_float4*      out          [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid != 0u) return;
+    float4 c = atrous_post_center(p, depth_tex, normal_tex, moments_read, src_irr, uint2(1, 1));
+    out[0] = packed_float4(c);
+}
 "#;
 
 /// One shadow-casting light's ray-tracing params — the per-caster payload
@@ -4701,6 +4842,39 @@ fn firefly_clamp_params_bytes(params: &FireflyClampParams) -> &[u8] {
     }
 }
 
+/// CPU mirror of the MSL `AtrousPostParams` struct backing `atrous_post`
+/// (RT-Stage-3 P3, BUG-eytk). Plain POD — `uint2 size` + `uint step` +
+/// `float strength`, 16 bytes. Same discipline as `AtrousParams`/`FireflyClampParams`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AtrousPostParams {
+    pub size: [u32; 2],
+    /// Dilation step in texels (1, 2, 4, 8 — same convention as AtrousParams.step).
+    pub step: u32,
+    /// Blend strength: 0.0 = no filtering, 1.0 = full replace.
+    pub strength: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<AtrousPostParams>() == 16);
+
+impl AtrousPostParams {
+    pub fn new(size: [u32; 2], step: u32, strength: f32) -> Self {
+        Self { size, step, strength }
+    }
+}
+
+fn atrous_post_params_bytes(params: &AtrousPostParams) -> &[u8] {
+    // SAFETY: `AtrousPostParams` is `#[repr(C)]`, all-POD (two u32 + one
+    // u32 + one f32 = 16 bytes), no padding, no interior pointers — same
+    // discipline as `atrous_params_bytes`.
+    unsafe {
+        std::slice::from_raw_parts(
+            (params as *const AtrousPostParams) as *const u8,
+            std::mem::size_of::<AtrousPostParams>(),
+        )
+    }
+}
+
 // RT-T2-A: a 1x1 fully-opaque (alpha=1.0) texture — bound into every
 // `alpha_textures` slot a frame's `dispatch_shadow_rays` call doesn't fill
 // with a real base-color texture. Fully opaque so an accidental sample
@@ -4966,6 +5140,24 @@ pub trait ShadowRayTracer {
         label: &str,
     );
 
+    /// RT-Stage-3 P3 (BUG-eytk): post-accumulation à-trous spatial filter on
+    /// the demodulated irradiance. Smooths temporal accumulation's residual
+    /// Monte-Carlo noise using variance + spatial-spread guided bilateral
+    /// weights. Writes ONLY `dst_irr` — never touches moments or history
+    /// (I2: the filter never teaches the accumulator).
+    fn atrous_post_pass(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &AtrousPostParams,
+        params_buffer: &GpuBuffer,
+        depth_tex: &GpuTexture,
+        normal_tex: &GpuTexture,
+        moments_read: &GpuTexture,
+        src_irr: &GpuTexture,
+        dst_irr: &GpuTexture,
+        label: &str,
+    );
+
     /// RT-P2/D3, extended RT-T1-C (BUG-311): temporal-accumulate `hi_irr`
     /// (this frame's raw demodulated irradiance) into `history_write`,
     /// reprojecting `history_read` through `params.prev_view_proj` and
@@ -5079,6 +5271,11 @@ pub struct MetalShadowRayTracer {
     /// RT-Stage-3 P1 value-test-only surface (`debug_firefly_clamp`'s only
     /// caller) — see the MSL `debug_firefly_clamp` kernel's doc comment.
     debug_firefly_clamp_pipeline: GpuComputePipeline,
+    /// RT-Stage-3 P3 (BUG-eytk): the post-accumulation à-trous filter pipeline.
+    atrous_post_pipeline: GpuComputePipeline,
+    /// RT-Stage-3 P3 value-test-only surface (`debug_atrous_post`'s only
+    /// caller) — see the MSL `debug_atrous_post` kernel's doc comment.
+    debug_atrous_post_pipeline: GpuComputePipeline,
     /// RT-T2-A: 1x1 fully-opaque texture bound into every one of
     /// `trace_shadow_rays`'s `alpha_textures` slots that this frame's
     /// `dispatch_shadow_rays` call doesn't supply a real texture for —
@@ -5104,6 +5301,8 @@ pub struct RtPipelines {
     pub debug_clamp_refl_history_pipeline: GpuComputePipeline,
     pub firefly_clamp_pipeline: GpuComputePipeline,
     pub debug_firefly_clamp_pipeline: GpuComputePipeline,
+    pub atrous_post_pipeline: GpuComputePipeline,
+    pub debug_atrous_post_pipeline: GpuComputePipeline,
 }
 
 impl RtPipelines {
@@ -5366,6 +5565,38 @@ impl RtPipelines {
             ]),
         );
 
+        // RT-Stage-3 P3 (BUG-eytk): post-accumulation à-trous filter —
+        // params buffer(1), depth texture(0), normal texture(1), moments(2),
+        // src_irr(3), dst_irr(write, 4). Signatures and slot maps change
+        // together.
+        let atrous_post_pipeline = compile_pipeline(
+            device,
+            &library,
+            "atrous_post",
+            identity_slot_map(&[
+                (1, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
+                (2, SlotKind::Texture),
+                (3, SlotKind::Texture),
+                (4, SlotKind::Texture),
+            ]),
+        );
+
+        let debug_atrous_post_pipeline = compile_pipeline(
+            device,
+            &library,
+            "debug_atrous_post",
+            identity_slot_map(&[
+                (0, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
+                (2, SlotKind::Texture),
+                (3, SlotKind::Texture),
+                (1, SlotKind::Buffer),
+            ]),
+        );
+
         Self {
             trace_pipeline_binary,
             trace_pipeline_translucent,
@@ -5376,6 +5607,8 @@ impl RtPipelines {
             debug_clamp_refl_history_pipeline,
             firefly_clamp_pipeline,
             debug_firefly_clamp_pipeline,
+            atrous_post_pipeline,
+            debug_atrous_post_pipeline,
         }
     }
 }
@@ -5404,6 +5637,8 @@ impl MetalShadowRayTracer {
             debug_clamp_refl_history_pipeline: p.debug_clamp_refl_history_pipeline.clone(),
             firefly_clamp_pipeline: p.firefly_clamp_pipeline.clone(),
             debug_firefly_clamp_pipeline: p.debug_firefly_clamp_pipeline.clone(),
+            atrous_post_pipeline: p.atrous_post_pipeline.clone(),
+            debug_atrous_post_pipeline: p.debug_atrous_post_pipeline.clone(),
             dummy_alpha_tex,
         }
     }
@@ -5634,6 +5869,135 @@ impl MetalShadowRayTracer {
         let mut result = [0.0f32; 3];
         unsafe {
             std::ptr::copy_nonoverlapping(out_ptr as *const f32, result.as_mut_ptr(), 3);
+        }
+        result
+    }
+
+    /// RT-Stage-3 P3 value-test-only surface (`debug_atrous_post`'s only
+    /// caller) — exercises the EXACT SAME `atrous_post_center` MSL helper
+    /// the production `atrous_post` kernel calls, against a caller-supplied
+    /// 3x3 neighborhood (depth, normal, moments, src_irr). Center is (1,1),
+    /// step=1 (the 3x3 dilated read at step 1 reads the full 3x3 — exactly
+    /// like `debug_firefly_clamp`'s pattern). No ray tracing, no full-res
+    /// pass — synchronous (commits and waits) — test-only call pattern,
+    /// never used on a hot path.
+    ///
+    /// Returns `[r, g, b, a]` — the a channel matters here because the
+    /// kernel's `.a` passthrough is an invariant (I2: accumulated AO
+    /// unchanged).
+    pub fn debug_atrous_post(
+        &self,
+        device: &GpuDevice,
+        depth: &[f32; 9],
+        normal: &[[f32; 4]; 9],
+        moments: &[[f32; 4]; 9],
+        src_irr: &[[f32; 4]; 9],
+        step: u32,
+        strength: f32,
+    ) -> [f32; 4] {
+        let depth_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::R32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-eytk-debug-atrous-depth",
+            mip_levels: 1,
+        });
+        let depth_bytes: Vec<u8> = depth.iter().flat_map(|d| d.to_le_bytes()).collect();
+        device.upload_texture(&depth_tex, &depth_bytes);
+
+        let normal_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-eytk-debug-atrous-normal",
+            mip_levels: 1,
+        });
+        let normal_bytes: Vec<u8> = normal
+            .iter()
+            .flat_map(|texel| texel.iter().flat_map(|c| c.to_le_bytes()))
+            .collect();
+        device.upload_texture(&normal_tex, &normal_bytes);
+
+        let moments_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-eytk-debug-atrous-moments",
+            mip_levels: 1,
+        });
+        let moments_bytes: Vec<u8> = moments
+            .iter()
+            .flat_map(|texel| texel.iter().flat_map(|c| c.to_le_bytes()))
+            .collect();
+        device.upload_texture(&moments_tex, &moments_bytes);
+
+        let src_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-eytk-debug-atrous-src",
+            mip_levels: 1,
+        });
+        let src_bytes: Vec<u8> = src_irr
+            .iter()
+            .flat_map(|texel| texel.iter().flat_map(|c| c.to_le_bytes()))
+            .collect();
+        device.upload_texture(&src_tex, &src_bytes);
+
+        let params = AtrousPostParams::new([3, 3], step, strength);
+        let params_buffer = device.create_buffer_shared(20); // AtrousPostParams
+        let params_ptr = params_buffer
+            .mapped_ptr()
+            .expect("debug atrous post params buffer must be CPU-mapped");
+        unsafe {
+            std::ptr::write_unaligned(params_ptr as *mut AtrousPostParams, params);
+        }
+        let out_buffer = device.create_buffer_shared(16); // packed_float4
+        out_buffer.zero_fill();
+
+        let cb = device
+            .raw_queue()
+            .commandBuffer()
+            .expect("Failed to acquire command buffer for BUG-eytk debug dispatch");
+        unsafe { cb.setLabel(Some(&NSString::from_str("BUG-eytk debug atrous post"))) };
+        let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
+            .computeCommandEncoder()
+            .expect("computeCommandEncoder failed");
+        unsafe {
+            enc.setComputePipelineState(&self.debug_atrous_post_pipeline.state);
+            enc.setBuffer_offset_atIndex(Some(params_buffer.raw()), 0, 0);
+            enc.setTexture_atIndex(Some(&depth_tex.raw), 0);
+            enc.setTexture_atIndex(Some(&normal_tex.raw), 1);
+            enc.setTexture_atIndex(Some(&moments_tex.raw), 2);
+            enc.setTexture_atIndex(Some(&src_tex.raw), 3);
+            enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize { width: 1, height: 1, depth: 1 },
+            );
+        }
+        enc.endEncoding();
+        cb.commit();
+        unsafe { cb.waitUntilCompleted() };
+
+        let out_ptr = out_buffer
+            .mapped_ptr()
+            .expect("debug output buffer must be CPU-mapped");
+        let mut result = [0.0f32; 4];
+        unsafe {
+            std::ptr::copy_nonoverlapping(out_ptr as *const f32, result.as_mut_ptr(), 4);
         }
         result
     }
@@ -5998,6 +6362,54 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 2,
                     texture: dst,
+                },
+            ],
+            groups,
+            label,
+        );
+    }
+
+    fn atrous_post_pass(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &AtrousPostParams,
+        params_buffer: &GpuBuffer,
+        depth_tex: &GpuTexture,
+        normal_tex: &GpuTexture,
+        moments_read: &GpuTexture,
+        src_irr: &GpuTexture,
+        dst_irr: &GpuTexture,
+        label: &str,
+    ) {
+        params_buffer.upload(atrous_post_params_bytes(params));
+        let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
+        encoder.dispatch_compute(
+            &self.atrous_post_pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: depth_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: normal_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: moments_read,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: src_irr,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: dst_irr,
                 },
             ],
             groups,
