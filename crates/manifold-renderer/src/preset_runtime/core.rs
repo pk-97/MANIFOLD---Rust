@@ -1812,41 +1812,6 @@ impl PresetRuntime {
         self.executor.backend().texture_2d(output_slot)
     }
 
-    /// Debug readback: source texture, every step's output texture, and
-    /// the output_slot texture. For bisecting black-frame bugs where the
-    /// chain executes fully but presents zeros.
-    pub fn chain_debug_info(&self) -> Option<ChainDebugInfo<'_>> {
-        let PresetIo::Transform {
-            source_slot,
-            output_slot,
-        } = self.io
-        else {
-            return None;
-        };
-        let backend = self.executor.backend();
-        let source_tex = backend.texture_2d(source_slot);
-        let output_tex = backend.texture_2d(output_slot);
-
-        let mut step_outputs = Vec::new();
-        for (idx, step) in self.plan.steps().iter().enumerate() {
-            for (port_name, res_id) in &step.outputs {
-                let tex = backend.slot_for(*res_id).and_then(|s| backend.texture_2d(s));
-                step_outputs.push(StepDebugInfo {
-                    step_idx: idx,
-                    port_name,
-                    resource_id: *res_id,
-                    texture: tex,
-                });
-            }
-        }
-
-        Some(ChainDebugInfo {
-            source: source_tex,
-            output: output_tex,
-            step_outputs,
-        })
-    }
-
     /// Forwarded `clear_state` for each effect node — called on seek
     /// / project load so trails, feedback, and mip pyramids don't
     /// carry stale content across playback discontinuities. Also
