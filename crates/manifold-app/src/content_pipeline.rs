@@ -3685,14 +3685,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     /// Read-back accessor: the layer scratch buffer's current source texture.
     /// Only meaningful for compositors with per-layer scratch buffers.
+    #[cfg(test)]
     pub fn layer_scratch_texture(&self, layer_id: &str) -> Option<&manifold_gpu::GpuTexture> {
         self.compositor.layer_scratch_texture(layer_id)
     }
 
     /// Read-back accessor: the effect chain's output texture for a layer.
     /// Only meaningful for compositors with per-layer effect chains.
+    #[cfg(test)]
     pub fn chain_output_texture(&self, layer_id: &str) -> Option<&manifold_gpu::GpuTexture> {
         self.compositor.chain_output_texture(layer_id)
+    }
+
+    /// Debug readback: full chain intermediate texture state for a layer.
+    /// Returns source, step outputs, and output_slot textures.
+    #[cfg(test)]
+    pub fn chain_debug_info(
+        &self,
+        layer_id: &str,
+    ) -> Option<manifold_renderer::preset_runtime::ChainDebugInfo<'_>> {
+        self.compositor.chain_debug_info(layer_id)
     }
 
     /// Run the PQ encoder on the final compositor output for HDR export.

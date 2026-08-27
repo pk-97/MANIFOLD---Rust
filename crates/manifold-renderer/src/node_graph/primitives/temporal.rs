@@ -125,6 +125,12 @@ struct FeedbackState {
     /// seeded chain into a seed↔zero oscillation. Cleared after the skip so
     /// the next frame captures normally.
     just_allocated: bool,
+    /// Discriminator for the `just_allocated` skip: true when the alloc
+    /// was a post-clear gap re-entry (the `needs_clear` zero-branch),
+    /// false when it was a seed/bootstrap alloc. In swap mode, gap
+    /// re-entry needs the mirror+swap parity fix; seed allocs must keep
+    /// the old skip to preserve the seed.
+    cleared_on_alloc: bool,
 }
 
 impl NodeState for FeedbackState {}
@@ -236,7 +242,8 @@ impl Primitive for Feedback {
             None => true,
         };
         if needs_alloc {
-            if self.needs_clear {
+            let cleared = self.needs_clear;
+            if cleared {
                 // Post-reset re-entry: the back-edge `in` slot still holds
                 // the pre-reset frame, so the seed path would copy a ghost
                 // of the old content into `out`. Zero instead.
@@ -256,7 +263,7 @@ impl Primitive for Feedback {
             store.insert(
                 node_id,
                 owner_key,
-                FeedbackState { swap, width, height, just_allocated: true },
+                FeedbackState { swap, width, height, just_allocated: true, cleared_on_alloc: cleared },
             );
         } else if self.needs_clear {
             gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
@@ -327,14 +334,47 @@ impl Primitive for Feedback {
         let Some(state) = store.get::<FeedbackState>(node_id, owner_key) else {
             return;
         };
-        let (swap, width, height) = (state.swap, state.width, state.height);
-        // Skip the capture on the frame `run` (re)seeded from `seed`: the
-        // persistent `out`/state already holds the seed, and `in` at this
-        // point is the pre-producer (stale / black) slot. Capturing it would
-        // clobber the seed and collapse the bootstrap into a seed↔zero
-        // flicker. Re-arm for normal capture next frame.
+        let (swap, width, height, cleared_on_alloc) =
+            (state.swap, state.width, state.height, state.cleared_on_alloc);
+        // Parity invariant: every frame must end with exactly one swap so
+        // the presented slot's texture is never more than one frame old.
+        // On the re-entry frame after a gap clear (`just_allocated` +
+        // `cleared_on_alloc`), the persistent `out` holds stale zeroed
+        // content and `in` holds this frame's fresh producer write. In
+        // swap mode we copy the fresh producer output (in) into the
+        // persistent out BEFORE the swap so the swap rotates fresh
+        // content into the presented slot — without this, the swap would
+        // rotate the stale twin into view (the tick-46 black-frame bug).
+        // On seed/bootstrap allocs (`just_allocated` without
+        // `cleared_on_alloc`), the original skip is preserved — the seed
+        // was just installed into `out` and must not be overwritten.
+        // Bridge mode always keeps the skip (no swap, no twin to rotate).
         if state.just_allocated {
             state.just_allocated = false;
+            if swap && cleared_on_alloc {
+                // Gap re-entry: mirror the fresh producer write (in_tex)
+                // into the persistent out slot so the swap can't rotate a
+                // stale twin into the presented slot. Same direction as
+                // the bridge branch below: fresh → persistent.
+                let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+                    return;
+                };
+                ctx.mark_gpu_accessed();
+                let gpu = ctx
+                    .gpu
+                    .as_deref_mut()
+                    .expect("Feedback::late_capture requires a GpuEncoder");
+                Self::copy_with_format_bridge(
+                    gpu,
+                    in_tex,
+                    out_tex,
+                    width,
+                    height,
+                    state_format,
+                    &mut self.cross_format_copy_fp32,
+                );
+                ctx.request_texture_swap("out", "in");
+            }
             return;
         }
 
