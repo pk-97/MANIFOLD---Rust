@@ -300,6 +300,17 @@ fn scale_dim(native: u32, num: u32, den: u32) -> u32 {
 /// per hero asset.
 const EMISSIVE_GLOW_RANGE_WORLD_UNITS: f32 = 3.0;
 
+/// RT-Stage-3 P1 (BUG-mkgh): the firefly clamp's luma threshold is
+/// `FIREFLY_MEDIAN_GAIN * max(neighborhood median, floor)` — how many local
+/// medians above the neighborhood a texel may reach before it's clamped.
+/// Committed 8.0 (range 4–16, anchored to `RT_REFL_FIREFLY_GAIN`).
+const FIREFLY_MEDIAN_GAIN: f32 = 8.0;
+/// RT-Stage-3 P1 (BUG-mkgh): the clamp's absolute luma floor — the bare
+/// gain (8 × 1.0) would hard-ceiling an isolated legit emitter at 8 luma,
+/// so the floor is `max(4.0, emissive_table_mean_power)` (a bright-emissive
+/// scene raises its own ceiling; worst case 8 × 4 = 32).
+const FIREFLY_ABS_FLOOR_MIN: f32 = 4.0;
+
 /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered specular
 /// chain base resolution + mip count. `PREFILTER_MIP_COUNT` mips span
 /// roughness 0 (mip 0, base resolution) to roughness 1 (the last mip,
@@ -760,6 +771,21 @@ pub struct RenderScene {
     rt_temporal_color_scratch: Option<manifold_gpu::GpuTexture>,
     rt_temporal_color_scratch_width: u32,
     rt_temporal_color_scratch_height: u32,
+    /// RT-Stage-3 P1 (BUG-mkgh): dedicated single-sample scratch the forward
+    /// pass resolves into when the firefly clamp is active this frame — the
+    /// clamp then reads it and writes `target`, so source and destination
+    /// never alias (under `temporal_upscale`, `target` IS
+    /// `rt_temporal_color_scratch`, which is exactly the aliasing case the
+    /// clamp must avoid). Same `Rgba16Float` + usage as the temporal scratch
+    /// (a legal MSAA resolve destination + clamp read), plus `SHADER_WRITE`
+    /// is NOT needed here — the clamp only reads it.
+    rt_firefly_scratch: Option<manifold_gpu::GpuTexture>,
+    rt_firefly_scratch_width: u32,
+    rt_firefly_scratch_height: u32,
+    /// RT-Stage-3 P1: CPU-mapped upload buffer for `FireflyClampParams`
+    /// (separate from the other params buffers for the same non-clobbering
+    /// reason `rt_atrous_params_buffer` documents).
+    rt_firefly_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// D22: the live MetalFX Temporal scaler — created lazily on this
     /// node's first `temporal_upscale` frame, resized on dimension change
     /// (same lifecycle contract as `crate::metalfx_temporal_upscaler`'s own
@@ -1498,6 +1524,10 @@ impl RenderScene {
             rt_temporal_color_scratch: None,
             rt_temporal_color_scratch_width: 0,
             rt_temporal_color_scratch_height: 0,
+            rt_firefly_scratch: None,
+            rt_firefly_scratch_width: 0,
+            rt_firefly_scratch_height: 0,
+            rt_firefly_params_buffer: None,
             denoiser: None,
             denoiser_unavailable_logged: false,
             denoise_gate_blocked_logged: false,
@@ -1789,6 +1819,19 @@ impl RenderScene {
                 label: "RT Denoise Feed",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(false),
+                range: None,
+                enum_values: &[],
+            },
+            // RT-Stage-3 P1 (BUG-mkgh): per-scene pre-blur firefly clamp
+            // toggle. Default ON = today's behavior plus the clamp; Peter can
+            // flip it off per scene from the layer inspector (cardable like
+            // the other rt_* toggles). Inert when RT didn't render this
+            // frame or the denoiser owns the tail (`denoise_active`).
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_firefly_clamp"),
+                label: "RT Firefly Clamp",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(true),
                 range: None,
                 enum_values: &[],
             },
@@ -2292,12 +2335,47 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            // RT-Stage-3 P1 (BUG-mkgh): `SHADER_WRITE` added so the firefly
+            // clamp can write its result into this scratch (the clamp's
+            // `dst` when `temporal_upscale` is on); harmless otherwise —
+            // it only widens the usage of a texture MetalFX already reads
+            // and the MSAA resolve already writes.
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
             label: "node.render_scene RT temporal-upscale render-res color scratch (D22)",
             mip_levels: 1,
         }));
         self.rt_temporal_color_scratch_width = width;
         self.rt_temporal_color_scratch_height = height;
+    }
+
+    /// RT-Stage-3 P1 (BUG-mkgh): (re)allocate the dedicated firefly-clamp
+    /// scratch — the single-sample color the forward pass resolves into when
+    /// the clamp is active this frame, so the clamp reads it and writes
+    /// `target` (never aliased). Same `Rgba16Float` + `RENDER_TARGET |
+    /// SHADER_READ` usage as the temporal scratch — a legal MSAA resolve
+    /// destination read back by the clamp's `texture2d<float>` (the clamp
+    /// writes `target`, not this texture, so no `SHADER_WRITE` here).
+    fn ensure_rt_firefly_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.rt_firefly_scratch_width == width
+            && self.rt_firefly_scratch_height == height
+            && self.rt_firefly_scratch.is_some()
+        {
+            return;
+        }
+        self.rt_firefly_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene RT firefly-clamp scratch (BUG-mkgh)",
+            mip_levels: 1,
+        }));
+        self.rt_firefly_scratch_width = width;
+        self.rt_firefly_scratch_height = height;
     }
 
     /// D22: (re)create the live `MetalFxTemporalUpscaler` when the
@@ -2677,6 +2755,17 @@ impl RenderScene {
         if self.rt_atrous_params_buffer.is_none() {
             self.rt_atrous_params_buffer = Some(device.create_buffer_shared(
                 std::mem::size_of::<manifold_gpu::raytrace::AtrousParams>() as u64,
+            ));
+        }
+    }
+
+    /// RT-Stage-3 P1 (BUG-mkgh): CPU-mapped `FireflyClampParams` upload
+    /// buffer — separate from the other params buffers (same
+    /// non-clobbering reason).
+    fn ensure_rt_firefly_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.rt_firefly_params_buffer.is_none() {
+            self.rt_firefly_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::FireflyClampParams>() as u64,
             ));
         }
     }
@@ -4147,6 +4236,12 @@ impl EffectNode for RenderScene {
             && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
         let rt_gi_enabled = rt_enabled
             && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
+        // RT-Stage-3 P1 (BUG-mkgh): pre-blur firefly clamp toggle. Default
+        // ON. Read once here (folded with rt_enabled like the other terms)
+        // so the tail can gate the clamp dispatch without a second param
+        // lookup after the `ctx` mutable borrows below.
+        let rt_firefly_clamp_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_firefly_clamp"), Some(ParamValue::Bool(true)));
         // RT_QUALITY_SETTINGS_DESIGN.md D5/D6: the active quality column,
         // resolved per frame by the compositor from project settings.
         // Copied out of ctx here — the dispatch code below runs after
@@ -4231,6 +4326,21 @@ impl EffectNode for RenderScene {
         // counterpart). When true, suppresses `temporal_upscale_active`
         // (DN2: the denoiser REPLACES the plain temporal scaler).
         let mut denoise_active = false;
+        // RT-Stage-3 P1 (BUG-mkgh): whether the RT trace + accumulate
+        // dispatches actually ran this frame — set true inside the
+        // `rt_ready && topo-key-match` RT block, false otherwise (the
+        // raster path serves the accel-not-ready/topo-transition frames).
+        // Gates the firefly clamp: clamping when RT didn't render is a
+        // forbidden move. Declared here (mut, assigned later) so the tail
+        // can read it — same pattern as `denoise_active`.
+        let mut rt_rendered_this_frame = false;
+        // RT-Stage-3 P1 (BUG-mkgh): the emissive table's mean power — the
+        // firefly clamp's absolute floor anchor (`max(4.0, mean_power)`).
+        // Computed inside the RT block (only there is the emissive table
+        // resident), so hoisted to this scope the way `denoise_active` is,
+        // defaulting to 0.0 (floor falls back to 4.0) on any frame RT
+        // didn't render.
+        let mut emissive_table_mean_power: f32 = 0.0;
         // GBUFFER_DESIGN.md section 2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -4993,6 +5103,19 @@ impl EffectNode for RenderScene {
                 let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
+                // RT-Stage-3 P1 (BUG-mkgh): firefly-clamp params buffer +
+                // scratch. The scratch is sized to `target` for the
+                // non-denoise path (render-res under `temporal_upscale`,
+                // native-res otherwise) — denoise_active disables the
+                // clamp, so its dims are irrelevant there.
+                self.ensure_rt_firefly_params_buffer(gpu.device);
+                if rt_firefly_clamp_enabled {
+                    if temporal_upscale {
+                        self.ensure_rt_firefly_scratch(gpu.device, width, height);
+                    } else {
+                        self.ensure_rt_firefly_scratch(gpu.device, native_width, native_height);
+                    }
+                }
                 self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
             }
             // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
@@ -5609,8 +5732,10 @@ impl EffectNode for RenderScene {
             if rt_ready && self.rt_accel_topo_key == Some(topo_key) {
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
-                // emissive geometry.
-                let emissive_table_mean_power = self
+                // emissive geometry. Hoisted to the evaluate scope (mut
+                // declared above) so the firefly clamp's floor can read it
+                // at the tail.
+                emissive_table_mean_power = self
                     .rt_accel
                     .as_ref()
                     .and_then(|a| a.emissive_table.as_ref())
@@ -6213,6 +6338,10 @@ impl EffectNode for RenderScene {
                 );
                 self.rt_history_ping = write_idx;
                 self.rt_moments_valid = true;
+                // RT-Stage-3 P1 (BUG-mkgh): RT actually rendered this frame
+                // (trace + accumulate dispatched) — arms the firefly clamp
+                // gate at the tail.
+                rt_rendered_this_frame = true;
                 gpu.checkpoint();
 
                 // RAYTRACING_DESIGN.md section 5.2 P3 (D5, "emissive-colored
@@ -6319,6 +6448,22 @@ impl EffectNode for RenderScene {
         } else {
             native_color
         };
+        // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the node's
+        // final resolved color, before the upscale/denoise tail. When it's
+        // active the forward pass resolves into a DEDICATED scratch
+        // (`rt_firefly_scratch`) and the clamp copies scratch→`target` —
+        // never `rt_temporal_color_scratch`, because under temporal upscale
+        // `target` IS that scratch and the clamp's source/destination would
+        // alias. Gated on RT having actually rendered this frame AND the
+        // param AND not `denoise_active` (the denoiser owns the tail then).
+        let firefly_clamp_active = rt_rendered_this_frame
+            && rt_firefly_clamp_enabled
+            && !denoise_active;
+        let resolve_target: &manifold_gpu::GpuTexture = if firefly_clamp_active {
+            self.rt_firefly_scratch.as_ref().expect("ensured above")
+        } else {
+            target
+        };
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: `opaque_scene_color` was
         // already (re)allocated above, sized to this exact `target`'s
         // format — see `opaque_scene_color_target_format`'s doc comment for
@@ -6389,7 +6534,14 @@ impl EffectNode for RenderScene {
             // Every object had zero drawable vertices — clear so stale
             // pool contents don't leak through (matches render_mesh's
             // vertex_count == 0 fallback).
-            ctx.gpu_encoder().native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            ctx.gpu_encoder().native_enc.clear_texture(resolve_target, 0.0, 0.0, 0.0, 0.0);
+            if firefly_clamp_active {
+                // Zero-vertex + clamp: RT didn't render (no geometry), so
+                // this branch is unreachable with the clamp armed — but
+                // clear `target` too so a future gate change can't strand
+                // a stale `target` behind an un-run clamp.
+                ctx.gpu_encoder().native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            }
             return;
         }
 
@@ -6862,7 +7014,7 @@ impl EffectNode for RenderScene {
 
         let pass_desc = manifold_gpu::DepthMsaaPassDesc {
             msaa_color,
-            resolve_target: target,
+            resolve_target,
             msaa_depth: depth_tex,
             depth_resolve: depth_resolve_target,
             aux_color,
@@ -6893,7 +7045,7 @@ impl EffectNode for RenderScene {
             let blend_depth_stencil = self.blend_depth_stencil.as_ref().expect("ensured");
             let gpu = ctx.gpu_encoder();
             gpu.native_enc
-                .copy_texture_to_texture(target, opaque_scene_color, width, height, 1);
+                .copy_texture_to_texture(resolve_target, opaque_scene_color, width, height, 1);
             // E2b: level 0 is fresh from the blit above; levels 1.. are
             // stale until regenerated (same "regen on every write" rule
             // `node.gltf_texture_source` step 8 follows) — `fs_pbr`'s
@@ -6906,7 +7058,7 @@ impl EffectNode for RenderScene {
             }
             if !blend_draw_calls.is_empty() {
                 gpu.native_enc.draw_instanced_depth_batch(
-                    target,
+                    resolve_target,
                     opaque_depth_snapshot,
                     blend_depth_stencil,
                     &blend_draw_calls,
@@ -7017,7 +7169,7 @@ impl EffectNode for RenderScene {
             let gpu = ctx.gpu_encoder();
             gpu.native_enc.draw_instanced(
                 composite_pipeline,
-                target,
+                resolve_target,
                 &[
                     GpuBinding::Bytes {
                         binding: 0,
@@ -7031,6 +7183,46 @@ impl EffectNode for RenderScene {
                 1,
                 manifold_gpu::GpuLoadAction::Load,
                 "node.render_scene shaft composite",
+            );
+        }
+
+        // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the fully
+        // composited `resolve_target` (Pass A + transmissive Pass B + shafts)
+        // and writes `target`, so the upscale/denoise tail below reads the
+        // clamped color. Depth guide is the internal single-sample
+        // `opaque_depth_snapshot` (the SAME depth `atrous_filter`/
+        // `accumulate_irradiance` read) — NOT `self.depth_texture`, which is
+        // the 4x-MSAA memoryless Pass-2 target and unreadable in a compute
+        // pass, and NOT the lazy graph `depth` output, which is `None` when
+        // unwired. `opaque_depth_snapshot` is ensured whenever `rt_enabled`,
+        // so it is resident on every frame `rt_rendered_this_frame` can be
+        // true.
+        if firefly_clamp_active {
+            let tracer = self
+                .rt_tracer
+                .as_ref()
+                .expect("rt_rendered_this_frame implies rt_tracer ensured");
+            let firefly_params_buffer = self
+                .rt_firefly_params_buffer
+                .as_ref()
+                .expect("ensured above");
+            let firefly_depth = self
+                .opaque_depth_snapshot
+                .as_ref()
+                .expect("ensured above: rt_enabled implies opaque depth snapshot");
+            let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new(
+                [width, height],
+                FIREFLY_MEDIAN_GAIN,
+                FIREFLY_ABS_FLOOR_MIN.max(emissive_table_mean_power),
+            );
+            tracer.firefly_clamp(
+                ctx.gpu_encoder().native_enc,
+                &firefly_params,
+                firefly_params_buffer,
+                firefly_depth,
+                resolve_target,
+                target,
+                "node.render_scene RT firefly_clamp",
             );
         }
 
@@ -7717,14 +7909,15 @@ mod tests {
         // `objects` + `lights` + `rt_enabled` (D14) + `temporal_upscale`
         // (section 5.2 P4) + `rt_reflections` (section 9 RD9) +
         // `rt_denoise_feed` (section 17.5 DN4) + `rt_shadows` +
-        // `rt_ao` + `rt_gi` (RT term toggles) — per-object TRS moved to
+        // `rt_ao` + `rt_gi` (RT term toggles) + `rt_firefly_clamp`
+        // (RT-Stage-3 P1, BUG-mkgh) — per-object TRS moved to
         // `node.scene_object`'s `transform` input
         // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3);
         // instances carries no per-object instance_count param either
         // (REALTIME_3D_DESIGN.md section 10 D11). Neither toggle grows with object
         // count — this assertion is about object count, not the fixed
         // scene-level toggle set.
-        assert_eq!(s.parameters().len(), 9);
+        assert_eq!(s.parameters().len(), 10);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
 
@@ -7737,7 +7930,7 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 9, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(node.parameters().len(), 10, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -7789,7 +7982,7 @@ mod tests {
         assert!(node.inputs().iter().any(|p| p.name == "object_31"));
         // objects/lights + fixed scene-level toggles — object count never
         // grows the param list.
-        assert_eq!(node.parameters().len(), 9);
+        assert_eq!(node.parameters().len(), 10);
     }
 
     #[test]
@@ -8958,5 +9151,35 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         s.ensure_rt_masks(&device, 64, 64, 256, 256);
         assert_eq!(s.rt_mask_trace_w, 64);
         assert_eq!(s.rt_mask_width, 256);
+    }
+
+    /// RT-Stage-3 P1 (BUG-mkgh): the firefly clamp's median is a partial
+    /// selection over the non-void 3x3 subset's luma, returning the element
+    /// at sorted index `n/2` (odd n = the middle; even n = the element at
+    /// index n/2). This is the Rust mirror of the MSL `firefly_median_luma`
+    /// in `crates/manifold-gpu/src/metal/raytrace.rs` — kept in lockstep by
+    /// the gpu-proofs value test, which asserts the GPU kernel lands on the
+    /// same order statistic. Plain (non-GPU) unit test: pins the selection
+    /// convention so a retune can't silently drift the CPU mirror.
+    #[test]
+    fn firefly_median_selection_is_the_n_over_2_order_statistic() {
+        let median = |ls: &[f32]| {
+            let mut v = ls.to_vec();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[v.len() / 2]
+        };
+
+        // Odd n: the true middle.
+        assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+        // The full 9-element subset (center included) of a hot-center
+        // firefly: median is the 5th-smallest (a dim neighbor), not the
+        // outlier — which is exactly what lets the clamp engage.
+        assert_eq!(median(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0]), 1.0);
+        // Neighbors 1..8 + center 100 => median 5 (the 5th-smallest).
+        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 100.0]), 5.0);
+        // Even n: index n/2 (the upper of the two middles), matching the MSL
+        // `mid = n / 2` convention.
+        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0]), 3.0);
+        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), 4.0);
     }
 }

@@ -60,6 +60,7 @@ mod rt_edc_enclosure;
 mod rt_emissive_direct;
 mod rt_emissive_light_table;
 mod rt_furnace_oracle;
+mod rt_firefly_clamp;
 mod rt_gesture_response;
 mod rt_normal_tangent_mirror;
 mod rt_multi_caster_shadow;
