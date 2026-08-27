@@ -86,6 +86,8 @@ use segments::{SegmentMember, classify_segment_member, segment_run, build_segmen
 mod build;
 use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, OpenGroup};
 
+mod convert_heal;
+
 /// The production chain-topology key, exposed for load-time clip-topology
 /// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
 /// chains against the exact inputs `is_compatible` hashes, so a warmed
