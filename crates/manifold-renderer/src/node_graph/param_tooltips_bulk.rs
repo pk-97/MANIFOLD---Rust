@@ -887,6 +887,9 @@ crate::param_tooltips!("node.scanline_jitter_field", {
     "amount" => "How far the torn rows slide sideways and how many of them tear, from 0 for none up to 1. Feed the output into a Remap in Relative mode.",
     "scanline" => "How many rows tear at once, from 0 for a clean image up to 1 for heavy tearing across the frame.",
     "speed" => "How fast the tearing pattern reshuffles over time, from 0.1 for a slow drift up to 10 for a fast jitter.",
+    "spread" => "How far the bands push apart across the slice axis, in band heights — 0 keeps them touching, 1 separates each pair by a full band. Only applies in Slide motion.",
+    "spread_mode" => "How the bands separate: Shear slides each band's content over its neighbours, Split lifts the strips apart so the gaps go transparent and show whatever is underneath.",
+    "angle" => "The angle of the slices in degrees — 0 for horizontal strips, 90 for vertical strips, anything between for diagonal. Rotates the slide, the spread, and the gaps together.",
 });
 
 crate::param_tooltips!("node.sine_wave", {

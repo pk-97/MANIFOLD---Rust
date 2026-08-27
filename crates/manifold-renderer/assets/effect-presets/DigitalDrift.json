@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "DigitalDrift",
-  "description": "Digital Drift — a faithful node-graph rebuild of the Latent Space website background mosh, built from composable atoms (no wgsl_compute monolith). The website's single fragment pass decomposes into a summed UV offset that resamples the source once, organised into two readable groups. `Drift Field` is the motion engine: the per-band horizontal slide is node.scanline_jitter_field in Slide motion (smooth value-noise drift, every band, ungated, band count = `bands`); the organic domain-warp flow is node.math (time * speed) → two more node.math (× +0.065 / -0.065, giving the website's t = u_time*0.13 at speed 2) → two node.noise in the Value type (the 123.34/456.21/45.32 value-noise hash) sampled at uv*3 ± t → node.pack_rgba (R/G) → node.scale_offset_image(0.028, -0.014) = (value_noise - 0.5)*0.028; node.mix(Add) sums the flow offset (RG) and the slide offset (R) into one field. `Warp & Split` applies it: node.remap(Relative) warps the source by the summed offset in a single resample, then node.radial_offset_field(Linear) → node.rgb_split adds the horizontal RGB fringe at the seams. A top-level node.mix(Lerp, Drift) crossfades the whole effect back over the untouched source so Drift=0 is a clean passthrough (skipMode onZero). Two node.value hubs fan the cards: Drift → the slide amount + the final crossfade; Speed → both the flow time-scale and the slide rate, so one Speed knob accelerates the entire motion together. The value-noise field is the literal website function — the Value type on node.noise and the matching hash on node.scanline_jitter_field's Slide mode carry the same constants — so this is the actual effect, not a lookalike. Divergences vs the website: (a) the chromatic split is a separate post pass on the warped image (one extra bilinear tap, visually negligible) rather than folded into the same fetch; (b) the website's occasional glitch-gate `g` (gated big shift + g-scaled chromatic) is omitted — Digital Drift is the calm continuous form; add a second node.scanline_jitter_field in Tear mode for the spiky accent; (c) source UVs are canvas [0,1] (the clip already fills the canvas) rather than the website's aspect-cover branch. Flow time comes from system.generator_input.time; the slide reads FrameTime.seconds internally. The groups flatten to a graph byte-identical in behaviour to the ungrouped form; card bindings reach inner nodes by stable nodeId, so grouping never touches the performance surface.",
+  "description": "Digital Drift — a faithful node-graph rebuild of the Latent Space website background mosh, built from composable atoms (no wgsl_compute monolith). The website's single fragment pass decomposes into a summed UV offset that resamples the source once, organised into two readable groups. `Drift Field` is the motion engine: the per-band horizontal slide is node.scanline_jitter_field in Slide motion (smooth value-noise drift, every band, ungated, band count = `bands`); the organic domain-warp flow is node.math (time * speed) → two more node.math (× +0.065 / -0.065, giving the website's t = u_time*0.13 at speed 2) → two node.noise in the Value type (the 123.34/456.21/45.32 value-noise hash) sampled at uv*3 ± t → node.pack_rgba (R/G) → node.scale_offset_image(0.028, -0.014) = (value_noise - 0.5)*0.028; node.mix(Add) sums the flow offset (RG) and the slide offset (R) into one field. `Warp & Split` applies it: node.remap(Relative) warps the source by the summed offset in a single resample, then node.radial_offset_field(Linear) → node.rgb_split adds the horizontal RGB fringe at the seams. A top-level node.mix(Lerp, Drift) crossfades the whole effect back over the untouched source so Drift=0 is a clean passthrough (skipMode onZero). Two node.value hubs fan the cards: Drift → the slide amount + the final crossfade; Speed → both the flow time-scale and the slide rate, so one Speed knob accelerates the entire motion together. Band Gap → the slide field's `spread`, which separates the bands across the slice axis in band heights (0 keeps the website look; it shares the slide's band quantisation, so the steps land exactly on the horizontal slide seams). Gap Mode picks the character: Shear resamples each band's window shifted (remap's Clamp wrap stretches the edge content into the seams); Split translates the strips themselves — the field's B channel carries a coverage mask (1 inside strips, 0 in the gaps) that survives the flow sum untouched, and `Warp & Split` projects it (node.channel_mixer) onto node.masked_mix against a transparent-black constant, so the gaps composite as true alpha 0 and lower layers show through. Slice Angle rotates the whole slice frame in degrees (0 = horizontal strips, 90 = vertical strips sliding vertically) and drives both the slide field's `angle` and the RGB split's direction, so the fringe stays parallel to the strips. The value-noise field is the literal website function — the Value type on node.noise and the matching hash on node.scanline_jitter_field's Slide mode carry the same constants — so this is the actual effect, not a lookalike. Divergences vs the website: (a) the chromatic split is a separate post pass on the warped image (one extra bilinear tap, visually negligible) rather than folded into the same fetch; (b) the website's occasional glitch-gate `g` (gated big shift + g-scaled chromatic) is omitted — Digital Drift is the calm continuous form; add a second node.scanline_jitter_field in Tear mode for the spiky accent; (c) source UVs are canvas [0,1] (the clip already fills the canvas) rather than the website's aspect-cover branch. Flow time comes from system.generator_input.time; the slide reads FrameTime.seconds internally. The groups flatten to a graph byte-identical in behaviour to the ungrouped form; card bindings reach inner nodes by stable nodeId, so grouping never touches the performance surface.",
   "presetMetadata": {
     "id": "DigitalDrift",
     "displayName": "Digital Drift",
@@ -42,6 +42,39 @@
         "oscSuffix": "Bands"
       },
       {
+        "id": "spread",
+        "name": "Band Gap",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "BandGap"
+      },
+      {
+        "id": "gap_mode",
+        "name": "Gap Mode",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "GapMode"
+      },
+      {
+        "id": "angle",
+        "name": "Slice Angle",
+        "min": 0.0,
+        "max": 180.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "SliceAngle"
+      },
+      {
         "id": "rgb_shift",
         "name": "RGB Shift",
         "min": 0.0,
@@ -73,6 +106,34 @@
         "label": "Bands",
         "defaultValue": 36.0,
         "target": { "kind": "node", "nodeId": "rows", "param": "bands" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "spread",
+        "label": "Band Gap",
+        "defaultValue": 0.0,
+        "target": { "kind": "node", "nodeId": "rows", "param": "spread" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "gap_mode",
+        "label": "Gap Mode",
+        "defaultValue": 0.0,
+        "target": { "kind": "node", "nodeId": "rows", "param": "spread_mode" },
+        "convert": { "type": "EnumRound" }
+      },
+      {
+        "id": "angle",
+        "label": "Slice Angle",
+        "defaultValue": 0.0,
+        "target": { "kind": "node", "nodeId": "rows", "param": "angle" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "angle",
+        "label": "Slice Angle",
+        "defaultValue": 0.0,
+        "target": { "kind": "node", "nodeId": "split_dir", "param": "angle" },
         "convert": { "type": "Float" }
       },
       {
@@ -279,6 +340,39 @@
               "amount": { "type": "Float", "value": -8.0 }
             }
           },
+          {
+            "id": 5,
+            "typeId": "node.channel_mixer",
+            "handle": "mask_proj", "nodeId": "mask_proj",
+            "title": "coverage mask = field B",
+            "params": {
+              "row0": { "type": "Vec4", "value": [0.0, 0.0, 1.0, 0.0] },
+              "row1": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+              "row2": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+              "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] }
+            }
+          },
+          {
+            "id": 6,
+            "typeId": "node.channel_mixer",
+            "handle": "transparent", "nodeId": "transparent",
+            "title": "transparent black",
+            "params": {
+              "row0": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+              "row1": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+              "row2": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+              "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] }
+            }
+          },
+          {
+            "id": 7,
+            "typeId": "node.masked_mix",
+            "handle": "gap_apply", "nodeId": "gap_apply",
+            "title": "apply gap mask",
+            "params": {
+              "amount": { "type": "Float", "value": 1.0 }
+            }
+          },
           { "id": 4, "typeId": "system.group_output" }
         ],
         "wires": [
@@ -286,7 +380,12 @@
           { "fromNode": 0, "fromPort": "offset", "toNode": 1, "toPort": "uv_field" },
           { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
           { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "velocity" },
-          { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "out" }
+          { "fromNode": 0, "fromPort": "offset", "toNode": 5, "toPort": "source" },
+          { "fromNode": 0, "fromPort": "source", "toNode": 6, "toPort": "source" },
+          { "fromNode": 3, "fromPort": "out", "toNode": 7, "toPort": "b" },
+          { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "a" },
+          { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "mask" },
+          { "fromNode": 7, "fromPort": "out", "toNode": 4, "toPort": "out" }
         ]
       }
     },

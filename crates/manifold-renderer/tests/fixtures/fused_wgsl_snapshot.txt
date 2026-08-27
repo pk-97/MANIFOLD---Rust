@@ -781,7 +781,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:DigitalDrift node:18 ===
+=== effect:DigitalDrift node:21 ===
 // @input_access: src_0 gather
 struct Params {
     n0_amount: f32,
@@ -789,6 +789,9 @@ struct Params {
     n0_speed: f32,
     n0_motion: u32,
     n0_bands: f32,
+    n0_spread: f32,
+    n0_spread_mode: u32,
+    n0_angle: f32,
     n0_time: f32,
     n1_type: u32,
     n1_scale: f32,
@@ -814,15 +817,33 @@ struct Params {
     n5_mode: u32,
     n6_wrap: u32,
     n6_mode: u32,
+    n7_row0_x: f32,
+    n7_row0_y: f32,
+    n7_row0_z: f32,
+    n7_row0_w: f32,
+    n7_row1_x: f32,
+    n7_row1_y: f32,
+    n7_row1_z: f32,
+    n7_row1_w: f32,
+    n7_row2_x: f32,
+    n7_row2_y: f32,
+    n7_row2_z: f32,
+    n7_row2_w: f32,
+    n7_row3_x: f32,
+    n7_row3_y: f32,
+    n7_row3_z: f32,
+    n7_row3_w: f32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 // @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
-@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var dst_0: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(4) var dst_1: texture_storage_2d<rgba16float, write>;
 
 fn sjf_hash1(n: f32) -> f32 {
     return fract(sin(n) * 43758.5453123);
@@ -1036,21 +1057,49 @@ fn wrap_coord(t: f32, mode: u32) -> f32 {
     return clamp(t, 0.0, 1.0);
 }
 
-fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, time: f32) -> vec4<f32> {
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, spread: f32, spread_mode: u32, angle: f32, time: f32) -> vec4<f32> {
     let res = dims;
 
     if motion == 1u {
         // Slide — smooth, ungated, every band drifts. speed=2 → website 0.13.
-        // bands = 0 → no rows (offset 0): a downstream flow/domain warp carries
-        // the motion instead of slicing the image into per-row tears.
+        // bands = 0 → no rows (offset 0, full coverage): a downstream
+        // flow/domain warp carries the motion instead of slicing the image
+        // into per-row tears.
         if bands <= 0.0 {
-            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            return vec4<f32>(0.0, 0.0, 1.0, 1.0);
         }
-        let band = floor(uv.y * bands);
+        // The whole slice frame rotates by `angle` degrees around the canvas
+        // centre: bands quantise across the rotated y, the slide runs along
+        // the rotated x, the spread pushes across the rotated y.
+        let rad = angle * 0.01745329;
+        let ca = cos(rad);
+        let sa = sin(rad);
+        let cuv = uv - vec2<f32>(0.5, 0.5);
+        let ruv = vec2<f32>(ca * cuv.x + sa * cuv.y, -sa * cuv.x + ca * cuv.y) + vec2<f32>(0.5, 0.5);
         let t = time * speed * 0.065;
+        var band = floor(ruv.y * bands);
+        var offset_y = 0.0;
+        var coverage = 1.0;
+        if spread_mode == 1u {
+            // Split — translate the strips themselves apart from the centre;
+            // gaps emit coverage 0 so a downstream masked_mix composites
+            // them as transparent. u inverts the strip translation: output
+            // row ruv.y pulls the strip content from u.
+            let u = (ruv.y + 0.5 * spread) / (1.0 + spread);
+            band = floor(u * bands);
+            let f = fract(u * bands);
+            let edge = 0.5 * spread / (1.0 + spread);
+            coverage = step(edge, f) * step(f, 1.0 - edge);
+            offset_y = u - ruv.y;
+        } else {
+            // Shear — resample each band's window shifted across the slice
+            // axis; the gap between adjacent bands is `spread` band-heights.
+            offset_y = ((band + 0.5) / bands - 0.5) * spread;
+        }
         let n = sjf_value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * amount * 0.05;
-        return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+        let off = vec2<f32>(ca * offset_x - sa * offset_y, sa * offset_x + ca * offset_y);
+        return vec4<f32>(off.x, off.y, coverage, 1.0);
     }
 
     // Tear (default) — byte-identical to the original VHS jolt.
@@ -1061,7 +1110,7 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f3
     let scan_shift = (sjf_hash1(scanline_row + t * 3.17) * 2.0 - 1.0) * amount * 0.08;
     let offset_x = scan_shift * scan_mask;
 
-    return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+    return vec4<f32>(offset_x, 0.0, 1.0, 1.0);
 }
 
 fn n1_body(uv: vec2<f32>, dims: vec2<f32>, noise_type: u32, scale: f32, offset_x: f32, offset_y: f32, octaves: i32, lacunarity: f32, persistence: f32) -> vec4<f32> {
@@ -1180,43 +1229,75 @@ fn n6_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: v
     return textureSampleLevel(source, samp, wrapped, 0.0);
 }
 
+fn n7_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(dst);
+    let dims = textureDimensions(dst_0);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_time);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_spread, params.n0_spread_mode, params.n0_angle, params.n0_time);
     let r1 = n1_body(uv, vec2<f32>(dims), params.n1_type, params.n1_scale, params.n1_offset_x, params.n1_offset_y, params.n1_octaves, params.n1_lacunarity, params.n1_persistence);
     let r2 = n2_body(uv, vec2<f32>(dims), params.n2_type, params.n2_scale, params.n2_offset_x, params.n2_offset_y, params.n2_octaves, params.n2_lacunarity, params.n2_persistence);
     let r3 = n3_body(r2, r1, vec4<f32>(0.0), vec4<f32>(0.0), uv, vec2<f32>(dims), params.n3_default_r, params.n3_default_g, params.n3_default_b, params.n3_default_a, 1u, 1u, 0u, 0u);
     let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_scale, params.n4_offset);
     let r5 = n5_body(r4, r0, uv, vec2<f32>(dims), params.n5_amount, params.n5_mode);
     let r6 = n6_body(src_0, samp, r5, uv, vec2<f32>(dims), params.n6_wrap, params.n6_mode);
-    textureStore(dst, coord, r6);
+    let r7 = n7_body(r5, uv, vec2<f32>(dims), vec4<f32>(params.n7_row0_x, params.n7_row0_y, params.n7_row0_z, params.n7_row0_w), vec4<f32>(params.n7_row1_x, params.n7_row1_y, params.n7_row1_z, params.n7_row1_w), vec4<f32>(params.n7_row2_x, params.n7_row2_y, params.n7_row2_z, params.n7_row2_w), vec4<f32>(params.n7_row3_x, params.n7_row3_y, params.n7_row3_z, params.n7_row3_w));
+    textureStore(dst_0, coord, r6);
+    textureStore(dst_1, coord, r7);
 }
 
-=== effect:DigitalDrift node:19 ===
-// @input_access: src_0 gather
-// @input_access: src_1 coincident
+=== effect:DigitalDrift node:22 ===
+// @input_access: src_0 coincident
+// @input_access: src_1 gather
+// @input_access: src_2 coincident
 struct Params {
-    n0_mode: u32,
-    n0_angle: f32,
-    n0_falloff: f32,
-    n1_amount: f32,
+    n0_row0_x: f32,
+    n0_row0_y: f32,
+    n0_row0_z: f32,
+    n0_row0_w: f32,
+    n0_row1_x: f32,
+    n0_row1_y: f32,
+    n0_row1_z: f32,
+    n0_row1_w: f32,
+    n0_row2_x: f32,
+    n0_row2_y: f32,
+    n0_row2_z: f32,
+    n0_row2_w: f32,
+    n0_row3_x: f32,
+    n0_row3_y: f32,
+    n0_row3_z: f32,
+    n0_row3_w: f32,
+    n1_mode: u32,
+    n1_angle: f32,
+    n1_falloff: f32,
     n2_amount: f32,
-    n2_mode: u32,
+    n3_amount: f32,
+    n4_amount: f32,
+    n4_mode: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var src_1: texture_2d<f32>;
-@group(0) @binding(3) var samp: sampler;
-@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var src_2: texture_2d<f32>;
+@group(0) @binding(4) var samp: sampler;
+@group(0) @binding(5) var dst: texture_storage_2d<rgba16float, write>;
 
 fn overlay_channel(a: f32, b: f32) -> f32 {
     if a < 0.5 {
@@ -1254,7 +1335,19 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
     }
 }
 
-fn n0_body(uv: vec2<f32>, dims: vec2<f32>, mode: u32, angle: f32, falloff: f32) -> vec4<f32> {
+fn n0_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n1_body(uv: vec2<f32>, dims: vec2<f32>, mode: u32, angle: f32, falloff: f32) -> vec4<f32> {
     var dir: vec2<f32>;
     if mode == 0u {
         let delta = uv - vec2<f32>(0.5, 0.5);
@@ -1274,7 +1367,7 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, mode: u32, angle: f32, falloff: f32) 
     return vec4<f32>(dir, 0.0, 1.0);
 }
 
-fn n1_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+fn n2_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
     let inv = vec2<f32>(1.0) / dims;
     let v = velocity.rg;
     let off = v * amount * inv;
@@ -1284,7 +1377,12 @@ fn n1_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2
     return vec4<f32>(s_r, s_c.g, s_b, s_c.a);
 }
 
-fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n3_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
@@ -1305,11 +1403,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_1 = textureLoad(src_1, coord, 0);
-    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_mode, params.n0_angle, params.n0_falloff);
-    let r1 = n1_body(src_0, samp, r0, uv, vec2<f32>(dims), params.n1_amount);
-    let r2 = n2_body(ext_1, r1, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
-    textureStore(dst, coord, r2);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let ext_2 = textureLoad(src_2, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n0_row0_x, params.n0_row0_y, params.n0_row0_z, params.n0_row0_w), vec4<f32>(params.n0_row1_x, params.n0_row1_y, params.n0_row1_z, params.n0_row1_w), vec4<f32>(params.n0_row2_x, params.n0_row2_y, params.n0_row2_z, params.n0_row2_w), vec4<f32>(params.n0_row3_x, params.n0_row3_y, params.n0_row3_z, params.n0_row3_w));
+    let r1 = n1_body(uv, vec2<f32>(dims), params.n1_mode, params.n1_angle, params.n1_falloff);
+    let r2 = n2_body(src_1, samp, r1, uv, vec2<f32>(dims), params.n2_amount);
+    let r3 = n3_body(r0, r2, ext_2, uv, vec2<f32>(dims), params.n3_amount);
+    let r4 = n4_body(ext_0, r3, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode);
+    textureStore(dst, coord, r4);
 }
 
 === effect:Dither node:4 ===
@@ -1551,6 +1652,9 @@ struct Params {
     n0_speed: f32,
     n0_motion: u32,
     n0_bands: f32,
+    n0_spread: f32,
+    n0_spread_mode: u32,
+    n0_angle: f32,
     n0_time: f32,
     n1_amount: f32,
     n1_block_size: f32,
@@ -1563,9 +1667,6 @@ struct Params {
     n4_gain: f32,
     n5_low: f32,
     n5_high: f32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 // @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
@@ -1661,21 +1762,49 @@ fn wrap_coord(t: f32, mode: u32) -> f32 {
     return clamp(t, 0.0, 1.0);
 }
 
-fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, time: f32) -> vec4<f32> {
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, spread: f32, spread_mode: u32, angle: f32, time: f32) -> vec4<f32> {
     let res = dims;
 
     if motion == 1u {
         // Slide — smooth, ungated, every band drifts. speed=2 → website 0.13.
-        // bands = 0 → no rows (offset 0): a downstream flow/domain warp carries
-        // the motion instead of slicing the image into per-row tears.
+        // bands = 0 → no rows (offset 0, full coverage): a downstream
+        // flow/domain warp carries the motion instead of slicing the image
+        // into per-row tears.
         if bands <= 0.0 {
-            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            return vec4<f32>(0.0, 0.0, 1.0, 1.0);
         }
-        let band = floor(uv.y * bands);
+        // The whole slice frame rotates by `angle` degrees around the canvas
+        // centre: bands quantise across the rotated y, the slide runs along
+        // the rotated x, the spread pushes across the rotated y.
+        let rad = angle * 0.01745329;
+        let ca = cos(rad);
+        let sa = sin(rad);
+        let cuv = uv - vec2<f32>(0.5, 0.5);
+        let ruv = vec2<f32>(ca * cuv.x + sa * cuv.y, -sa * cuv.x + ca * cuv.y) + vec2<f32>(0.5, 0.5);
         let t = time * speed * 0.065;
+        var band = floor(ruv.y * bands);
+        var offset_y = 0.0;
+        var coverage = 1.0;
+        if spread_mode == 1u {
+            // Split — translate the strips themselves apart from the centre;
+            // gaps emit coverage 0 so a downstream masked_mix composites
+            // them as transparent. u inverts the strip translation: output
+            // row ruv.y pulls the strip content from u.
+            let u = (ruv.y + 0.5 * spread) / (1.0 + spread);
+            band = floor(u * bands);
+            let f = fract(u * bands);
+            let edge = 0.5 * spread / (1.0 + spread);
+            coverage = step(edge, f) * step(f, 1.0 - edge);
+            offset_y = u - ruv.y;
+        } else {
+            // Shear — resample each band's window shifted across the slice
+            // axis; the gap between adjacent bands is `spread` band-heights.
+            offset_y = ((band + 0.5) / bands - 0.5) * spread;
+        }
         let n = sjf_value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * amount * 0.05;
-        return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+        let off = vec2<f32>(ca * offset_x - sa * offset_y, sa * offset_x + ca * offset_y);
+        return vec4<f32>(off.x, off.y, coverage, 1.0);
     }
 
     // Tear (default) — byte-identical to the original VHS jolt.
@@ -1686,7 +1815,7 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f3
     let scan_shift = (sjf_hash1(scanline_row + t * 3.17) * 2.0 - 1.0) * amount * 0.08;
     let offset_x = scan_shift * scan_mask;
 
-    return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+    return vec4<f32>(offset_x, 0.0, 1.0, 1.0);
 }
 
 fn n1_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, block_size: f32, speed: f32, time: f32) -> N1BodyOutputs {
@@ -1749,7 +1878,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_time);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_spread, params.n0_spread_mode, params.n0_angle, params.n0_time);
     let r1 = n1_body(uv, vec2<f32>(dims), params.n1_amount, params.n1_block_size, params.n1_speed, params.n1_time);
     let r2 = n2_body(r1.offset, r0, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
     let r3 = n3_body(src_0, samp, r2, uv, vec2<f32>(dims), params.n3_wrap, params.n3_mode);
