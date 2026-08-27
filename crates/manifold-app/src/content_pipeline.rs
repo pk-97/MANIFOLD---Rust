@@ -3238,6 +3238,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let render_w = ((width as f32) * scale).round().max(1.0) as u32;
         let render_h = ((height as f32) * scale).round().max(1.0) as u32;
 
+        // A same-configuration resize must be free: every chain graph is
+        // dropped on resize, so a redundant same-dims call (LoadProject's
+        // inline resize followed by the queued ResizeContent, undo/redo of
+        // an unrelated setting) wipes every warmed chain and the next clip
+        // start pays a full rebuild on stage.
+        if width == self.output_w
+            && height == self.output_h
+            && self.compositor.dimensions() == (render_w, render_h)
+        {
+            return;
+        }
+
         self.output_w = width;
         self.output_h = height;
 
