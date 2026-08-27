@@ -3548,16 +3548,6 @@ struct AtrousPostParams {
     float strength;
 };
 
-// Tuning constants — committed ranges from design doc section 3.1:
-// POST_LUMA_SIGMA_SCALE 4.0 (range 2-8), POST_LUMA_SIGMA_FLOOR 0.02
-// (range 0.01-0.05), POST_SPATIAL_GAIN 2.0 (range 1-4, anchored to
-// ATROUS_REFL_VARIANCE_GAIN), POST_EARLY_OUT 0.004 ≈ 1 8-bit level
-// (range 0.002-0.01).
-const float POST_LUMA_SIGMA_SCALE = 4.0;
-const float POST_LUMA_SIGMA_FLOOR = 0.02;
-const float POST_SPATIAL_GAIN = 2.0;
-const float POST_EARLY_OUT = 0.004;
-
 // Per-texel body shared by `atrous_post` (production) and
 // `debug_atrous_post` (value test). Returns the texel's final rgba —
 // alpha always passes through unchanged (accumulated AO, I2).
@@ -3570,6 +3560,16 @@ static float4 atrous_post_center(
     texture2d<float> src_irr,
     uint2 tid)
 {
+    // Tuning constants — committed ranges from RT_STAGE3_DENOISE_DESIGN.md
+    // section 3.1 (atrous_post kernel): scale 4.0 (2-8), floor 0.02
+    // (0.01-0.05), spatial gain 2.0 (1-4, anchored to
+    // ATROUS_REFL_VARIANCE_GAIN), early-out 0.004 ≈ 1 8-bit level
+    // (0.002-0.01). Function scope, not program scope — MSL requires
+    // program-scope variables in the constant address space.
+    const float POST_LUMA_SIGMA_SCALE = 4.0;
+    const float POST_LUMA_SIGMA_FLOOR = 0.02;
+    const float POST_SPATIAL_GAIN = 2.0;
+    const float POST_EARLY_OUT = 0.004;
     float4 src = src_irr.read(tid);
     float center_depth = read_firefly_depth(depth_tex, tid);
     if (center_depth >= 1.0 - 1e-6) {
