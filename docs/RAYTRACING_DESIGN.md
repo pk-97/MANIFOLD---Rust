@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — sections through 16 landed; stage-3 spatial denoise + firefly clamp landed (RT_STAGE3_DENOISE_DESIGN.md, closes the BUG-312 (RT ray noise speckle) lineage); Metal 4 denoiser hard-off Apple-side (BUG-woji (MTL4FX denoiser crash)) — classic MetalFX is the operating point. OWED: Peter's looks (17.7 re-look, DN-I pair, TL-C pair, ED-A hero scene), multi-bounce, R2 constants, fast-camera denoiser, noise-gate re-baseline at default-flip, P5 export, P6 frame interp. · K3 + Peter
+**Status:** IN PROGRESS — sections through 16 landed; stage-3 spatial denoise + firefly clamp landed (RT_STAGE3_DENOISE_DESIGN.md; closes the BUG-312 (RT ray noise speckle) lineage) but measured inert under motion (BUG-27bs (RT spatial denoise inert under continuous motion)) → stage-4 motion denoise APPROVED not built (RT_STAGE4_MOTION_DENOISE_DESIGN.md); MetalFX classic is the operating point (Metal 4 hard-off, BUG-woji (MTL4FX denoiser crash)). OWED: Peter's looks (17.7, DN-I, TL-C, ED-A hero), multi-bounce, R2 constants, fast-camera denoiser, noise-gate re-baseline, P5 export, P6 interp. · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
