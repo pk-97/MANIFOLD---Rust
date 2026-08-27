@@ -789,6 +789,7 @@ struct Params {
     n0_speed: f32,
     n0_motion: u32,
     n0_bands: f32,
+    n0_spread: f32,
     n0_time: f32,
     n1_type: u32,
     n1_scale: f32,
@@ -815,7 +816,6 @@ struct Params {
     n6_wrap: u32,
     n6_mode: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 // @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
@@ -1036,7 +1036,7 @@ fn wrap_coord(t: f32, mode: u32) -> f32 {
     return clamp(t, 0.0, 1.0);
 }
 
-fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, time: f32) -> vec4<f32> {
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, spread: f32, time: f32) -> vec4<f32> {
     let res = dims;
 
     if motion == 1u {
@@ -1050,7 +1050,11 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f3
         let t = time * speed * 0.065;
         let n = sjf_value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * amount * 0.05;
-        return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+        // spread pushes bands apart vertically from the canvas centre; the
+        // gap between adjacent bands is `spread` band-heights. Shares `band`,
+        // so the vertical steps land exactly on the slide's seams.
+        let offset_y = ((band + 0.5) / bands - 0.5) * spread;
+        return vec4<f32>(offset_x, offset_y, 0.0, 1.0);
     }
 
     // Tear (default) — byte-identical to the original VHS jolt.
@@ -1188,7 +1192,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_time);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_spread, params.n0_time);
     let r1 = n1_body(uv, vec2<f32>(dims), params.n1_type, params.n1_scale, params.n1_offset_x, params.n1_offset_y, params.n1_octaves, params.n1_lacunarity, params.n1_persistence);
     let r2 = n2_body(uv, vec2<f32>(dims), params.n2_type, params.n2_scale, params.n2_offset_x, params.n2_offset_y, params.n2_octaves, params.n2_lacunarity, params.n2_persistence);
     let r3 = n3_body(r2, r1, vec4<f32>(0.0), vec4<f32>(0.0), uv, vec2<f32>(dims), params.n3_default_r, params.n3_default_g, params.n3_default_b, params.n3_default_a, 1u, 1u, 0u, 0u);
@@ -1551,6 +1555,7 @@ struct Params {
     n0_speed: f32,
     n0_motion: u32,
     n0_bands: f32,
+    n0_spread: f32,
     n0_time: f32,
     n1_amount: f32,
     n1_block_size: f32,
@@ -1565,7 +1570,6 @@ struct Params {
     n5_high: f32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 // @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
@@ -1661,7 +1665,7 @@ fn wrap_coord(t: f32, mode: u32) -> f32 {
     return clamp(t, 0.0, 1.0);
 }
 
-fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, time: f32) -> vec4<f32> {
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, spread: f32, time: f32) -> vec4<f32> {
     let res = dims;
 
     if motion == 1u {
@@ -1675,7 +1679,11 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f3
         let t = time * speed * 0.065;
         let n = sjf_value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * amount * 0.05;
-        return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+        // spread pushes bands apart vertically from the canvas centre; the
+        // gap between adjacent bands is `spread` band-heights. Shares `band`,
+        // so the vertical steps land exactly on the slide's seams.
+        let offset_y = ((band + 0.5) / bands - 0.5) * spread;
+        return vec4<f32>(offset_x, offset_y, 0.0, 1.0);
     }
 
     // Tear (default) — byte-identical to the original VHS jolt.
@@ -1749,7 +1757,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_time);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_spread, params.n0_time);
     let r1 = n1_body(uv, vec2<f32>(dims), params.n1_amount, params.n1_block_size, params.n1_speed, params.n1_time);
     let r2 = n2_body(r1.offset, r0, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
     let r3 = n3_body(src_0, samp, r2, uv, vec2<f32>(dims), params.n3_wrap, params.n3_mode);
