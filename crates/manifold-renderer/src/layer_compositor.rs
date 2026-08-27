@@ -1666,17 +1666,31 @@ impl LayerCompositor {
 
     /// Read-back accessor: the layer scratch buffer's current source texture.
     /// Returns `None` if the layer has no scratch buffer allocated.
+    #[cfg(test)]
     pub fn layer_scratch_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
         self.layer_bufs.get(layer_id).map(|pp| pp.source_texture())
     }
 
     /// Read-back accessor: the effect chain's output texture for a layer.
     /// Returns `None` if the layer has no chain or the chain has no output.
+    #[cfg(test)]
     pub fn chain_output_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
         self.effect_chains
             .get(layer_id)
             .and_then(|opt| opt.as_ref())
             .and_then(|rt| rt.output_texture())
+    }
+
+    /// Debug readback: full chain intermediate texture state for a layer.
+    /// Returns source, step outputs, and output_slot textures.
+    pub fn chain_debug_info(
+        &self,
+        layer_id: &LayerId,
+    ) -> Option<crate::preset_runtime::ChainDebugInfo<'_>> {
+        self.effect_chains
+            .get(layer_id)
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.chain_debug_info())
     }
 
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
@@ -3198,6 +3212,16 @@ impl Compositor for LayerCompositor {
             .get(&LayerId::new(layer_id))
             .and_then(|opt| opt.as_ref())
             .and_then(|rt| rt.output_texture())
+    }
+
+    fn chain_debug_info(
+        &self,
+        layer_id: &str,
+    ) -> Option<crate::preset_runtime::ChainDebugInfo<'_>> {
+        self.effect_chains
+            .get(&LayerId::new(layer_id))
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.chain_debug_info())
     }
 }
 
