@@ -38,7 +38,7 @@ fn luma(c: [f32; 3]) -> f32 {
 /// step=1.
 ///
 /// Mirrors the MSL constants:
-const POST_LUMA_SIGMA_SCALE: f32 = 4.0;
+const POST_LUMA_SIGMA_SCALE: f32 = 2.0;
 const POST_LUMA_SIGMA_FLOOR: f32 = 0.02;
 const POST_SPATIAL_GAIN: f32 = 2.0;
 const POST_EARLY_OUT: f32 = 0.004;
@@ -94,7 +94,7 @@ fn atrous_post_center_cpu(
     let spatial_sd = (sm2 - sm1 * sm1).max(0.0).sqrt();
 
     let sigma = (POST_LUMA_SIGMA_SCALE * var.sqrt()).max(POST_LUMA_SIGMA_FLOOR)
-        + POST_SPATIAL_GAIN * spatial_sd;
+        + POST_SPATIAL_GAIN * spatial_sd * (2.0 / n_eff).min(1.0);
 
     // Early-out
     if var.sqrt() < POST_EARLY_OUT && spatial_sd < POST_EARLY_OUT {
