@@ -493,6 +493,7 @@ impl RowHost {
                 min: info.spec.min,
                 max: info.spec.max,
                 whole_numbers: info.spec.whole_numbers,
+                degrees: info.spec.is_angle,
             }));
         }
         None

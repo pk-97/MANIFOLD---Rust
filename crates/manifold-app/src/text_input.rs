@@ -168,6 +168,10 @@ pub struct InspectorParamCtx {
     pub target: manifold_ui::panels::GraphParamTarget,
     pub param_id: manifold_core::effects::ParamId,
     pub whole_numbers: bool,
+    /// Angle row (stored radians, displayed degrees): prefill shows degrees and
+    /// commit converts back — same boundary contract as `SceneNumericParamCtx`'s
+    /// `degrees` flag.
+    pub degrees: bool,
 }
 
 /// Context for an in-flight driver Free-period type-in — set when the box opens
@@ -666,12 +670,12 @@ pub fn parse_lenient_numeric(text: &str) -> Option<f32> {
     cleaned.parse::<f32>().ok()
 }
 
-/// D10's degrees→radians commit-side conversion — the panel boundary's other
-/// half (the display side lives in `scene_setup_panel.rs`'s
-/// `is_degrees_param` + triplet/camera-row formatters). Pure passthrough
-/// when `degrees` is false, so every non-angle `SceneNumericParam` commit
-/// takes the identical path it always did.
-pub fn scene_numeric_commit_value(parsed: f32, degrees: bool) -> f32 {
+/// Degrees→radians commit-side conversion for angle rows — the panel
+/// boundary's other half (the display side lives in the row formatters).
+/// Shared by `SceneNumericParam` (D10) and `InspectorParam` (camera card
+/// angles). Pure passthrough when `degrees` is false, so every non-angle
+/// commit takes the identical path it always did.
+pub fn degrees_commit_value(parsed: f32, degrees: bool) -> f32 {
     if degrees { parsed.to_radians() } else { parsed }
 }
 
@@ -693,7 +697,7 @@ mod parse_tests {
     #[test]
     fn degrees_row_commit_converts_to_radians() {
         let parsed = parse_lenient_numeric("45").expect("\"45\" parses");
-        let radians = scene_numeric_commit_value(parsed, true);
+        let radians = degrees_commit_value(parsed, true);
         assert!(
             (radians - std::f32::consts::FRAC_PI_4).abs() < 1e-5,
             "got {radians}"
@@ -704,6 +708,6 @@ mod parse_tests {
     #[test]
     fn non_degrees_row_commit_passes_through() {
         let parsed = parse_lenient_numeric("0.42").expect("\"0.42\" parses");
-        assert_eq!(scene_numeric_commit_value(parsed, false), 0.42);
+        assert_eq!(degrees_commit_value(parsed, false), 0.42);
     }
 }
