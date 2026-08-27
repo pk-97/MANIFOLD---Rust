@@ -73,6 +73,7 @@ fn main() -> ExitCode {
         "clip" => run_clip(rest),
         "scene" => run_scene(rest),
         "settings" => run_settings(rest),
+        "effect" => run_effect(rest),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -105,7 +106,8 @@ USAGE:
   project_tool settings set-rt-quality <file.manifold> <realtime|export> <field> <value>
       field: shadows|ao|gi|reflections  value: ultra_low|low|medium|high|extra_high|ultra
       field: ray_resolution             value: quarter|half|three_quarter|native
-      field: spatial_denoise            value: off|low|medium|high"
+      field: spatial_denoise            value: off|low|medium|high
+  project_tool effect add <file.manifold> --layer <index> --preset <PresetTypeId>"
     );
 }
 
@@ -477,6 +479,78 @@ fn settings_set_rt_quality(rest: &[String]) -> ExitCode {
     }
     settings["rtQuality"][column][field] = serde_json::Value::String(value.clone());
     println!("rt_quality.{column}.{field} = {value}");
+    validate_and_save(&root, path)
+}
+
+// ── effect ────────────────────────────────────────────────────────────
+
+fn run_effect(rest: &[String]) -> ExitCode {
+    let Some((sub, rest)) = rest.split_first() else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    match sub.as_str() {
+        "add" => effect_add(rest),
+        other => {
+            eprintln!("error: unknown effect subcommand '{other}'\n");
+            print_usage();
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `effect add <file.manifold> --layer <index> --preset <PresetTypeId>` —
+/// append a default-constructed effect instance to the layer's chain. The
+/// instance is built through the typed `PresetInstance::new` constructor
+/// (never hand-rolled JSON) and the whole file re-validates through the
+/// real loader before save. RT-Stage-3 P5 uses it to author the
+/// defocused-emitter fixture (DepthOfField onto RtEmissiveStrength).
+fn effect_add(rest: &[String]) -> ExitCode {
+    let Some(path) = rest.first() else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let layer = flag_value(rest, "--layer").and_then(|s| s.parse::<usize>().ok());
+    let preset = flag_value(rest, "--preset");
+    let (Some(layer), Some(preset)) = (layer, preset) else {
+        eprintln!("error: effect add needs --layer <index> and --preset <id>");
+        return ExitCode::from(2);
+    };
+
+    let instance = manifold_core::effects::PresetInstance::new(
+        manifold_core::PresetTypeId::from_string(preset.to_string()),
+    );
+    let instance_json = match serde_json::to_value(&instance) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: instance serialize failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let layers = &mut root["timeline"]["layers"];
+    let Some(l) = layers.as_array_mut().and_then(|a| a.get_mut(layer)) else {
+        eprintln!("error: no layer at index {layer}");
+        return ExitCode::from(2);
+    };
+    // A layer with no chain serializes `effects` as absent (None) — create
+    // the array only when adding the first effect.
+    if l.get("effects").is_none() || l["effects"].is_null() {
+        l["effects"] = serde_json::json!([]);
+    }
+    let Some(chain) = l["effects"].as_array_mut() else {
+        eprintln!("error: layer {layer} 'effects' is not an array");
+        return ExitCode::from(2);
+    };
+    chain.push(instance_json);
+    println!("added {preset} to layer {layer} ({} effect(s) in chain)", chain.len());
     validate_and_save(&root, path)
 }
 
