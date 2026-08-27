@@ -104,7 +104,8 @@ USAGE:
   project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]
   project_tool settings set-rt-quality <file.manifold> <realtime|export> <field> <value>
       field: shadows|ao|gi|reflections  value: ultra_low|low|medium|high|extra_high|ultra
-      field: ray_resolution             value: quarter|half|three_quarter|native"
+      field: ray_resolution             value: quarter|half|three_quarter|native
+      field: spatial_denoise            value: off|low|medium|high"
     );
 }
 
@@ -438,10 +439,15 @@ fn settings_set_rt_quality(rest: &[String]) -> ExitCode {
     const TIER_FIELDS: [&str; 4] = ["shadows", "ao", "gi", "reflections"];
     const TIERS: [&str; 6] = ["ultra_low", "low", "medium", "high", "extra_high", "ultra"];
     const RESOLUTIONS: [&str; 4] = ["quarter", "half", "three_quarter", "native"];
+    // RT-Stage-3 (BUG-eytk (spatial à-trous denoiser)): the spatial-denoise
+    // row joined the RT quality grid.
+    const DENOISE: [&str; 4] = ["off", "low", "medium", "high"];
     let valid = if TIER_FIELDS.contains(&field.as_str()) {
         TIERS.contains(&value.as_str())
     } else if field == "ray_resolution" {
         RESOLUTIONS.contains(&value.as_str())
+    } else if field == "spatial_denoise" {
+        DENOISE.contains(&value.as_str())
     } else {
         eprintln!("error: unknown field '{field}'");
         return ExitCode::from(2);
