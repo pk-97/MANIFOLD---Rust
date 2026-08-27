@@ -6,23 +6,6 @@ use super::*;
 
 pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
-/// Debug readback: one fused step's output resource info.
-pub struct StepDebugInfo<'a> {
-    pub step_idx: usize,
-    pub port_name: &'static str,
-    pub resource_id: ResourceId,
-    pub texture: Option<&'a GpuTexture>,
-}
-
-/// Debug readback: full chain intermediate texture state for bisecting
-/// black-frame bugs. Source texture, every step's output texture, and
-/// the output_slot texture.
-pub struct ChainDebugInfo<'a> {
-    pub source: Option<&'a GpuTexture>,
-    pub output: Option<&'a GpuTexture>,
-    pub step_outputs: Vec<StepDebugInfo<'a>>,
-}
-
 /// Walk the plan to find the `ResourceId` produced by `node`'s named
 /// output port. Mirrors the helper in `effects/mirror.rs` —
 /// duplicated here because it's a 5-line plan utility and crossing
