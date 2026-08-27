@@ -4,7 +4,7 @@
 // per-band drift, the Latent Space website mosh slide). res from the ambient
 // dims; sjf_hash1 uses GPU sin (matches hand). `time` is a backing param
 // (port-shadow; run() packs the resolved value). Matches
-// scanline_jitter_field.wgsl. PARAMS: [amount, scanline, speed, motion, bands, time].
+// scanline_jitter_field.wgsl. PARAMS: [amount, scanline, speed, motion, bands, spread, time].
 fn sjf_hash1(n: f32) -> f32 {
     return fract(sin(n) * 43758.5453123);
 }
@@ -27,7 +27,7 @@ fn sjf_value_noise(p: vec2<f32>) -> f32 {
     );
 }
 
-fn body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, time: f32) -> vec4<f32> {
+fn body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, spread: f32, time: f32) -> vec4<f32> {
     let res = dims;
 
     if motion == 1u {
@@ -41,7 +41,11 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, 
         let t = time * speed * 0.065;
         let n = sjf_value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * amount * 0.05;
-        return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
+        // spread pushes bands apart vertically from the canvas centre; the
+        // gap between adjacent bands is `spread` band-heights. Shares `band`,
+        // so the vertical steps land exactly on the slide's seams.
+        let offset_y = ((band + 0.5) / bands - 0.5) * spread;
+        return vec4<f32>(offset_x, offset_y, 0.0, 1.0);
     }
 
     // Tear (default) — byte-identical to the original VHS jolt.

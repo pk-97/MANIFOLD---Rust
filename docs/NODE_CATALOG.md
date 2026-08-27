@@ -404,7 +404,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 8 |
-| `DigitalDrift` | Digital Drift | effect | Filmic | 4 |
+| `DigitalDrift` | Digital Drift | effect | Filmic | 5 |
 | `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
 | `Dither` | Dither | effect | Color | 2 |
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
