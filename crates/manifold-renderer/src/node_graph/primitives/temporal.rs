@@ -328,13 +328,42 @@ impl Primitive for Feedback {
             return;
         };
         let (swap, width, height) = (state.swap, state.width, state.height);
-        // Skip the capture on the frame `run` (re)seeded from `seed`: the
-        // persistent `out`/state already holds the seed, and `in` at this
-        // point is the pre-producer (stale / black) slot. Capturing it would
-        // clobber the seed and collapse the bootstrap into a seed↔zero
-        // flicker. Re-arm for normal capture next frame.
+        // Parity invariant: every frame must end with exactly one swap so
+        // the presented slot's texture is never more than one frame old.
+        // On the re-entry frame after a gap clear (`just_allocated`), the
+        // persistent `out` holds stale seed/zeroed content and `in` holds
+        // this frame's fresh producer write. In swap mode we copy the fresh
+        // producer output (in) into the persistent out BEFORE the swap so
+        // the swap rotates fresh content into the presented slot — without
+        // this, the swap would rotate the stale twin into view (the
+        // tick-46 black-frame bug). In bridge mode the existing skip is
+        // correct — no swap happens, so there's no twin to rotate.
         if state.just_allocated {
             state.just_allocated = false;
+            if swap {
+                // Mirror the fresh producer write (in_tex) into the
+                // persistent out slot so the swap can't rotate a stale
+                // twin into the presented slot. Same direction as the
+                // bridge branch below: fresh → persistent.
+                let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+                    return;
+                };
+                ctx.mark_gpu_accessed();
+                let gpu = ctx
+                    .gpu
+                    .as_deref_mut()
+                    .expect("Feedback::late_capture requires a GpuEncoder");
+                Self::copy_with_format_bridge(
+                    gpu,
+                    in_tex,
+                    out_tex,
+                    width,
+                    height,
+                    state_format,
+                    &mut self.cross_format_copy_fp32,
+                );
+                ctx.request_texture_swap("out", "in");
+            }
             return;
         }
 
