@@ -1413,13 +1413,18 @@ impl Application {
                     min: _,
                     max: _,
                     whole_numbers,
+                    degrees,
                 }) => {
                     // Prefill the box with the base (set) value, formatted as a
-                    // plain number so editing in place stays parseable.
+                    // plain number so editing in place stays parseable. Angle
+                    // rows prefill in degrees (the stored `value` stays radians)
+                    // — the same boundary contract as
+                    // `SceneSetupBeginNumericTextInput`'s D10.
+                    let display = if *degrees { value.to_degrees() } else { *value };
                     let initial = if *whole_numbers {
-                        format!("{}", value.round() as i64)
+                        format!("{}", display.round() as i64)
                     } else {
-                        format!("{:.3}", value)
+                        format!("{display:.3}")
                     };
                     self.text_input.begin(
                         crate::text_input::TextInputField::InspectorParam,
@@ -1436,6 +1441,7 @@ impl Application {
                         target: target.clone(),
                         param_id: param_id.clone(),
                         whole_numbers: *whole_numbers,
+                        degrees: *degrees,
                     });
                     continue;
                 }

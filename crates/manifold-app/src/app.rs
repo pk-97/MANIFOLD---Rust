@@ -1012,7 +1012,9 @@ impl Application {
                         // the param's display hint (default slider travel), not a
                         // restriction — a typed value is free to exceed it, exactly
                         // like a card remap or modulation. No clamp here.
-                        let mut v = parsed;
+                        // Angle rows type degrees; convert back to the stored
+                        // radians at the same boundary the prefill converted at.
+                        let mut v = crate::text_input::degrees_commit_value(parsed, ctx.degrees);
                         if ctx.whole_numbers {
                             v = v.round();
                         }
@@ -1065,7 +1067,7 @@ impl Application {
                     // D10: the panel boundary is the ONLY place a
                     // degrees-typed value converts to the radians the
                     // graph stores.
-                    let value = crate::text_input::scene_numeric_commit_value(parsed, ctx.degrees);
+                    let value = crate::text_input::degrees_commit_value(parsed, ctx.degrees);
                     let content_tx = self.content_tx.as_ref().unwrap().clone();
                     use manifold_ui::panels::PanelAction;
                     // ONE dispatch = ONE undo unit — the exact write the

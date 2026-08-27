@@ -88,7 +88,7 @@
         };
         meta.bindings.push(orphan);
 
-        let healed = crate::preset_runtime::build::heal_bool_convert_bindings(
+        let healed = crate::preset_runtime::convert_heal::heal_bool_convert_bindings(
             &mut def,
             &PrimitiveRegistry::with_builtin(),
         );
