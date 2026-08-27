@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "DepthOfField",
-  "description": "Depth of Field effect with three selectable focus modes and variable blur strength. The graph reads source image and applies one of three circle-of-confusion masks (tilt-shift box, radial ellipse, or AI depth analysis) selected by the Mode slider. The selected mask is inverted into a CoC texture, scaled by blur strength, clamped, and drives the radius of two separable Gaussian blur passes (horizontal then vertical, using scatter-as-gather weighting to prevent foreground bleeding). Finally, a masked blend composites the original over the blurred image using the same CoC as the blend mask. Depth mode analysis is gated by mux liveness pruning, so the MiDaS DNN only runs when Mode is set to Depth. All groups flatten to byte-identical behavior at load, and card bindings reach inner nodes by stable nodeId.",
+  "description": "Depth of Field effect with three selectable focus modes and variable blur strength. The graph reads source image and applies one of three circle-of-confusion masks (tilt-shift box, radial ellipse, or AI depth analysis) selected by the Mode slider. The selected mask is inverted into a CoC texture, scaled by blur strength, clamped, and drives the radius of two separable Gaussian blur passes (horizontal then vertical, using scatter-as-gather weighting to prevent foreground bleeding). The blurs run on a 4x box-prefiltered (downsampled) source — every texel they gather is an area average, so bright HDR pixels cannot sparkle into sparse dots, and the passes cost 1/16 the pixels; the blurred result is bilinearly upsampled at the composite. Finally, a masked blend composites the original over the blurred image using the same full-res CoC as the blend mask, keeping focus edges sharp. Depth mode analysis is gated by mux liveness pruning, so the MiDaS DNN only runs when Mode is set to Depth. All groups flatten to byte-identical behavior at load, and card bindings reach inner nodes by stable nodeId.",
   "presetMetadata": {
     "id": "DepthOfField",
     "displayName": "Depth of Field",
@@ -992,6 +992,19 @@
         },
         "nodes": [
           {
+            "id": 42,
+            "nodeId": "prefilter",
+            "typeId": "node.downsample",
+            "handle": "prefilter",
+            "params": {
+              "factor": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Prefilter 4x"
+          },
+          {
             "id": 40,
             "nodeId": "blur_h",
             "typeId": "node.variable_blur",
@@ -1003,7 +1016,7 @@
               },
               "max_radius": {
                 "type": "Float",
-                "value": 16.0
+                "value": 4.0
               },
               "quality": {
                 "type": "Enum",
@@ -1028,7 +1041,7 @@
               },
               "max_radius": {
                 "type": "Float",
-                "value": 16.0
+                "value": 4.0
               },
               "quality": {
                 "type": "Enum",
@@ -1060,6 +1073,12 @@
           {
             "fromNode": 107,
             "fromPort": "sourceImage",
+            "toNode": 42,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 42,
+            "fromPort": "out",
             "toNode": 40,
             "toPort": "in"
           },

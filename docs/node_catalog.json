@@ -4633,6 +4633,7 @@
       "category": "Routing",
       "examples": [
         "Bloom",
+        "DepthOfField",
         "FluidSim2D",
         "OilyFluid",
         "ParticleText"
