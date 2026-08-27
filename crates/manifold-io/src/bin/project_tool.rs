@@ -491,6 +491,7 @@ fn run_effect(rest: &[String]) -> ExitCode {
     };
     match sub.as_str() {
         "add" => effect_add(rest),
+        "set-genparam" => effect_set_genparam(rest),
         other => {
             eprintln!("error: unknown effect subcommand '{other}'\n");
             print_usage();
@@ -551,6 +552,54 @@ fn effect_add(rest: &[String]) -> ExitCode {
     };
     chain.push(instance_json);
     println!("added {preset} to layer {layer} ({} effect(s) in chain)", chain.len());
+    validate_and_save(&root, path)
+}
+
+/// `effect set-genparam <file.manifold> --layer <index> <key> <value>` —
+/// write one entry of the layer's `genParams.params` manifest. Used to seed
+/// params added after the fixture was saved (load-reconcile fills the typed
+/// default but never persists it into the stored manifest, so rt-capture's
+/// `--set-at` suffix resolution can't find them). RT-Stage-3 P5 uses it for
+/// `8_rt_firefly_clamp=0` on the defocused-emitter fixture.
+fn effect_set_genparam(rest: &[String]) -> ExitCode {
+    let Some(path) = rest.first() else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let layer = flag_value(rest, "--layer").and_then(|s| s.parse::<usize>().ok());
+    let key = rest.get(1);
+    let value = rest.get(2).and_then(|s| s.parse::<f64>().ok());
+    let (Some(layer), Some(key), Some(value)) = (layer, key, value) else {
+        eprintln!("error: effect set-genparam needs --layer <index> <key> <value>");
+        return ExitCode::from(2);
+    };
+
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let layers = &mut root["timeline"]["layers"];
+    let Some(l) = layers.as_array_mut().and_then(|a| a.get_mut(layer)) else {
+        eprintln!("error: no layer at index {layer}");
+        return ExitCode::from(2);
+    };
+    let params = &mut l["genParams"]["params"];
+    let Some(map) = params.as_object_mut() else {
+        eprintln!("error: layer {layer} has no genParams.params map");
+        return ExitCode::from(2);
+    };
+    // Entry shape mirrors the stored manifest: value + base (+ exposed for
+    // card-visible params). Existing entries keep their shape (only the
+    // value/base are written); a new key gets the standard default entry.
+    let entry = map
+        .entry(key.clone())
+        .or_insert_with(|| serde_json::json!({"value": value, "exposed": true, "base": value}));
+    entry["value"] = serde_json::json!(value);
+    entry["base"] = serde_json::json!(value);
+    println!("layer {layer} genParams.{key} = {value}");
     validate_and_save(&root, path)
 }
 
