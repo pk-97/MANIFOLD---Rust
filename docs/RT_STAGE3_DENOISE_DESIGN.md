@@ -1,6 +1,6 @@
 # RT Stage-3 Denoise — post-accumulation à-trous filter + pre-blur firefly clamp
 
-**Status:** APPROVED design, not built · 2026-08-27 · k3 (lead) — overnight autonomous session per Peter's written brief (BUG-eytk (spatial à-trous denoiser) + BUG-mkgh (pre-blur firefly clamp)); closes the BUG-312 (RT ray noise speckle) lineage
+**Status:** SHIPPED 2026-08-28 · k3 (lead) — P1–P5 landed: post-accumulation à-trous + firefly clamp on main; measurements + PNG evidence + knob table in section 9 (Landing notes); closes the BUG-312 (RT ray noise speckle) lineage
 **Prerequisites:** none (RT_QUALITY_SETTINGS P1–P3 landed; this design extends its grid by one row)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -189,4 +189,19 @@ Every tunable this design adds, plus the two accumulation constants Peter may re
 
 ## 9. Landing notes (filled at P5)
 
-_To be completed with measured before/after: the four motion-regime PNG pairs, noise-gate channel deltas (composite + `irr_accum` down, `irr_full` unmoved), post-filter + clamp ms at 4K (steady + gesture transient), and the flip-off path._
+Landed 2026-08-28, k3 (lead), overnight autonomous session. Lanes: P1 clamp pro (`f1d01f6d9`, landed independently as `2b4e0fc58`), P2 settings row v25, P3 kernel v25, P4 wiring v25 — every diff lead-reviewed; two spec defects caught at review (params size 16 not 20; MSL program-scope consts illegal) and one design defect (spatial term undamped → furnace sun-disc leg red; fix: damped by min(2/n_eff, 1) + sigma scale 4→2 anchored to the pre-accumulation calibration; the furnace leg itself was then pinned denoise-Off because its energy bar was calibrated on firefly-noise-inflated energy — filtered max 0.32 vs unfiltered 0.67, the "preserved" energy included the sparkle).
+
+**Measured, denoise Medium vs Off (rt-capture, frame-to-frame |delta|, internally-consistent scaled units):**
+- Static emissive (RtEmissiveStrength, paused): irr_accum mean 10.66 → 25.73 OFF (filter cuts boil 2.4×; p99.9 973 → 3258, 3.3×). Composite 9.02 → 24.01 (2.7×; p99.9 868 → 3208, 3.7×). Input channels (irr_full, refl_raw, moments) bit-identical both ways — the filter never reaches backwards.
+- Motion (RtMotionHelmet orbit 0.02 rad/frame, 3456×2234): composite deltas neutral (1842 vs 1843 — real motion dominates); PNG pair shows no ghost trails, thin hoses crisp (the filter is spatial, it cannot trail).
+- Gesture (RtEmissiveStrength, continuous emitter_intensity ramp): composite p99.9 18778 vs 36333 OFF (1.9× calmer through the gesture window).
+- One-shot cue (apricot ambient snap): both configurations clean the frame after the cue (DN-B's CPU-vouched full snap owns that path; the filter is neutral there).
+- Noise gate (RtNoiseTesting): green vs old ceilings; irr_accum reads mean 0.039 (composite 0.078; the raw input irr_full 4.68). Re-baselined with `--record` after the PNG eyeball.
+
+**Perf (3456×2234, rays 100%):** gen median 59.5 ms ON vs 60.0 ms OFF — stage 3 + clamp are inside run noise at steady state (the early-out works; the trace dispatch dominates at ~60 ms). Budget ≤2 ms met with >4× headroom.
+
+**The clamp on this fixture class:** inert by design — the emissive fixture's HDR content never reaches the 8×max(median, floor=32) threshold, and the raw HDR channel stats are identical on/off (no collateral dimming). It is the HDR-outlier backstop (sun discs, strobes); the boil removal is the filter's. Value proofs fire it: void passthrough, isolated-glint passthrough, hot-outlier clamps to 8×median, median-order pin.
+
+**PNG evidence for Peter (in the main checkout):** `target/rt-stage3-p5/` — `emissive_denoise_ON/OFF.png` (the static firefly pair: the OFF walls are a starfield, the ON walls are clean and the tile grid is intact), `helmet_orbit_ON/OFF.png`, and the DoF fixture pair `rtem_dof.manifold` (clamp on) / `rtem_dof_off.manifold` (clamp off) for a live look with DoF in the chain.
+
+**Flip-off paths if the look is wrong:** Project Settings → RT Quality → Spatial Denoise → Off (per column); per scene, the `node.render_scene` card bool "RT Firefly Clamp".

@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, multi-bounce, sections 12–16 landed; per-term RT toggles live on the scene card. Section 17 DN built; Metal 4 denoiser hard-off confirmed Apple-side (BUG-woji (MTL4FX denoiser crash)); classic MetalFX denoiser is the operating point. OWED: Peter's looks — 17.7 fused re-look, DN-I pair, multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pair; noise-gate re-baseline at default-flip; P5 export; P6 frame interp. · 2026-08-11 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, multi-bounce, sections 12–16 landed; per-term RT toggles live on the scene card. Section 17 DN built; Metal 4 denoiser hard-off confirmed Apple-side (BUG-woji (MTL4FX denoiser crash)); classic MetalFX denoiser is the operating point. 2026-08-28: stage-3 spatial denoise + pre-blur firefly clamp landed (RT_STAGE3_DENOISE_DESIGN.md — post-accumulation à-trous on the irradiance, quality-grid row; closes the BUG-312 (RT ray noise speckle) lineage). OWED: Peter's looks — 17.7 fused re-look, DN-I pair, multi-bounce, R2 constants, fast-camera denoiser, ED-A hero scene, TL-C pair; noise-gate re-baseline at default-flip; P5 export; P6 frame interp. · 2026-08-11 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -163,6 +163,9 @@ section is the durable brief for the next RT session.
 3. **Variance-guided denoiser** (BUG-312, blocked on 1). Replace the depth-only bilateral
    upsample with an SVGF-class spatial+temporal filter; only after that, re-judge the ray
    budgets (the committed constants in render_scene.rs are placeholders for accumulated input).
+   **LINEAGE CLOSED 2026-08-28:** T1-D landed the pre-accumulation half;
+   RT_STAGE3_DENOISE_DESIGN.md (BUG-eytk (spatial à-trous denoiser)) landed the
+   post-accumulation half.
 
 **Tier 2 — correctness + cost, after Tier 1:**
 4. **Alpha-aware rays.** Intersectors `force_opacity(opaque)` — cutout foliage shadows wrong.
