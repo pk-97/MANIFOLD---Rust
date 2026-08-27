@@ -119,13 +119,130 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
+    let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
-    manifold_core::scene_exposure::migrate_scene_exposures(
+    let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
         def,
         SCENE_VOCABULARY_TYPE_IDS,
         section_name_for_node,
         &provider,
-    )
+    );
+    repaired || migrated
+}
+
+/// Legacy tail repair (2026-08-27): pre-fix projects carry the lens's old
+/// neutral `f_stop = 1000` seed. 1000 sat outside the param's 0.5–32 band,
+/// and the stamper's widen rule stretched every stamped f-stop slider to
+/// fit — the unusable-ranges bug Peter reported on a fresh import. The same
+/// fix that brings the value back in band (32) also moves "DoF off" off the
+/// f-stop axis entirely: off is bokeh's `enabled` toggle now, seeded false
+/// (no f-stop value is off on close-up scenes — f/32 blurs visibly past the
+/// focus plane). A stored 1000 is proof the lens was never dialed, so every
+/// bokeh in the def is forced to enabled=false alongside the rewrite —
+/// otherwise migrated projects would GAIN visible DoF on load, changing
+/// their look. Guarded on exactly 1000.0: any other f-stop is a performer's
+/// choice (or already repaired) and the whole pass is left alone. Runs
+/// BEFORE the core stamp/repair passes so they see the corrected defaults;
+/// idempotent — a second run finds no 1000.0 and writes nothing.
+fn repair_legacy_lens_f_stop(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::{BindingTarget, SerializedParamValue};
+
+    let mut lens_node_ids: Vec<manifold_core::NodeId> = Vec::new();
+    let mut bokeh_node_ids: Vec<manifold_core::NodeId> = Vec::new();
+    fn collect_and_repair(
+        nodes: &mut [manifold_core::effect_graph_def::EffectGraphNode],
+        lenses: &mut Vec<manifold_core::NodeId>,
+    ) -> bool {
+        let mut changed = false;
+        for node in nodes.iter_mut() {
+            if node.type_id.as_str() == "node.camera_lens"
+                && let Some(SerializedParamValue::Float { value }) = node.params.get_mut("f_stop")
+                && *value == 1000.0
+            {
+                *value = 32.0;
+                lenses.push(node.node_id.clone());
+                changed = true;
+            }
+            if let Some(group) = node.group.as_deref_mut() {
+                changed |= collect_and_repair(&mut group.nodes, lenses);
+            }
+        }
+        changed
+    }
+    fn collect_bokehs(
+        nodes: &mut [manifold_core::effect_graph_def::EffectGraphNode],
+        bokehs: &mut Vec<manifold_core::NodeId>,
+    ) {
+        for node in nodes.iter_mut() {
+            if node.type_id.as_str() == "node.bokeh_gather" {
+                node.params.insert(
+                    "enabled".to_string(),
+                    SerializedParamValue::Bool { value: false },
+                );
+                bokehs.push(node.node_id.clone());
+            }
+            if let Some(group) = node.group.as_deref_mut() {
+                collect_bokehs(&mut group.nodes, bokehs);
+            }
+        }
+    }
+    if !collect_and_repair(&mut def.nodes, &mut lens_node_ids) {
+        return false;
+    }
+    collect_bokehs(&mut def.nodes, &mut bokeh_node_ids);
+
+    // Keep the stamps in step: the default repairs in core key off the node
+    // param, but they only widen ranges — the stretched max needs the band
+    // re-derived from the current metadata (0.5–32 widened by the new 32
+    // default is exactly the band). Bokeh stamps follow the new off default.
+    let f_stop_meta = metadata_for_node_type("node.camera_lens")
+        .into_iter()
+        .find(|m| m.name == "f_stop");
+    if let Some(preset) = def.preset_metadata.as_mut() {
+        if let Some(meta) = f_stop_meta {
+            for node_id in &lens_node_ids {
+                let Some(binding) = preset.bindings.iter_mut().find(|b| {
+                    !b.user_added
+                        && matches!(
+                            &b.target,
+                            BindingTarget::Node { node_id: nid, param }
+                                if nid == node_id && param == "f_stop"
+                        )
+                }) else {
+                    continue;
+                };
+                if binding.default_value == 1000.0 {
+                    binding.default_value = 32.0;
+                }
+                let binding_id = binding.id.clone();
+                if let Some(spec) = preset.params.iter_mut().find(|p| p.id == binding_id) {
+                    if spec.default_value == 1000.0 {
+                        spec.default_value = 32.0;
+                    }
+                    spec.min = meta.min.min(spec.default_value);
+                    spec.max = meta.max.max(spec.default_value);
+                }
+            }
+        }
+        for node_id in &bokeh_node_ids {
+            let Some(binding) = preset.bindings.iter_mut().find(|b| {
+                !b.user_added
+                    && matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id: nid, param }
+                            if nid == node_id && param == "enabled"
+                    )
+            }) else {
+                continue;
+            };
+            binding.default_value = 0.0;
+            let binding_id = binding.id.clone();
+            if let Some(spec) = preset.params.iter_mut().find(|p| p.id == binding_id) {
+                spec.default_value = 0.0;
+            }
+        }
+    }
+    true
 }
 
 fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode) -> String {
@@ -329,6 +446,163 @@ mod tests {
                 spec.name,
             );
         }
+    }
+
+    /// 2026-08-27 (Peter's unusable-ranges report): a pre-fix project carries
+    /// the lens's legacy neutral `f_stop = 1000` plus a stamp the widen rule
+    /// stretched to 0.5–1000. Load must rewrite the stored value to 32
+    /// (top of the band) and un-stretch the stamp — AND force bokeh
+    /// `enabled` false (the 1000 proves DoF was never dialed; off is the
+    /// toggle now, and migrated projects must not GAIN visible DoF on load).
+    /// Any other stored f-stop is a performer's choice and must survive.
+    #[test]
+    fn migrate_repairs_legacy_lens_f_stop_1000_and_unstretches_stamp() {
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        use std::collections::BTreeMap;
+
+        let lens = |f_stop: f32, id: u32, node_id: &str| {
+            let mut params = BTreeMap::new();
+            params.insert("f_stop".to_string(), SerializedParamValue::Float { value: f_stop });
+            manifold_core::effect_graph_def::EffectGraphNode {
+                id,
+                node_id: NodeId::new(node_id),
+                type_id: "node.camera_lens".to_string(),
+                handle: Some(node_id.to_string()),
+                params,
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }
+        };
+
+        let bokeh = manifold_core::effect_graph_def::EffectGraphNode {
+            id: 5,
+            node_id: NodeId::new("bokeh"),
+            type_id: "node.bokeh_gather".to_string(),
+            handle: Some("bokeh".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![lens(1000.0, 3, "lens_legacy"), lens(2.8, 4, "lens_dialed"), bokeh],
+            wires: vec![],
+        };
+
+        // First pass stamps and repairs; doctor the repaired lens back to
+        // the exact pre-fix state (legacy seed + stretched stamp + DoF
+        // default-on) to prove the load path repairs a REAL old project,
+        // not just a fresh one.
+        assert!(migrate_scene_exposures(&mut def));
+        {
+            let legacy = def.nodes.iter_mut().find(|n| n.id == 3).unwrap();
+            legacy.params.insert(
+                "f_stop".to_string(),
+                SerializedParamValue::Float { value: 1000.0 },
+            );
+            let bokeh = def.nodes.iter_mut().find(|n| n.id == 5).unwrap();
+            bokeh.params.insert(
+                "enabled".to_string(),
+                SerializedParamValue::Bool { value: true },
+            );
+            let meta = def.preset_metadata.as_mut().unwrap();
+            let binding = meta
+                .bindings
+                .iter_mut()
+                .find(|b| b.id == "3_f_stop")
+                .expect("stamped f_stop binding");
+            binding.default_value = 1000.0;
+            let spec = meta.params.iter_mut().find(|p| p.id == "3_f_stop").unwrap();
+            spec.default_value = 1000.0;
+            spec.max = 1000.0;
+            // The bokeh stamp a real tail project carries — bokeh_gather is
+            // not in the scene vocabulary, so the generic stamper never
+            // makes one; the import assembly / v1130 migration does.
+            meta.bindings.push(manifold_core::effect_graph_def::BindingDef {
+                id: "5_enabled".to_string(),
+                label: "Enabled".to_string(),
+                default_value: 1.0,
+                target: manifold_core::effect_graph_def::BindingTarget::Node {
+                    node_id: NodeId::new("bokeh"),
+                    param: "enabled".to_string(),
+                },
+                convert: manifold_core::effects::ParamConvert::BoolThreshold,
+                user_added: false,
+                scale: 1.0,
+                offset: 0.0,
+                default_mirrors_node_param: true,
+            });
+            meta.params.push(manifold_core::effect_graph_def::ParamSpecDef {
+                id: "5_enabled".to_string(),
+                name: "Enabled".to_string(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 1.0,
+                section: Some("Camera".to_string()),
+                ..Default::default()
+            });
+        }
+
+        assert!(
+            migrate_scene_exposures(&mut def),
+            "legacy state must be repaired on load"
+        );
+        let legacy = def.nodes.iter().find(|n| n.id == 3).unwrap();
+        assert_eq!(
+            legacy.params.get("f_stop"),
+            Some(&SerializedParamValue::Float { value: 32.0 }),
+            "legacy 1000 seed rewritten to the in-band neutral"
+        );
+        let bokeh = def.nodes.iter().find(|n| n.id == 5).unwrap();
+        assert_eq!(
+            bokeh.params.get("enabled"),
+            Some(&SerializedParamValue::Bool { value: false }),
+            "DoF forced off — the legacy 1000 proves it was never dialed"
+        );
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "3_f_stop").unwrap();
+        assert_eq!(spec.default_value, 32.0);
+        assert_eq!((spec.min, spec.max), (0.5, 32.0), "stretched stamp un-stretched to the band");
+        assert_eq!(
+            meta.bindings.iter().find(|b| b.id == "3_f_stop").unwrap().default_value,
+            32.0
+        );
+        assert_eq!(
+            meta.params.iter().find(|p| p.id == "5_enabled").unwrap().default_value,
+            0.0,
+            "bokeh stamp default follows the forced-off node param"
+        );
+        assert_eq!(
+            meta.bindings.iter().find(|b| b.id == "5_enabled").unwrap().default_value,
+            0.0
+        );
+        let dialed = def.nodes.iter().find(|n| n.id == 4).unwrap();
+        assert_eq!(
+            dialed.params.get("f_stop"),
+            Some(&SerializedParamValue::Float { value: 2.8 }),
+            "a performer's chosen aperture is never rewritten"
+        );
+
+        let after_repair = def.clone();
+        assert!(
+            !migrate_scene_exposures(&mut def),
+            "second migration run is a no-op once repaired"
+        );
+        assert_eq!(def, after_repair);
     }
 
     #[test]

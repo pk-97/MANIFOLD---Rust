@@ -322,7 +322,22 @@ mod hand_computed_coc {
         let d_mm = linearize_depth(raw_depth, NEAR, FAR) * WORLD_TO_MM;
         let s_mm = focus_distance * WORLD_TO_MM;
         let coc_mm = a_mm * f_mm * (d_mm - s_mm).abs() / (d_mm * (s_mm - f_mm).max(1.0));
-        (coc_mm / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius)
+        let coc_px = (coc_mm / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius);
+        // The WGSL body's focus<=0 neutral contract — mirrored exactly.
+        if focus_distance <= 0.0 { 0.0 } else { coc_px }
+    }
+
+    /// focus_distance <= 0 is the LensParams hyperfocal/neutral contract
+    /// (2026-08-27): exactly 0 CoC at any aperture. Before this, S_mm = 0
+    /// made the denominator max(S-f,1) = 1 and the formula degenerated to
+    /// f_mm^2/f_stop — max-radius blur at EVERY aperture (Peter's fully-soft
+    /// frame after dragging Focus to the slider's left end).
+    #[test]
+    fn zero_focus_distance_is_neutral_not_max_blur() {
+        assert_eq!(coc_px(0.5, 0.0, 1.4, 24.0), 0.0, "focus 0 must be neutral even wide open");
+        assert_eq!(coc_px(0.5, -1.0, 32.0, 24.0), 0.0, "negative focus is neutral too");
+        let focused = coc_px(0.5, 0.3, 1.4, 24.0);
+        assert!(focused > 1.0, "a real focus distance keeps its CoC, got {focused}");
     }
 
     /// Case 1: focus exactly AT the sample (D_mm == S_mm) — CoC must be
