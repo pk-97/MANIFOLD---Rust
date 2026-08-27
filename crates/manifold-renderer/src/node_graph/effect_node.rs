@@ -78,12 +78,15 @@ pub struct RtQuality {
     pub refl_spp: u32,
     pub ray_res_num: u32,
     pub ray_res_den: u32,
+    pub denoise_strength: f32,
+    pub denoise_iterations: u32,
 }
 
 impl Default for RtQuality {
     fn default() -> Self {
         // Live defaults match today's constants (design D2):
         // shadows UltraLow(1), ao/gi Medium(4), reflections High(8), ray Half(1/2)
+        // denoise Medium: strength 0.85, 3 iterations
         Self {
             shadow_spp: 1,
             ao_spp: 4,
@@ -91,6 +94,8 @@ impl Default for RtQuality {
             refl_spp: 8,
             ray_res_num: 1,
             ray_res_den: 2,
+            denoise_strength: 0.85,
+            denoise_iterations: 3,
         }
     }
 }
@@ -106,6 +111,8 @@ impl RtQuality {
             refl_spp: c.reflections.spp(),
             ray_res_num: num,
             ray_res_den: den,
+            denoise_strength: c.spatial_denoise.strength(),
+            denoise_iterations: c.spatial_denoise.iterations(),
         }
     }
 }

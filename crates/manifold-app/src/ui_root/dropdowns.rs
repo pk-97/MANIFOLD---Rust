@@ -280,6 +280,24 @@ impl UIRoot {
                 self.open_dropdown_typed(items, *anchor);
                 true
             }
+            PanelAction::Root(RootAction::OpenRtQualityDenoiseDropdown { realtime, anchor }) => {
+                use manifold_core::settings::RtSpatialDenoise;
+                let settings = self.rt_quality_panel.current_settings();
+                let current = if *realtime { settings.realtime.spatial_denoise } else { settings.export.spatial_denoise };
+                let items: Vec<DropdownItem> = RtSpatialDenoise::ALL
+                    .iter()
+                    .map(|d| {
+                        let mut new_settings = settings;
+                        let col = if *realtime { &mut new_settings.realtime } else { &mut new_settings.export };
+                        col.spatial_denoise = *d;
+                        DropdownItem::new(d.label())
+                            .with_check(*d == current)
+                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)))
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, *anchor);
+                true
+            }
             PanelAction::Clip(ClipAction::ClipDetectQuantizeClicked) => {
                 // Typed (2b.11): each grid option carries its quantize step.
                 let items: Vec<DropdownItem> =
