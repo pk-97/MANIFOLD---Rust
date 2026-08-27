@@ -887,6 +887,7 @@ crate::param_tooltips!("node.scanline_jitter_field", {
     "amount" => "How far the torn rows slide sideways and how many of them tear, from 0 for none up to 1. Feed the output into a Remap in Relative mode.",
     "scanline" => "How many rows tear at once, from 0 for a clean image up to 1 for heavy tearing across the frame.",
     "speed" => "How fast the tearing pattern reshuffles over time, from 0.1 for a slow drift up to 10 for a fast jitter.",
+    "spread" => "How far the bands push apart vertically from the centre, in band heights — 0 keeps them touching, 1 opens a one-band gap between each band. Only applies in Slide motion.",
 });
 
 crate::param_tooltips!("node.sine_wave", {

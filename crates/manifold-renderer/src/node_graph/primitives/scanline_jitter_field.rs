@@ -3,11 +3,12 @@
 //! block.
 //!
 //! Hashes each scanline row (animated by `time`) and emits one texture:
-//!   - `offset` (R): a signed horizontal UV shift per row (G=B=0,
-//!     A=1), gated so only a fraction of rows tear — feed it into a
-//!     `node.remap` in **Relative** mode, alone or summed with other
-//!     offset fields (e.g. `node.block_displace_field`) via
-//!     `node.mix(Add)`.
+//!   - `offset` (R): a signed horizontal UV shift per row (B=0, A=1),
+//!     gated so only a fraction of rows tear. Slide mode also writes G:
+//!     a per-band vertical spread that pushes bands apart from the canvas
+//!     centre. Feed it into a `node.remap` in **Relative** mode, alone or
+//!     summed with other offset fields (e.g. `node.block_displace_field`)
+//!     via `node.mix(Add)`.
 //!
 //! Split out of the old fused `node.glitch_displace`. `time` drives the
 //! hash — wired or read from `FrameTime.seconds`.
@@ -27,9 +28,9 @@ struct ScanlineJitterUniforms {
     speed: f32,
     motion: i32,
     bands: f32,
+    spread: f32,
     time: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 /// `motion` selector values. Index into the `motion` enum param and the
@@ -41,7 +42,7 @@ pub const SCANLINE_MOTION: &[&str] = &["Tear", "Slide"];
 crate::primitive! {
     name: ScanlineJitterField,
     type_id: "node.scanline_jitter_field",
-    purpose: "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count: in Tear it has no effect (Tear is always per pixel row); in Slide, 0 = no rows (the field outputs zero, so a downstream flow/domain warp carries the motion without per-row slicing), and e.g. 36 = chunky strips. Emits `offset` (R = signed horizontal UV shift per row/band, G=B=0, A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
+    purpose: "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count: in Tear it has no effect (Tear is always per pixel row); in Slide, 0 = no rows (the field outputs zero, so a downstream flow/domain warp carries the motion without per-row slicing), and e.g. 36 = chunky strips. `spread` (Slide only) pushes the bands apart vertically around the canvas centre, in band heights — 0 keeps them touching, 1 opens a one-band gap between adjacent bands; it shares the slide's band quantisation, so the vertical steps land exactly on the same seams as the horizontal slide. Emits `offset` (R = signed horizontal UV shift per row/band, G = vertical band-spread shift, B=0, A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
     inputs: {
         amount: ScalarF32 optional,
         speed: ScalarF32 optional,
@@ -91,6 +92,14 @@ crate::primitive! {
             range: Some((0.0, 256.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("spread"),
+            label: "Spread",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
         // Backing param for the `time` input (port-shadow); run() packs the
         // resolved FrameTime/wired value, so the default below is never live.
         ParamDef {
@@ -103,7 +112,7 @@ crate::primitive! {
         },
     ],
     depth_rule: SourceHeight,
-    composition_notes: "Tear mode: offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Slide mode: offset.r = (value_noise(band, time*speed*0.065) - 0.5) * amount * 0.05 — ungated, every band drifts smoothly; band = floor(uv.y*bands). bands=0 emits a zero offset (the slide turns off — pair with a flow/domain warp so the image still moves, the Digital Drift recipe). speed=2 reproduces the website's 0.13 time scale; `scanline` is ignored. Sum the offset with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp). G/B are 0 so a relative remap leaves the vertical axis untouched.",
+    composition_notes: "Tear mode: offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Slide mode: offset.r = (value_noise(band, time*speed*0.065) - 0.5) * amount * 0.05 — ungated, every band drifts smoothly; band = floor(uv.y*bands). bands=0 emits a zero offset (the slide turns off — pair with a flow/domain warp so the image still moves, the Digital Drift recipe). speed=2 reproduces the website's 0.13 time scale; `scanline` is ignored. Slide also emits offset.g = ((band+0.5)/bands - 0.5) * `spread`: bands push apart vertically from the canvas centre, `spread` band-heights of gap between adjacent bands (0 = bands touching, the old look; Tear leaves G at 0). Sum the offset with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp).",
     examples: ["preset.effect.glitch", "preset.effect.digital_drift"],
     picker: { label: "Scanline Jitter Field", category: Atom },
     summary: "Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap.",
@@ -147,6 +156,10 @@ impl Primitive for ScanlineJitterField {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
         };
+        let spread = match ctx.params.get("spread") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
         let time = match ctx.inputs.scalar("time") {
             Some(ParamValue::Float(f)) => f,
             _ => ctx.time.seconds.0 as f32,
@@ -178,9 +191,9 @@ impl Primitive for ScanlineJitterField {
             speed,
             motion,
             bands,
+            spread,
             time,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

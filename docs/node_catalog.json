@@ -17964,6 +17964,17 @@
         },
         {
           "default": "0",
+          "label": "Spread",
+          "name": "spread",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "How far the bands push apart vertically from the centre, in band heights — 0 keeps them touching, 1 opens a one-band gap between each band. Only applies in Slide motion.",
+          "type": "float"
+        },
+        {
+          "default": "0",
           "label": "Time",
           "name": "time",
           "range": [
@@ -17973,7 +17984,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count: in Tear it has no effect (Tear is always per pixel row); in Slide, 0 = no rows (the field outputs zero, so a downstream flow/domain warp carries the motion without per-row slicing), and e.g. 36 = chunky strips. Emits `offset` (R = signed horizontal UV shift per row/band, G=B=0, A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
+      "purpose": "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count: in Tear it has no effect (Tear is always per pixel row); in Slide, 0 = no rows (the field outputs zero, so a downstream flow/domain warp carries the motion without per-row slicing), and e.g. 36 = chunky strips. `spread` (Slide only) pushes the bands apart vertically around the canvas centre, in band heights — 0 keeps them touching, 1 opens a one-band gap between adjacent bands; it shares the slide's band quantisation, so the vertical steps land exactly on the same seams as the horizontal slide. Emits `offset` (R = signed horizontal UV shift per row/band, G = vertical band-spread shift, B=0, A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap.",
@@ -25522,6 +25533,13 @@
           "max": "128",
           "min": "0",
           "name": "Bands"
+        },
+        {
+          "default": "0",
+          "id": "spread",
+          "max": "2",
+          "min": "0",
+          "name": "Band Gap"
         },
         {
           "default": "0.008",

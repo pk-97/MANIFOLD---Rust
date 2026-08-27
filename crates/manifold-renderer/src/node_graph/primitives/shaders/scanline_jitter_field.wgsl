@@ -1,7 +1,9 @@
 // node.scanline_jitter_field — per-row random horizontal-offset field.
 // Pure generator (reads its own dims). Emits one texture:
 //   offset_out : R = signed horizontal UV shift per scanline row, gated
-//                so only a fraction of rows tear (G=B=0, A=1). Feed into
+//                so only a fraction of rows tear (B=0, A=1). Slide mode
+//                also writes G: a per-band vertical spread that pushes
+//                bands apart from the canvas centre. Feed into
 //                node.remap (Relative mode), alone or summed with other
 //                offset fields.
 //
@@ -16,9 +18,9 @@ struct Uniforms {
     speed: f32,
     motion: i32,
     bands: f32,
+    spread: f32,
     time: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -67,7 +69,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let t = u.time * u.speed * 0.065;
         let n = value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * u.amount * 0.05;
-        textureStore(offset_out, vec2<i32>(id.xy), vec4<f32>(offset_x, 0.0, 0.0, 1.0));
+        // spread pushes bands apart vertically from the canvas centre; the
+        // gap between adjacent bands is `spread` band-heights. Shares `band`,
+        // so the vertical steps land exactly on the slide's seams.
+        let offset_y = ((band + 0.5) / u.bands - 0.5) * u.spread;
+        textureStore(offset_out, vec2<i32>(id.xy), vec4<f32>(offset_x, offset_y, 0.0, 1.0));
         return;
     }
 
