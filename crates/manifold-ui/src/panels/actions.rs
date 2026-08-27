@@ -742,6 +742,9 @@ pub enum RootAction {
     /// RT quality panel: click on a ray-resolution cell — same mechanics as
     /// [`RootAction::OpenRtQualityTierDropdown`], items = the four fractions.
     OpenRtQualityResDropdown { realtime: bool, anchor: Rect },
+    /// RT quality panel: click on a spatial-denoise cell — items = the four
+    /// intensity levels (Off/Low/Medium/High).
+    OpenRtQualityDenoiseDropdown { realtime: bool, anchor: Rect },
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the

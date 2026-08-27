@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 // Re-export RT quality types from foundation (UI's accessible home)
 pub use manifold_foundation::settings::{
-    RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution,
+    RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise,
 };
 
 /// Project-wide settings.
@@ -593,6 +593,7 @@ mod tests {
                 gi: RtQualityTier::High,
                 reflections: RtQualityTier::Ultra,
                 ray_resolution: RtRayResolution::Quarter,
+                spatial_denoise: RtSpatialDenoise::Off,
             },
             export: RtQualityColumn {
                 shadows: RtQualityTier::ExtraHigh,
@@ -600,6 +601,7 @@ mod tests {
                 gi: RtQualityTier::ExtraHigh,
                 reflections: RtQualityTier::Ultra,
                 ray_resolution: RtRayResolution::ThreeQuarter,
+                spatial_denoise: RtSpatialDenoise::High,
             },
         };
 
@@ -611,12 +613,14 @@ mod tests {
         assert_eq!(deserialized.realtime.gi, RtQualityTier::High);
         assert_eq!(deserialized.realtime.reflections, RtQualityTier::Ultra);
         assert_eq!(deserialized.realtime.ray_resolution, RtRayResolution::Quarter);
+        assert_eq!(deserialized.realtime.spatial_denoise, RtSpatialDenoise::Off);
 
         assert_eq!(deserialized.export.shadows, RtQualityTier::ExtraHigh);
         assert_eq!(deserialized.export.ao, RtQualityTier::Ultra);
         assert_eq!(deserialized.export.gi, RtQualityTier::ExtraHigh);
         assert_eq!(deserialized.export.reflections, RtQualityTier::Ultra);
         assert_eq!(deserialized.export.ray_resolution, RtRayResolution::ThreeQuarter);
+        assert_eq!(deserialized.export.spatial_denoise, RtSpatialDenoise::High);
     }
 
     #[test]
@@ -645,12 +649,14 @@ mod tests {
         assert_eq!(settings.rt_quality.realtime.gi, defaults.realtime.gi);
         assert_eq!(settings.rt_quality.realtime.reflections, defaults.realtime.reflections);
         assert_eq!(settings.rt_quality.realtime.ray_resolution, defaults.realtime.ray_resolution);
+        assert_eq!(settings.rt_quality.realtime.spatial_denoise, defaults.realtime.spatial_denoise);
 
         assert_eq!(settings.rt_quality.export.shadows, defaults.export.shadows);
         assert_eq!(settings.rt_quality.export.ao, defaults.export.ao);
         assert_eq!(settings.rt_quality.export.gi, defaults.export.gi);
         assert_eq!(settings.rt_quality.export.reflections, defaults.export.reflections);
         assert_eq!(settings.rt_quality.export.ray_resolution, defaults.export.ray_resolution);
+        assert_eq!(settings.rt_quality.export.spatial_denoise, defaults.export.spatial_denoise);
     }
 
     #[test]

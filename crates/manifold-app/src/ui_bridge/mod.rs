@@ -253,6 +253,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::ParamEnumDropdown { .. }
             | RootAction::OpenRtQualityTierDropdown { .. }
             | RootAction::OpenRtQualityResDropdown { .. }
+            | RootAction::OpenRtQualityDenoiseDropdown { .. }
             | RootAction::SceneSetupAddModifierClicked(..)
             | RootAction::SceneSetupSkinSourceClicked { .. }
             | RootAction::SceneSetupSkinTargetMapClicked { .. }
