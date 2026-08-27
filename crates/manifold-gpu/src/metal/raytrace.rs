@@ -3566,7 +3566,7 @@ static float4 atrous_post_center(
     // ATROUS_REFL_VARIANCE_GAIN), early-out 0.004 ≈ 1 8-bit level
     // (0.002-0.01). Function scope, not program scope — MSL requires
     // program-scope variables in the constant address space.
-    const float POST_LUMA_SIGMA_SCALE = 4.0;
+    const float POST_LUMA_SIGMA_SCALE = 2.0;
     const float POST_LUMA_SIGMA_FLOOR = 0.02;
     const float POST_SPATIAL_GAIN = 2.0;
     const float POST_EARLY_OUT = 0.004;
@@ -3602,7 +3602,15 @@ static float4 atrous_post_center(
     float spatial_sd = sqrt(max(sm2 - sm1 * sm1, 0.0));
 
     float sigma = max(POST_LUMA_SIGMA_SCALE * sqrt(var), POST_LUMA_SIGMA_FLOOR)
-                + POST_SPATIAL_GAIN * spatial_sd;
+                + POST_SPATIAL_GAIN * spatial_sd * min(2.0 / n_eff, 1.0);
+    // The spatial term is damped by history length: it substitutes for
+    // temporal evidence only while that evidence is thin (cold start,
+    // reset, gesture snap — n_eff ~ 1-2). On converged texels (n_eff -> 50)
+    // it falls to ~4%: undamped, it widened the luma stop at LEGIT
+    // high-contrast edges (the furnace oracle's sun-disc GI patch preserved
+    // only 42% of the sun's contribution) — spatial spread cannot tell
+    // Monte-Carlo noise from a real edge, but thin history is exactly when
+    // noise dominates.
 
     // Early-out: both variance and spatial spread quiet — write src unchanged.
     if (sqrt(var) < POST_EARLY_OUT && spatial_sd < POST_EARLY_OUT) {
