@@ -149,7 +149,7 @@ impl RtSpatialDenoise {
 
 ### P5 — Measure, gate, land (lead, not a lane)
 
-`scripts/landing_gate.py`; `scripts/gpu_proofs_gate.py`; `scripts/rt_noise_gate.py` — expect composite + the new `irr_accum` channel measurably down; `irr_full` (the pre-accumulation input) must NOT move. Re-baseline with `--record` ONLY after a PNG eyeball (lead-only visual verification): defocused RT scene with bright emitters, before/after. Perf: post-filter + clamp ms at 4K rays 100% on the apricot RT fixture and RtEmissiveStrength (steady state + gesture transient), Liveschool as the non-RT zero-cost proof — all written into section 8 (Landing notes), alongside the flip-off path Peter gets if the look is wrong (one dropdown row, one node bool). Close BUG-eytk (spatial à-trous denoiser) + BUG-mkgh (pre-blur firefly clamp); RAYTRACING_DESIGN.md status header + section 17 (ML denoising) pointer updated; supersession sweep (`rg` this design's name + BUG-312 (RT ray noise speckle) across docs/ and memory); merge per `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
+`scripts/landing_gate.py`; `scripts/gpu_proofs_gate.py`; `scripts/rt_noise_gate.py` — expect composite + the new `irr_accum` channel measurably down; `irr_full` (the pre-accumulation input) must NOT move. **The noise gate is a floor, not a target (Peter's directive 2026-08-27): do not tune to it.** Tuning and re-baseline are driven by the motion-regime PNG pairs, all lead-rendered and lead-eyed before any `--record`: (a) slow camera dolly over glossy surfaces — reflections glued, no boiling, no ghost trails (the DamagedHelmet orbit fixture, rt-capture `--animate`, is the starting oracle); (b) post-light-cue recovery — clean within ~10 frames, not the current ~2.5 s tail; (c) defocused bright emitter — no bokeh blobs AND sun glints/speculars not dulled (bright-emissive scene check before settling the clamp threshold); (d) thin geometry (railings/cables) — texture detail survives, no halos, no smeared contact shadows (halos = edge-stopping too weak = fix the weights before landing, not after). If a fixture for (c) or (d) doesn't exist under `tests/fixtures/rt/`, the lead authors one via `project_tool` in P5. Only `--record` after those PNGs look right. Perf: post-filter + clamp ms at 4K rays 100% on the apricot RT fixture and RtEmissiveStrength (steady state + gesture transient; ≤2 ms steady-state budget), Liveschool as the non-RT zero-cost proof — all written into section 9 (Landing notes), alongside the flip-off path Peter gets if the look is wrong (one dropdown row, one node bool). Close BUG-eytk (spatial à-trous denoiser) + BUG-mkgh (pre-blur firefly clamp); RAYTRACING_DESIGN.md status header + section 17 (ML denoising) pointer updated; supersession sweep (`rg` this design's name + BUG-312 (RT ray noise speckle) across docs/ and memory); merge per `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
 
 ## 6. Decided — do not reopen
 
@@ -169,6 +169,22 @@ impl RtSpatialDenoise {
 - **Post-filter as a general graph atom** — BLOCKED-class (no offset-texel codegen access kind); trigger: a non-RT consumer wants à-trous. Track in beads if requested.
 - **Clamp threshold exposure as a user param** — trigger: Peter reaches for it on stage; constants are tuned against fixtures first.
 
-## 8. Landing notes (filled at P5)
+## 8. Knob table (Peter's morning pass — dial-turning, not spelunking)
 
-_To be completed with measured before/after: noise-gate channel deltas, post-filter + clamp ms at 4K, PNG artifact paths._
+Every tunable this design adds, plus the two accumulation constants Peter may reach for in the same session. "Treats" names the visual symptom each direction of turn addresses.
+
+| Knob | Where | Value | Safe range | Turn up treats | Turn down treats |
+|---|---|---|---|---|---|
+| `POST_LUMA_SIGMA_SCALE` | raytrace.rs `atrous_post` const | 4.0 | 2–8 | residual boil on noisy texels (wider luma tolerance → more averaging) | over-blur / soft GI gradients (narrower → less averaging) |
+| `POST_LUMA_SIGMA_FLOOR` | same | 0.02 | 0.01–0.05 | boil on converged-but-noisy texels | flat-region detail loss |
+| `POST_SPATIAL_GAIN` | same | 2.0 | 1–4 | post-cue/gesture raw-frame harshness (the cold-start term) | halo risk at true lighting edges through gestures |
+| `POST_EARLY_OUT` | same | 0.004 | 0.002–0.01 | filter cost (more texels skip) | unfiltered permanent-floor shimmer |
+| Tier → (strength, iterations) | `RtSpatialDenoise` (settings.rs) | Low (0.6,2) / Med (0.85,3) / High (1.0,4) | per-row edit | — | — |
+| `FIREFLY_MEDIAN_GAIN` | raytrace.rs `firefly_clamp` const | 8.0 | 4–16 | bokeh blobs / hot bokeh discs | dulled glints (if up fails: floor is binding instead) |
+| `FIREFLY_ABS_FLOOR` | same — `max(4.0, emissive_mean_power)` | 4.0 base | 2–8 base | isolated bright panels/small emitters surviving | dark-scene outliers surviving |
+| `IRRADIANCE_ACCUM_ALPHA` | render_scene.rs (existing) | 0.02 | 0.01–0.05 | post-cue tail length (higher = shorter tail, more boil) | residual boil on stills |
+| `RT_REFL_ACCUM_ALPHA_MIN` | render_scene.rs (existing) | 0.025 | 0.01–0.05 | reflection trail through motion | reflection boil |
+
+## 9. Landing notes (filled at P5)
+
+_To be completed with measured before/after: the four motion-regime PNG pairs, noise-gate channel deltas (composite + `irr_accum` down, `irr_full` unmoved), post-filter + clamp ms at 4K (steady + gesture transient), and the flip-off path._
