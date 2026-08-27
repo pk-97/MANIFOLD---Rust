@@ -1557,6 +1557,16 @@ impl LayerCompositor {
             })
             .map(|(id, _)| id.clone())
             .collect();
+        if !stale.is_empty() && std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+            for id in &stale {
+                let why = if !alive.contains(id) {
+                    "layer-not-in-frame"
+                } else {
+                    "grace-expired"
+                };
+                eprintln!("[rebuild] scope=pool-evict reason={why} layer={id}");
+            }
+        }
         for id in stale {
             pool.remove(&id);
             last_used.remove(&id);
@@ -3025,6 +3035,9 @@ impl Compositor for LayerCompositor {
         self.blend.resize(width, height);
         // Drop cached chain graphs so they rebuild at the new resolution
         // next frame (the underlying graph holds width/height-sized slots).
+        if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+            eprintln!("[rebuild] scope=all reason=compositor-resize dims={width}x{height}");
+        }
         for ec in self.effect_chains.values_mut() {
             *ec = None;
         }
