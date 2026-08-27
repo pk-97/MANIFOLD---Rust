@@ -250,6 +250,18 @@ pub trait Compositor: Send {
     /// layers have blit_to_led enabled (fall back to led_tap_texture or output).
     fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 
+    /// Read-back accessor: the layer scratch buffer's current source texture.
+    /// Only meaningful for compositors with per-layer scratch buffers.
+    fn layer_scratch_texture(&self, _layer_id: &str) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
+    /// Read-back accessor: the effect chain's output texture for a layer.
+    /// Only meaningful for compositors with per-layer effect chains.
+    fn chain_output_texture(&self, _layer_id: &str) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
     /// Snapshot of a specific effect type's internal graph, identified
     /// by its `PresetTypeId`. Default `None` — non-graph compositors
     /// have nothing to expose. The real `LayerCompositor` override

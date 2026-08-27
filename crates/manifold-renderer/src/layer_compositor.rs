@@ -1664,6 +1664,21 @@ impl LayerCompositor {
         // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
     }
 
+    /// Read-back accessor: the layer scratch buffer's current source texture.
+    /// Returns `None` if the layer has no scratch buffer allocated.
+    pub fn layer_scratch_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
+        self.layer_bufs.get(layer_id).map(|pp| pp.source_texture())
+    }
+
+    /// Read-back accessor: the effect chain's output texture for a layer.
+    /// Returns `None` if the layer has no chain or the chain has no output.
+    pub fn chain_output_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
+        self.effect_chains
+            .get(layer_id)
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.output_texture())
+    }
+
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
     ///
     /// For single-clip layers without layer effects, the output is the clip texture
@@ -3170,6 +3185,19 @@ impl Compositor for LayerCompositor {
         {
             cg.set_rt_quality(q);
         }
+    }
+
+    fn layer_scratch_texture(&self, layer_id: &str) -> Option<&GpuTexture> {
+        self.layer_bufs
+            .get(&LayerId::new(layer_id))
+            .map(|pp| pp.source_texture())
+    }
+
+    fn chain_output_texture(&self, layer_id: &str) -> Option<&GpuTexture> {
+        self.effect_chains
+            .get(&LayerId::new(layer_id))
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.output_texture())
     }
 }
 
