@@ -28,7 +28,7 @@ import re
 import sys
 
 EXECUTOR_TIERS = re.compile(
-    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding|ox-alpha",
+    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding|ox-alpha|mimo-v",
     re.IGNORECASE,
 )
 DISPATCHER_TIERS = re.compile(r"\bglm-", re.IGNORECASE)
