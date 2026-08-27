@@ -262,6 +262,15 @@ pub trait Compositor: Send {
         None
     }
 
+    /// Debug readback: full chain intermediate texture state for a layer.
+    /// Returns source, step outputs, and output_slot textures.
+    fn chain_debug_info(
+        &self,
+        _layer_id: &str,
+    ) -> Option<crate::preset_runtime::ChainDebugInfo<'_>> {
+        None
+    }
+
     /// Snapshot of a specific effect type's internal graph, identified
     /// by its `PresetTypeId`. Default `None` — non-graph compositors
     /// have nothing to expose. The real `LayerCompositor` override

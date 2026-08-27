@@ -104,6 +104,8 @@ pub fn chain_topology_hash(
 
 mod core;
 pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
+mod debug;
+pub use debug::{ChainDebugInfo, StepDebugInfo};
 use core::{EffectSlot, PresetIo, chain_active_effects};
 #[cfg(test)]
 use core::assert_manifest_gate;

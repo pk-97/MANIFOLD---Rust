@@ -273,7 +273,9 @@ fn gap_start_black_frame_probe() {
 
     // Bisect: capture ticks 43..49 (7 ticks)
     eprintln!("[gap-probe] bisect window: ticks 43..49");
-    eprintln!("[gap-probe] tick | output_mean | clip_gen_mean | scratch_mean | chain_mean | png");
+    eprintln!("[gap-probe] tick | output_mean | clip_gen_mean | scratch_mean | chain_mean");
+
+    let mut prev_output_identity: Option<usize> = None;
 
     for tick in 43..=49 {
         // Drive one tick to render this frame
@@ -324,6 +326,46 @@ fn gap_start_black_frame_probe() {
         // (d) Export output (compositor final)
         let output_tex = ct.content_pipeline.export_output_texture();
         let output_mean = readback_mean_rgba(device, output_tex);
+
+        // (e) Chain-internal bisect: source, step outputs, output slot identity
+        let chain_info = ct.content_pipeline.chain_debug_info(&layer_id_str);
+        let output_changed = if let Some(ref info) = chain_info {
+            match prev_output_identity {
+                Some(prev) => info.output.map(GpuTexture::identity_key) != Some(prev),
+                None => false,
+            }
+        } else {
+            false
+        };
+
+        if let Some(ref info) = chain_info {
+            let src_mean = info
+                .source
+                .map(|tex| readback_mean_rgba(device, tex))
+                .unwrap_or([f64::NAN; 4]);
+            let out_mean = info
+                .output
+                .map(|tex| readback_mean_rgba(device, tex))
+                .unwrap_or([f64::NAN; 4]);
+            eprintln!(
+                "[gap-probe] {tick:3}  chain src=[{:.4} {:.4} {:.4} {:.4}] out=[{:.4} {:.4} {:.4} {:.4}] out_id={:x?} changed={output_changed}",
+                src_mean[0], src_mean[1], src_mean[2], src_mean[3],
+                out_mean[0], out_mean[1], out_mean[2], out_mean[3],
+                info.output.map(GpuTexture::identity_key),
+            );
+            for step in &info.step_outputs {
+                let step_mean = step
+                    .texture
+                    .map(|tex| readback_mean_rgba(device, tex))
+                    .unwrap_or([f64::NAN; 4]);
+                eprintln!(
+                    "[gap-probe] {tick:3}  step {:2} port={:<20} res={:?} mean=[{:.4} {:.4} {:.4} {:.4}]",
+                    step.step_idx, step.port_name, step.resource_id.0,
+                    step_mean[0], step_mean[1], step_mean[2], step_mean[3],
+                );
+            }
+            prev_output_identity = info.output.map(GpuTexture::identity_key);
+        }
 
         // Release device before next tick
         let _ = device;
