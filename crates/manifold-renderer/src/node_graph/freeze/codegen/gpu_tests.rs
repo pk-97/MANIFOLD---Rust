@@ -3054,22 +3054,27 @@ fn generated_source_atoms_match_originals() {
     strip_bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // width
     strip_bytes[4..8].copy_from_slice(&2u32.to_le_bytes()); // mode = Both
     // scanline_jitter_field [amount, scanline, speed, motion(i32), bands,
-    // spread, time, pad], 32B. GPU sin → bit-exact; time is a backing param
-    // packed by run(). Two cases: Tear (motion=0) and Slide (motion=1) with a
-    // non-zero spread so the vertical band-gap channel is exercised.
-    let scanline_bytes = |motion: i32, bands: f32, spread: f32| {
-        let mut b = vec![0u8; 32];
+    // spread, spread_mode(i32), angle, time, pad×3], 48B. GPU sin →
+    // bit-exact; time is a backing param packed by run(). Four cases: Tear,
+    // Slide Shear, Slide Split, and Slide Split at 45° so the rotated slice
+    // frame and the coverage-mask channel are all exercised.
+    let scanline_bytes = |motion: i32, bands: f32, spread: f32, mode: i32, angle: f32| {
+        let mut b = vec![0u8; 48];
         b[0..4].copy_from_slice(&0.8f32.to_le_bytes()); // amount
         b[4..8].copy_from_slice(&0.3f32.to_le_bytes()); // scanline
         b[8..12].copy_from_slice(&2.0f32.to_le_bytes()); // speed
         b[12..16].copy_from_slice(&motion.to_le_bytes());
         b[16..20].copy_from_slice(&bands.to_le_bytes());
         b[20..24].copy_from_slice(&spread.to_le_bytes());
-        b[24..28].copy_from_slice(&1.0f32.to_le_bytes()); // time
+        b[24..28].copy_from_slice(&mode.to_le_bytes());
+        b[28..32].copy_from_slice(&angle.to_le_bytes());
+        b[32..36].copy_from_slice(&1.0f32.to_le_bytes()); // time
         b
     };
-    let scanline_tear = scanline_bytes(0, 0.0, 0.0);
-    let scanline_slide = scanline_bytes(1, 8.0, 0.5);
+    let scanline_tear = scanline_bytes(0, 0.0, 0.0, 0, 0.0);
+    let scanline_shear = scanline_bytes(1, 8.0, 0.5, 0, 0.0);
+    let scanline_split = scanline_bytes(1, 8.0, 1.0, 1, 0.0);
+    let scanline_split_45 = scanline_bytes(1, 8.0, 1.0, 1, 45.0);
     // flow_field_noise [time, z_scale, warp_scale, resolution], 16B. warp=0.5
     // exercises the domain warp; resolution slot ignored by the body.
     let flow_bytes = pack_f32(&[1.0, 0.01, 0.5, 0.0]);
@@ -3092,7 +3097,9 @@ fn generated_source_atoms_match_originals() {
         ("node.radial_offset_field", "radial_offset_field.wgsl", Some(radial_offset_bytes.as_slice())),
         ("node.edge_stretch", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
         ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_tear.as_slice())),
-        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_slide.as_slice())),
+        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_shear.as_slice())),
+        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_split.as_slice())),
+        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_split_45.as_slice())),
         ("node.flow_field_noise", "flow_field_noise.wgsl", Some(flow_bytes.as_slice())),
     ];
     for (type_id, shader_file, bytes) in cases {
