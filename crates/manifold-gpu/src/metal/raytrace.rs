@@ -4844,7 +4844,7 @@ fn firefly_clamp_params_bytes(params: &FireflyClampParams) -> &[u8] {
 
 /// CPU mirror of the MSL `AtrousPostParams` struct backing `atrous_post`
 /// (RT-Stage-3 P3, BUG-eytk). Plain POD — `uint2 size` + `uint step` +
-/// `float strength`, 20 bytes. Same discipline as `AtrousParams`/`FireflyClampParams`.
+/// `float strength`, 16 bytes. Same discipline as `AtrousParams`/`FireflyClampParams`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct AtrousPostParams {
@@ -4855,7 +4855,7 @@ pub struct AtrousPostParams {
     pub strength: f32,
 }
 
-const _: () = assert!(std::mem::size_of::<AtrousPostParams>() == 20);
+const _: () = assert!(std::mem::size_of::<AtrousPostParams>() == 16);
 
 impl AtrousPostParams {
     pub fn new(size: [u32; 2], step: u32, strength: f32) -> Self {
@@ -4865,7 +4865,7 @@ impl AtrousPostParams {
 
 fn atrous_post_params_bytes(params: &AtrousPostParams) -> &[u8] {
     // SAFETY: `AtrousPostParams` is `#[repr(C)]`, all-POD (two u32 + one
-    // u32 + one f32 = 20 bytes), no padding, no interior pointers — same
+    // u32 + one f32 = 16 bytes), no padding, no interior pointers — same
     // discipline as `atrous_params_bytes`.
     unsafe {
         std::slice::from_raw_parts(
