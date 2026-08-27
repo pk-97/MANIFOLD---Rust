@@ -3735,6 +3735,300 @@ mod clip_topology_enumeration_tests {
     }
 }
 
+/// Probe: gap-start black-frame reproduction test.
+///
+/// Drives a StylizedFeedback layer through an idle gap (no clips) and
+/// reads back the compositor output plus the clip, layer-scratch, and
+/// chain-output textures on every frame. If the gap-start frame is
+/// near-black, the per-texture mean-RGBA table pinpoints which texture
+/// in the chain's path is black (input vs output vs compositor).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gap_start_black_frame_probe {
+    use super::*;
+
+    /// Read back a texture into f32 RGBA mean via a shared-buffer blit.
+    /// Returns [R, G, B, A] each in 0.0..=1.0.
+    fn readback_mean_rgba(device: &GpuDevice, tex: &GpuTexture) -> [f64; 4] {
+        let bpp = tex.format.bytes_per_pixel();
+        let row_bytes = bpp * tex.width;
+        let total = (row_bytes * tex.height) as u64;
+        let buf = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("probe readback");
+        enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, row_bytes);
+        enc.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("shared buffer mapped ptr");
+        let f32_len = (total / 4) as usize;
+        let data: &[f32] = unsafe { std::slice::from_raw_parts(ptr as *const f32, f32_len) };
+        let n = (tex.width * tex.height) as f64;
+        let mut sums = [0.0f64; 4];
+        // Rgba16Float: 4 channels × 2 bytes = 8 bytes/pixel.
+        // As f32 slots: 2 per pixel. Each f32 packs two f16 channels.
+        // f32[0] = R(low16) G(high16), f32[1] = B(low16) A(high16).
+        for px in data.chunks_exact(2) {
+            let lo = px[0].to_ne_bytes();
+            let hi = px[1].to_ne_bytes();
+            sums[0] += half_to_f32(u16::from_ne_bytes([lo[0], lo[1]])) as f64;
+            sums[1] += half_to_f32(u16::from_ne_bytes([lo[2], lo[3]])) as f64;
+            sums[2] += half_to_f32(u16::from_ne_bytes([hi[0], hi[1]])) as f64;
+            sums[3] += half_to_f32(u16::from_ne_bytes([hi[2], hi[3]])) as f64;
+        }
+        [sums[0] / n, sums[1] / n, sums[2] / n, sums[3] / n]
+    }
+
+    /// IEEE 754 half-precision → f32.
+    fn half_to_f32(h: u16) -> f32 {
+        let sign = ((h >> 15) & 1) as u32;
+        let exp = ((h >> 10) & 0x1f) as i32;
+        let frac = (h & 0x3ff) as u32;
+        if exp == 0 {
+            if frac == 0 {
+                f32::from_bits(sign << 31)
+            } else {
+                // Subnormal
+                let mut val = frac as f32 / 1024.0;
+                let mut e = 1;
+                while (frac & (1 << e)) == 0 && e < 10 {
+                    e += 1;
+                }
+                val /= 1024.0f32.powi(e - 1);
+                val = ldexpf(val, 1 - 15);
+                if sign != 0 { -val } else { val }
+            }
+        } else if exp == 31 {
+            if frac == 0 {
+                if sign != 0 { f32::NEG_INFINITY } else { f32::INFINITY }
+            } else {
+                f32::NAN
+            }
+        } else {
+            let val = f32::from_bits((sign << 31) | (((exp + 127 - 15) as u32) << 23) | (frac << 13));
+            val
+        }
+    }
+
+    fn ldexpf(x: f32, exp: i32) -> f32 {
+        x * (2.0f32).powi(exp)
+    }
+
+    #[test]
+    fn gap_start_frame_output_not_black_with_stylized_feedback() {
+        let device = crate::test_device();
+        let mut comp = LayerCompositor::new(&device, 64, 64);
+        comp.effect_chains.reserve(4);
+        comp.chain_last_used_frame.reserve(4);
+
+        // -- Layer with StylizedFeedback --
+        let layer_id = LayerId::from("L");
+        let mut layer = manifold_core::layer::Layer::new(
+            "L".to_string(),
+            manifold_core::types::LayerType::Video,
+            0,
+        );
+        let mut fx = PresetInstance::new(PresetTypeId::new("StylizedFeedback"));
+        fx.params = manifold_core::params::ParamManifest::from_params(vec![
+            {
+                let mut p = manifold_core::params::Param::bundled(
+                    manifold_core::effect_graph_def::ParamSpecDef {
+                        id: "amount".into(),
+                        name: "amount".into(),
+                        min: 0.0,
+                        max: 1.0,
+                        default_value: 0.5,
+                        whole_numbers: false,
+                        is_toggle: false,
+                        is_trigger: false,
+                        value_labels: vec![],
+                        format_string: None,
+                        osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
+                        is_angle: false,
+                        is_trigger_gate: false,
+                        wraps: false,
+                        section: None,
+                        card_visible: true,
+                    },
+                );
+                p.value = 0.5;
+                p.base = 0.5;
+                p.exposed = true;
+                p
+            },
+        ]);
+        layer.effects_mut().push(fx);
+
+        // -- Solid red clip texture --
+        let clip_tex = RenderTarget::new(&device, 64, 64, GpuTextureFormat::Rgba16Float, "probe clip");
+
+        let mut output_means: Vec<([f64; 4], [f64; 4])> = Vec::new();
+        // (clip_mean, layer_scratch_mean, chain_output_mean) on the gap-start frame.
+        let mut gap_diagnostics: Option<([f64; 4], [f64; 4], [f64; 4])> = None;
+
+        const GAP_START_FRAME: usize = 3;
+
+        for frame in 0..8 {
+            let has_clip = frame < 3 || frame >= 6;
+            let is_gap_start = frame == GAP_START_FRAME;
+
+            // -- Fill clip texture solid red --
+            {
+                let mut enc = device.create_encoder("fill clip");
+                let mut gpu = GpuEncoder::new(&mut enc, &device);
+                gpu.clear_texture(&clip_tex.texture, 1.0, 0.0, 0.0, 1.0);
+                drop(gpu);
+                enc.commit_and_wait_completed();
+            }
+
+            // -- Capture raw pointers to textures needed after render --
+            let output_tex_ptr: *const GpuTexture = &comp.tonemap.output.texture;
+            let scratch_tex_ptr: *const GpuTexture =
+                if is_gap_start {
+                    comp.layer_bufs
+                        .get(&layer_id)
+                        .map(|pp| pp.source_texture() as *const GpuTexture)
+                        .unwrap_or(std::ptr::null())
+                } else {
+                    std::ptr::null()
+                };
+            let chain_tex_ptr: *const GpuTexture =
+                if is_gap_start {
+                    comp.effect_chains
+                        .get(&layer_id)
+                        .and_then(|o| o.as_ref())
+                        .and_then(|rt| rt.output_texture())
+                        .map(|t| t as *const GpuTexture)
+                        .unwrap_or(std::ptr::null())
+                } else {
+                    std::ptr::null()
+                };
+
+            // -- Build frame --
+            let clips_vec;
+            let layers_vec = vec![CompositeLayerDescriptor {
+                layer_index: 0,
+                layer_id: &layer_id,
+                blend_mode: BlendMode::Normal,
+                opacity: 1.0,
+                hidden: false,
+                blit_to_led: false,
+                effects: layer.effects(),
+                effect_groups: layer.effect_groups(),
+                parent_layer_id: None,
+                is_group: false,
+                trigger_count: 0,
+            }];
+
+            if has_clip {
+                clips_vec = vec![CompositeClipDescriptor {
+                    clip_id: "clip",
+                    texture: &clip_tex.texture,
+                    layer_index: 0,
+                    blend_mode: BlendMode::Normal,
+                    opacity: 1.0,
+                    is_muted: false,
+                    effects: &[],
+                    effect_groups: &[],
+                }];
+            } else {
+                clips_vec = vec![];
+            }
+
+            let frame_obj = CompositorFrame {
+                time: frame as f64 / 60.0,
+                beat: frame as f64 / 4.0,
+                dt: 1.0 / 60.0,
+                frame_count: frame as u64,
+                compositor_dirty: true,
+                clips: &clips_vec,
+                layers: &layers_vec,
+                master_effects: &[],
+                master_effect_groups: &[],
+                master_trigger_count: 0,
+                tonemap: crate::tonemap::TonemapSettings::default(),
+                led_exit_index: -1,
+                led_composite_size: (1, 1),
+                output_width: 64,
+                output_height: 64,
+                occluded_layers: &[],
+                render_skip: &[],
+            };
+
+            // -- Render --
+            let mut enc = device.create_encoder(&format!("frame {frame}"));
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            let _output = comp.render(&mut gpu, &frame_obj);
+            drop(gpu);
+            enc.commit_and_wait_completed();
+
+            // -- Read back output texture --
+            let output_mean = readback_mean_rgba(&device, unsafe { &*output_tex_ptr });
+
+            // -- Read back clip texture (diagnostic) --
+            let clip_mean = readback_mean_rgba(&device, &clip_tex.texture);
+
+            // -- Read back gap-start diagnostics --
+            let mut scratch_mean = [-1.0f64; 4];
+            let mut chain_mean = [-1.0f64; 4];
+            if is_gap_start {
+                if !scratch_tex_ptr.is_null() {
+                    scratch_mean = readback_mean_rgba(&device, unsafe { &*scratch_tex_ptr });
+                }
+                if !chain_tex_ptr.is_null() {
+                    chain_mean = readback_mean_rgba(&device, unsafe { &*chain_tex_ptr });
+                }
+                gap_diagnostics = Some((clip_mean, scratch_mean, chain_mean));
+            }
+
+            output_means.push((clip_mean, output_mean));
+
+            eprintln!(
+                "[gap-probe] frame {:2}: clip=[{:.3} {:.3} {:.3} {:.3}] output=[{:.3} {:.3} {:.3} {:.3}]{}",
+                frame,
+                clip_mean[0], clip_mean[1], clip_mean[2], clip_mean[3],
+                output_mean[0], output_mean[1], output_mean[2], output_mean[3],
+                if is_gap_start {
+                    format!(
+                        " | scratch=[{:.3} {:.3} {:.3} {:.3}] chain=[{:.3} {:.3} {:.3} {:.3}]",
+                        scratch_mean[0], scratch_mean[1], scratch_mean[2], scratch_mean[3],
+                        chain_mean[0], chain_mean[1], chain_mean[2], chain_mean[3],
+                    )
+                } else {
+                    String::new()
+                },
+            );
+        }
+
+        // -- Verify: gap-start frame output is NOT near-black --
+        let (_clip_mean, output_mean) = output_means[GAP_START_FRAME];
+        let (diag_clip, diag_scratch, diag_chain) =
+            gap_diagnostics.expect("gap diagnostics must be captured");
+
+        let mean_r = output_mean[0];
+        if mean_r < 0.5 {
+            eprintln!(
+                "\n[gap-probe] FAIL: gap-start output mean R={:.3} (< 0.5 threshold)\n\
+                 [gap-probe]   clip texture:    R={:.3} G={:.3} B={:.3} A={:.3}\n\
+                 [gap-probe]   layer scratch:   R={:.3} G={:.3} B={:.3} A={:.3}\n\
+                 [gap-probe]   chain output:    R={:.3} G={:.3} B={:.3} A={:.3}\n\
+                 [gap-probe]   compositor out:  R={:.3} G={:.3} B={:.3} A={:.3}\n\
+                 [gap-probe] Black texture identified by comparing above values.",
+                mean_r,
+                diag_clip[0], diag_clip[1], diag_clip[2], diag_clip[3],
+                diag_scratch[0], diag_scratch[1], diag_scratch[2], diag_scratch[3],
+                diag_chain[0], diag_chain[1], diag_chain[2], diag_chain[3],
+                output_mean[0], output_mean[1], output_mean[2], output_mean[3],
+            );
+        }
+        assert!(
+            mean_r >= 0.5,
+            "gap-start frame output mean R={:.3} < 0.5 — black frame detected. \
+             clip={:?} scratch={:?} chain={:?} output={:?}",
+            mean_r,
+            diag_clip, diag_scratch, diag_chain, output_mean,
+        );
+    }
+}
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod muted_clip_output_tests {
     //! Regression: a layer whose clips are ALL muted must emit no
