@@ -2583,6 +2583,104 @@ kernel void atrous_filter(
     dst_refl.write(float4(acc_refl / wsum_refl, src_refl.read(tid).a), tid);
 }
 
+// RT-Stage-3 P1 (BUG-mkgh): pre-blur firefly clamp — a single compute pass
+// over the node's resolved color that caps a texel's luma to a multiple of
+// its 3x3 neighborhood median, so the downstream DoF/bloom blur kernels
+// (which run on the layer texture after `node.render_scene` returns) don't
+// smear RT firefly outliers into bright bokeh blobs. The median is over the
+// non-void texels of the 3x3 (center included — the "3..9-element non-void
+// subset" of RT_STAGE3_DENOISE_DESIGN.md section 3.2); void texels (depth
+// >= 1-1e-6) are excluded, a center void texel passes through untouched (an
+// EXR sun disc in the void background is legit content, never clamped), and
+// fewer than 3 non-void texels also passes through (a silhouette glint
+// can't establish a median). `gain`/`floor` ride the CPU-mirrored
+// `FireflyClampParams` below.
+struct FireflyClampParams {
+    uint2 size;
+    float gain;
+    float floor;
+};
+
+#define FIREFLY_MEDIAN_MAX 9u
+
+// Median luma of the non-void 3x3 subset (3..9 elements), by partial
+// selection — same `mid = n / 2` convention as `median_luma` above (odd n =
+// the middle element; even n = the element at index n/2). Its own array
+// size because the 3x3 neighborhood can hold 9 non-void texels where
+// `median_luma`'s `MAX_RT_REFL_SPP`=8 cap does not apply.
+static float firefly_median_luma(thread float3* s, uint n) {
+    float l[FIREFLY_MEDIAN_MAX];
+    for (uint i = 0u; i < n; ++i) { l[i] = luma(s[i]); }
+    uint mid = n / 2u;
+    for (uint i = 0u; i <= mid; ++i) {
+        uint m = i;
+        for (uint j = i + 1u; j < n; ++j) { if (l[j] < l[m]) { m = j; } }
+        float t = l[i]; l[i] = l[m]; l[m] = t;
+    }
+    return l[mid];
+}
+
+// Normalize the two depth-source signatures to one scalar read: the
+// production path binds `opaque_depth_snapshot` (Depth32Float) as
+// `depth2d<float>`; the `debug_firefly_clamp` value-test surface uploads an
+// R32Float as `texture2d<float>` (Depth32Float has no CPU-upload path, so
+// the test can't hand-write a real depth texture). The clamp math is
+// identical either way — only the texture type differs.
+static float read_firefly_depth(depth2d<float> t, uint2 p) { return t.read(p, 0); }
+static float read_firefly_depth(texture2d<float> t, uint2 p) { return t.read(p).r; }
+
+// Per-texel clamp body shared by `firefly_clamp` (production) and
+// `debug_firefly_clamp` (value test). Returns the texel's final rgba —
+// alpha always passes through untouched.
+template<typename DepthTex>
+static float4 firefly_clamp_center(
+    constant FireflyClampParams& p,
+    DepthTex depth_tex,
+    texture2d<float> src,
+    uint2 tid)
+{
+    float4 center = src.read(tid);
+    float center_depth = read_firefly_depth(depth_tex, tid);
+    if (center_depth >= 1.0 - 1e-6) {
+        return center; // void center: passthrough (sun disc in void is content)
+    }
+    float3 vals[FIREFLY_MEDIAN_MAX];
+    uint n = 0u;
+    vals[n++] = center.rgb;
+    const int2 offsets[8] = {
+        int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+        int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
+    };
+    for (uint i = 0u; i < 8u; ++i) {
+        int2 q = int2(tid) + offsets[i];
+        if (q.x < 0 || q.y < 0 || q.x >= int(p.size.x) || q.y >= int(p.size.y)) continue;
+        uint2 uq = uint2(q);
+        if (read_firefly_depth(depth_tex, uq) >= 1.0 - 1e-6) continue;
+        vals[n++] = src.read(uq).rgb;
+    }
+    if (n < 3u) {
+        return center; // <3 non-void texels: can't establish a median
+    }
+    float median = firefly_median_luma(vals, n);
+    float threshold = p.gain * max(median, p.floor);
+    float center_luma = luma(center.rgb);
+    if (center_luma > threshold) {
+        center.rgb *= threshold / center_luma;
+    }
+    return center;
+}
+
+kernel void firefly_clamp(
+    constant FireflyClampParams&          p         [[buffer(1)]],
+    depth2d<float>                        depth_tex [[texture(0)]],
+    texture2d<float>                      src       [[texture(1)]],
+    texture2d<float, access::write>       dst       [[texture(2)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    if (tid.x >= p.size.x || tid.y >= p.size.y) return;
+    dst.write(firefly_clamp_center(p, depth_tex, src, tid), tid);
+}
+
 // RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
 // demodulated irradiance texture — the next stage of the SAME lighting pass
 // (not a parallel denoiser system). `reset` (driven by the SHARED
@@ -3415,6 +3513,26 @@ kernel void debug_clamp_refl_history(
     if (tid != 0u) return;
     float3 r = clamp_refl_history(float3(history), hi_refl, uint2(1, 1), uint2(3, 3));
     out[0] = packed_float3(r);
+}
+
+// RT-Stage-3 P1 (BUG-mkgh) value-test-only surface, mirroring the BUG-dx6w
+// `debug_clamp_refl_history` precedent — exercises the EXACT SAME
+// `firefly_clamp_center` helper the production `firefly_clamp` kernel calls,
+// against a caller-supplied 3x3 color neighborhood + a 3x3 R32Float depth
+// neighborhood (Depth32Float has no CPU-upload path, so the depth comes in
+// as `texture2d<float>` instead of `depth2d<float>`). Center is (1,1). No
+// ray tracing, no full-res pass — not part of the production dispatch path
+// (never called by `render_scene.rs`).
+kernel void debug_firefly_clamp(
+    constant FireflyClampParams& p         [[buffer(0)]],
+    texture2d<float>             depth_tex [[texture(0)]],
+    texture2d<float>             color_tex [[texture(1)]],
+    device packed_float3*        out       [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid != 0u) return;
+    float4 c = firefly_clamp_center(p, depth_tex, color_tex, uint2(1, 1));
+    out[0] = packed_float3(c.rgb);
 }
 "#;
 
@@ -4547,6 +4665,42 @@ fn atrous_params_bytes(params: &AtrousParams) -> &[u8] {
     }
 }
 
+/// CPU mirror of the MSL `FireflyClampParams` struct backing `firefly_clamp`
+/// (RT-Stage-3 P1, BUG-mkgh). Plain POD — `uint2 size` then two `f32`s, no
+/// alignment surprises.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FireflyClampParams {
+    pub size: [u32; 2],
+    /// `FIREFLY_MEDIAN_GAIN` — how many medians above the local median a
+    /// texel's luma may reach before it is clamped. Committed 8.0.
+    pub gain: f32,
+    /// `FIREFLY_ABS_FLOOR` = `max(4.0, emissive_table_mean_power)` — the
+    /// absolute luma floor the threshold never dips below, so an isolated
+    /// legit small emitter isn't hard-ceilinged at `gain * 1.0` luma.
+    pub floor: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<FireflyClampParams>() == 16);
+
+impl FireflyClampParams {
+    pub fn new(size: [u32; 2], gain: f32, floor: f32) -> Self {
+        Self { size, gain, floor }
+    }
+}
+
+fn firefly_clamp_params_bytes(params: &FireflyClampParams) -> &[u8] {
+    // SAFETY: `FireflyClampParams` is `#[repr(C)]`, all-POD (two u32 + two
+    // f32), no padding, no interior pointers — same discipline as
+    // `atrous_params_bytes`.
+    unsafe {
+        std::slice::from_raw_parts(
+            (params as *const FireflyClampParams) as *const u8,
+            std::mem::size_of::<FireflyClampParams>(),
+        )
+    }
+}
+
 // RT-T2-A: a 1x1 fully-opaque (alpha=1.0) texture — bound into every
 // `alpha_textures` slot a frame's `dispatch_shadow_rays` call doesn't fill
 // with a real base-color texture. Fully opaque so an accidental sample
@@ -4794,6 +4948,24 @@ pub trait ShadowRayTracer {
         label: &str,
     );
 
+    /// RT-Stage-3 P1 (BUG-mkgh): pre-blur firefly clamp — one full-res pass
+    /// that caps each texel's luma to `gain * max(neighborhood median,
+    /// floor)` (void and sub-3-neighbor texels pass through untouched), so
+    /// downstream DoF/bloom blurs don't smear RT fireflies into bokeh blobs.
+    /// `src` and `dst` are always distinct textures (the caller resolves the
+    /// forward pass into a dedicated `rt_firefly_scratch`, then clamps
+    /// scratch→`dst` — never aliased, or the 3x3 read would race the write).
+    fn firefly_clamp(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &FireflyClampParams,
+        params_buffer: &GpuBuffer,
+        depth_tex: &GpuTexture,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        label: &str,
+    );
+
     /// RT-P2/D3, extended RT-T1-C (BUG-311): temporal-accumulate `hi_irr`
     /// (this frame's raw demodulated irradiance) into `history_write`,
     /// reprojecting `history_read` through `params.prev_view_proj` and
@@ -4902,6 +5074,11 @@ pub struct MetalShadowRayTracer {
     /// comment. Always compiled (tiny kernel, negligible cost); never
     /// dispatched by the production `render_scene.rs` path.
     debug_clamp_refl_history_pipeline: GpuComputePipeline,
+    /// RT-Stage-3 P1 (BUG-mkgh): the pre-blur firefly clamp pipeline.
+    firefly_clamp_pipeline: GpuComputePipeline,
+    /// RT-Stage-3 P1 value-test-only surface (`debug_firefly_clamp`'s only
+    /// caller) — see the MSL `debug_firefly_clamp` kernel's doc comment.
+    debug_firefly_clamp_pipeline: GpuComputePipeline,
     /// RT-T2-A: 1x1 fully-opaque texture bound into every one of
     /// `trace_shadow_rays`'s `alpha_textures` slots that this frame's
     /// `dispatch_shadow_rays` call doesn't supply a real texture for —
@@ -4925,6 +5102,8 @@ pub struct RtPipelines {
     pub accumulate_pipeline: GpuComputePipeline,
     pub debug_fetch_normal_pipeline: GpuComputePipeline,
     pub debug_clamp_refl_history_pipeline: GpuComputePipeline,
+    pub firefly_clamp_pipeline: GpuComputePipeline,
+    pub debug_firefly_clamp_pipeline: GpuComputePipeline,
 }
 
 impl RtPipelines {
@@ -5160,6 +5339,33 @@ impl RtPipelines {
             ]),
         );
 
+        // RT-Stage-3 P1 (BUG-mkgh): firefly clamp — params buffer(1), depth
+        // texture(0), src texture(1), dst texture(2). Signatures and slot
+        // maps change together.
+        let firefly_clamp_pipeline = compile_pipeline(
+            device,
+            &library,
+            "firefly_clamp",
+            identity_slot_map(&[
+                (1, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
+                (2, SlotKind::Texture),
+            ]),
+        );
+
+        let debug_firefly_clamp_pipeline = compile_pipeline(
+            device,
+            &library,
+            "debug_firefly_clamp",
+            identity_slot_map(&[
+                (0, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
+                (1, SlotKind::Buffer),
+            ]),
+        );
+
         Self {
             trace_pipeline_binary,
             trace_pipeline_translucent,
@@ -5168,6 +5374,8 @@ impl RtPipelines {
             accumulate_pipeline,
             debug_fetch_normal_pipeline,
             debug_clamp_refl_history_pipeline,
+            firefly_clamp_pipeline,
+            debug_firefly_clamp_pipeline,
         }
     }
 }
@@ -5194,6 +5402,8 @@ impl MetalShadowRayTracer {
             accumulate_pipeline: p.accumulate_pipeline.clone(),
             debug_fetch_normal_pipeline: p.debug_fetch_normal_pipeline.clone(),
             debug_clamp_refl_history_pipeline: p.debug_clamp_refl_history_pipeline.clone(),
+            firefly_clamp_pipeline: p.firefly_clamp_pipeline.clone(),
+            debug_firefly_clamp_pipeline: p.debug_firefly_clamp_pipeline.clone(),
             dummy_alpha_tex,
         }
     }
@@ -5316,6 +5526,98 @@ impl MetalShadowRayTracer {
             enc.setComputePipelineState(&self.debug_clamp_refl_history_pipeline.state);
             enc.setTexture_atIndex(Some(&neighborhood_tex.raw), 0);
             enc.setBuffer_offset_atIndex(Some(history_buffer.raw()), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize { width: 1, height: 1, depth: 1 },
+            );
+        }
+        enc.endEncoding();
+        cb.commit();
+        unsafe { cb.waitUntilCompleted() };
+
+        let out_ptr = out_buffer
+            .mapped_ptr()
+            .expect("debug output buffer must be CPU-mapped");
+        let mut result = [0.0f32; 3];
+        unsafe {
+            std::ptr::copy_nonoverlapping(out_ptr as *const f32, result.as_mut_ptr(), 3);
+        }
+        result
+    }
+
+    /// RT-Stage-3 P1 (BUG-mkgh) value-test-only entry point — dispatches the
+    /// SAME `firefly_clamp_center` MSL helper the production `firefly_clamp`
+    /// kernel calls, against a caller-supplied 3x3 `color` neighborhood
+    /// (row-major, `color[0]` = top-left) and a matching 3x3 `depth`
+    /// neighborhood (`depth[i] >= 1.0 - 1e-6` = void, read from the center's
+    /// (1,1) texel). Depth uploads as R32Float (Depth32Float has no
+    /// CPU-upload path) and the debug kernel reads it via the
+    /// `read_firefly_depth` `texture2d<float>` overload — the same scalar
+    /// depth value the production `depth2d<float>` path sees. No ray
+    /// tracing, no full-res pass; synchronous (commits and waits) —
+    /// test-only call pattern, never used on a hot path.
+    pub fn debug_firefly_clamp(
+        &self,
+        device: &GpuDevice,
+        color: &[[f32; 4]; 9],
+        depth: &[f32; 9],
+        gain: f32,
+        floor: f32,
+    ) -> [f32; 3] {
+        let color_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-mkgh-debug-firefly-color",
+            mip_levels: 1,
+        });
+        let color_bytes: Vec<u8> = color
+            .iter()
+            .flat_map(|texel| texel.iter().flat_map(|c| c.to_le_bytes()))
+            .collect();
+        device.upload_texture(&color_tex, &color_bytes);
+
+        let depth_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::R32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-mkgh-debug-firefly-depth",
+            mip_levels: 1,
+        });
+        let depth_bytes: Vec<u8> = depth.iter().flat_map(|d| d.to_le_bytes()).collect();
+        device.upload_texture(&depth_tex, &depth_bytes);
+
+        let params = FireflyClampParams::new([3, 3], gain, floor);
+        let params_buffer = device.create_buffer_shared(16); // FireflyClampParams
+        let params_ptr = params_buffer
+            .mapped_ptr()
+            .expect("debug firefly params buffer must be CPU-mapped");
+        unsafe {
+            std::ptr::write_unaligned(params_ptr as *mut FireflyClampParams, params);
+        }
+        let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        out_buffer.zero_fill();
+
+        let cb = device
+            .raw_queue()
+            .commandBuffer()
+            .expect("Failed to acquire command buffer for BUG-mkgh debug dispatch");
+        unsafe { cb.setLabel(Some(&NSString::from_str("BUG-mkgh debug firefly clamp"))) };
+        let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
+            .computeCommandEncoder()
+            .expect("computeCommandEncoder failed");
+        unsafe {
+            enc.setComputePipelineState(&self.debug_firefly_clamp_pipeline.state);
+            enc.setBuffer_offset_atIndex(Some(params_buffer.raw()), 0, 0);
+            enc.setTexture_atIndex(Some(&depth_tex.raw), 0);
+            enc.setTexture_atIndex(Some(&color_tex.raw), 1);
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
                 MTLSize { width: 1, height: 1, depth: 1 },
@@ -5658,6 +5960,44 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 14,
                     texture: dst_svt,
+                },
+            ],
+            groups,
+            label,
+        );
+    }
+
+    fn firefly_clamp(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &FireflyClampParams,
+        params_buffer: &GpuBuffer,
+        depth_tex: &GpuTexture,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        label: &str,
+    ) {
+        params_buffer.upload(firefly_clamp_params_bytes(params));
+        let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
+        encoder.dispatch_compute(
+            &self.firefly_clamp_pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: depth_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: src,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: dst,
                 },
             ],
             groups,
