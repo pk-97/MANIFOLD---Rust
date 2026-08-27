@@ -70,7 +70,7 @@ pub struct FrameTime {
 ///
 /// Default = live constants: shadows=1, ao/gi=4, reflections=8, ray=1/2.
 /// Export mode: higher spp from RtQualitySettings::export column.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct RtQuality {
     pub shadow_spp: u32,
     pub ao_spp: u32,
