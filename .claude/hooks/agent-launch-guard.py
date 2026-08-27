@@ -42,6 +42,7 @@ SLOT_ENV = {
 SHORT_LABEL = {
     "deepseek-v4-flash": "flash",
     "ox-alpha-free": "ox",
+    "mimo-v2.5": "v25",
     "deepseek-v4-pro": "pro",
     "glm-4.7": "glm47",
     "glm-5.2": "glm52",
