@@ -151,6 +151,10 @@ mod amount_zero_passthrough_tests;
 mod generator_runtime_tests;
 
 #[cfg(test)]
+#[path = "tests/bool_convert_heal.rs"]
+mod bool_convert_heal_tests;
+
+#[cfg(test)]
 #[path = "tests/layer_skin.rs"]
 mod layer_skin_tests;
 

@@ -340,13 +340,22 @@ fn stamp_tail_metadata(
             spec["isToggle"] = Value::from(true);
         }
         params.push(spec);
-        bindings.push(serde_json::json!({
+        let mut binding = serde_json::json!({
             "id": id,
             "label": label,
             "defaultValue": default,
             "target": {"kind": "node", "nodeId": node_id, "param": param},
             "defaultMirrorsNodeParam": true,
-        }));
+        });
+        if is_toggle {
+            // The Bool `enabled` targets need the threshold convert — the
+            // field deserializes as Float when absent, and a Float convert
+            // into a Bool param both trips the load-time convert check
+            // (graph refused → black layer) and silently misses the slot at
+            // runtime (dead toggle, effect stuck on). Peter 2026-08-27.
+            binding["convert"] = serde_json::json!({"type": "BoolThreshold"});
+        }
+        bindings.push(binding);
     }
 }
 
@@ -613,6 +622,19 @@ mod tests {
         assert!(has("motion_blur", "max_blur_px"));
         assert!(has("motion_blur", "enabled"));
         assert!(has("bokeh", "enabled"));
+        // Toggle bindings must carry the BoolThreshold convert — absent, the
+        // field deserializes as Float and the renderer's load-time convert
+        // check refuses the whole graph (Peter 2026-08-27 black scenes).
+        for b in bindings {
+            let param = b["target"]["param"].as_str().unwrap();
+            if param == "enabled" {
+                assert_eq!(
+                    b["convert"]["type"].as_str(),
+                    Some("BoolThreshold"),
+                    "toggle binding missing BoolThreshold convert: {b:?}"
+                );
+            }
+        }
         for p in params {
             assert_eq!(p["section"].as_str(), Some("Camera"));
         }
