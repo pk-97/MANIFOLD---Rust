@@ -745,7 +745,10 @@ pub enum RootAction {
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the
-    /// app needs to begin the session and commit it.
+    /// app needs to begin the session and commit it. `degrees` marks an angle row
+    /// (stored radians, displayed degrees): the type-in prefills and commits in
+    /// degrees, converting at the panel boundary like
+    /// `SceneSetupBeginNumericTextInput`'s own `degrees` flag.
     BeginParamTextInput {
         target: GraphParamTarget,
         param_id: ParamId,
@@ -754,6 +757,7 @@ pub enum RootAction {
         min: f32,
         max: f32,
         whole_numbers: bool,
+        degrees: bool,
     },
     /// Click on the driver drawer's Free field → open a beats type-in for the
     /// LFO's free-running period (free mode). Carries the target + id, the field
