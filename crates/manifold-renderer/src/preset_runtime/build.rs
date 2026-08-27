@@ -562,6 +562,18 @@ impl PresetRuntime {
         if let Some(manifest) = manifest {
             bound.apply(&mut graph, manifest);
         }
+        if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+            for inst in graph.nodes() {
+                if inst.node.type_id().as_str() == "node.render_scene" {
+                    eprintln!(
+                        "[rebuild] scope=build-seed type={type_id} node={:?} rt_enabled={:?} manifest={}",
+                        inst.id,
+                        inst.params.get("rt_enabled"),
+                        manifest.is_some(),
+                    );
+                }
+            }
+        }
         let plan = compile(&graph)?;
         // Walk the plan for the FinalOutput step, pull its `in` input resource —
         // that's what the host pre-binds the target texture to.

@@ -1002,6 +1002,7 @@ impl Executor {
         let mut preview_matched = false;
         let mut preview_tex_count = 0usize;
 
+        let mut evaluated_steps = 0u32;
         for (idx, step) in plan.steps().iter().enumerate() {
             // Live wire-value tap (see `live_scalar_inputs` field doc):
             // snapshot this step's wired scalar inputs before any skip
@@ -1348,6 +1349,7 @@ impl Executor {
                         .with_errors(&mut self.error_scratch);
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
+                        evaluated_steps += 1;
                         // Aliased-output contract: a primitive that
                         // declares `aliased_array_io = [(in, out)]`
                         // promises its dispatch writes to the aliased
@@ -1577,6 +1579,16 @@ impl Executor {
                 let dims = resolve_dims(plan, res_id, canvas_dims);
                 self.backend.release(res_id, ty, fmt, dims);
             }
+        }
+
+        if evaluated_steps == 0
+            && gpu.is_some()
+            && std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok()
+        {
+            eprintln!(
+                "[rebuild] scope=executor reason=zero-steps-evaluated steps={}",
+                plan.steps().len(),
+            );
         }
 
         // Node-output-preview diagnostic. Fires once per retarget (deduped) when

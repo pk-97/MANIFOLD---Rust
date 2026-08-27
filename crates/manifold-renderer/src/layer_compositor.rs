@@ -1557,6 +1557,16 @@ impl LayerCompositor {
             })
             .map(|(id, _)| id.clone())
             .collect();
+        if !stale.is_empty() && std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+            for id in &stale {
+                let why = if !alive.contains(id) {
+                    "layer-not-in-frame"
+                } else {
+                    "grace-expired"
+                };
+                eprintln!("[rebuild] scope=pool-evict reason={why} layer={id}");
+            }
+        }
         for id in stale {
             pool.remove(&id);
             last_used.remove(&id);
@@ -1652,6 +1662,21 @@ impl LayerCompositor {
     pub fn cleanup_clip_owner_internal(&mut self, _clip_id: &str) {
         // No-op until a graph-runtime primitive declares per-clip state.
         // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
+    }
+
+    /// Read-back accessor: the layer scratch buffer's current source texture.
+    /// Returns `None` if the layer has no scratch buffer allocated.
+    pub fn layer_scratch_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
+        self.layer_bufs.get(layer_id).map(|pp| pp.source_texture())
+    }
+
+    /// Read-back accessor: the effect chain's output texture for a layer.
+    /// Returns `None` if the layer has no chain or the chain has no output.
+    pub fn chain_output_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
+        self.effect_chains
+            .get(layer_id)
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.output_texture())
     }
 
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
@@ -3025,6 +3050,9 @@ impl Compositor for LayerCompositor {
         self.blend.resize(width, height);
         // Drop cached chain graphs so they rebuild at the new resolution
         // next frame (the underlying graph holds width/height-sized slots).
+        if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+            eprintln!("[rebuild] scope=all reason=compositor-resize dims={width}x{height}");
+        }
         for ec in self.effect_chains.values_mut() {
             *ec = None;
         }
@@ -3157,6 +3185,19 @@ impl Compositor for LayerCompositor {
         {
             cg.set_rt_quality(q);
         }
+    }
+
+    fn layer_scratch_texture(&self, layer_id: &str) -> Option<&GpuTexture> {
+        self.layer_bufs
+            .get(&LayerId::new(layer_id))
+            .map(|pp| pp.source_texture())
+    }
+
+    fn chain_output_texture(&self, layer_id: &str) -> Option<&GpuTexture> {
+        self.effect_chains
+            .get(&LayerId::new(layer_id))
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.output_texture())
     }
 }
 

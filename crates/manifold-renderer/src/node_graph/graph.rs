@@ -310,6 +310,12 @@ impl Graph {
         inst.node.reconfigure(&inst.params);
         if forced_changed {
             self.forced_outputs_epoch += 1;
+            if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+                eprintln!(
+                    "[rebuild] scope=forced-outputs reason=param-flip node={id:?} param={name} value={:?}",
+                    inst.params.get(name),
+                );
+            }
         }
         Ok(())
     }
@@ -443,6 +449,12 @@ impl Graph {
             };
             if forced_changed {
                 self.forced_outputs_epoch += 1;
+                if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+                    eprintln!(
+                        "[rebuild] scope=forced-outputs reason=param-flip node={id:?} param={name} value={:?}",
+                        inst.params.get(name),
+                    );
+                }
             }
         }
     }
