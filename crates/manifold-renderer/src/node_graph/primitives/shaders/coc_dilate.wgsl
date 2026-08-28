@@ -27,15 +27,25 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let texel = vec2<f32>(1.0) / dims;
     let uv = (vec2<f32>(f32(id.x), f32(id.y)) + vec2<f32>(0.5)) / dims;
 
-    var m: f32 = fetch(uv).r;
-    m = max(m, fetch(uv + vec2<f32>(-texel.x, -texel.y)).r);
-    m = max(m, fetch(uv + vec2<f32>(0.0,      -texel.y)).r);
-    m = max(m, fetch(uv + vec2<f32>( texel.x, -texel.y)).r);
-    m = max(m, fetch(uv + vec2<f32>(-texel.x, 0.0     )).r);
-    m = max(m, fetch(uv + vec2<f32>( texel.x, 0.0     )).r);
-    m = max(m, fetch(uv + vec2<f32>(-texel.x,  texel.y)).r);
-    m = max(m, fetch(uv + vec2<f32>(0.0,       texel.y)).r);
-    m = max(m, fetch(uv + vec2<f32>( texel.x,  texel.y)).r);
+    var m_r: f32 = fetch(uv).r;
+    m_r = max(m_r, fetch(uv + vec2<f32>(-texel.x, -texel.y)).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>(0.0,      -texel.y)).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>( texel.x, -texel.y)).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>(-texel.x, 0.0     )).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>( texel.x, 0.0     )).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>(-texel.x,  texel.y)).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>(0.0,       texel.y)).r);
+    m_r = max(m_r, fetch(uv + vec2<f32>( texel.x,  texel.y)).r);
 
-    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(m, m, m, 1.0));
+    var m_g: f32 = fetch(uv).g;
+    m_g = max(m_g, fetch(uv + vec2<f32>(-texel.x, -texel.y)).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>(0.0,      -texel.y)).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>( texel.x, -texel.y)).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>(-texel.x, 0.0     )).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>( texel.x, 0.0     )).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>(-texel.x,  texel.y)).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>(0.0,       texel.y)).g);
+    m_g = max(m_g, fetch(uv + vec2<f32>( texel.x,  texel.y)).g);
+
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(m_r, m_g, m_r, 1.0));
 }

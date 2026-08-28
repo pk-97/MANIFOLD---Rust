@@ -10,14 +10,15 @@
 //! A_mm    = f_mm / f_stop                                // aperture diameter
 //! D_mm    = linearize_depth(raw_depth, near, far) * WORLD_TO_MM
 //! S_mm    = focus_distance * WORLD_TO_MM
-//! coc_mm  = A_mm * f_mm * |D_mm - S_mm| / (D_mm * max(S_mm - f_mm, 1.0))
-//! coc_px  = clamp(coc_mm / SENSOR_H_MM * viewport_h, 0.0, max_radius)
-//! out.r   = coc_px / max_radius   (normalized — node.variable_blur's `width`
-//!           R channel is a [0,1] FRACTION of ITS OWN max_radius:
-//!           step_size = width_sample * max_radius + 1.0. Wire this atom's
-//!           `max_radius` param equal to the downstream variable_blur nodes'
-//!           `max_radius` so the units agree — get this wrong and DoF looks
-//!           right in isolation but desyncs from the actual blur radius.)
+//! signed  = D_mm - S_mm
+//! coc_mm  = A_mm * f_mm * signed / (D_mm * max(S_mm - f_mm, 1.0))
+//! coc_px  = clamp(|coc_mm| / SENSOR_H_MM * viewport_h, 0.0, max_radius)
+//! out.r   = coc_px / max_radius   (MAGNITUDE — node.variable_blur's and
+//!           node.bokeh_gather's `width.r` read this unchanged)
+//! out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
+//!           0.0 = far-or-in-focus; docs/BOKEH_LAYERED_DOF_DESIGN.md D1)
+//! out.b   = out.r
+//! out.a   = 1.0
 //! ```
 //!
 //! `f_stop = INFINITY` (pinhole) drives `A_mm = 0`, hence `coc_mm = 0`
@@ -66,7 +67,7 @@ struct CocFromDepthUniforms {
 crate::primitive! {
     name: CocFromDepth,
     type_id: "node.coc_from_depth",
-    purpose: "Physically-based circle-of-confusion from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); A_mm = f_mm/f_stop; D_mm = linearize_depth(raw_depth, near, far) * 1000; S_mm = focus_distance * 1000; coc_mm = A_mm*f_mm*|D_mm-S_mm| / (D_mm*max(S_mm-f_mm, 1.0)); coc_px = clamp(coc_mm/24mm * viewport_h, 0, max_radius). Output is coc_px / max_radius (a [0,1] fraction) — wire straight into node.variable_blur's `width` input with max_radius matched between the two nodes. f_stop = infinity (pinhole) makes the whole buffer zero. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Physically-based circle-of-confusion from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); A_mm = f_mm/f_stop; D_mm = linearize_depth(raw_depth, near, far) * 1000; S_mm = focus_distance * 1000; signed = D_mm - S_mm; coc_mm = A_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_px = clamp(|coc_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_px / max_radius (the [0,1] magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the magnitude zero everywhere. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -316,15 +317,20 @@ mod hand_computed_coc {
     /// hand oracle both implement) — used ONLY to cross-check the by-hand
     /// arithmetic in each `#[test]`'s comment, never as the thing being
     /// tested against itself.
-    fn coc_px(raw_depth: f32, focus_distance: f32, f_stop: f32, max_radius: f32) -> f32 {
+    fn coc_output(raw_depth: f32, focus_distance: f32, f_stop: f32, max_radius: f32) -> [f32; 4] {
         let f_mm = SENSOR_H_MM / (2.0 * (FOV_Y * 0.5).tan());
         let a_mm = f_mm / f_stop;
         let d_mm = linearize_depth(raw_depth, NEAR, FAR) * WORLD_TO_MM;
         let s_mm = focus_distance * WORLD_TO_MM;
-        let coc_mm = a_mm * f_mm * (d_mm - s_mm).abs() / (d_mm * (s_mm - f_mm).max(1.0));
-        let coc_px = (coc_mm / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius);
+        let signed_delta = d_mm - s_mm;
+        let coc_mm = a_mm * f_mm * signed_delta / (d_mm * (s_mm - f_mm).max(1.0));
+        let coc_px = (coc_mm.abs() / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius);
         // The WGSL body's focus<=0 neutral contract — mirrored exactly.
-        if focus_distance <= 0.0 { 0.0 } else { coc_px }
+        let coc_q = if focus_distance <= 0.0 { 0.0 } else { coc_px };
+        let normalized = coc_q / max_radius;
+        // Sign flag: 1.0 = nearer than focus, 0.0 = far-or-in-focus.
+        let near_flag = if focus_distance > 0.0 && signed_delta < 0.0 { 1.0 } else { 0.0 };
+        [normalized, near_flag, normalized, 1.0]
     }
 
     /// focus_distance <= 0 is the LensParams hyperfocal/neutral contract
@@ -334,10 +340,14 @@ mod hand_computed_coc {
     /// frame after dragging Focus to the slider's left end).
     #[test]
     fn zero_focus_distance_is_neutral_not_max_blur() {
-        assert_eq!(coc_px(0.5, 0.0, 1.4, 24.0), 0.0, "focus 0 must be neutral even wide open");
-        assert_eq!(coc_px(0.5, -1.0, 32.0, 24.0), 0.0, "negative focus is neutral too");
-        let focused = coc_px(0.5, 0.3, 1.4, 24.0);
-        assert!(focused > 1.0, "a real focus distance keeps its CoC, got {focused}");
+        let got = coc_output(0.5, 0.0, 1.4, 24.0);
+        assert_eq!(got[0], 0.0, "focus 0 must be neutral magnitude even wide open");
+        assert_eq!(got[1], 0.0, "focus 0 must produce a far/in-focus sign flag");
+        let got = coc_output(0.5, -1.0, 32.0, 24.0);
+        assert_eq!(got[0], 0.0, "negative focus is neutral too");
+        assert_eq!(got[1], 0.0, "negative focus sign flag stays 0");
+        let focused = coc_output(0.5, 0.3, 1.4, 24.0);
+        assert!(focused[0] > 0.0, "a real focus distance keeps its magnitude, got {}", focused[0]);
     }
 
     /// Case 1: focus exactly AT the sample (D_mm == S_mm) — CoC must be
@@ -351,8 +361,9 @@ mod hand_computed_coc {
         let raw = range * (NEAR / 5.0 - 1.0);
         let view_z = linearize_depth(raw, NEAR, FAR);
         assert!((view_z - 5.0).abs() < 1e-4, "fixture raw must linearize to 5.0m, got {view_z}");
-        let got = coc_px(raw, 5.0, 2.8, 24.0);
-        assert!(got.abs() < 1e-4, "focus-plane sample must give CoC == 0, got {got}");
+        let got = coc_output(raw, 5.0, 2.8, 24.0);
+        assert!(got[0].abs() < 1e-4, "focus-plane sample must give CoC magnitude == 0, got {}", got[0]);
+        assert!(got[1].abs() < 1e-4, "focus-plane sample is far-or-in-focus, sign flag == 0, got {}", got[1]);
     }
 
     /// Case 2: f_stop = infinity (pinhole) — CoC must be exactly 0
@@ -360,8 +371,9 @@ mod hand_computed_coc {
     /// any finite number is 0). raw = 0.5 (mid-range, no special meaning).
     #[test]
     fn case_2_pinhole_gives_zero_coc_at_any_depth() {
-        let got = coc_px(0.5, 1.0, f32::INFINITY, 24.0);
-        assert_eq!(got, 0.0, "f_stop = infinity must give exactly 0, got {got}");
+        let got = coc_output(0.5, 1.0, f32::INFINITY, 24.0);
+        assert_eq!(got[0], 0.0, "f_stop = infinity must give exactly 0 magnitude, got {}", got[0]);
+        assert_eq!(got[1], 1.0, "raw 0.5 is nearer than focus=1.0, sign flag == 1, got {}", got[1]);
     }
 
     /// Case 3: hand-worked non-trivial point. raw = 0.5, focus_distance =
@@ -379,8 +391,9 @@ mod hand_computed_coc {
     ///          just this by-hand division — machine arithmetic, not eyeballed)
     #[test]
     fn case_3_hand_worked_nontrivial_point() {
-        let got = coc_px(0.5, 2.0, 2.0, 24.0);
-        assert!((got - 14.6843).abs() < 5e-3, "hand-worked case_3: expected ~14.6843, got {got}");
+        let got = coc_output(0.5, 2.0, 2.0, 24.0);
+        assert!((got[0] - 14.6843 / 24.0).abs() < 5e-4, "hand-worked case_3 magnitude: expected ~{}, got {}", 14.6843 / 24.0, got[0]);
+        assert_eq!(got[1], 1.0, "raw 0.5 is nearer than focus=2.0, sign flag == 1");
     }
 
     /// Case 4: depth far beyond focus, wide aperture — clamp to max_radius
@@ -399,8 +412,9 @@ mod hand_computed_coc {
     ///   clamp-engaged case). Verified with a Python f32 cross-check.
     #[test]
     fn case_4_close_focus_wide_aperture_far_depth() {
-        let got = coc_px(0.95, 0.5, 0.5, 24.0);
-        assert!((got - 19.7919).abs() < 5e-3, "hand-worked case_4: expected ~19.7919, got {got}");
+        let got = coc_output(0.95, 0.5, 0.5, 24.0);
+        assert!((got[0] - 19.7919 / 24.0).abs() < 5e-4, "hand-worked case_4 magnitude: expected ~{}, got {}", 19.7919 / 24.0, got[0]);
+        assert_eq!(got[1], 0.0, "raw 0.95 is far from focus=0.5, sign flag == 0");
     }
 
     /// Case 5: clamp-engaged. raw = 0.99 (very near far plane), focus_distance
@@ -417,8 +431,9 @@ mod hand_computed_coc {
     ///   exactly.
     #[test]
     fn case_5_clamp_engages_at_max_radius() {
-        let got = coc_px(0.99, 0.2, 0.5, 24.0);
-        assert_eq!(got, 24.0, "clamp must engage exactly at max_radius, got {got}");
+        let got = coc_output(0.99, 0.2, 0.5, 24.0);
+        assert!((got[0] - 1.0).abs() < 1e-6, "clamp must give magnitude == max_radius/max_radius = 1.0, got {}", got[0]);
+        assert_eq!(got[1], 0.0, "raw 0.99 is far from focus=0.2, sign flag == 0");
     }
 }
 
@@ -601,7 +616,12 @@ mod gpu_tests {
         let out = dispatch_coc(&device, &pipeline, &depth, w, h, bytes);
 
         for (i, px) in out.iter().enumerate() {
-            assert_eq!(px[0], 0.0, "texel {i} R must be exactly 0 at f_stop=inf, got {}", px[0]);
+            assert_eq!(px[0], 0.0, "texel {i} R magnitude must be exactly 0 at f_stop=inf, got {}", px[0]);
+            assert_eq!(px[2], 0.0, "texel {i} B magnitude must be exactly 0 at f_stop=inf, got {}", px[2]);
+            assert_eq!(px[3], 1.0, "texel {i} alpha must stay 1.0, got {}", px[3]);
+            // The depth ramp linearizes to values well below focus_distance=5.0,
+            // so every texel is geometrically nearer than focus.
+            assert_eq!(px[1], 1.0, "texel {i} sign flag must be 1 (nearer), got {}", px[1]);
         }
     }
 

@@ -25,14 +25,16 @@
 //!
 //! Algorithm (fixed, not parameterized — quality plumbing, not a performer
 //! knob, per D8's `bilateral_blur` precedent of "no new cards"): for each
-//! output texel, `out.r = max` over a 3x3 neighborhood (self + 8 neighbors)
-//! of the input's R channel. `node.coc_from_depth`'s output convention is
-//! R == G == B == coc_px / max_radius (a `[0,1]` fraction), alpha == 1.0 —
-//! this atom preserves that convention exactly: broadcast the max to RGB,
-//! alpha == 1.0 (matching the center's own alpha, which is always 1.0 under
-//! that convention, so this is simultaneously "pass-through" and "constant").
-//! Dilating a uniform (flat) CoC field returns the same flat field unchanged
-//! (max of N identical values is that value) — the cheap no-op sanity gate.
+//! output texel, compute the 3x3 neighborhood max independently for the R and
+//! G channels. R holds the magnitude (coc_px / max_radius); G holds the sign
+//! flag from `node.coc_from_depth` (1.0 = nearer than focus, 0.0 =
+//! far-or-in-focus). G max == 1.0 means "at least one pixel in the neighborhood
+//! is nearer than focus" (docs/BOKEH_LAYERED_DOF_DESIGN.md D1). B copies R so
+//! the output is self-describing, alpha == 1.0 (matching the center's own
+//! alpha, which is always 1.0 under the coc_from_depth convention, so this is
+//! simultaneously "pass-through" and "constant"). Dilating a uniform (flat)
+//! CoC field returns the same flat field unchanged (max of N identical values
+//! is that value) — the cheap no-op sanity gate.
 //!
 //! Single `Texture2D` input, sampler-`Gather` access (stencil-fetch ABI,
 //! `fetch_in(uv)`) — matches `separable_gaussian.rs`'s single-input Gather
@@ -48,7 +50,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: CocDilate,
     type_id: "node.coc_dilate",
-    purpose: "Fixed 3x3 neighborhood-max dilation of a single-channel mask-shaped texture (R == G == B convention, e.g. node.coc_from_depth's output): out.r = max over the 3x3 neighborhood (self + 8 neighbors) of in.r, broadcast to RGB, alpha = 1.0. Fixes BUG-137 (docs/BUG_BACKLOG.md): node.variable_blur reads its per-pixel gather radius from only the center pixel's own CoC, so a heavily-blurred pixel never borrows a wider radius from a neighboring high-CoC pixel — this atom spreads the max CoC outward before the gather consumes it, softening the hard seam at depth discontinuities. Wire coc_from_depth.out -> coc_dilate.in -> variable_blur(H/V).width. No params: the 3x3 radius is fixed, not a performer knob. A flat (uniform) input passes through unchanged (max of identical values is that value).",
+    purpose: "Fixed 3x3 neighborhood-max dilation of a CoC texture (docs/BOKEH_LAYERED_DOF_DESIGN.md D1): R and B hold the magnitude (coc_px / max_radius), G holds the sign flag from node.coc_from_depth (1.0 = nearer than focus, 0.0 = far-or-in-focus). For each output texel, out.r = max over the 3x3 neighborhood of in.r, out.g = max over the same neighborhood of in.g, out.b = out.r, alpha = 1.0. G max == 1.0 means at least one neighbor is nearer than focus. Fixes BUG-137 (docs/BUG_BACKLOG.md): node.variable_blur reads its per-pixel gather radius from only the center pixel's own CoC, so a heavily-blurred pixel never borrows a wider radius from a neighboring high-CoC pixel — this atom spreads the max CoC outward before the gather consumes it, softening the hard seam at depth discontinuities. Wire coc_from_depth.out -> coc_dilate.in -> variable_blur(H/V).width or bokeh_gather.width. No params: the 3x3 radius is fixed, not a performer knob. A flat (uniform) input passes through unchanged (max of identical values is that value).",
     inputs: {
         in: Texture2D required,
     },
@@ -57,7 +59,7 @@ crate::primitive! {
     },
     params: [],
     depth_rule: Inherit,
-    composition_notes: "Insert between node.coc_from_depth and the two node.variable_blur (H then V) nodes that consume its `width` input: coc_from_depth.out -> coc_dilate.in, coc_dilate.out -> variable_blur_h.width AND -> variable_blur_v.width (both H and V read the SAME dilated CoC texture, matching the existing convention where both blur passes read the same undilated coc_from_depth.out today). Preserves coc_from_depth's output convention exactly (R==G==B in [0,1], alpha=1.0), so no downstream unit change is needed — variable_blur's width contract (step_size = width_sample * max_radius + 1.0) is unaffected other than reading a spatially-widened value. Also feeds node.bokeh_gather (the CINEMATIC_POST P4 upgrade) equally — dilation is upstream of whichever gather consumes the CoC.",
+    composition_notes: "Insert between node.coc_from_depth and the two node.variable_blur (H then V) nodes that consume its `width` input: coc_from_depth.out -> coc_dilate.in, coc_dilate.out -> variable_blur_h.width AND -> variable_blur_v.width (both H and V read the SAME dilated CoC texture). R/B keep the magnitude convention node.variable_blur reads from `width.r`; G carries the sign flag (1.0 = nearer than focus) and is ignored by node.variable_blur but propagated for node.bokeh_gather's layered near/far split. Also feeds node.bokeh_gather (the CINEMATIC_POST P4 upgrade) equally — dilation is upstream of whichever gather consumes the CoC.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "CoC Dilate", category: Atom },
     summary: "Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a hard visible edge.",
@@ -202,30 +204,40 @@ mod gpu_tests {
     /// Synthetic CoC-shaped input: a sharp step at x == w/2 (0.1 CoC on the
     /// left half, 0.9 on the right — a depth-discontinuity silhouette, the
     /// exact shape BUG-137 names) PLUS a single isolated spike at (2, 2) set
-    /// to 1.0 — so a broken (non-max, or wrong-radius) kernel can't hide
-    /// behind either fixture alone. R==G==B, alpha=1.0 (coc_from_depth's
-    /// output convention).
-    fn coc_step_with_spike(w: u32, h: u32) -> Vec<f32> {
-        let mut plane = vec![0.0f32; (w * h) as usize];
+    /// to 1.0. The left half and the spike are "nearer than focus" (G=1.0);
+    /// the right half is "far" (G=0.0). R and B carry the magnitude. This
+    /// makes the R and G max channels exercise different paths, so a kernel
+    /// that confuses magnitude with sign cannot pass.
+    fn coc_step_with_spike(w: u32, h: u32) -> (Vec<f32>, Vec<f32>) {
+        let mut mag = vec![0.0f32; (w * h) as usize];
+        let mut sign = vec![0.0f32; (w * h) as usize];
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) as usize;
-                plane[i] = if x < w / 2 { 0.1 } else { 0.9 };
+                mag[i] = if x < w / 2 { 0.1 } else { 0.9 };
+                sign[i] = if x < w / 2 { 1.0 } else { 0.0 };
             }
         }
         if w > 2 && h > 2 {
-            plane[(2 * w + 2) as usize] = 1.0;
+            mag[(2 * w + 2) as usize] = 1.0;
+            sign[(2 * w + 2) as usize] = 1.0;
         }
-        plane
+        (mag, sign)
     }
 
-    fn plane_to_rgba16f_tex(device: &GpuDevice, w: u32, h: u32, plane: &[f32], label: &str) -> GpuTexture {
+    fn plane_to_rgba16f_tex(
+        device: &GpuDevice,
+        w: u32,
+        h: u32,
+        mag: &[f32],
+        sign: &[f32],
+        label: &str,
+    ) -> GpuTexture {
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
         for i in 0..(w * h) as usize {
-            let v = f16::from_f32(plane[i]);
-            px[i * 4] = v;
-            px[i * 4 + 1] = v;
-            px[i * 4 + 2] = v;
+            px[i * 4] = f16::from_f32(mag[i]);
+            px[i * 4 + 1] = f16::from_f32(sign[i]);
+            px[i * 4 + 2] = f16::from_f32(mag[i]);
             px[i * 4 + 3] = f16::from_f32(1.0);
         }
         upload_rgba16f(device, w, h, label, &px)
@@ -255,26 +267,31 @@ mod gpu_tests {
     }
 
     /// CPU reference implementing the SAME committed algorithm as the WGSL
-    /// (I1's "two implementations of the same spec" pattern): 3x3
-    /// neighborhood max with clamp-to-edge addressing (matching the default
-    /// sampler `run()` creates).
-    fn cpu_dilate(plane: &[f32], w: u32, h: u32) -> Vec<f32> {
-        let mut out = vec![0.0f32; (w * h) as usize];
+    /// (I1's "two implementations of the same spec" pattern): independent 3x3
+    /// neighborhood maxes for R (magnitude) and G (sign flag), with
+    /// clamp-to-edge addressing (matching the default sampler `run()` creates).
+    fn cpu_dilate(mag: &[f32], sign: &[f32], w: u32, h: u32) -> (Vec<f32>, Vec<f32>) {
+        let mut out_mag = vec![0.0f32; (w * h) as usize];
+        let mut out_sign = vec![0.0f32; (w * h) as usize];
         for y in 0..h as i32 {
             for x in 0..w as i32 {
-                let mut m = f32::MIN;
+                let mut m_r = f32::MIN;
+                let mut m_g = f32::MIN;
                 for dy in -1..=1i32 {
                     for dx in -1..=1i32 {
                         let sx = (x + dx).clamp(0, w as i32 - 1) as u32;
                         let sy = (y + dy).clamp(0, h as i32 - 1) as u32;
-                        let v = plane[(sy * w + sx) as usize];
-                        m = m.max(v);
+                        let idx = (sy * w + sx) as usize;
+                        m_r = m_r.max(mag[idx]);
+                        m_g = m_g.max(sign[idx]);
                     }
                 }
-                out[(y as u32 * w + x as u32) as usize] = m;
+                let idx = (y as u32 * w + x as u32) as usize;
+                out_mag[idx] = m_r;
+                out_sign[idx] = m_g;
             }
         }
-        out
+        (out_mag, out_sign)
     }
 
     fn dispatch_dilate(
@@ -311,8 +328,8 @@ mod gpu_tests {
     fn generated_dilate_matches_cpu_reference() {
         let device = crate::test_device();
         let (w, h) = (16u32, 8u32);
-        let plane = coc_step_with_spike(w, h);
-        let input = plane_to_rgba16f_tex(&device, w, h, &plane, "coc-dilate-in");
+        let (mag, sign) = coc_step_with_spike(w, h);
+        let input = plane_to_rgba16f_tex(&device, w, h, &mag, &sign, "coc-dilate-in");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
         let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocDilate>()
@@ -324,16 +341,21 @@ mod gpu_tests {
         );
         let gen_out = dispatch_dilate(&device, &gen_pipeline, &sampler, &input, w, h);
 
-        let cpu = cpu_dilate(&plane, w, h);
+        let (cpu_mag, cpu_sign) = cpu_dilate(&mag, &sign, w, h);
         for (i, g_px) in gen_out.iter().enumerate() {
             assert!(
-                (g_px[0] - cpu[i]).abs() < 1e-4,
-                "texel {i}: gpu={} cpu_reference={}",
+                (g_px[0] - cpu_mag[i]).abs() < 1e-4,
+                "texel {i}: R gpu={} cpu_reference={}",
                 g_px[0],
-                cpu[i]
+                cpu_mag[i]
             );
-            // R == G == B broadcast, alpha == 1.0 (coc_from_depth's convention).
-            assert!((g_px[0] - g_px[1]).abs() < 1e-6, "texel {i}: R != G");
+            assert!(
+                (g_px[1] - cpu_sign[i]).abs() < 1e-4,
+                "texel {i}: G gpu={} cpu_reference={}",
+                g_px[1],
+                cpu_sign[i]
+            );
+            // B copies R (magnitude), alpha == 1.0 (coc_from_depth's convention).
             assert!((g_px[0] - g_px[2]).abs() < 1e-6, "texel {i}: R != B");
             assert!((g_px[3] - 1.0).abs() < 1e-6, "texel {i}: alpha != 1.0");
         }
@@ -350,8 +372,9 @@ mod gpu_tests {
         let device = crate::test_device();
         let (w, h) = (12u32, 12u32);
         let flat_value = 0.37f32;
-        let plane = vec![flat_value; (w * h) as usize];
-        let input = plane_to_rgba16f_tex(&device, w, h, &plane, "coc-dilate-flat-in");
+        let mag = vec![flat_value; (w * h) as usize];
+        let sign = vec![0.0f32; (w * h) as usize];
+        let input = plane_to_rgba16f_tex(&device, w, h, &mag, &sign, "coc-dilate-flat-in");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
         let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocDilate>()
@@ -373,6 +396,10 @@ mod gpu_tests {
                 px[0],
                 flat_value
             );
+            // All sign flags are 0, so the max is 0; B copies R; alpha stays 1.
+            assert!((px[1]).abs() < 1e-6, "texel {i}: flat sign field must stay 0, got {}", px[1]);
+            assert!((px[0] - px[2]).abs() < 1e-6, "texel {i}: R != B on flat field");
+            assert!((px[3] - 1.0).abs() < 1e-6, "texel {i}: alpha != 1.0");
         }
     }
 }
