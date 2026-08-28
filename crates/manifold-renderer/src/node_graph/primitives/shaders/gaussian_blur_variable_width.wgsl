@@ -65,16 +65,20 @@ fn subtap_count(step_size: f32) -> i32 {
     return clamp(raw, 1, SUBTAP_CAP);
 }
 
-// Scatter-as-gather CoC weight gate. WEIGHTING_MODE = 0 returns 1.0
-// (every neighbor contributes); WEIGHTING_MODE = 1 returns the legacy
-// DoF gate: contribution allowed only when the neighbor's CoC is at
-// least the center's, OR the center is itself very blurry (CoC > 0.5).
+// Scatter-as-gather CoC weight ramp. WEIGHTING_MODE = 0 returns 1.0
+// (every neighbor contributes); WEIGHTING_MODE = 1: contribution ramps
+// linearly from 1.0 at neighbor_coc == center_coc to 0.0 over a 0.1 CoC
+// drop (the old binary step() flickered per tap across CoC discontinuities
+// and the renormalization boosted the survivors — silhouette-edge speckle),
+// OR the center is itself very blurry (CoC > 0.5) → 1.0.
+const COC_RAMP: f32 = 0.1;
+
 fn coc_weight(center_coc: f32, neighbor_coc: f32) -> f32 {
     if WEIGHTING_MODE == 0u {
         return 1.0;
     }
     return select(
-        step(center_coc, neighbor_coc),
+        clamp((neighbor_coc - center_coc) / COC_RAMP + 1.0, 0.0, 1.0),
         1.0,
         center_coc > 0.5,
     );
