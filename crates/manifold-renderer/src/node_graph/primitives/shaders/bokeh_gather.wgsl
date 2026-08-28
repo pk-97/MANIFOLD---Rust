@@ -92,6 +92,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         w_acc = w_acc + w;
     }
 
-    let rgb = select(center.rgb, acc / max(w_acc, 0.0001), w_acc > 0.0);
+    let coverage = w_acc / f32(BOKEH_N);
+    let focus_fill = 1.0 - smoothstep(0.0, 0.25, center_coc_frac);
+    let rgb = acc / f32(BOKEH_N) + center.rgb * (1.0 - coverage) * focus_fill;
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(rgb, center.a));
 }

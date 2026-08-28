@@ -102,7 +102,7 @@ fn mip_level_count(w: u32, h: u32) -> u32 {
 crate::primitive! {
     name: BokehGather,
     type_id: "node.bokeh_gather",
-    purpose: "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by a 2px soft ramp on (tap_coc_px - distance_to_center_px) — a sample contributes in proportion to how far its OWN CoC reaches past the distance back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc; softened from D5's binary step 2026-08-28 — the hard cutoff + small included counts + normalization amplified the per-pixel hash into spray noise). Tap colors are sampled from an internal mip chain of `in` (built per frame by exact box-average downsample dispatches) at a fractional LOD derived from the center CoC — lod = clamp(log2(coc_px/4), 0, 8) — so silhouette taps read area averages instead of coin-flipping between hot pixels and black (the 2026-08-28 speckle fix); CoC weights stay full-res, so occlusion boundaries remain crisp. Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in. `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work — no mip chain is built). Fusion-exempt (BoundaryReason::BarrieredReduction): the internal prefilter mip chain is a barriered multi-pass dependency the fused form cannot express.",
+    purpose: "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by a 2px soft ramp on (tap_coc_px - distance_to_center_px) — a sample contributes in proportion to how far its OWN CoC reaches past the distance back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc; softened from D5's binary step 2026-08-28 — the hard cutoff + small included counts + normalization amplified the per-pixel hash into spray noise). Tap colors are sampled from an internal mip chain of `in` (built per frame by exact box-average downsample dispatches) at a fractional LOD derived from the center CoC — lod = clamp(log2(coc_px/4), 0, 8) — so silhouette taps read area averages instead of coin-flipping between hot pixels and black (the 2026-08-28 speckle fix); CoC weights stay full-res, so occlusion boundaries remain crisp. Coverage-filled normalization (out = acc/32 + center × (1 − w_acc/32) × focus_fill, focus gated to sharp pixels so defocused texels scatter fully): excluded taps' share is filled with the center pixel's own color, so halos feather smoothly into whatever is behind them (no plateau-then-cliff rim) and sharp foreground interiors keep their own color (no dark fringe). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in. `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work — no mip chain is built). Fusion-exempt (BoundaryReason::BarrieredReduction): the internal prefilter mip chain is a barriered multi-pass dependency the fused form cannot express.",
     inputs: {
         in: Texture2D required,
         width: Texture2D required,
@@ -591,11 +591,17 @@ pub(crate) mod cpu_reference {
             w_acc += w;
         }
 
-        if w_acc > 0.0 {
-            [acc[0] / w_acc, acc[1] / w_acc, acc[2] / w_acc, center[3]]
-        } else {
-            center
-        }
+        let coverage = w_acc / BOKEH_N as f32;
+        // 1 − smoothstep(0, 0.25, x) — the fill is for sharp pixels only;
+        // a defocused center scatters fully (see body step 5).
+        let t = (center_coc_frac / 0.25).clamp(0.0, 1.0);
+        let focus_fill = 1.0 - t * t * (3.0 - 2.0 * t);
+        [
+            acc[0] / BOKEH_N as f32 + center[0] * (1.0 - coverage) * focus_fill,
+            acc[1] / BOKEH_N as f32 + center[1] * (1.0 - coverage) * focus_fill,
+            acc[2] / BOKEH_N as f32 + center[2] * (1.0 - coverage) * focus_fill,
+            center[3],
+        ]
     }
 }
 
