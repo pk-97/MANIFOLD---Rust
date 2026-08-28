@@ -81,8 +81,10 @@ use crate::node_graph::primitive::Primitive;
 
 /// Generated-codegen uniform layout: the `max_radius` param (f32) then the
 /// `enabled` param (Bool → u32), padded to a 16-byte (4-word) multiple.
-/// `enabled` is host-only: the shader never reads it, but the codegen path
-/// lays every param into the uniform struct. Mirrors `node.variable_blur`'s
+/// `enabled` is overloaded per-dispatch as the far/near field selector
+/// (0 = far, 1 = near — run() writes FIELD_FAR/FIELD_NEAR explicitly); the
+/// node-level `enabled=false` never reaches the shader (skip_passthrough
+/// aliases in→out). Mirrors `node.variable_blur`'s
 /// `BlurUniforms` / `node.motion_blur`'s `MotionBlurUniforms` layout-note
 /// convention.
 #[repr(C)]
