@@ -50,7 +50,7 @@ suites, e.g. `project_3d.rs::gpu_tests`; this extends the same idea from
 | `Camera::project_to_pixel` CPU oracle (`view_z`, `depth`) | CAMERA_AND_LENS D2 | Reference for every depth↔world computation in the gates |
 | Tone map atoms (`node.tone_map`, reinhard) | `primitives/tone_map.rs`, `reinhard_tone_map.rs` | Untouched — exposure lives in render_scene (CAMERA D5); no new tonemap work here |
 | Effect/generator preset JSON + checker + card surface | `assets/` presets, `check_presets` (remember: checker ≠ runtime — load smoke required) | The composition deliverable's plumbing |
-| DoF/SSAO/motion-blur/bokeh atoms | nowhere | Genuinely new: 4 atoms, all single-dispatch, all codegen-path |
+| DoF/SSAO/motion-blur/bokeh atoms | nowhere | Genuinely new: 4 atoms, all codegen-path (bokeh_gather later declared `BarrieredReduction` — internal prefilter mip chain, 2026-08-28 speckle fix — still codegen-generated via `standalone_for_boundary_spec`) |
 
 section 2.5 audit statement (mandatory): `coc_from_depth` = genuinely new
 (pointwise math, no existing atom computes CoC); DoF gather = **exists**
