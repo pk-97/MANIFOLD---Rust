@@ -157,7 +157,10 @@ pub enum BoundaryReason {
     /// Workgroup-barrier reduction or multi-pass scan/reduce — a single
     /// dispatch would need `var<workgroup>` + barriers, which the
     /// no-fused-monolith rule forbids folding into one kernel (`peak`,
-    /// `luminance`, `spawn_from_mesh`, `scatter_on_mesh`).
+    /// `luminance`, `spawn_from_mesh`, `scatter_on_mesh`). Also the
+    /// sequential-dependency flavor: an internal prefilter mip chain
+    /// (`bokeh_gather`) — each level depends on the previous, and a fused
+    /// gather input has no mip levels to sample.
     BarrieredReduction,
     /// Cross-frame GPU state — the primitive's output must materialize in
     /// VRAM to survive into next frame's input, so there is no VRAM

@@ -4,6 +4,17 @@
 // independent (not sharing Rust source) so the gpu_tests parity check is a
 // real cross-check, not a tautology.
 //
+// MIP-GATHER UPGRADE (2026-08-28, silhouette-edge speckle fix): `tex_in` is
+// bound as a MIPMAPPED prefiltered copy of `in` (run() builds the chain with
+// exact box-average downsamples via bokeh_mip_downsample.wgsl) and tap
+// colors sample at a fractional LOD derived from the center CoC —
+// lod = clamp(log2(center_coc_px / 4), 0, 8) — so the 32-tap disc stays
+// dense at the sampled level and silhouette taps read area averages instead
+// of coin-flipping between hot pixels and black. CoC weights stay full-res
+// (tex_width at LOD 0). See bokeh_gather_body.wgsl's header for the full
+// rationale. `tex_sampler` must be created with mip_filter = Linear for the
+// fractional LOD to be trilinear.
+//
 // Bindings: uniforms(0), tex_in(1), tex_width(2), tex_sampler(3),
 // output_tex(4, rgba16float storage) — matches the generated layout for a
 // two-Gather-input, one-f32-param primitive (precedent:
@@ -24,6 +35,7 @@ struct Uniforms {
 
 const BOKEH_N: u32 = 32u;
 const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
+const BOKEH_LOD_TARGET_RADIUS: f32 = 4.0;
 
 fn fetch_in(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(tex_in, tex_sampler, uv, 0.0);
@@ -55,6 +67,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let center_coc_px = center_coc_frac * u.max_radius;
+    let lod = clamp(log2(center_coc_px / BOKEH_LOD_TARGET_RADIUS), 0.0, 8.0);
     let texel = 1.0 / dims;
     let px = uv * dims;
     let rot = bokeh_hash_angle(px);
@@ -68,7 +81,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let offset_px = vec2<f32>(r * cos(theta), r * sin(theta)) * center_coc_px;
         let tap_uv = uv + offset_px * texel;
 
-        let tap_color = fetch_in(tap_uv).rgb;
+        let tap_color = textureSampleLevel(tex_in, tex_sampler, tap_uv, lod).rgb;
         let tap_coc_px = clamp(fetch_width(tap_uv).r, 0.0, 1.0) * u.max_radius;
         let distance_to_center_px = length(offset_px);
         let w = step(distance_to_center_px, tap_coc_px);

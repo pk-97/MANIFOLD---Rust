@@ -50,6 +50,57 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     generate_standalone(&spec)
 }
 
+/// The emission shape `generate_standalone`'s arity gate expects, derived
+/// from the texture-input count: 0 → Source, 1 → Pointwise, ≥2 →
+/// MultiInputCoincident (mirrors the gate's own arms). Used only by the
+/// boundary-atom entry points below, where the declared `FUSION_KIND` is
+/// `Boundary` and the shape must come from the ports instead.
+fn emission_shape_for(
+    inputs: &[crate::node_graph::ports::NodePort],
+) -> crate::node_graph::freeze::classify::FusionKind {
+    use crate::node_graph::freeze::classify::FusionKind;
+    match inputs.iter().filter(|i| is_texture_input(i)).count() {
+        0 => FusionKind::Source,
+        1 => FusionKind::Pointwise,
+        _ => FusionKind::MultiInputCoincident,
+    }
+}
+
+/// Standalone codegen for an atom whose declared fusion kind is `Boundary`
+/// (fusion-exempt per `docs/ADDING_PRIMITIVES.md`'s taxonomy) but whose
+/// runtime kernel is still GENERATED from its `wgsl_body` — the atom is
+/// excused from fusion, not from the codegen path. First inhabitant:
+/// `node.bokeh_gather` (`BoundaryReason::BarrieredReduction` — its internal
+/// prefilter mip chain is a barriered multi-pass dependency the fused form
+/// can never express, so the body samples the raw `tex_*` bindings at a
+/// computed LOD; legal because a Boundary atom's body is only ever emitted
+/// standalone, where those bindings exist).
+///
+/// Guards against misuse on fusable atoms: `standalone_for_spec` is the
+/// entry for anything that can fuse.
+pub fn standalone_for_boundary_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
+) -> Result<String, CodegenError> {
+    use crate::node_graph::freeze::classify::FusionKind;
+    assert_eq!(
+        P::FUSION_KIND,
+        FusionKind::Boundary,
+        "standalone_for_boundary_spec is for Boundary atoms; fusable atoms use standalone_for_spec",
+    );
+    let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
+    let spec = StandaloneKernelSpec {
+        fusion_kind: emission_shape_for(P::INPUTS),
+        body,
+        inputs: P::INPUTS,
+        params: P::PARAMS,
+        input_access: P::INPUT_ACCESS,
+        derived_uniforms: P::DERIVED_UNIFORMS,
+        outputs: P::OUTPUTS,
+        stencil_fetch: P::STENCIL_FETCH,
+        includes: P::WGSL_INCLUDES,
+    };
+    generate_standalone(&spec)
+}
+
 /// WGSL storage-texture format token for the formats a texture kernel can declare
 /// as a write target. `None` for anything else (the standalone path only supports
 /// the f16 working default + fp32 opt-in for precision-sensitive feedback loops).
@@ -118,7 +169,7 @@ pub fn standalone_for_node(
     node: &dyn crate::node_graph::effect_node::EffectNode,
 ) -> Result<String, CodegenError> {
     let body = node.wgsl_body().ok_or(CodegenError::NoBody)?;
-    let spec = StandaloneKernelSpec {
+    let mut spec = StandaloneKernelSpec {
         fusion_kind: node.fusion_kind(),
         body,
         inputs: node.inputs(),
@@ -134,6 +185,13 @@ pub fn standalone_for_node(
     }
     if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_))) {
         return generate_standalone_resolve(body, node.inputs(), node.parameters(), node.outputs());
+    }
+    // Fusion-exempt (Boundary) texture atoms still get their standalone kernel
+    // generated — the emission shape comes from the ports, not the declared
+    // kind (dynamic mirror of `standalone_for_boundary_spec`; first inhabitant
+    // `node.bokeh_gather`, kept prewarmed through this path).
+    if node.fusion_kind() == crate::node_graph::freeze::classify::FusionKind::Boundary {
+        spec.fusion_kind = emission_shape_for(node.inputs());
     }
     generate_standalone(&spec)
 }
