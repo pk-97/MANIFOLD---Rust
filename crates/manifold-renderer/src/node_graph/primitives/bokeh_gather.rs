@@ -102,7 +102,7 @@ fn mip_level_count(w: u32, h: u32) -> u32 {
 crate::primitive! {
     name: BokehGather,
     type_id: "node.bokeh_gather",
-    purpose: "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by step(distance_to_center_px, tap_coc_px) — a sample only contributes if its OWN CoC reaches back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc). Tap colors are sampled from an internal mip chain of `in` (built per frame by exact box-average downsample dispatches) at a fractional LOD derived from the center CoC — lod = clamp(log2(coc_px/4), 0, 8) — so silhouette taps read area averages instead of coin-flipping between hot pixels and black (the 2026-08-28 speckle fix); CoC weights stay full-res, so occlusion boundaries remain crisp. Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in. `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work — no mip chain is built). Fusion-exempt (BoundaryReason::BarrieredReduction): the internal prefilter mip chain is a barriered multi-pass dependency the fused form cannot express.",
+    purpose: "Single-pass occlusion-aware disc gather depth-of-field (docs/CINEMATIC_POST_DESIGN.md D5): 32 golden-angle spiral taps (r_i = sqrt((i+0.5)/32), theta_i = i*2.399963, rotated per-pixel by the committed hash) scaled by the CENTER pixel's CoC (read from `width`'s R channel, coc_from_depth/coc_dilate's [0,1]-fraction-of-max_radius convention), each tap weighted by a 2px soft ramp on (tap_coc_px - distance_to_center_px) — a sample contributes in proportion to how far its OWN CoC reaches past the distance back to the center (the standard scatter-as-gather occlusion approximation, generalizing node.variable_blur's ScatterAsGatherByCoC weighting from 1D taps to a 2D disc; softened from D5's binary step 2026-08-28 — the hard cutoff + small included counts + normalization amplified the per-pixel hash into spray noise). Tap colors are sampled from an internal mip chain of `in` (built per frame by exact box-average downsample dispatches) at a fractional LOD derived from the center CoC — lod = clamp(log2(coc_px/4), 0, 8) — so silhouette taps read area averages instead of coin-flipping between hot pixels and black (the 2026-08-28 speckle fix); CoC weights stay full-res, so occlusion boundaries remain crisp. Luminance-preserving normalization (divide by the accumulated weight; falls back to the center color if every tap is occluded). Circular aperture v1 — no blade-count shaping. center_coc < 0.005 (in-focus) is an exact pass-through, same convention as node.variable_blur's own in-focus early-out — a zero-CoC lens (f_stop = infinity) produces a bit-clean image through this atom. Same `in`/`width` port shape as node.variable_blur so it drops straight into a DoF chain in its place: coc_from_depth (-> coc_dilate) -> bokeh_gather.width, upstream color -> bokeh_gather.in. `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work — no mip chain is built). Fusion-exempt (BoundaryReason::BarrieredReduction): the internal prefilter mip chain is a barriered multi-pass dependency the fused form cannot express.",
     inputs: {
         in: Texture2D required,
         width: Texture2D required,
@@ -430,7 +430,8 @@ mod tests {
 pub(crate) mod cpu_reference {
     const BOKEH_N: usize = 32;
     const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
-    const BOKEH_LOD_TARGET_RADIUS: f32 = 4.0;
+    const BOKEH_LOD_TARGET_RADIUS: f32 = 2.0;
+    const BOKEH_INCLUSION_RAMP: f32 = 1.0;
 
     /// D2's committed per-pixel rotation hash, transcribed exactly from
     /// `ssao_from_depth_body.wgsl`'s `ssao_hash_angle`:
@@ -580,7 +581,9 @@ pub(crate) mod cpu_reference {
             let tap_color = sample_lod(chain, tap_uv[0], tap_uv[1], lod);
             let tap_coc_px = coc.sample(tap_uv[0], tap_uv[1])[0].clamp(0.0, 1.0) * max_radius;
             let distance_to_center_px = (offset_px[0] * offset_px[0] + offset_px[1] * offset_px[1]).sqrt();
-            let w = if distance_to_center_px <= tap_coc_px { 1.0 } else { 0.0 };
+            let w = ((tap_coc_px - distance_to_center_px + BOKEH_INCLUSION_RAMP)
+                / (2.0 * BOKEH_INCLUSION_RAMP))
+                .clamp(0.0, 1.0);
 
             acc[0] += tap_color[0] * w;
             acc[1] += tap_color[1] * w;
@@ -832,15 +835,15 @@ mod gpu_tests {
     /// (implemented twice from the same committed spec, compared
     /// pixel-for-pixel).
     ///
-    /// D5's `step(distance_to_center_px, tap_coc_px)` is a HARD binary cutoff
-    /// on 32 trig-computed tap positions scaled by up to `max_radius` (24px)
-    /// — the same "rare boundary-flip" class `ssao_from_depth.rs`'s
-    /// `generated_ssao_matches_cpu_reference_on_synthetic_ramp` documents and
-    /// bounds explicitly (CPU trig vs GPU fast-math trig legitimately differ
-    /// at the ULP level, and multiplying by a large radius before a hard
-    /// threshold turns a ULP difference into an occasional whole-tap
-    /// inclusion/exclusion flip — confirmed empirically here: a control
-    /// fixture with EVERY tap forced always-included, so no threshold could
+    /// The tap weights were D5's HARD binary `step(distance_to_center_px,
+    /// tap_coc_px)` and are now a 2px soft ramp, but the dominant ULP class
+    /// is unchanged: 32 trig-computed tap positions scaled by up to
+    /// `max_radius` (24px) — CPU trig vs GPU fast-math trig legitimately
+    /// differ at the ULP level, and multiplying by a large radius turns a
+    /// ULP position difference into a small per-tap weight/color difference
+    /// (pre-ramp it was an occasional whole-tap inclusion flip — confirmed
+    /// empirically: a control fixture with EVERY tap forced always-included,
+    /// so no threshold could
     /// ever flip, still showed the same small-magnitude divergence, proving
     /// this is the well-known cross-compile trig ULP class, not an algorithm
     /// bug). The mip-gather upgrade adds a second ULP class of the same

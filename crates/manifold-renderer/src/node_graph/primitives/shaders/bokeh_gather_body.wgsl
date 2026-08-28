@@ -47,12 +47,13 @@
 //      CENTER pixel's own CoC, not each tap's. Tap UVs are computed in
 //      full-res pixel space; only the SAMPLING LEVEL changes.
 //   4. Each tap's own CoC (sampled fresh from `width` at the tap's UV,
-//      scaled to px the same way) sets whether it contributes:
-//      weight = step(distance_to_center_px, tap_coc_px) — a sample only
-//      contributes if its own CoC reaches (or exceeds) the distance back to
-//      the center (the standard scatter-as-gather occlusion approximation
-//      named in D5; same shape as node.variable_blur's ScatterAsGatherByCoC
-//      weighting_mode, generalized from 1D taps to a 2D disc).
+//      scaled to px the same way) sets how much it contributes:
+//      weight = clamp((tap_coc_px - distance + RAMP) / (2*RAMP), 0, 1) —
+//      a sample counts in proportion to how far its own CoC reaches past
+//      the distance back to the center (the standard scatter-as-gather
+//      occlusion approximation named in D5, softened from D5's binary step
+//      to a 2px ramp 2026-08-28: the binary cutoff + small included counts
+//      + normalization was the residual spray-noise amplifier).
 //   5. Luminance-preserving normalization: divide the accumulated color by
 //      the accumulated weight; if the weight sum is exactly 0 (every tap
 //      occluded), fall back to the center color instead of dividing by
@@ -70,9 +71,19 @@
 const BOKEH_N: u32 = 32u;
 const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
 // Effective disc radius at the sampled mip level the LOD formula targets:
-// 32 taps over a radius-4 disc is ~1.6 texels²/sample — dense enough that
-// the gather stops undersampling the prefiltered signal.
-const BOKEH_LOD_TARGET_RADIUS: f32 = 4.0;
+// 2 texels, so each tap's footprint (~1 texel) OVERLAPS its neighbors —
+// taps read correlated area averages and the 32-tap spiral pattern fills
+// rather than spraying. (Was 4: footprints were a third the size of their
+// gaps and a small source mirrored back as 32 separated blobs.)
+const BOKEH_LOD_TARGET_RADIUS: f32 = 2.0;
+// Soft inclusion ramp width (px, full-res): a tap's weight fades 0→1 across
+// [tap_coc - RAMP, tap_coc + RAMP] instead of flipping binary at the
+// threshold. The binary step + small included-tap count + luminance
+// normalization was the noise amplifier: one tap flipping changed the
+// output by 1/w_acc, and the per-pixel hash decorrelated the flip between
+// neighbors. Centered on the old threshold so occlusion reach is unchanged
+// on average.
+const BOKEH_INCLUSION_RAMP: f32 = 1.0;
 
 // D2's committed per-pixel rotation hash (docs/CINEMATIC_POST_DESIGN.md D2) —
 // same formula as ssao_from_depth_body.wgsl's ssao_hash_angle / film_grain's
@@ -110,7 +121,8 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32) -> vec4<f
         let tap_color = textureSampleLevel(tex_in, samp, tap_uv, lod).rgb;
         let tap_coc_px = clamp(fetch_width(tap_uv).r, 0.0, 1.0) * max_radius;
         let distance_to_center_px = length(offset_px);
-        let w = step(distance_to_center_px, tap_coc_px);
+        let w = clamp((tap_coc_px - distance_to_center_px + BOKEH_INCLUSION_RAMP)
+                      / (2.0 * BOKEH_INCLUSION_RAMP), 0.0, 1.0);
 
         acc = acc + tap_color * w;
         w_acc = w_acc + w;

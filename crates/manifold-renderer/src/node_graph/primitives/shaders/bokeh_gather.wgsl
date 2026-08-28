@@ -35,7 +35,8 @@ struct Uniforms {
 
 const BOKEH_N: u32 = 32u;
 const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
-const BOKEH_LOD_TARGET_RADIUS: f32 = 4.0;
+const BOKEH_LOD_TARGET_RADIUS: f32 = 2.0;
+const BOKEH_INCLUSION_RAMP: f32 = 1.0;
 
 fn fetch_in(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(tex_in, tex_sampler, uv, 0.0);
@@ -84,7 +85,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let tap_color = textureSampleLevel(tex_in, tex_sampler, tap_uv, lod).rgb;
         let tap_coc_px = clamp(fetch_width(tap_uv).r, 0.0, 1.0) * u.max_radius;
         let distance_to_center_px = length(offset_px);
-        let w = step(distance_to_center_px, tap_coc_px);
+        let w = clamp((tap_coc_px - distance_to_center_px + BOKEH_INCLUSION_RAMP)
+                      / (2.0 * BOKEH_INCLUSION_RAMP), 0.0, 1.0);
 
         acc = acc + tap_color * w;
         w_acc = w_acc + w;
