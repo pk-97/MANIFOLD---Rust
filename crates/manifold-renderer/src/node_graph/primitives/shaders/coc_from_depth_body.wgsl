@@ -7,13 +7,15 @@
 //   A_mm    = f_mm / f_stop
 //   D_mm    = linearize_depth(raw_depth, near, far) * WORLD_TO_MM
 //   S_mm    = focus_distance * WORLD_TO_MM
-//   coc_mm  = A_mm * f_mm * abs(D_mm - S_mm) / (D_mm * max(S_mm - f_mm, 1.0))
-//   coc_px  = clamp(coc_mm / SENSOR_H_MM * viewport_h, 0.0, max_radius)
-//   out.r   = coc_px / max_radius   (normalized — node.variable_blur's `width`
-//             convention: step_size = width_sample * max_radius + 1.0, so this
-//             atom must emit a [0,1] FRACTION of ITS OWN max_radius, not raw
-//             pixels; the preset wires this atom's max_radius equal to the
-//             downstream variable_blur nodes' max_radius so the units agree.)
+//   signed  = D_mm - S_mm
+//   coc_mm  = A_mm * f_mm * signed / (D_mm * max(S_mm - f_mm, 1.0))
+//   coc_px  = clamp(|coc_mm| / SENSOR_H_MM * viewport_h, 0.0, max_radius)
+//   out.r   = coc_px / max_radius   (MAGNITUDE — unchanged for every existing
+//             reader: node.variable_blur and node.bokeh_gather read `width.r`)
+//   out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
+//             0.0 = far-or-in-focus; docs/BOKEH_LAYERED_DOF_DESIGN.md D1)
+//   out.b   = out.r   (copy of magnitude)
+//   out.a   = 1.0
 //
 // `depth` is CoincidentTexel (own-texel integer textureLoad, no sampler) —
 // render_scene's `depth` output stores RAW [0,1] clip depth, matching every
@@ -48,13 +50,16 @@ fn body(
     let a_mm = f_mm / f_stop;
     let d_mm = linearize_depth(c_depth.r, near, far) * WORLD_TO_MM;
     let s_mm = focus_distance * WORLD_TO_MM;
-    let coc_mm = a_mm * f_mm * abs(d_mm - s_mm) / (d_mm * max(s_mm - f_mm, 1.0));
-    let coc_px = clamp(coc_mm / SENSOR_H_MM * dims.y, 0.0, max_radius);
+    let signed_delta = d_mm - s_mm;
+    let coc_mm = a_mm * f_mm * signed_delta / (d_mm * max(s_mm - f_mm, 1.0));
+    let coc_px = clamp(abs(coc_mm) / SENSOR_H_MM * dims.y, 0.0, max_radius);
     // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
     // exactly 0 CoC. Without this, S_mm = 0 makes the denominator 1 and the
     // formula degenerates to f_mm^2/f_stop: MAX blur at every aperture
     // (Peter's 2026-08-27 fully-soft frame after dragging Focus to 0).
     let coc_q = select(coc_px, 0.0, focus_distance <= 0.0);
     let normalized = coc_q / max_radius;
-    return vec4<f32>(normalized, normalized, normalized, 1.0);
+    // Sign flag: 1.0 = nearer than focus, 0.0 = far-or-in-focus.
+    let near_flag = select(0.0, 1.0, (signed_delta < 0.0) && (focus_distance > 0.0));
+    return vec4<f32>(normalized, near_flag, normalized, 1.0);
 }
