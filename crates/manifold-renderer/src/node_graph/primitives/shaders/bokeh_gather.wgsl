@@ -17,11 +17,11 @@
 //
 // Bindings: uniforms(0), tex_in(1), tex_width(2), tex_sampler(3),
 // output_tex(4, rgba16float storage) — matches the generated layout for a
-// two-Gather-input, one-f32-param primitive (precedent:
-// gaussian_blur_variable_width.wgsl).
+// two-Gather-input, [max_radius, enabled] param primitive.
 
 struct Uniforms {
     max_radius: f32,
+    enabled: u32,
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
@@ -37,6 +37,8 @@ const BOKEH_N: u32 = 32u;
 const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
 const BOKEH_LOD_TARGET_RADIUS: f32 = 2.0;
 const BOKEH_INCLUSION_RAMP: f32 = 1.0;
+const BOKEH_FIELD_FAR: u32 = 0u;
+const BOKEH_FIELD_NEAR: u32 = 1u;
 
 fn fetch_in(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(tex_in, tex_sampler, uv, 0.0);
@@ -63,6 +65,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let center = fetch_in(uv);
     let center_coc_frac = clamp(fetch_width(uv).r, 0.0, 1.0);
     if center_coc_frac < 0.005 {
+        if u.enabled == BOKEH_FIELD_NEAR {
+            textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+            return;
+        }
         textureStore(output_tex, vec2<i32>(id.xy), center);
         return;
     }
@@ -93,7 +99,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let coverage = w_acc / f32(BOKEH_N);
+    let rgb = acc / f32(BOKEH_N);
+
+    if u.enabled == BOKEH_FIELD_NEAR {
+        textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(rgb, coverage));
+        return;
+    }
+
     let focus_fill = 1.0 - smoothstep(0.0, 0.25, center_coc_frac);
-    let rgb = acc / f32(BOKEH_N) + center.rgb * (1.0 - coverage) * focus_fill;
-    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(rgb, center.a));
+    let far_rgb = rgb + center.rgb * (1.0 - coverage) * focus_fill;
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(far_rgb, center.a));
 }

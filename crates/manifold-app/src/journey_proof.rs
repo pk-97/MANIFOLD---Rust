@@ -719,4 +719,58 @@ mod tests {
         // GPU float nondeterminism) while still failing hard on real drift.
         assert!(max_diff < 0.01, "two runs of the same export diverged: max per-frame luma diff {max_diff}");
     }
+
+    /// **TEMPORARY** — BOKEH_LAYERED_DOF_DESIGN.md P3 L2 demo harness.
+    /// Loads Peter's 'Right Where I Need You - Music Video V5' project from
+    /// its Dropbox path, exports beats 396.0-400.0, extracts the middle frame
+    /// as a PNG, and asserts it is not black. The lead runs this manually to
+    /// look for the layered near/far halo overlapping the in-focus petals.
+    /// This test will be deleted before landing.
+    #[test]
+    fn temp_bokeh_p3_demo_export_frame() {
+        let project_path = std::path::Path::new(
+            "/Users/peterkiemann/Library/CloudStorage/Dropbox/Videos/\
+             LATENT SPACE - Marketing Content/MANIFOLD Projects/Interim/\
+             Right Where I Need You/Right Where I Need You - Music Video V5.manifold",
+        );
+        assert!(project_path.exists(), "project not found at {}", project_path.display());
+
+        let project = manifold_io::loader::load_project_with(
+            project_path,
+            crate::project_io::install_embedded_presets,
+        )
+        .expect("load Peter's project with embedded presets");
+
+        let fps = project.settings.frame_rate as f32;
+        let width = project.settings.output_width.max(1) as u32;
+        let height = project.settings.output_height.max(1) as u32;
+
+        let dir = out_dir("temp_bokeh_p3_demo");
+        let video_path = dir.join("export.mp4");
+        let mut cfg = tiny_export_config(&video_path, fps);
+        cfg.width = width;
+        cfg.height = height;
+        cfg.start_beat = 396.0;
+        cfg.end_beat = 400.0;
+
+        run_headless_export(project, cfg).expect("export beats 396-400 should succeed");
+
+        let frames = extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
+        assert!(!frames.is_empty(), "export produced no frames");
+        let mid = frames[frames.len() / 2].clone();
+        let out_png = dir.join("bokeh_p3_demo_frame.png");
+        std::fs::copy(&mid, &out_png).expect("copy representative frame to named PNG");
+        let luma = frame_mean_luma(&out_png).expect("luma of demo frame");
+        println!(
+            "[journey-proof] temp_bokeh_p3_demo_export_frame: {}x{} {} frames, luma={luma}, png={}",
+            width,
+            height,
+            frames.len(),
+            out_png.display()
+        );
+        assert!(
+            luma > 0.01,
+            "demo frame at beats 396-400 is nearly black (luma={luma}) — something failed to render"
+        );
+    }
 }

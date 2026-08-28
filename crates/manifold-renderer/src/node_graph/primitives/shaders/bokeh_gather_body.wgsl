@@ -71,10 +71,9 @@
 //
 // `width` is a Gather stencil-fetch input (`fetch_width`, defined by the
 // codegen as a real textureSampleLevel over the bound texture) — full-res
-// always. PARAMS: [max_radius, enabled]. `enabled` is host-only: the codegen
-// path lays every param into the uniform struct, so the body accepts it but
-// never reads it — skip_passthrough aliases `in`→`out` when
-// `enabled = false`, so this body only runs when enabled.
+// always. PARAMS: [max_radius, enabled]. `enabled` is overloaded as the
+// per-pass field selector (0 = far, 1 = near); the host still aliases `in→out`
+// when the node param `enabled = false`, so the body only sees 0/1.
 // Matches bokeh_gather.wgsl (the hand parity oracle) — kept independent (not
 // sharing source) so the gpu_tests parity check is a real cross-check.
 
@@ -102,10 +101,20 @@ fn bokeh_hash_angle(px: vec2<f32>) -> f32 {
     return fract(sin(dot(px, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.283185307;
 }
 
+const BOKEH_FIELD_FAR: u32 = 0u;
+const BOKEH_FIELD_NEAR: u32 = 1u;
+
 fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32) -> vec4<f32> {
     let center = fetch_in(uv);
     let center_coc_frac = clamp(fetch_width(uv).r, 0.0, 1.0);
     if center_coc_frac < 0.005 {
+        // `enabled` is overloaded as a per-pass field selector: far pass
+        // returns the original center; near pass returns transparent black
+        // because the near field is only additive light (the far result
+        // already carries the in-focus / far contribution).
+        if enabled == BOKEH_FIELD_NEAR {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
         return center;
     }
 
@@ -139,12 +148,21 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32) -> vec4<f
     }
 
     let coverage = w_acc / f32(BOKEH_N);
-    // The fill is for SHARP pixels only (a foreground interior whose blurry
-    // background taps were excluded fills with its own color — no dark
-    // fringe). A defocused center has no unscattered remainder — gating by
-    // the center's own CoC keeps a hot texel from retaining a bright core
-    // (I3 regression).
+    let rgb = acc / f32(BOKEH_N);
+
+    if enabled == BOKEH_FIELD_NEAR {
+        // Near field: plain average, no center fill (the original center is
+        // already in the far result). Alpha is the accumulated coverage so the
+        // composite pass knows how much this pixel's near halo contributes.
+        return vec4<f32>(rgb, coverage);
+    }
+
+    // Far field: coverage-filled normalization. The fill is for SHARP pixels
+    // only (a foreground interior whose blurry background taps were excluded
+    // fills with its own color — no dark fringe). A defocused center has no
+    // unscattered remainder — gating by the center's own CoC keeps a hot
+    // texel from retaining a bright core (I3 regression).
     let focus_fill = 1.0 - smoothstep(0.0, 0.25, center_coc_frac);
-    let rgb = acc / f32(BOKEH_N) + center.rgb * (1.0 - coverage) * focus_fill;
-    return vec4<f32>(rgb, center.a);
+    let far_rgb = rgb + center.rgb * (1.0 - coverage) * focus_fill;
+    return vec4<f32>(far_rgb, center.a);
 }
