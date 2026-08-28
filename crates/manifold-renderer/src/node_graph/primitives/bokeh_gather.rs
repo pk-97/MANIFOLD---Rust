@@ -71,8 +71,8 @@
 use std::borrow::Cow;
 
 use manifold_gpu::{
-    GpuBinding, GpuFilterMode, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
-    GpuTextureFormat, GpuTextureUsage,
+    GpuBinding, GpuComputePipeline, GpuFilterMode, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
+    GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -90,6 +90,18 @@ use crate::node_graph::primitive::Primitive;
 struct BokehGatherUniforms {
     max_radius: f32,
     enabled: u32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
+/// Uniforms for the internal far-field CoC dilation helper
+/// (`shaders/bokeh_coc_dilate_wide.wgsl`): the `max_radius` param (f32) and
+/// the pass direction (0 = horizontal, 1 = vertical), padded to 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BokehDilateUniforms {
+    max_radius: f32,
+    direction: u32,
     _pad0: f32,
     _pad1: f32,
 }
@@ -151,7 +163,12 @@ crate::primitive! {
         // next level's src). No per-frame allocation on the hot path.
         mip_chain: Option<GpuTexture> = None,
         mip_views: Vec<GpuTexture> = Vec::new(),
-        downsample_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        downsample_pipeline: Option<GpuComputePipeline> = None,
+        // Internal far-field CoC dilation (BOKEH_LAYERED_DOF_DESIGN.md P2):
+        // full-res RGBA16F textures cached across frames, rebuilt on resize.
+        far_coc: Option<GpuTexture> = None,
+        dilation_temp: Option<GpuTexture> = None,
+        dilation_pipeline: Option<GpuComputePipeline> = None,
     },
 }
 
@@ -201,11 +218,11 @@ impl Primitive for BokehGather {
         // Internal prefilter mip chain of `in` — rebuilt on resize only
         // (hot-path rule: no per-frame allocation).
         let levels = mip_level_count(sw, sh);
-        let rebuild = match &self.mip_chain {
+        let rebuild_mip = match &self.mip_chain {
             Some(t) => t.width != sw || t.height != sh,
             None => true,
         };
-        if rebuild {
+        if rebuild_mip {
             self.mip_chain = Some(gpu.device.create_texture(&GpuTextureDesc {
                 width: sw,
                 height: sh,
@@ -222,6 +239,30 @@ impl Primitive for BokehGather {
                 .collect();
         }
 
+        // Internal far-field CoC dilation textures — rebuilt on resize only.
+        // Output dims match the output texture (full-res, same as the width
+        // field and the gather output).
+        let rebuild_dilate = match &self.far_coc {
+            Some(t) => t.width != w || t.height != h,
+            None => true,
+        };
+        if rebuild_dilate {
+            let desc = GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+                label: "node.bokeh_gather far coc",
+                mip_levels: 1,
+            };
+            self.far_coc = Some(gpu.device.create_texture(&desc));
+            let mut temp_desc = desc;
+            temp_desc.label = "node.bokeh_gather dilation temp";
+            self.dilation_temp = Some(gpu.device.create_texture(&temp_desc));
+        }
+
         let downsample = self.downsample_pipeline.get_or_insert_with(|| {
             // Internal prefilter helper (not the atom's runtime kernel — that
             // is codegen-generated below). Hand-authored so the downsample
@@ -233,9 +274,20 @@ impl Primitive for BokehGather {
                 "node.bokeh_gather mip downsample",
             )
         });
+        let dilation = self.dilation_pipeline.get_or_insert_with(|| {
+            // Internal far-field CoC dilation helper (BOKEH_LAYERED_DOF_DESIGN.md
+            // P2): separable max, H then V. Hand-authored so the "R only where
+            // G == 0" mask is exact and identical on every backend.
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/bokeh_coc_dilate_wide.wgsl"),
+                "cs_main",
+                "node.bokeh_gather far coc dilation",
+            )
+        });
         // mip_filter = Linear: the body's fractional LOD must be trilinear.
         // The same sampler serves the downsample dispatches (single-level
-        // views + explicit LOD 0 make the mip filter moot there).
+        // views + explicit LOD 0 make the mip filter moot there) and the
+        // dilation helper (which only samples LOD 0).
         let sampler = self.sampler.get_or_insert_with(|| {
             gpu.device.create_sampler(&GpuSamplerDesc {
                 mip_filter: GpuFilterMode::Linear,
@@ -269,6 +321,47 @@ impl Primitive for BokehGather {
             );
         }
 
+        // Far-field CoC dilation: H pass writes temp, V pass writes far_coc.
+        // The helper reads R only where G == 0, so near-field CoC (G == 1)
+        // never leaks into the far field (BOKEH_LAYERED_DOF_DESIGN.md D3).
+        let dilate_uniforms = |direction: u32| BokehDilateUniforms {
+            max_radius,
+            direction,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        let far_coc = self.far_coc.as_ref().expect("far_coc built above");
+        let dilation_temp = self.dilation_temp.as_ref().expect("dilation_temp built above");
+
+        gpu.native_enc.dispatch_compute(
+            dilation,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&dilate_uniforms(0)),
+                },
+                GpuBinding::Texture { binding: 1, texture: width_tex },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Texture { binding: 3, texture: dilation_temp },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "node.bokeh_gather far coc dilation H",
+        );
+        gpu.native_enc.dispatch_compute(
+            dilation,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&dilate_uniforms(1)),
+                },
+                GpuBinding::Texture { binding: 1, texture: dilation_temp },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Texture { binding: 3, texture: far_coc },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "node.bokeh_gather far coc dilation V",
+        );
+
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Boundary-atom codegen path: the runtime kernel is GENERATED
             // from `wgsl_body` (uniform/ABI machinery intact) even though the
@@ -297,6 +390,11 @@ impl Primitive for BokehGather {
         };
 
         let mip_chain = self.mip_chain.as_ref().expect("mip chain built above");
+        // The far gather consumes the dilated far CoC, bound to the body's
+        // `width` input slot. The generated body samples `fetch_width` at
+        // full-res LOD 0, so swapping which texture backs `tex_width` per
+        // dispatch is exactly the two-Gather-input ABI the codegen already
+        // emits (standalone.rs: verify-at-impl confirmed).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -310,7 +408,7 @@ impl Primitive for BokehGather {
                 },
                 GpuBinding::Texture {
                     binding: 2,
-                    texture: width_tex,
+                    texture: far_coc,
                 },
                 GpuBinding::Sampler {
                     binding: 3,
@@ -490,7 +588,7 @@ pub(crate) mod cpu_reference {
     }
 
     impl MipLevel {
-        fn as_plane(&self) -> Plane4<'_> {
+        pub(crate) fn as_plane(&self) -> Plane4<'_> {
             Plane4 { w: self.w, h: self.h, rgba: &self.rgba }
         }
     }
@@ -541,13 +639,53 @@ pub(crate) mod cpu_reference {
         out
     }
 
-    /// The D5 algorithm with the mip-gather upgrade, transcribed exactly
-    /// (independent of the WGSL body) — one texel's bokeh-gathered output,
-    /// `[r,g,b,a]`. `color` is level 0 of `chain`; `coc` is full-res always.
+    /// One separable 1D max-dilation pass of the far CoC field, reading R
+    /// only where G == 0 (far side + in-focus) and writing the magnitude to R.
+    /// `dir` is (1,0) for horizontal or (0,1) for vertical; `radius_px` is
+    /// `max_radius` rounded to integer pixels, matching the GPU helper's loop.
+    fn dilate_max_1d(src: &Plane4<'_>, dst: &mut [[f32; 4]], dir: [i32; 2], radius_px: i32) {
+        let w = src.w;
+        let h = src.h;
+        for y in 0..h {
+            for x in 0..w {
+                let mut far_coc = 0.0f32;
+                for k in -radius_px..=radius_px {
+                    let sx = (x + dir[0] * k).clamp(0, w - 1);
+                    let sy = (y + dir[1] * k).clamp(0, h - 1);
+                    let sample = src.rgba[(sy * w + sx) as usize];
+                    if sample[1] == 0.0 {
+                        far_coc = far_coc.max(sample[0]);
+                    }
+                }
+                dst[(y * w + x) as usize] = [far_coc, 0.0, 0.0, 1.0];
+            }
+        }
+    }
+
+    /// Build the full internal far-field CoC pipeline: H then V separable
+    /// max-dilation of the signed CoC field. Near-field pixels (G == 1) are
+    /// excluded so they cannot leak into the far field. Output is a full-res
+    /// plane with R = far CoC magnitude, matching `bokeh_coc_dilate_wide.wgsl`.
+    pub fn build_far_coc(coc: &Plane4<'_>, max_radius: f32) -> MipLevel {
+        let w = coc.w;
+        let h = coc.h;
+        let mut temp = vec![[0.0f32; 4]; (w * h) as usize];
+        let mut far = vec![[0.0f32; 4]; (w * h) as usize];
+        let radius_px = max_radius.round() as i32;
+        dilate_max_1d(coc, &mut temp, [1, 0], radius_px);
+        let temp_plane = Plane4 { w, h, rgba: &temp };
+        dilate_max_1d(&temp_plane, &mut far, [0, 1], radius_px);
+        MipLevel { w, h, rgba: far }
+    }
+
+    /// The D5 algorithm with the mip-gather + far-field dilation upgrades,
+    /// transcribed exactly (independent of the WGSL body) — one texel's
+    /// bokeh-gathered output, `[r,g,b,a]`. `color` is level 0 of `chain`;
+    /// `far_coc` is the dilated far CoC field from `build_far_coc`.
     pub fn bokeh_gather_texel(
         color: &Plane4<'_>,
         chain: &[MipLevel],
-        coc: &Plane4<'_>,
+        far_coc: &Plane4<'_>,
         cx: i32,
         cy: i32,
         max_radius: f32,
@@ -556,7 +694,7 @@ pub(crate) mod cpu_reference {
         let uv = [(cx as f32 + 0.5) / dims[0], (cy as f32 + 0.5) / dims[1]];
 
         let center = color.sample(uv[0], uv[1]);
-        let center_coc_frac = coc.sample(uv[0], uv[1])[0].clamp(0.0, 1.0);
+        let center_coc_frac = far_coc.sample(uv[0], uv[1])[0].clamp(0.0, 1.0);
         if center_coc_frac < 0.005 {
             return center;
         }
@@ -579,7 +717,7 @@ pub(crate) mod cpu_reference {
             let tap_uv = [uv[0] + offset_px[0] * texel[0], uv[1] + offset_px[1] * texel[1]];
 
             let tap_color = sample_lod(chain, tap_uv[0], tap_uv[1], lod);
-            let tap_coc_px = coc.sample(tap_uv[0], tap_uv[1])[0].clamp(0.0, 1.0) * max_radius;
+            let tap_coc_px = far_coc.sample(tap_uv[0], tap_uv[1])[0].clamp(0.0, 1.0) * max_radius;
             let distance_to_center_px = (offset_px[0] * offset_px[0] + offset_px[1] * offset_px[1]).sqrt();
             let w = ((tap_coc_px - distance_to_center_px + BOKEH_INCLUSION_RAMP)
                 / (2.0 * BOKEH_INCLUSION_RAMP))
@@ -636,8 +774,8 @@ mod gpu_tests {
         GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
 
-    use super::cpu_reference::{bokeh_gather_texel, build_mip_chain, Plane4};
-    use super::{mip_level_count, BokehGather, BokehGatherUniforms};
+    use super::cpu_reference::{bokeh_gather_texel, build_far_coc, build_mip_chain, Plane4};
+    use super::{mip_level_count, BokehDilateUniforms, BokehGather, BokehGatherUniforms};
     use crate::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
@@ -693,9 +831,11 @@ mod gpu_tests {
             for x in 0..w {
                 let i = (y * w + x) as usize;
                 let v = 0.1 + 0.7 * (x as f32 / (w - 1).max(1) as f32);
-                rgba[i] = [v, v, v, 1.0];
+                // P1 signed-CoC convention: R=magnitude, G=sign (0 = far/in-focus),
+                // B=R copy. The dilation helper reads R only where G == 0.
+                rgba[i] = [v, 0.0, v, 1.0];
                 px[i * 4] = f16::from_f32(v);
-                px[i * 4 + 1] = f16::from_f32(v);
+                px[i * 4 + 1] = f16::from_f32(0.0);
                 px[i * 4 + 2] = f16::from_f32(v);
                 px[i * 4 + 3] = f16::from_f32(1.0);
             }
@@ -707,8 +847,9 @@ mod gpu_tests {
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
         for i in 0..(w * h) as usize {
             let v = f16::from_f32(value);
+            // P1 signed-CoC convention: far/in-focus sign flag (G = 0).
             px[i * 4] = v;
-            px[i * 4 + 1] = v;
+            px[i * 4 + 1] = f16::from_f32(0.0);
             px[i * 4 + 2] = v;
             px[i * 4 + 3] = f16::from_f32(1.0);
         }
@@ -803,21 +944,99 @@ mod gpu_tests {
         chain
     }
 
-    /// Dispatch the gather against `color`'s mip chain and read back the
-    /// output — the full run() path (prefilter + gather), not the gather in
-    /// isolation.
+    fn dilation_pipeline(device: &GpuDevice) -> GpuComputePipeline {
+        device.create_compute_pipeline(
+            include_str!("shaders/bokeh_coc_dilate_wide.wgsl"),
+            "cs_main",
+            "bokeh-coc-dilate-wide-test",
+        )
+    }
+
+    fn dilate_uniforms(max_radius: f32, direction: u32) -> BokehDilateUniforms {
+        BokehDilateUniforms { max_radius, direction, _pad0: 0.0, _pad1: 0.0 }
+    }
+
+    /// Build the far-field CoC on GPU exactly as `run()` does: H pass writes
+    /// `dilation_temp`, V pass writes `far_coc`.
+    fn build_far_coc_gpu(
+        device: &GpuDevice,
+        dilation: &GpuComputePipeline,
+        sampler: &GpuSampler,
+        width_tex: &GpuTexture,
+        w: u32,
+        h: u32,
+        max_radius: f32,
+    ) -> GpuTexture {
+        let far_coc = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            label: "bokeh-far-coc-test",
+            mip_levels: 1,
+        });
+        let temp = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            label: "bokeh-dilation-temp-test",
+            mip_levels: 1,
+        });
+        let mut enc = device.create_encoder("bokeh-dilate");
+        enc.dispatch_compute(
+            dilation,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 0)),
+                },
+                GpuBinding::Texture { binding: 1, texture: width_tex },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Texture { binding: 3, texture: &temp },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "bokeh-dilate-H",
+        );
+        enc.dispatch_compute(
+            dilation,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 1)),
+                },
+                GpuBinding::Texture { binding: 1, texture: &temp },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Texture { binding: 3, texture: &far_coc },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "bokeh-dilate-V",
+        );
+        enc.commit_and_wait_completed();
+        far_coc
+    }
+
+    /// Dispatch the full internal pipeline (prefilter + far CoC dilation +
+    /// gather) and read back the output.
     fn dispatch(
         device: &GpuDevice,
         pipeline: &GpuComputePipeline,
         downsample: &GpuComputePipeline,
+        dilation: &GpuComputePipeline,
         sampler: &GpuSampler,
         color: &GpuTexture,
         width_tex: &GpuTexture,
         w: u32,
         h: u32,
+        max_radius: f32,
         uniform_bytes: &[u8],
     ) -> Vec<[f32; 4]> {
         let mip_chain = build_mip_chain_gpu(device, downsample, sampler, color, w, h);
+        let far_coc = build_far_coc_gpu(device, dilation, sampler, width_tex, w, h, max_radius);
         let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "bokeh-out");
         let mut enc = device.create_encoder("bokeh-dispatch");
         enc.dispatch_compute(
@@ -825,7 +1044,7 @@ mod gpu_tests {
             &[
                 GpuBinding::Bytes { binding: 0, data: uniform_bytes },
                 GpuBinding::Texture { binding: 1, texture: &mip_chain },
-                GpuBinding::Texture { binding: 2, texture: width_tex },
+                GpuBinding::Texture { binding: 2, texture: &far_coc },
                 GpuBinding::Sampler { binding: 3, sampler },
                 GpuBinding::Texture { binding: 4, texture: &out.texture },
             ],
@@ -880,20 +1099,32 @@ mod gpu_tests {
             "bokeh-generated",
         );
         let downsample = downsample_pipeline(&device);
+        let dilation = dilation_pipeline(&device);
         let sampler = mip_linear_sampler(&device);
         let gen_out = dispatch(
-            &device, &pipeline, &downsample, &sampler, &color_tex, &coc_tex, w, h, bytes,
+            &device,
+            &pipeline,
+            &downsample,
+            &dilation,
+            &sampler,
+            &color_tex,
+            &coc_tex,
+            w,
+            h,
+            max_radius,
+            bytes,
         );
 
         let color_buf = Plane4 { w: w as i32, h: h as i32, rgba: &color_rgba };
         let coc_buf = Plane4 { w: w as i32, h: h as i32, rgba: &coc_rgba };
         let chain = build_mip_chain(&color_buf, mip_level_count(w, h));
+        let far_coc = build_far_coc(&coc_buf, max_radius);
         let mut sum_abs = 0.0f64;
         let mut n = 0u32;
         for y in 0..h as i32 {
             for x in 0..w as i32 {
                 let idx = (y as u32 * w + x as u32) as usize;
-                let cpu = bokeh_gather_texel(&color_buf, &chain, &coc_buf, x, y, max_radius);
+                let cpu = bokeh_gather_texel(&color_buf, &chain, &far_coc.as_plane(), x, y, max_radius);
                 let gpu = gen_out[idx];
                 for c in 0..4 {
                     let d = (cpu[c] - gpu[c]).abs();
@@ -935,6 +1166,7 @@ mod gpu_tests {
         let bytes = bytemuck::bytes_of(&uniforms);
         let sampler = mip_linear_sampler(&device);
         let downsample = downsample_pipeline(&device);
+        let dilation = dilation_pipeline(&device);
 
         let gen_wgsl =
             crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<BokehGather>()
@@ -945,7 +1177,17 @@ mod gpu_tests {
             "bokeh-zero-coc",
         );
         let got = dispatch(
-            &device, &pipeline, &downsample, &sampler, &color_tex, &coc_tex, w, h, bytes,
+            &device,
+            &pipeline,
+            &downsample,
+            &dilation,
+            &sampler,
+            &color_tex,
+            &coc_tex,
+            w,
+            h,
+            24.0,
+            bytes,
         );
         let expected = readback_rgba(&device, &color_tex, w, h);
 
@@ -996,6 +1238,7 @@ mod gpu_tests {
         let bytes = bytemuck::bytes_of(&uniforms);
         let sampler = mip_linear_sampler(&device);
         let downsample = downsample_pipeline(&device);
+        let dilation = dilation_pipeline(&device);
         let gen_wgsl =
             crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<BokehGather>()
                 .expect("node.bokeh_gather standalone codegen");
@@ -1005,7 +1248,17 @@ mod gpu_tests {
             "bokeh-firefly",
         );
         let out = dispatch(
-            &device, &pipeline, &downsample, &sampler, &color_tex, &coc_tex, w, h, bytes,
+            &device,
+            &pipeline,
+            &downsample,
+            &dilation,
+            &sampler,
+            &color_tex,
+            &coc_tex,
+            w,
+            h,
+            24.0,
+            bytes,
         );
 
         // (a) Energy conserved: the prefilter must SPREAD the hot pixel's
@@ -1055,6 +1308,179 @@ mod gpu_tests {
             worst.2,
             worst.0,
             worst.1
+        );
+    }
+
+    /// **I4 — rim gate (BOKEH_LAYERED_DOF_DESIGN.md P2):** a bright rectangle
+    /// (value 20.0) with far CoC 0.5 sits on in-focus black (CoC 0). Without
+    /// far-field dilation, pixels just outside the rectangle receive no light
+    /// and the silhouette ends in a hard rim. With dilation, the far CoC
+    /// spreads by `max_radius`, so the bright rectangle's halo feathers outward
+    /// and energy is conserved.
+    #[test]
+    fn bright_rectangle_halo_feathers_past_silhouette_no_rim() {
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+        let max_radius = 24.0f32;
+
+        // 16×16 bright rectangle centered in the frame, far CoC 0.5,
+        // surrounded by in-focus black (CoC 0).
+        let rect0 = (w - 16) / 2;
+        let rect1 = rect0 + 16;
+        let mut color_rgba = vec![[0.0f32; 4]; (w * h) as usize];
+        let mut coc = vec![[0.0f32; 4]; (w * h) as usize];
+        let mut color_px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        let mut coc_px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        let bright = 20.0f32;
+        for y in rect0..rect1 {
+            for x in rect0..rect1 {
+                let i = (y * w + x) as usize;
+                color_rgba[i] = [bright, bright, bright, 1.0];
+                coc[i] = [0.5, 0.0, 0.5, 1.0]; // far side: R=magnitude, G=0, B=R copy
+                for c in 0..3 {
+                    color_px[i * 4 + c] = f16::from_f32(bright);
+                }
+                color_px[i * 4 + 3] = f16::from_f32(1.0);
+            }
+        }
+        // CoC texture: R and B = magnitude, G = sign flag (0 = far/in-focus).
+        for i in 0..(w * h) as usize {
+            coc_px[i * 4] = f16::from_f32(coc[i][0]);
+            coc_px[i * 4 + 1] = f16::from_f32(coc[i][1]);
+            coc_px[i * 4 + 2] = f16::from_f32(coc[i][2]);
+            coc_px[i * 4 + 3] = f16::from_f32(coc[i][3]);
+        }
+        let color_tex = upload_rgba16f(&device, w, h, "bokeh-rim-color", &color_px);
+        let coc_tex = upload_rgba16f(&device, w, h, "bokeh-rim-coc", &coc_px);
+
+        let uniforms = bg_uniforms(max_radius);
+        let bytes = bytemuck::bytes_of(&uniforms);
+        let sampler = mip_linear_sampler(&device);
+        let downsample = downsample_pipeline(&device);
+        let dilation = dilation_pipeline(&device);
+        let gen_wgsl =
+            crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<BokehGather>()
+                .expect("node.bokeh_gather standalone codegen");
+        let pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "bokeh-rim",
+        );
+        let out = dispatch(
+            &device,
+            &pipeline,
+            &downsample,
+            &dilation,
+            &sampler,
+            &color_tex,
+            &coc_tex,
+            w,
+            h,
+            max_radius,
+            bytes,
+        );
+
+        // (a) Energy conserved: per-channel sum over the frame must be a
+        // substantial fraction of the bright rectangle's total energy. The
+        // mip/gather pipeline spreads it; clamp-to-edge at the frame borders
+        // is the only loss.
+        let input_energy = bright * 16.0 * 16.0;
+        let mut channel_sum = [0.0f32; 3];
+        for p in &out {
+            for c in 0..3 {
+                channel_sum[c] += p[c];
+            }
+        }
+        for (c, s) in channel_sum.iter().enumerate() {
+            assert!(
+                *s > input_energy * 0.7,
+                "channel {c} energy {s} — expected most of the rectangle's energy \
+                 ({input_energy}) to be conserved in the output"
+            );
+        }
+
+        // (b) Monotonic radial falloff beyond the rectangle edge: bin pixels by
+        // their integer distance from the rectangle's outer edge and assert
+        // mean brightness never rises as distance increases. The halo is
+        // expected to be roughly monotonic (small local wobble from the hash
+        // is fine; the mean over a ring is the oracle).
+        let mut ring_means: std::collections::BTreeMap<i32, (f32, u32)> = Default::default();
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let dx = (x - rect0 as i32).max(rect1 as i32 - 1 - x).max(0);
+                let dy = (y - rect0 as i32).max(rect1 as i32 - 1 - y).max(0);
+                let dist_from_edge = dx.max(dy);
+                let i = (y as u32 * w + x as u32) as usize;
+                let luma = (out[i][0] + out[i][1] + out[i][2]) / 3.0;
+                let entry = ring_means.entry(dist_from_edge).or_insert((0.0, 0));
+                entry.0 += luma;
+                entry.1 += 1;
+            }
+        }
+        let mut prev_mean = f32::MAX;
+        for (dist, (sum, count)) in ring_means.iter() {
+            let mean = sum / *count as f32;
+            // Inside the rectangle (dist < 0) not binned; dist=0 is the edge
+            // ring. The mean must not rise as we move outward.
+            if *dist > 0 {
+                assert!(
+                    mean <= prev_mean + 0.05,
+                    "rim falloff non-monotonic at edge distance {dist}: mean {mean} \
+                     after previous ring {prev_mean} — halo should feather, not brighten"
+                );
+            }
+            prev_mean = mean;
+        }
+
+        // (c) Nonzero glow at 0.5×max_radius out: pixels roughly 12px outside
+        // the rectangle edge still carry visible brightness. Use a band
+        // [0.4, 0.6]×max_radius to tolerate the integer ring binning.
+        let mut glow_sum = 0.0f32;
+        let mut glow_count = 0u32;
+        let glow_min = (max_radius * 0.4) as i32;
+        let glow_max = (max_radius * 0.6) as i32;
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let dx = (x - rect0 as i32).max(rect1 as i32 - 1 - x).max(0);
+                let dy = (y - rect0 as i32).max(rect1 as i32 - 1 - y).max(0);
+                let dist_from_edge = dx.max(dy);
+                if dist_from_edge >= glow_min && dist_from_edge <= glow_max {
+                    let i = (y as u32 * w + x as u32) as usize;
+                    glow_sum += (out[i][0] + out[i][1] + out[i][2]) / 3.0;
+                    glow_count += 1;
+                }
+            }
+        }
+        assert!(glow_count > 0, "rim gate: no pixels in the 0.5×max_radius band");
+        let glow_mean = glow_sum / glow_count as f32;
+        assert!(
+            glow_mean > 0.1,
+            "rim gate: mean brightness {glow_mean} at ~0.5×max_radius band — \
+             far-field dilation must carry nonzero glow past the silhouette"
+        );
+
+        // (d) Smoothness beyond the silhouette: no adjacent-pixel channel delta
+        // anywhere in the frame should look like a pre-mip firefly spike. The
+        // halo is broad and the mip prefilter keeps it that way.
+        let mut max_delta = 0.0f32;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let p = out[y * w as usize + x];
+                for (nx, ny) in [(x + 1, y), (x, y + 1)] {
+                    if nx >= w as usize || ny >= h as usize {
+                        continue;
+                    }
+                    let q = out[ny * w as usize + nx];
+                    for c in 0..3 {
+                        max_delta = max_delta.max((p[c] - q[c]).abs());
+                    }
+                }
+            }
+        }
+        assert!(
+            max_delta < 1.5,
+            "rim gate: adjacent-pixel delta {max_delta} — the halo must be smooth, \
+             not a spiky rim"
         );
     }
 }
