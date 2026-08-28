@@ -111,7 +111,16 @@ name which one when you claim an exemption:
    (area→scan→place). A single dispatch that needs workgroup memory + barriers is
    structurally multi-pass — which is why "single-dispatch" was the wrong axis.
    Forcing these into one `standalone_for_spec` kernel would violate the
-   no-fused-monolith rule.
+   no-fused-monolith rule. Same class, sequential-dependency flavor: an
+   **internal prefilter mip chain** (`node.bokeh_gather`, 2026-08-28 — each
+   mip level depends on the previous, and a fused gather input has no mip
+   levels to sample). Such an atom declares `boundary_reason:
+   BarrieredReduction` and keeps the codegen path via
+   `standalone_for_boundary_spec` — excused from FUSION, not from codegen;
+   its `wgsl_body` may then reference the standalone `tex_*`/`samp` bindings
+   directly (e.g. `textureSampleLevel(tex_in, samp, uv, lod)`), which is
+   legal precisely because a Boundary atom's body is only ever emitted
+   standalone.
 2. **Cross-frame state** — exempt. `temporal` (`node.feedback`): the state texture must
    materialize in VRAM to survive the frame, so there is no round-trip to fuse away.
    The freeze compiler already fuses *around* it — state-capture wires are excluded

@@ -30,7 +30,10 @@ pub(crate) use fused::rename_ident;
 
 pub use standalone::{generate_standalone, StandaloneKernelSpec};
 
-pub use entry_points::{standalone_for_node, standalone_for_spec, standalone_for_spec_fmt, wgsl_storage_token};
+pub use entry_points::{
+    standalone_for_boundary_spec, standalone_for_node, standalone_for_spec,
+    standalone_for_spec_fmt, wgsl_storage_token,
+};
 
 pub use types::{CodegenError, ENTRY, FusedVirtualChain, FusionRegion, GeneratedFusion, InputSource, RegionNode, VOLUME_WORKGROUP_3D};
 pub(crate) use types::{param_is_fusable, param_wgsl_type, wgsl_safe_field};
