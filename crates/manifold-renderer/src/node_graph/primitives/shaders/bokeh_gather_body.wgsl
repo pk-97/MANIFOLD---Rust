@@ -54,10 +54,20 @@
 //      occlusion approximation named in D5, softened from D5's binary step
 //      to a 2px ramp 2026-08-28: the binary cutoff + small included counts
 //      + normalization was the residual spray-noise amplifier).
-//   5. Luminance-preserving normalization: divide the accumulated color by
-//      the accumulated weight; if the weight sum is exactly 0 (every tap
-//      occluded), fall back to the center color instead of dividing by
-//      zero. Circular aperture v1 — no blade-count shaping.
+//   5. Coverage-filled normalization (2026-08-28, replaces D5's
+//      divide-by-included-weight): out = acc/BOKEH_N + center *
+//      (1 - w_acc/BOKEH_N) * focus_fill, where focus_fill =
+//      1 - smoothstep(0, 0.25, center_coc_frac). The excluded taps' share
+//      of the kernel is filled with the CENTER pixel's own color, so a
+//      blurred halo dilutes smoothly into whatever is behind it (in the
+//      black void: feathers to black — no plateau-then-cliff rim). The
+//      focus gate confines the fill to SHARP pixels: a sharp foreground
+//      interior fills with its own color (no dark fringe), while a
+//      defocused texel has no unscattered remainder and scatters fully
+//      (ungated, a hot texel kept a bright core — I3 regression).
+//      D5's w_acc normalization held every blurred region at full
+//      brightness right up to a hard cutoff — the "disconnected halo"
+//      artifact Peter flagged on the music-video repro.
 //
 // `width` is a Gather stencil-fetch input (`fetch_width`, defined by the
 // codegen as a real textureSampleLevel over the bound texture) — full-res
@@ -128,6 +138,13 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32) -> vec4<f
         w_acc = w_acc + w;
     }
 
-    let rgb = select(center.rgb, acc / max(w_acc, 0.0001), w_acc > 0.0);
+    let coverage = w_acc / f32(BOKEH_N);
+    // The fill is for SHARP pixels only (a foreground interior whose blurry
+    // background taps were excluded fills with its own color — no dark
+    // fringe). A defocused center has no unscattered remainder — gating by
+    // the center's own CoC keeps a hot texel from retaining a bright core
+    // (I3 regression).
+    let focus_fill = 1.0 - smoothstep(0.0, 0.25, center_coc_frac);
+    let rgb = acc / f32(BOKEH_N) + center.rgb * (1.0 - coverage) * focus_fill;
     return vec4<f32>(rgb, center.a);
 }
