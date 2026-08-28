@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "DepthOfField",
-  "description": "Depth of Field effect with three selectable focus modes and variable blur strength. The graph reads source image and applies one of three circle-of-confusion masks (tilt-shift box, radial ellipse, or AI depth analysis) selected by the Mode slider. The selected mask is inverted into a CoC texture, scaled by blur strength, clamped, and drives the radius of two separable Gaussian blur passes (horizontal then vertical, using scatter-as-gather weighting to prevent foreground bleeding). The blurs run on a 4x box-prefiltered (downsampled) source — every texel they gather is an area average, so bright HDR pixels cannot sparkle into sparse dots, and the passes cost 1/16 the pixels; the blurred result is bilinearly upsampled at the composite. Finally, a masked blend composites the original over the blurred image using the same full-res CoC as the blend mask, keeping focus edges sharp. Depth mode analysis is gated by mux liveness pruning, so the MiDaS DNN only runs when Mode is set to Depth. All groups flatten to byte-identical behavior at load, and card bindings reach inner nodes by stable nodeId.",
+  "description": "Depth of Field effect with three selectable focus modes and variable blur strength. The graph reads source image and applies one of three circle-of-confusion masks (tilt-shift box, radial ellipse, or AI depth analysis) selected by the Mode slider. The selected mask is inverted into a CoC texture, scaled by blur strength, clamped, and drives the radius of two separable Gaussian blur passes (horizontal then vertical, using scatter-as-gather weighting to prevent foreground bleeding). The blurs run on a 4x box-prefiltered (downsampled) source — every texel they gather is an area average, so bright HDR pixels cannot sparkle into sparse dots, and the passes cost 1/16 the pixels; the blurred result is bilinearly upsampled at the composite. Two edge-firefly guards ride the prefilter: a highlight knee clamps the blur path's RGB to 4.0 before downsampling (a single 20+ nit edge pixel would otherwise survive the box average as a hot low-res texel and smear into a dot along silhouettes; the in-focus composite path keeps full HDR), and the blurs' CoC width input gets its own 4x box prefilter so the scatter-as-gather weight field is smooth at the blur's working resolution (the kernel's per-tap weight is a 0.1-wide ramp, not a binary step, so weights cannot flicker on/off across the CoC edge and get renormalized brighter). Finally, a masked blend composites the original over the blurred image using the same full-res CoC as the blend mask, keeping focus edges sharp. Depth mode analysis is gated by mux liveness pruning, so the MiDaS DNN only runs when Mode is set to Depth. All groups flatten to byte-identical behavior at load, and card bindings reach inner nodes by stable nodeId.",
   "presetMetadata": {
     "id": "DepthOfField",
     "displayName": "Depth of Field",
@@ -992,6 +992,23 @@
         },
         "nodes": [
           {
+            "id": 43,
+            "nodeId": "highlight_knee",
+            "typeId": "node.clamp",
+            "handle": "highlight_knee",
+            "params": {
+              "max": {
+                "type": "Float",
+                "value": 4.0
+              },
+              "min": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Highlight Knee"
+          },
+          {
             "id": 42,
             "nodeId": "prefilter",
             "typeId": "node.downsample",
@@ -1003,6 +1020,19 @@
               }
             },
             "title": "Prefilter 4x"
+          },
+          {
+            "id": 44,
+            "nodeId": "coc_low",
+            "typeId": "node.downsample",
+            "handle": "coc_low",
+            "params": {
+              "factor": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "CoC Prefilter 4x"
           },
           {
             "id": 40,
@@ -1073,6 +1103,12 @@
           {
             "fromNode": 107,
             "fromPort": "sourceImage",
+            "toNode": 43,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
             "toNode": 42,
             "toPort": "in"
           },
@@ -1085,12 +1121,18 @@
           {
             "fromNode": 107,
             "fromPort": "width",
+            "toNode": 44,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 44,
+            "fromPort": "out",
             "toNode": 40,
             "toPort": "width"
           },
           {
-            "fromNode": 107,
-            "fromPort": "width_2",
+            "fromNode": 44,
+            "fromPort": "out",
             "toNode": 41,
             "toPort": "width"
           },

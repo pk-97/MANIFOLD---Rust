@@ -59,12 +59,20 @@ fn vbw_subtap_count(step_size: f32) -> i32 {
     return clamp(raw, 1, VBW_SUBTAP_CAP);
 }
 
+// Scatter-as-gather CoC weight ramp width. The old binary step() flipped a
+// tap's full weight on/off at the CoC discontinuity, and the acc/w_acc
+// renormalization then boosted the surviving taps — per-pixel speckle along
+// blurred silhouette edges. The ramp is 1.0 at neighbor_coc == center_coc
+// (byte-identical for smooth CoC fields) and falls linearly to 0 over a 0.1
+// CoC drop, so the bleed guard keeps its teeth without the flicker.
+const VBW_COC_RAMP: f32 = 0.1;
+
 fn coc_weight(center_coc: f32, neighbor_coc: f32) -> f32 {
     if WEIGHTING_MODE == 0u {
         return 1.0;
     }
     return select(
-        step(center_coc, neighbor_coc),
+        clamp((neighbor_coc - center_coc) / VBW_COC_RAMP + 1.0, 0.0, 1.0),
         1.0,
         center_coc > 0.5,
     );
