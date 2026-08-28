@@ -1,8 +1,6 @@
 # Layered Bokeh DoF — near/far field split inside `node.bokeh_gather`
 
-**Status:** IN PROGRESS — P1 landed (signed CoC, no look change); P2 far-field dilation landed (rim fix) · 2026-08-28 · k3 (lead)
-**P2 gate:** `scripts/gpu_proofs_gate.py` PASS (I1/I2/I3 updated + I4 green); clippy `-D warnings`; `cargo nextest run -p manifold-renderer` 1681 passed; graph-tool validate/fusion OK; bokeh_gather stays `boundary:barriered_reduction`; LOD-sampling negative clean.
-**Next:** P3 near field + composite (layered look).
+**Status:** IN PROGRESS — P1 landed (signed CoC, no look change); P2 far-field dilation + P3 near field pending · 2026-08-28 · k3 (lead)
 **Prerequisites:** the mip-gather + soft-ramp + coverage-fill chain (landed
 2026-08-28: merges 4d6ee0b46, 40e4cbd00, bc4c20a6d)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (acceptance demos) before starting any phase.

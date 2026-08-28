@@ -687,6 +687,39 @@ mod tests {
 
     /// D4 (design doc): same project + range + fps -> the same feature
     /// sequence, at the artifact level. Runs the audio-reactive export
+    /// twice from the same click-track WAV and compares per-frame luma.
+    #[test]
+    fn export_is_deterministic_in_features() {
+        let dir = out_dir("export_is_deterministic_in_features");
+        let click_wav = dir.join("click.wav");
+        write_click_track_wav(&click_wav);
+        let wav_path = click_wav.to_str().unwrap();
+
+        let video_a = dir.join("export_a.mp4");
+        run_headless_export(audio_reactive_project(wav_path), tiny_export_config(&video_a, CLICK_FPS))
+            .expect("export a should succeed");
+        let frames_a = extract_frames_to_pngs(&video_a, &dir.join("frames_a")).expect("frames a");
+        let luma_a = luma_series(&frames_a).expect("luma a");
+
+        let video_b = dir.join("export_b.mp4");
+        run_headless_export(audio_reactive_project(wav_path), tiny_export_config(&video_b, CLICK_FPS))
+            .expect("export b should succeed");
+        let frames_b = extract_frames_to_pngs(&video_b, &dir.join("frames_b")).expect("frames b");
+        let luma_b = luma_series(&frames_b).expect("luma b");
+
+        assert_eq!(luma_a.len(), luma_b.len(), "both runs must produce the same frame count");
+        let max_diff = luma_a
+            .iter()
+            .zip(luma_b.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        println!("[journey-proof] export_is_deterministic_in_features: max_diff={max_diff}");
+        // Tolerant of encoder-quantization jitter (H.264 CRF is deterministic
+        // given identical input frames, but this guards against any residual
+        // GPU float nondeterminism) while still failing hard on real drift.
+        assert!(max_diff < 0.01, "two runs of the same export diverged: max per-frame luma diff {max_diff}");
+    }
+
     /// **TEMPORARY** — BOKEH_LAYERED_DOF_DESIGN.md P2 L2 demo harness.
     /// Loads Peter's 'Right Where I Need You - Music Video V5' project from
     /// its Dropbox path, exports one beat around the headless-known frame at

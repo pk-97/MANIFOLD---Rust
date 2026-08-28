@@ -42,7 +42,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Brute-force separable max over [-max_radius, +max_radius] px.
     // The gather's own disc falloff dominates the visible falloff, so the
     // square-vs-disc footprint error of separable max is accepted per D3.
-    let radius_px = i32(u.max_radius);
+    // Round to the nearest pixel count — the CPU reference rounds too, and
+    // truncation would shrink the window by a tap at fractional max_radius.
+    let radius_px = i32(u.max_radius + 0.5);
     for (var i: i32 = -radius_px; i <= radius_px; i = i + 1) {
         let tap_uv = uv + step * f32(i);
         let sample = textureSampleLevel(src, samp, tap_uv, 0.0);
