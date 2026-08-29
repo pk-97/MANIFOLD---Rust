@@ -16,6 +16,8 @@
 struct Uniforms {
     max_radius: f32,
     direction: u32, // 0 = horizontal, 1 = vertical
+    decay: f32,      // distance-decay per half-res tap (px_per_tap / max_radius)
+    _pad0: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -49,9 +51,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let tap_uv = uv + step * f32(i);
         let sample = textureSampleLevel(src, samp, tap_uv, 0.0);
         // R carries magnitude; G is the sign flag. Only far-side and in-focus
-        // pixels (G == 0) contribute to the far field.
+        // pixels (G == 0) contribute to the far field. The field is half-res,
+        // so each tap step is 2 full-res px; decay is 2 / max_radius.
         if (sample.g == 0.0) {
-            far_coc = max(far_coc, sample.r);
+            far_coc = max(far_coc, sample.r - f32(abs(i)) * u.decay);
         }
     }
 
