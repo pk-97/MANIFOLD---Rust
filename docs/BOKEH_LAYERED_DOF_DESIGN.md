@@ -1,6 +1,6 @@
 # Layered Bokeh DoF — near/far field split inside `node.bokeh_gather`
 
-**Status:** IN PROGRESS — P1 (signed CoC) + P2 (far-field dilation, rim fix) landed; P3 near field + composite pending · 2026-08-28 · k3 (lead)
+**Status:** SHIPPED 2026-08-28 — P1 signed CoC, P2 far-field dilation, P3 near field + composite all landed; rim confirmed gone by Peter on the export demos (L2). Contract for the atom's internal layered passes.
 **Prerequisites:** the mip-gather + soft-ramp + coverage-fill chain (landed
 2026-08-28: merges 4d6ee0b46, 40e4cbd00, bc4c20a6d)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (acceptance demos) before starting any phase.
