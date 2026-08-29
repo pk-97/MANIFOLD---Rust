@@ -96,18 +96,21 @@ struct BokehGatherUniforms {
     _pad1: f32,
 }
 
-/// Uniforms for the internal far-field CoC dilation helper
+/// Uniforms for the internal far/near CoC dilation helper
 /// (`shaders/bokeh_coc_dilate_wide.wgsl`): `max_radius` (f32), pass
-/// direction (u32), and tent `decay` (f32), padded to 16 bytes. `decay` is
-/// `px_per_tap / max_radius` in normalized CoC units; the field textures are
-/// half-res, so each tap step is 2 full-res px and `decay = 2.0 / max_radius`.
+/// direction (u32), tent `decay` (f32), and falloff `shape` (u32:
+/// 0 = linear tent for the far field, 1 = sqrt fade for the near field —
+/// sqrt keeps foreground spill over sharp content, BOKEH_DOF_ROUND2_DESIGN.md
+/// D5). `decay` is `px_per_tap / max_radius` in normalized CoC units; the
+/// field textures are half-res, so each tap step is 2 full-res px and
+/// `decay = 2.0 / max_radius`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BokehDilateUniforms {
     max_radius: f32,
     direction: u32,
     decay: f32,
-    _pad0: f32,
+    shape: u32,
 }
 
 /// Full mip-chain depth for a `w`×`h` source (level 0 … 1×1).
@@ -368,11 +371,13 @@ impl Primitive for BokehGather {
         // Far-field CoC dilation: H pass writes temp, V pass writes far_coc.
         // The helper reads R only where G == 0, so near-field CoC (G == 1)
         // never leaks into the far field (BOKEH_LAYERED_DOF_DESIGN.md D3).
-        let dilate_uniforms = |direction: u32| BokehDilateUniforms {
+        // Far field dilates with the linear tent (shape 0); the near field
+        // uses the sqrt fade (shape 1) so foreground bokeh keeps its spill.
+        let dilate_uniforms = |direction: u32, shape: u32| BokehDilateUniforms {
             max_radius,
             direction,
             decay: 2.0 / max_radius,
-            _pad0: 0.0,
+            shape,
         };
         let far_coc = self.far_coc.as_ref().expect("far_coc built above");
         let dilation_temp = self.dilation_temp.as_ref().expect("dilation_temp built above");
@@ -382,7 +387,7 @@ impl Primitive for BokehGather {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(0)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(0, 0)),
                 },
                 GpuBinding::Texture { binding: 1, texture: width_tex },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -396,7 +401,7 @@ impl Primitive for BokehGather {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(1)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(1, 0)),
                 },
                 GpuBinding::Texture { binding: 1, texture: dilation_temp },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -455,7 +460,7 @@ impl Primitive for BokehGather {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(0)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(0, 1)),
                 },
                 GpuBinding::Texture { binding: 1, texture: near_coc_raw },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -469,7 +474,7 @@ impl Primitive for BokehGather {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(1)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(1, 1)),
                 },
                 GpuBinding::Texture { binding: 1, texture: dilation_temp },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -762,14 +767,17 @@ pub(crate) mod cpu_reference {
     /// (1,0) for horizontal or (0,1) for vertical; `radius_px` is `max_radius`
     /// rounded to integer pixels in full-res units, matching the GPU helper's
     /// loop. Each tap step is 2 full-res pixels, so the decay per tap is
-    /// `2.0 / max_radius`. The output is the maximum over the window of
-    /// `sample.r - |k| * decay`, still masked by G == 0.
+    /// `2.0 / max_radius`. `sqrt_fade` selects the falloff shape: false gives
+    /// the linear tent `sample.r * t` (far field), true gives
+    /// `sample.r * sqrt(t)` (near field — keeps foreground spill), where
+    /// `t = clamp(1 - |k| * decay / sample.r, 0, 1)`. Masked by G == 0.
     fn dilate_max_1d(
         src: &Plane4<'_>,
         dst: &mut [[f32; 4]],
         dir: [i32; 2],
         radius_px: i32,
         decay: f32,
+        sqrt_fade: bool,
     ) {
         let w = src.w;
         let h = src.h;
@@ -781,7 +789,10 @@ pub(crate) mod cpu_reference {
                     let sy = (y + dir[1] * k).clamp(0, h - 1);
                     let sample = src.rgba[(sy * w + sx) as usize];
                     if sample[1] == 0.0 {
-                        far_coc = far_coc.max(sample[0] - (k.abs() as f32) * decay);
+                        let t = (1.0 - (k.abs() as f32) * decay / sample[0].max(1e-6))
+                            .clamp(0.0, 1.0);
+                        let contrib = sample[0] * if sqrt_fade { t.sqrt() } else { t };
+                        far_coc = far_coc.max(contrib);
                     }
                 }
                 dst[(y * w + x) as usize] = [far_coc, 0.0, 0.0, 1.0];
@@ -790,16 +801,16 @@ pub(crate) mod cpu_reference {
     }
 
     /// Run the separable tent-dilation helper on an already-half-res field.
-    fn dilate_field(src: &Plane4<'_>, max_radius: f32) -> MipLevel {
+    fn dilate_field(src: &Plane4<'_>, max_radius: f32, sqrt_fade: bool) -> MipLevel {
         let w = src.w;
         let h = src.h;
         let mut temp = vec![[0.0f32; 4]; (w * h) as usize];
         let mut far = vec![[0.0f32; 4]; (w * h) as usize];
         let radius_px = max_radius.round() as i32;
         let decay = 2.0 / max_radius;
-        dilate_max_1d(src, &mut temp, [1, 0], radius_px, decay);
+        dilate_max_1d(src, &mut temp, [1, 0], radius_px, decay, sqrt_fade);
         let temp_plane = Plane4 { w, h, rgba: &temp };
-        dilate_max_1d(&temp_plane, &mut far, [0, 1], radius_px, decay);
+        dilate_max_1d(&temp_plane, &mut far, [0, 1], radius_px, decay, sqrt_fade);
         MipLevel { w, h, rgba: far }
     }
 
@@ -827,7 +838,7 @@ pub(crate) mod cpu_reference {
             }
         }
         let src_plane = Plane4 { w, h, rgba: &src };
-        dilate_field(&src_plane, max_radius)
+        dilate_field(&src_plane, max_radius, false)
     }
 
     /// Extract the near-field CoC magnitude: sample the full-res signed CoC
@@ -853,10 +864,12 @@ pub(crate) mod cpu_reference {
         MipLevel { w, h, rgba }
     }
 
-    /// Dilate the extracted near-field CoC. Because extraction clears G,
-    /// the same tent-dilation helper used for the far field can be reused.
+    /// Dilate the extracted near-field CoC with the sqrt fade (shape 1) so
+    /// foreground bokeh keeps most of its spill over sharp content. Because
+    /// extraction clears G, the same dilation helper used for the far field
+    /// can be reused.
     pub fn build_near_coc(near_raw: &Plane4<'_>, max_radius: f32) -> MipLevel {
-        dilate_field(near_raw, max_radius)
+        dilate_field(near_raw, max_radius, true)
     }
 
     /// The D5 algorithm with the mip-gather + layered-field upgrades,
@@ -1165,8 +1178,8 @@ mod gpu_tests {
         )
     }
 
-    fn dilate_uniforms(max_radius: f32, direction: u32) -> BokehDilateUniforms {
-        BokehDilateUniforms { max_radius, direction, decay: 2.0 / max_radius, _pad0: 0.0 }
+    fn dilate_uniforms(max_radius: f32, direction: u32, shape: u32) -> BokehDilateUniforms {
+        BokehDilateUniforms { max_radius, direction, decay: 2.0 / max_radius, shape }
     }
 
     /// Build the far-field CoC on GPU exactly as `run()` does: extract onto a
@@ -1208,7 +1221,7 @@ mod gpu_tests {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 0)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 0, 0)),
                 },
                 GpuBinding::Texture { binding: 1, texture: width_tex },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -1222,7 +1235,7 @@ mod gpu_tests {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 1)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 1, 0)),
                 },
                 GpuBinding::Texture { binding: 1, texture: &temp },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -1327,7 +1340,7 @@ mod gpu_tests {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 0)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 0, 1)),
                 },
                 GpuBinding::Texture { binding: 1, texture: near_coc_raw },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -1341,7 +1354,7 @@ mod gpu_tests {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 1)),
+                    data: bytemuck::bytes_of(&dilate_uniforms(max_radius, 1, 1)),
                 },
                 GpuBinding::Texture { binding: 1, texture: &temp },
                 GpuBinding::Sampler { binding: 2, sampler },
@@ -1905,11 +1918,12 @@ mod gpu_tests {
         let near_coc = 0.6f32;
         let bright = 10.0f32;
 
-        // Layout: bright near field on the left; a wide in-focus dark bar in
-        // the middle; dark background on the right. The bar is much wider
-        // than the halo reach (max_radius * near_coc ≈ 14px).
+        // Layout: bright near field on the left; a wide in-focus dark bar
+        // immediately adjacent (the P3 brief's "bar crossing a defocused
+        // bright field"); dark background on the right. The bar is much
+        // wider than the halo reach (max_radius * near_coc ≈ 14px).
         let bright_max_x = 40u32;
-        let bar_start = 48u32;
+        let bar_start = bright_max_x;
         let bar_end = 96u32;
         let mut color_rgba = vec![[0.0f32; 4]; (w * h) as usize];
         let mut coc = vec![[0.0f32; 4]; (w * h) as usize];
@@ -1965,9 +1979,12 @@ mod gpu_tests {
             max_radius,
         );
 
-        // (a) The bar interior keeps its own color: sample a 6px margin inside
-        // the left and right bar boundaries.
-        let margin = 6i32;
+        // (a) The bar interior keeps its own color: sample inside the bar
+        // past the halo's reach. The sqrt-fade near field spills ~9px past
+        // the bright edge (reach = max_radius * near_coc ≈ 14px; reach-back
+        // geometry caps the visible overlap at ~0.6× that), so a 12px margin
+        // puts the interior sample beyond the spill.
+        let margin = 12i32;
         let mut max_interior_dev = 0.0f32;
         for y in 0..h as i32 {
             for x in (bar_start as i32 + margin)..(bar_end as i32 - margin) {
@@ -1981,14 +1998,14 @@ mod gpu_tests {
             "bar interior max luma {max_interior_dev} — near halo must not replace the dark bar's own color"
         );
 
-        // (b) The bright field's halo visibly overlaps the bar's left edge:
-        // sample 2 px outside the bar on the dark-gap side, where the near
-        // layer still carries the defocused bright field, and assert visible
-        // luma. The bar interior itself stays dark (the center-coc falloff
-        // prevents the near gather from reaching back into the bright source).
+        // (b) The bright field's halo visibly overlaps the bar's left edge —
+        // the layered behavior the design exists for. Sample 2px INSIDE the
+        // bar boundary: the sqrt fade keeps the near field at ~0.56 strength
+        // there, so the gather disc (radius ≈ 13px) reaches back into the
+        // bright field and the composite lays real luma over the dark bar.
         let mut edge_sum = 0.0f32;
         let mut edge_count = 0u32;
-        let edge_x = bar_start as i32 - 2;
+        let edge_x = bar_start as i32 + 2;
         for y in 0..h as i32 {
             let i = (y * w as i32 + edge_x) as usize;
             edge_sum += (out[i][0] + out[i][1] + out[i][2]) / 3.0;
@@ -1996,7 +2013,7 @@ mod gpu_tests {
         }
         let edge_mean = edge_sum / edge_count as f32;
         assert!(
-            edge_mean > 0.1,
+            edge_mean > 0.3,
             "bar-edge luma {edge_mean} — near-field halo must visibly overlap the in-focus edge"
         );
 

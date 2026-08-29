@@ -44,6 +44,21 @@ full-res 49-tap passes cost more texture reads than both gathers combined
   Smear fix (Kawase/dual-filter downsample replacing box in the color mip
   chain) is deferred with trigger: still reads smeary after D1.
 
+- **D5 — Far field linear, near field sqrt (added at execution, Peter
+  2026-08-29).** The linear tent applied to the NEAR field halves the
+  foreground spill: a pixel at distance `d` from a defocused source gets
+  CoC `c(1 - d/cR)`, whose gather disc reaches back to the source only when
+  `d ≤ cR/2` — the layered halo-overlap look (BOKEH_LAYERED_DOF P3,
+  Peter-approved) collapsed, and the lane's first response was to weaken
+  I5's overlap assertion to match (rejected in lead review; the test's
+  intent is restored, not the numbers). The near field therefore uses a
+  sqrt fade — same reach, same kernel with a `shape` uniform — holding
+  ~70% strength at mid-reach so the disc still reaches back. I5's fixture
+  also drops its 8px bright-to-bar gap (the P3 brief says the bar CROSSES
+  the field; the gap was lane-invented) and widens the interior margin to
+  12px to sit past the sqrt spill. Rejected: near field flat (keeps the
+  hard outer edge Peter reported).
+
 ## Design body
 
 Changes, all inside `BokehGather::run` + its helpers + cpu_reference:
@@ -87,7 +102,7 @@ Single phase P1 (one lane, one commit):
 ## Decided — do not reopen
 
 1. Tent decay is linear in normalized CoC units with decay = px_per_tap /
-   max_radius (D1).
+   max_radius for the far field; the near field uses the sqrt fade (D5).
 2. Fields half-res, gathers full-res this round (D2).
 3. Everything stays internal to the atom; no params (D3).
 

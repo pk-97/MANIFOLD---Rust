@@ -11,13 +11,13 @@
 // — the structural rim fix. Output: R = dilated far CoC magnitude, G/B = 0,
 // A = 1. The gather body only consumes R, so the other channels are padding.
 //
-// Bindings: uniform(0) [max_radius, direction], src(1), samp(2), dst(3, rgba16float write).
+// Bindings: uniform(0) [max_radius, direction, decay, shape], src(1), samp(2), dst(3, rgba16float write).
 
 struct Uniforms {
     max_radius: f32,
     direction: u32, // 0 = horizontal, 1 = vertical
     decay: f32,      // distance-decay per half-res tap (px_per_tap / max_radius)
-    _pad0: f32,
+    shape: u32,      // 0 = linear tent (far field), 1 = sqrt fade (near field)
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -53,8 +53,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         // R carries magnitude; G is the sign flag. Only far-side and in-focus
         // pixels (G == 0) contribute to the far field. The field is half-res,
         // so each tap step is 2 full-res px; decay is 2 / max_radius.
+        // t is the linear tent weight (1 at the source, 0 at its reach); the
+        // far field uses t itself, the near field uses sqrt(t) so foreground
+        // bokeh keeps most of its spill over sharp content while the outer
+        // edge still falls smoothly to zero (BOKEH_DOF_ROUND2_DESIGN.md D1/D5).
         if (sample.g == 0.0) {
-            far_coc = max(far_coc, sample.r - f32(abs(i)) * u.decay);
+            let t = clamp(1.0 - f32(abs(i)) * u.decay / max(sample.r, 1e-6), 0.0, 1.0);
+            far_coc = max(far_coc, sample.r * select(t, sqrt(t), u.shape == 1u));
         }
     }
 
