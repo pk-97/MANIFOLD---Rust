@@ -1,6 +1,6 @@
 # Bokeh DoF Round 2 — tent-shaped halo fields + half-res dilation
 
-**Status:** APPROVED (Peter, 2026-08-29, direction agreed in chat), not built · k3 (lead)
+**Status:** SHIPPED 2026-08-29 — tent far / sqrt-near fields + half-res dilation landed; Peter runs the live look-check himself (L4 direct, his explicit call) · k3 (lead)
 **Prerequisites:** BOKEH_LAYERED_DOF_DESIGN shipped (P1–P3 landed 2026-08-28).
 **Execution contract:** docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs).
 
