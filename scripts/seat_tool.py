@@ -262,11 +262,9 @@ def assign(slot, model):
         print(f"WARNING: {model!r} not in litellm model_list — proxy cannot serve it yet")
     tier_src = TIER_GUARD_SPAWN.read_text()
     exe = re.search(r'EXECUTOR_TIERS\s*=\s*re\.compile\(\s*r"([^"]+)"', tier_src).group(1)
-    dsp = re.search(r'DISPATCHER_TIERS\s*=\s*re\.compile\(\s*r"([^"]+)"', tier_src).group(1)
-    want = dsp if slot == "opus" else exe
-    if not re.search(want, model, re.IGNORECASE):
-        which = "DISPATCHER_TIERS" if slot == "opus" else "EXECUTOR_TIERS"
-        print(f"WARNING: {model!r} not matched by {which} in agent-tier-spawn-guard.py — edit the regex")
+    # Dispatcher seat retired — every lane slot is executor tier now.
+    if not re.search(exe, model, re.IGNORECASE):
+        print(f"WARNING: {model!r} not matched by EXECUTOR_TIERS in agent-tier-spawn-guard.py — edit the regex")
 
     print(f"""
 done. Manual follow-ups (prose stays human-edited):

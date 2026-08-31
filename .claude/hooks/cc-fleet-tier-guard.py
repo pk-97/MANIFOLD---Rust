@@ -87,8 +87,8 @@ def decide(command: str, model: str) -> str:
             "dead on this harness (TeamCreate retired; teammates unreachable "
             "via SendMessage). Spawn provider lanes as native Agent-tool "
             "subagents instead: "
-            "model \"haiku\"=DeepSeek Flash, \"sonnet\"=GLM-4.7, "
-            "\"opus\"=GLM-5.2, \"fable\"=k3 on the K3 seat "
+            "model \"haiku\"=MiMo v2.5 Free, \"sonnet\"=Kimi K2.7 "
+            "(classifier only), \"opus\"=DeepSeek Flash, \"fable\"=k3 on the K3 seat "
             "(docs/AGENT_ROUTING.md §Native provider lanes)."
         )
     # ALL remaining spawn verbs (subagent/run/workflow) denied for EVERY tier
@@ -103,10 +103,9 @@ def decide(command: str, model: str) -> str:
         "teammates only (Peter 2026-08-02) — headless cc-fleet spawns are "
         "invisible in the UI, unreachable via SendMessage, and outside the "
         "lane-health-check. Spawn a native lane instead: model \"haiku\" = "
-        "DeepSeek Flash, \"sonnet\" = Kimi K2.7 (classifier slot — never "
-        "lanes), \"opus\" = DeepSeek Pro "
-        "(escalation seat), \"fable\" = k3, named with the slot prefix "
-        "(flash-*/k27-*/pro-*/k3-*). `cc-fleet subagent-status <job>` "
+        "MiMo v2.5 Free (lane work), \"sonnet\" = Kimi K2.7 (classifier slot — never "
+        "lanes), \"opus\" = DeepSeek Flash, \"fable\" = k3, named with the slot prefix "
+        "(v25-*/k27-*/flash-*/k3-*). `cc-fleet subagent-status <job>` "
         "polls of already-running jobs are unaffected."
     )
 
