@@ -344,33 +344,40 @@ impl Application {
                 self.time_since_start,
             );
 
-            // Route hover through InteractionOverlay (port of Unity OnPointerMove).
-            // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
-            // invalidation on hover change, and cursor shape feedback.
-            if let Some(content_tx) = self.content_tx.as_ref() {
-                let mut host = crate::editing_host::AppEditingHost::new(
-                    &mut self.local_project,
-                    content_tx,
-                    &self.content_state,
-                    &mut self.cursor_manager,
-                    &mut self.active_layer_id,
-                    &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate_layers,
-                    &mut self.pre_drag_commands,
-                );
-                self.overlay.on_pointer_move(
-                    self.cursor_pos,
-                    &mut host,
-                    &mut self.selection,
-                    &self.ws.ui_root.viewport,
-                );
-            }
+            if self.ws.ui_root.background_input_blocked() {
+                // A modal popup is open: keep tree hover feedback on the popup,
+                // but don't run the timeline InteractionOverlay or background
+                // cursor-shape feedback (split-handle, resize, etc.).
+                self.cursor_manager.set_default();
+            } else {
+                // Route hover through InteractionOverlay (port of Unity OnPointerMove).
+                // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
+                // invalidation on hover change, and cursor shape feedback.
+                if let Some(content_tx) = self.content_tx.as_ref() {
+                    let mut host = crate::editing_host::AppEditingHost::new(
+                        &mut self.local_project,
+                        content_tx,
+                        &self.content_state,
+                        &mut self.cursor_manager,
+                        &mut self.active_layer_id,
+                        &mut self.needs_rebuild,
+                        &mut self.needs_structural_sync,
+                        &mut self.scroll_dirty,
+                        &mut self.invalidate_layers,
+                        &mut self.pre_drag_commands,
+                    );
+                    self.overlay.on_pointer_move(
+                        self.cursor_pos,
+                        &mut host,
+                        &mut self.selection,
+                        &self.ws.ui_root.viewport,
+                    );
+                }
 
-            // Update cursor based on current interaction state.
-            // From Unity: Cursors.SetMove/SetBlocked/SetResizeHorizontal/SetDefault
-            self.update_cursor_for_position();
+                // Update cursor based on current interaction state.
+                // From Unity: Cursors.SetMove/SetBlocked/SetResizeHorizontal/SetDefault
+                self.update_cursor_for_position();
+            }
         }
 
         self.apply_pending_cursor(window_id);
@@ -410,27 +417,7 @@ impl Application {
                             }
                             self.input_handler.inspector_has_focus = in_inspector;
 
-                            // If a dropdown is open and the click lands outside it,
-                            // dismiss the dropdown and consume the event so that the
-                            // background node never receives a PointerDown (prevents
-                            // phantom pressed_id on the node behind the dropdown).
-                            if self.ws.ui_root.dropdown.is_open()
-                                && !self.ws.ui_root.dropdown.contains_point(self.cursor_pos)
-                            {
-                                self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
-                                // Click is consumed by dismiss — do not forward.
-                                if manifold_ui::input::input_trace_enabled() {
-                                    eprintln!(
-                                        "[input-trace] window: PRESS ({:.0},{:.0}) consumed by \
-                                         dropdown-dismiss",
-                                        self.cursor_pos.x, self.cursor_pos.y
-                                    );
-                                }
-                            } else if self
-                                .ws
-                                .ui_root
-                                .layout
-                                .is_near_split_handle(self.cursor_pos)
+                            if self.ws.ui_root.layout.is_near_split_handle(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
                                 // D5 (`docs/DRAG_CAPTURE_DESIGN.md`): the seam
@@ -720,6 +707,13 @@ impl Application {
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
                 self.needs_rebuild = true;
+                return;
+            }
+
+            // A modal popup blocks direct viewport/inspector scrolling.
+            // Dropdown and dock scrolling are handled via the queued UIEvent
+            // pipeline above, which the overlay driver already gates.
+            if self.ws.ui_root.background_input_blocked() {
                 return;
             }
 

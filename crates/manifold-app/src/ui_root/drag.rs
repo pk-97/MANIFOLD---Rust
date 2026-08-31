@@ -19,12 +19,28 @@ impl UIRoot {
         // gauntlet). A modal claims unconditionally (D4). A modeless overlay
         // claims iff `claims_drag(origin)` says so (P1: no overlay overrides
         // the default `false` yet — the audio panel's override lands P2).
-        // The dropdown specifically: an open dropdown that does NOT claim is
-        // dismissed here as a side effect, WITHOUT consuming (D3) — same UX
-        // as today's outside-click dismiss, minus the BUG-058 eat-arm.
+        //
+        // The dropdown is modal for clicks/wheel/keyboard but remains a
+        // transient surface for drags: a drag starting outside its rect still
+        // dismisses it without consuming, so the real owner underneath can
+        // operate (D3). A drag starting inside is captured like any other modal.
         let mut tree = std::mem::replace(&mut self.tree, UITree::new());
         let mut owner = None;
         for id in OverlayId::Z_ORDER.iter().rev() {
+            if *id == OverlayId::Dropdown && self.dropdown.is_open() {
+                let inside = self
+                    .dropdown
+                    .actual_rect()
+                    .map_or(false, |r| r.contains(origin));
+                if !inside {
+                    self.dropdown.close(&mut tree);
+                    self.closed_overlays.push(OverlayId::Dropdown);
+                    self.overlay_dirty = true;
+                    continue;
+                }
+                owner = Some(DragOwner::Overlay(OverlayId::Dropdown));
+                break;
+            }
             let ov = self.overlay_mut(*id);
             if !ov.is_open() {
                 continue;
@@ -36,11 +52,6 @@ impl UIRoot {
             if ov.claims_drag(origin) {
                 owner = Some(DragOwner::Overlay(*id));
                 break;
-            }
-            if *id == OverlayId::Dropdown {
-                self.dropdown.close(&mut tree);
-                self.closed_overlays.push(OverlayId::Dropdown);
-                self.overlay_dirty = true;
             }
         }
         self.tree = tree;

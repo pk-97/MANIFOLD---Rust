@@ -136,6 +136,14 @@ pub trait Overlay {
     /// Used for [`SizePolicy::Content`]; unused for `SelfManaged` overlays.
     fn desired_size(&self) -> Vec2;
 
+    /// The overlay's true on-screen content rect, if it positions itself
+    /// (`Anchor::SelfManaged`). `None` means "use the rect recorded by the
+    /// driver" for placed overlays. This lets `overlay_contains_point` hit-test
+    /// dropdowns / browser popups / pickers without scanning the tree.
+    fn actual_rect(&self) -> Option<Rect> {
+        None
+    }
+
     /// Build the overlay's nodes into `tree`. Only called when `is_open()`.
     fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement);
 
