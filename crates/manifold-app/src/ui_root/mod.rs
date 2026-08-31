@@ -1104,7 +1104,9 @@ impl UIRoot {
         // HoverEnter/HoverExit only fire on node-level transitions; they cannot
         // detect hover changes within the same node's bounding box (e.g., moving
         // between clips in the same track background). update_hover_at fills that gap.
-        if action == PointerAction::Move {
+        // With a modal popup open, the background is blocked — the viewport stays
+        // where it was so clips behind the popup don't light up.
+        if action == PointerAction::Move && !self.background_input_blocked() {
             let mut hover_actions = self.viewport.update_hover_at(pos);
             self.cursor_hover_actions.append(&mut hover_actions);
             // Waveform/stem button hover is handled by UITree node hover_bg_color.

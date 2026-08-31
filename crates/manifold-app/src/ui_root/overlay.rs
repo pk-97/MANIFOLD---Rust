@@ -21,6 +21,20 @@ impl UIRoot {
         }
     }
 
+    /// Immutable view of the overlay for an id. Used by hit-tests that only
+    /// need to read geometry / modality.
+    pub(crate) fn overlay_ref(&self, id: OverlayId) -> &dyn Overlay {
+        match id {
+            OverlayId::PerfHud => &self.perf_hud,
+            OverlayId::Dropdown => &self.dropdown,
+            OverlayId::Settings => &self.settings_popup,
+            OverlayId::RtQuality => &self.rt_quality_panel,
+            OverlayId::BrowserPopup => &self.browser_popup,
+            OverlayId::AbletonPicker => &self.ableton_picker,
+            OverlayId::Toast => &self.toast,
+        }
+    }
+
     /// Whether the overlay for `id` is currently open. Immutable mirror of
     /// `overlay_mut(id).is_open()` — the exhaustive match keeps it in lockstep
     /// with the driver registry. `pub(crate)`: used by `note_overlay_closed_if`
@@ -35,6 +49,28 @@ impl UIRoot {
             OverlayId::AbletonPicker => self.ableton_picker.is_open(),
             OverlayId::Toast => self.toast.is_open(),
         }
+    }
+
+    /// Modality of the overlay for `id`. Used by input gating predicates.
+    pub(crate) fn overlay_modality(&self, id: OverlayId) -> Modality {
+        match id {
+            OverlayId::PerfHud => self.perf_hud.modality(),
+            OverlayId::Dropdown => self.dropdown.modality(),
+            OverlayId::Settings => self.settings_popup.modality(),
+            OverlayId::RtQuality => self.rt_quality_panel.modality(),
+            OverlayId::BrowserPopup => self.browser_popup.modality(),
+            OverlayId::AbletonPicker => self.ableton_picker.modality(),
+            OverlayId::Toast => self.toast.modality(),
+        }
+    }
+
+    /// True when any open overlay is modal — background hover, cursor shape,
+    /// and direct wheel/resize paths should yield to the popup.
+    pub fn background_input_blocked(&self) -> bool {
+        OverlayId::Z_ORDER.iter().any(|id| {
+            self.overlay_is_open(*id)
+                && matches!(self.overlay_modality(*id), Modality::Modal { .. })
+        })
     }
 
     /// Live open-set as a bitmask, bit `i` = `OverlayId::Z_ORDER[i]` is open.
@@ -241,16 +277,23 @@ impl UIRoot {
     /// screen. Used by `window_input`'s split-handle / inspector-edge press
     /// checks so a seam visually UNDER a floating overlay (the Audio Setup
     /// panel docked over the timeline, BUG-059) doesn't steal the press.
-    /// `overlay_rects`' doc comment names the one known gap (`SelfManaged`
-    /// overlays).
+    ///
+    /// `Anchor::SelfManaged` overlays report their true rect via
+    /// [`Overlay::actual_rect`] (dropdown, browser popup, Ableton picker);
+    /// placed overlays fall back to the recorded `overlay_rects` entry.
     pub(crate) fn overlay_contains_point(&self, pos: Vec2) -> bool {
         for id in OverlayId::Z_ORDER.iter().rev() {
             if !self.overlay_is_open(*id) {
                 continue;
             }
-            if let Some((_, rect)) = self.overlay_rects.iter().find(|(oid, _)| oid == id)
-                && rect.contains(pos)
-            {
+            let rect = if let Some(rect) = self.overlay_ref(*id).actual_rect() {
+                rect
+            } else if let Some((_, rect)) = self.overlay_rects.iter().find(|(oid, _)| oid == id) {
+                *rect
+            } else {
+                continue;
+            };
+            if rect.contains(pos) {
                 return true;
             }
         }

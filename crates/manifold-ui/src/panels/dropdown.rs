@@ -797,9 +797,10 @@ impl Overlay for DropdownPanel {
     }
 
     fn modality(&self) -> Modality {
-        // Floats; a click outside dismisses it (handled inside handle_event,
-        // which returns Some(Dismissed) and self-closes).
-        Modality::Modeless
+        // Modal capture so the background never sees hover/cursor/seam events
+        // through the dropdown. `dim_background: false` keeps the drop-shadow
+        // shell look; the dropdown still self-closes on an outside click.
+        Modality::Modal { dim_background: false }
     }
 
     fn anchor(&self) -> Anchor {
@@ -809,6 +810,11 @@ impl Overlay for DropdownPanel {
 
     fn desired_size(&self) -> Vec2 {
         Vec2::ZERO
+    }
+
+    fn actual_rect(&self) -> Option<Rect> {
+        // Report the real container rect for overlay hit-testing.
+        Some(self.container_bounds)
     }
 
     fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
