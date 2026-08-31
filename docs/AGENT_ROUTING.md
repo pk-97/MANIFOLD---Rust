@@ -4,15 +4,15 @@
 
 ## 0 — K3 lead-in review queue (PENDING, written 2026-07-23 by the outgoing Fable session)
 
-Peter is switching the roster: **Kimi K3 = top session / lead, Flash Strong (DeepSeek V4 Pro, `opus` slot) = escalation lanes, Flash Weak (DeepSeek V4 Flash, `haiku` slot) = lane workers, GLM = no seat at all (removed from the classifier path 2026-08-04, Peter — classifier runs on DeepSeek V4 Flash; GLM-5.2 holds no seat either).** The seat *structure* below is empirically proven and carries over unchanged; what is unproven is this roster in those seats. K3 reviews the harness and this doc before running the first wave, and resolves each item here — then deletes it from section 0 and folds the answer into the body.
+Peter is switching the roster: **Kimi K3 = top session / lead, `opus` slot (DeepSeek V4 Flash since 2026-08-31, was V4 Pro) = escalation lanes, `haiku` slot (MiMo V2.5 Free since 2026-08-27) = lane workers, GLM = no seat at all (removed from the classifier path 2026-08-04, Peter — classifier runs on Kimi K2.7; GLM-5.2 holds no seat either).** The seat *structure* below is empirically proven and carries over unchanged; what is unproven is this roster in those seats. K3 reviews the harness and this doc before running the first wave, and resolves each item here — then deletes it from section 0 and folds the answer into the body.
 
 **The seat mapping (structural — the body text names whichever model held the seat when the observation was made):**
 
 | Seat | Was (through 2026-07-23) | Is (from 2026-07-24) |
 |---|---|---|
 | Lead / top session | Fable | **Kimi K3** |
-| Dispatcher / middle orchestrator | Opus | **Flash Strong (DeepSeek V4 Pro)** (native `opus` lane, lane label `pro-*` — swapped off GLM-5.2 2026-08-02, Peter: GLM weekly quota is reserved for the 4.7 classifier) |
-| Lane executor | Sonnet 5 / K2.7 | **DeepSeek V4 Flash** (native `haiku` lane per the model slot map) |
+| Dispatcher / middle orchestrator | Opus | **DeepSeek V4 Flash** (native `opus` lane, lane label `flash-*` — rotated off V4 Pro 2026-08-31, Peter: Pro too expensive, not needed) |
+| Lane executor | Sonnet 5 / K2.7 | **MiMo V2.5** (native `haiku` lane per the model slot map, lane label `v25-*`) |
 | Consult peer | Kimi K3 | **K3 fork, read-and-discuss only (R4 resolved 2026-07-27)** |
 
 **Roster simplification (Peter 2026-07-27):** GLM leaves entirely when the sub lapses end of month — dispatcher seat retired (deterministic runtime holds the clerical loop), consult = K3 read-only fork. Two model tiers remain: judgment (K3/Fable lead) and mechanical (DeepSeek Flash). Open item before the sub lapses: re-home the auto-approval classifier off GLM-4.7 (Flash measured unreliable there).
@@ -50,7 +50,7 @@ Everything below is proven doctrine under the old roster. Read it as seat descri
 | Agent-tool `model:` | Actual model | Tier |
 |---|---|---|
 | `"fable"` | Kimi K3 | judgment lane (rare — lead-tier work the lead delegates whole) |
-| `"opus"` | DeepSeek V4 Pro (`opencode`) | **Strong lane** — escalation when the weak lane fails or the work needs stronger judgment within a decided brief. Lane label `pro-*` |
+| `"opus"` | DeepSeek V4 Flash (`opencode`) | **Strong lane** — escalation when the weak lane fails or the work needs stronger judgment within a decided brief. Lane label `flash-*`. Rotated off V4 Pro 2026-08-31 (Peter): Pro too expensive, not needed; `deepseek-v4-pro` stays in the proxy model_list as the one-shot tool tier only |
 | `"sonnet"` | Kimi K2.7 (`kimi-for-coding`) | **classifier slot — never spawn lanes on it.** The harness auto-mode permission classifier resolves off it (PERMISSION_BOUNDARY.md section 2 (Which model runs it)); cheapest flat-rate seat, Peter 2026-08-25. Lane label `k27-*` |
 | `"haiku"` | MiMo V2.5 (`opencode`) | **Weak lane** — mechanical executor, the bulk tier. Lane label `v25-*`. Seated 2026-08-27 (Peter): `ox-alpha-free` went unavailable upstream; MiMo picked from the Zen list over paid DeepSeek; `deepseek-v4-flash` still routed in the proxy for rollback |
 

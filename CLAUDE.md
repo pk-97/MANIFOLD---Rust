@@ -116,7 +116,7 @@ Verify one level closer to the stage than where you changed things — compiles 
 
 Write code directly in the main context by default; spawn agents only for genuinely large isolated tasks, and say so.
 
-**Routing policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative.** A judgment lead (K3 or Fable as top session — the only seat that lands) driving two lane tiers. Current roster (Peter 2026-08-25): `haiku` = DeepSeek V4 Flash and `opus` = DeepSeek V4 Pro (OpenCode lanes), `sonnet` = Kimi K2.7 (classifier only, never lanes). GLM holds no seat — the ZAI sub lapsed 2026-08-24 and glm routes are removed from the proxy. The consult seat is a K3 fork, read-and-discuss only, hard-budgeted. The dispatcher seat is retired — the clerical loop belongs to workflow scripts, exit-code gates, and hooks. Lanes make one commit then stop for review; lanes never land; review throughput caps parallelism. All agents obey every rule in this file.
+**Routing policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative.** A judgment lead (K3 or Fable as top session — the only seat that lands) driving two lane tiers. Current roster (Peter 2026-08-31): `haiku` = MiMo V2.5 Free and `opus` = DeepSeek V4 Flash (OpenCode lanes), `sonnet` = Kimi K2.7 (classifier only, never lanes). GLM holds no seat — the ZAI sub lapsed 2026-08-24 and glm routes are removed from the proxy. The consult seat is a K3 fork, read-and-discuss only, hard-budgeted. The dispatcher seat is retired — the clerical loop belongs to workflow scripts, exit-code gates, and hooks. Lanes make one commit then stop for review; lanes never land; review throughput caps parallelism. All agents obey every rule in this file.
 
 ## Reference docs (read on demand)
 
