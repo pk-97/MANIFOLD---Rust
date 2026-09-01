@@ -100,6 +100,8 @@ up flagged params — a preset author marking a new path param gets collection f
 Rejected: a static `["model_file", "hdri_file", "path"]` list in the io layer — the third entry
 already proves the list rots on arrival.
 
+**D5a — Def-default-only path params materialize a per-clip override on re-link/collect (decided 2026-09-02, k3 (lead), from the P2 lane's write-back-home gap).** The lane found it mid-P2: when a flagged path param's value lives only in the preset-def default (no per-clip override), `resolve_all`/collect has no `string_params` entry to write into, so a re-link silently has no home. The rule: when re-linking or collecting such a param, the write-back **materializes** a per-clip `string_params` entry with the resolved path — never writes the preset def's `default_value` itself (defs are shared across clips and presets; mutating them would silently move other clips' media). Materialized overrides stay canonical: same precedence rules, no new home.
+
 **D6 — Collect All and Save is copy-only, then re-point, then save.** For each external
 `AssetRef` outside the project folder: copy (never move, never delete the source) into the
 right `Media/` family folder, dedup identical sources by content hash (SHA-256 full), then
