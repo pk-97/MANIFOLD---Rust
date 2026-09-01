@@ -87,6 +87,14 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &["Off", "On"],
         },
+        ParamDef {
+            name: Cow::Borrowed("emission_strength"),
+            label: "Emission Strength",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 10.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
@@ -103,6 +111,7 @@ impl Primitive for SceneObjectNode {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
+        let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let transform = ctx.inputs.transform("transform").unwrap_or_default();
         let material = ctx.inputs.material("material");
         let mesh = ctx.inputs.slot_of("vertices");
@@ -149,6 +158,7 @@ impl Primitive for SceneObjectNode {
             transmission_map,
             volume_thickness_map,
             instances,
+            emission_strength,
         };
 
         ctx.outputs.set_object("object", object);

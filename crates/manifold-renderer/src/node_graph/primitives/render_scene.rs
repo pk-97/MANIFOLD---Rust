@@ -481,6 +481,8 @@ struct RenderSceneUniforms {
     model: [[f32; 4]; 4],
     camera_pos: [f32; 4],
     base_color: [f32; 4],
+    /// `rgb`: emission PREMULTIPLIED with intensity, `w`: per-object
+    /// emissive-map strength multiplier (defaults to 1.0).
     emission: [f32; 4],
     /// `x`: metallic `[0,1]`, `y`: roughness `[0.01,1]`. `z`/`w` were
     /// permanently-zero reserved slots until GLB_CONFORMANCE_DESIGN.md
@@ -3744,6 +3746,7 @@ fn build_uniforms(
     model: [[f32; 4]; 4],
     cam: &Camera,
     material: &Material,
+    emission_strength: f32,
     light_count: f32,
     atmosphere: &Atmosphere,
     prev_view_proj: [[f32; 4]; 4],
@@ -3754,7 +3757,12 @@ fn build_uniforms(
         model,
         camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
         base_color: material.base_color,
-        emission: material.emission,
+        emission: [
+            material.emission[0],
+            material.emission[1],
+            material.emission[2],
+            emission_strength,
+        ],
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: z/w were permanently-zero
         // reserved slots, now ior/specular_factor — see the struct's field
         // doc comment.
@@ -4703,6 +4711,7 @@ impl EffectNode for RenderScene {
                 model,
                 &cam,
                 &material,
+                object.emission_strength,
                 light_count as f32,
                 &atmosphere,
                 prev_view_proj,
@@ -5527,9 +5536,9 @@ impl EffectNode for RenderScene {
                             d.uniforms.base_color[2],
                         ],
                         [
-                            d.uniforms.emission[0],
-                            d.uniforms.emission[1],
-                            d.uniforms.emission[2],
+                            d.uniforms.emission[0] * d.uniforms.emission[3],
+                            d.uniforms.emission[1] * d.uniforms.emission[3],
+                            d.uniforms.emission[2] * d.uniforms.emission[3],
                         ],
                         [
                             d.uniforms.pbr_metallic_roughness[0],
