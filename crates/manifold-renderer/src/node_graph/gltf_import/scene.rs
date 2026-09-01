@@ -576,9 +576,16 @@ pub(super) fn build_import_graph(
     //
     // SSAO radius is a WORLD-space distance and the importer never rescales
     // the model, so a hero mesh can be fractions of a unit or hundreds across.
-    // Scale the default to the model's own bounding radius (kept inside the
-    // atom's declared 0.01..5.0 envelope) so contact shadows read at any size.
-    let ssao_radius_default = (radius * 0.5).clamp(0.01, 5.0);
+    // Scale the default to the model's own bounding radius so contact shadows
+    // read at any size: `0.5·radius` center, clamped scene-relatively between
+    // `0.001·radius` (the scene-scale floor; keeps the default pinning to an
+    // absolute 0.01 only for near-degenerate bboxes) and `2·radius` (the upper
+    // bound of the scene-scale AO band in BUG-upfq P4). The old absolute
+    // `0.01..5.0` clamp made any scene with radius >10 pin at 5.0 — a 50-unit
+    // and a 50000-unit model idled at the same AO reach. This lives on the
+    // NODE default, not a card param — deliberately unexposed since Peter
+    // 2026-07-15 ("the defaults look good"); `scene_scale.rs` notes it.
+    let ssao_radius_default = (radius * 0.5).clamp((0.001 * radius).max(0.01), 2.0 * radius);
 
     let mut ao_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut ao_wires: Vec<EffectGraphWire> = Vec::new();

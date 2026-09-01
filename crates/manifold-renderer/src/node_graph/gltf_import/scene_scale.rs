@@ -13,6 +13,12 @@
 //! It is floored at 0.01 so a degenerate/empty bbox (zero extent, or a
 //! tiny asset at millimeter scale) still gets nonzero slider widths and no
 //! divide-by-zero anywhere downstream.
+//!
+//! SSAO radius is NOT in the range-profile below: `build_import_graph`
+//! scene-scales it as a NODE default (`scene.rs` — `0.5·radius`, clamped
+//! between `0.001·radius` and `2·radius`) and deliberately does not expose
+//! it on the card (Peter 2026-07-15, "the defaults look good"). A future
+//! audit should not re-flag it.
 
 use std::collections::HashMap;
 
