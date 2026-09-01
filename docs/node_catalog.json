@@ -18311,6 +18311,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Whether the object draws and casts shadows. Above 0.5 is on, below is off, so it can be modulated by a driver or trigger.",
           "type": "float"
         },
         {
@@ -18325,6 +18326,18 @@
             "0",
             "1"
           ],
+          "tooltip": "Whether the object casts shadows onto direct lights. Above 0.5 is on, below skips the shadow pass.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Emission Strength",
+          "name": "emission_strength",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "How strongly the object's emissive map glows, from 0 for off up to 10. Default 1.0 leaves the skin at full strength.",
           "type": "float"
         }
       ],
@@ -24815,6 +24828,13 @@
         },
         {
           "default": "1",
+          "id": "86_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "87_visible",
           "max": "1",
           "min": "0",
@@ -24829,6 +24849,13 @@
         },
         {
           "default": "1",
+          "id": "87_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "88_visible",
           "max": "1",
           "min": "0",
@@ -24840,6 +24867,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "88_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         }
       ]
     },
@@ -26841,6 +26875,13 @@
           "name": "Cast Shadows"
         },
         {
+          "default": "1",
+          "id": "7_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
           "default": "0",
           "id": "8_rt_enabled",
           "max": "1",
@@ -28107,6 +28148,13 @@
         },
         {
           "default": "1",
+          "id": "11_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "8_rt_shadows",
           "max": "1",
           "min": "0",
@@ -28617,6 +28665,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "7_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",
@@ -31164,6 +31219,13 @@
         },
         {
           "default": "1",
+          "id": "32_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "33_visible",
           "max": "1",
           "min": "0",
@@ -31175,6 +31237,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "33_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         }
       ]
     },
@@ -31662,6 +31731,13 @@
           "name": "Cast Shadows"
         },
         {
+          "default": "1",
+          "id": "6_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
           "default": "0",
           "id": "7_rt_enabled",
           "max": "1",
@@ -32075,6 +32151,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "7_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",
@@ -33015,6 +33098,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "9_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",

@@ -390,7 +390,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotWeather` | Apricot Weather | generator | Geometry | 168 |
+| `ApricotWeather` | Apricot Weather | generator | Geometry | 171 |
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
@@ -413,14 +413,14 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | `FilmGrain` | Film Grain | effect | Stylize | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
-| `FogBlast` | Fog Blast | generator | Geometry | 86 |
+| `FogBlast` | Fog Blast | generator | Geometry | 87 |
 | `Glitch` | Glitch | effect | Filmic | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Color | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
-| `Lantern` | Lantern | generator | Geometry | 155 |
-| `LightOrbit` | Light Orbit | generator | Geometry | 75 |
+| `Lantern` | Lantern | generator | Geometry | 156 |
+| `LightOrbit` | Light Orbit | generator | Geometry | 76 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
@@ -432,9 +432,9 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 129 |
-| `SceneStrobe` | Strobe | generator | Geometry | 75 |
-| `Skin` | Skin | generator | Geometry | 58 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 131 |
+| `SceneStrobe` | Strobe | generator | Geometry | 76 |
+| `Skin` | Skin | generator | Geometry | 59 |
 | `SoftFocus` | Soft Focus | effect | Stylize | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
@@ -442,7 +442,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
-| `TimeScrub` | Time Scrub | generator | Geometry | 75 |
+| `TimeScrub` | Time Scrub | generator | Geometry | 76 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
