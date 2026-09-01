@@ -4682,7 +4682,12 @@ impl EffectNode for RenderScene {
             // unwired (D2) — matches the old scattered params' defaults
             // exactly (pos 0, rot 0, scale 1).
             let t = object.transform;
-            let model = model_matrix(t.pos, t.rot_euler, t.scale);
+            let rot_euler = if t.billboard {
+                t.billboard_rot_euler(cam.pos)
+            } else {
+                t.rot_euler
+            };
+            let model = model_matrix(t.pos, rot_euler, t.scale);
             // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
             // seeds prev = current, giving THIS object exactly-zero
