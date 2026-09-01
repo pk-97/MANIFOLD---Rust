@@ -19,6 +19,14 @@ pub struct TimelineClip {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub audio_file_path: String,
 
+    /// Relative form of `audio_file_path`, filled on save by
+    /// `PathResolver::store_relative_paths` and preferred on load by
+    /// `resolve_all` — the same store-relative / re-link chain video clips
+    /// get. Additive-optional (PROJECT_FOLDERS_DESIGN D4): old builds ignore
+    /// it, new builds fill it on save, so no migration step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_audio_file_path: Option<String>,
+
     /// Absolute path to a still image for an image clip. Empty for
     /// video / generator / audio clips; non-empty marks this as a static
     /// image clip (discriminated the same way `video_clip_id` marks a
@@ -342,6 +350,7 @@ impl Default for TimelineClip {
             id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
             audio_file_path: String::new(),
+            relative_audio_file_path: None,
             image_path: String::new(),
             audio_detection: None,
             detection_source: None,
@@ -605,6 +614,30 @@ mod tests {
         assert!(!serde_json::to_string(&video).unwrap().contains("imagePath"));
         let generator = TimelineClip::new_generator(Beats(0.0), Beats(1.0));
         assert!(!generator.is_image());
+    }
+
+    #[test]
+    fn relative_audio_file_path_roundtrips_and_omits_when_unset() {
+        // PROJECT_FOLDERS_DESIGN D4 consequence: the additive-optional relative
+        // sibling must serialize camelCase when set, round-trip, and vanish (not
+        // `null`) when unset — pre-P2 projects stay byte-identical.
+        let clip = TimelineClip::default();
+        assert_eq!(clip.relative_audio_file_path, None);
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(
+            !json.contains("relativeAudioFilePath"),
+            "unset relative sibling must be omitted, got: {json}"
+        );
+
+        let mut set = TimelineClip::default();
+        set.relative_audio_file_path = Some("Media/Audio/loop.wav".to_string());
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains("\"relativeAudioFilePath\""));
+        let back: TimelineClip = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.relative_audio_file_path,
+            Some("Media/Audio/loop.wav".to_string())
+        );
     }
 
     #[test]
