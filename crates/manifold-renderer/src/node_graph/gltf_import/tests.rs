@@ -6416,6 +6416,36 @@ fn scene_derived_range_ratio_matches_bbox(small_half: f32, large_half: f32) -> b
     true
 }
 
+/// BUG-upfq P4: the unexposed ssao `radius` node default must keep tracking
+/// 0.5·scene-radius on big scenes — the old absolute `clamp(0.01, 5.0)`
+/// pinned every scene with radius >10 at the same 5.0 AO reach.
+#[test]
+fn scene_ssao_radius_default_tracks_scene_scale() {
+    fn ssao_radius(def: &manifold_core::effect_graph_def::EffectGraphDef) -> f32 {
+        def.nodes
+            .iter()
+            .filter_map(|n| n.group.as_ref())
+            .find_map(|g| g.nodes.iter().find(|n| n.type_id == "node.ssao_gtao"))
+            .and_then(|n| n.params.get("radius"))
+            .map(|v| match v {
+                SerializedParamValue::Float { value } => *value,
+                other => panic!("ssao radius must be a stamped float, got {other:?}"),
+            })
+            .expect("import has a grouped ssao_gtao node")
+    }
+
+    let (small_def, _) = scene_import_with_half_extent(5.0);
+    let (large_def, _) = scene_import_with_half_extent(50.0);
+    let small_r = super::scene_scale::SceneScale::from_bbox([-5.0; 3], [5.0; 3]).radius;
+    let large_r = super::scene_scale::SceneScale::from_bbox([-50.0; 3], [50.0; 3]).radius;
+
+    let small = ssao_radius(&small_def);
+    let large = ssao_radius(&large_def);
+    assert!((small - 0.5 * small_r).abs() < 1e-3, "small default is 0.5·radius, got {small}");
+    assert!((large - 0.5 * large_r).abs() < 1e-3, "large default is 0.5·radius, got {large}");
+    assert!(large > 5.0, "radius-86 scene must not pin at the old 5.0 ceiling, got {large}");
+}
+
 /// BUG-upfq P1: the position slider default — the import-stamped value, not
 /// the primitive's generic 0.0 — is never moved by the range override, only
 /// the min/max metadata.
