@@ -11,16 +11,19 @@
 //! param id — the design's negative `rg` gate (no path-param id literal in the
 //! io crate) enforces that.
 
+use crate::path_resolver::PathResolver;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::PresetInstance;
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Which media family an asset belongs to — the `Media/` subfolder it collects
 /// into (D2): `Media/Video`, `Media/Audio`, `Media/Meshes`, `Media/HDRIs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     Video,
     Audio,
@@ -246,6 +249,339 @@ fn classify_string_param(key: &str, value: &str, graph: Option<&EffectGraphDef>)
     } else {
         AssetKind::Mesh
     }
+}
+
+// ── Collect All and Save (D6) ──────────────────────────────────────
+
+/// What one Collect All and Save pass did (PROJECT_FOLDERS_DESIGN.md D6).
+/// `copied` counts unique files physically written (identical content deduped
+/// by full SHA-256), `already_local` counts refs already inside the project
+/// folder, `re_pointed` counts refs whose stored path was rewritten to the
+/// in-folder form.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CollectReport {
+    pub copied: usize,
+    pub already_local: usize,
+    pub bytes_copied: u64,
+    pub missing: usize,
+    pub re_pointed: usize,
+}
+
+#[derive(Debug)]
+pub enum CollectError {
+    /// The project path has no parent directory — media must collect into the
+    /// folder the `.manifold` file lives in (D1/D2).
+    NoProjectDir,
+    Io(String),
+    Save(crate::saver::SaveError),
+}
+
+impl std::fmt::Display for CollectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CollectError::NoProjectDir => write!(f, "project path has no parent directory"),
+            CollectError::Io(e) => write!(f, "IO error: {e}"),
+            CollectError::Save(e) => write!(f, "save error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for CollectError {}
+
+/// Collect All and Save (D6): copy every external asset into the project
+/// folder's `Media/` family subfolders — copy-only, never moving or deleting a
+/// source — dedup identical sources by full SHA-256, re-point the stored path
+/// to the in-folder file, then run the normal save path.
+///
+/// The single enumeration is [`collect_asset_paths`] (D4) — no second list.
+/// A flagged string param whose value lives only in the preset-def default is
+/// materialized as a per-clip override (D5a); the def's `default_value` is
+/// never written.
+pub fn collect_all_and_save(
+    project: &mut Project,
+    project_path: &Path,
+) -> Result<CollectReport, CollectError> {
+    // Raw `project_path.parent()`, NOT canonicalized: the save path
+    // (`saver::save_project` → `store_relative_paths`) derives its base from
+    // the same raw parent, so a canonicalized dir here would make
+    // `make_relative` compute a wrong `..`-laden sibling for the file paths we
+    // just wrote. `path_is_inside` canonicalizes both sides itself.
+    let project_dir = project_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .ok_or(CollectError::NoProjectDir)?;
+
+    let refs = collect_asset_paths(project);
+    let mut report = CollectReport::default();
+    // Dedup identical file content by (family, full SHA-256) → the target path
+    // the first copy landed at. Later refs with the same content re-point to
+    // the same file instead of copying it again.
+    let mut copied_files: HashMap<(AssetKind, [u8; 32]), PathBuf> = HashMap::new();
+    // Directories (layer video folders) have no content-hash dedup; dedup by
+    // canonical source path so two layers sharing one folder copy it once.
+    let mut copied_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
+
+    for r in &refs {
+        let src = &r.path;
+
+        // Layer video folder: a directory of footage, copied as a tree.
+        if src.is_dir() {
+            if path_is_inside(src, &project_dir) {
+                report.already_local += 1;
+                continue;
+            }
+            let canonical = std::fs::canonicalize(src).unwrap_or_else(|_| src.clone());
+            let target = if let Some(existing) = copied_dirs.get(&canonical) {
+                existing.clone()
+            } else {
+                let name = src
+                    .file_name()
+                    .map(|n| n.to_os_string())
+                    .unwrap_or_else(|| "folder".into());
+                let target = media_family_dir(&project_dir, r.kind).join(name);
+                let mut bytes = 0u64;
+                copy_dir_recursive(src, &target, &mut bytes)
+                    .map_err(|e| CollectError::Io(format!("copy {}: {e}", src.display())))?;
+                report.copied += 1;
+                report.bytes_copied += bytes;
+                copied_dirs.insert(canonical, target.clone());
+                target
+            };
+            re_point(project, &r.target, src, &target, &project_dir, &mut report);
+            continue;
+        }
+
+        if !src.is_file() {
+            report.missing += 1;
+            continue;
+        }
+
+        if path_is_inside(src, &project_dir) {
+            report.already_local += 1;
+            continue;
+        }
+
+        let hash = sha256_file(src)?;
+        let target = if let Some(existing) = copied_files.get(&(r.kind, hash)) {
+            existing.clone()
+        } else {
+            let family_dir = media_family_dir(&project_dir, r.kind);
+            std::fs::create_dir_all(&family_dir)
+                .map_err(|e| CollectError::Io(format!("create {}: {e}", family_dir.display())))?;
+            let name = src
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| "asset".into());
+            let target = resolve_target_path(&family_dir, &name, hash)?;
+            std::fs::copy(src, &target)
+                .map_err(|e| CollectError::Io(format!("copy {}: {e}", src.display())))?;
+            report.copied += 1;
+            report.bytes_copied += std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+            copied_files.insert((r.kind, hash), target.clone());
+            target
+        };
+
+        re_point(project, &r.target, src, &target, &project_dir, &mut report);
+    }
+
+    crate::saver::save_project(project, project_path, None, false).map_err(CollectError::Save)?;
+    Ok(report)
+}
+
+/// The `Media/<family>` subfolder a `kind` collects into (D2).
+fn media_family_dir(project_dir: &Path, kind: AssetKind) -> PathBuf {
+    let sub = match kind {
+        AssetKind::Video => "Video",
+        AssetKind::Audio => "Audio",
+        AssetKind::Mesh => "Meshes",
+        AssetKind::Hdri => "HDRIs",
+    };
+    project_dir.join("Media").join(sub)
+}
+
+/// True when `path` is inside `dir`. Both are resolved to absolute where
+/// possible; a missing `path` compares lexically, which may under-report but
+/// never wrongly treats an in-folder path as external.
+fn path_is_inside(path: &Path, dir: &Path) -> bool {
+    let p = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let d = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    p.starts_with(d)
+}
+
+/// Full SHA-256 of a file's bytes, streamed (no whole-file read).
+fn sha256_file(path: &Path) -> Result<[u8; 32], CollectError> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| CollectError::Io(format!("open {}: {e}", path.display())))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| CollectError::Io(format!("hash {}: {e}", path.display())))?;
+    Ok(hasher.finalize().into())
+}
+
+/// Pick the destination for `name` inside `dir`: the plain name, unless a file
+/// already occupies it with DIFFERENT content — then a `_1`, `_2`, … suffix is
+/// appended before the extension. Same-content is reused (a prior collect left
+/// it); different content is never overwritten.
+fn resolve_target_path(dir: &Path, name: &std::ffi::OsStr, new_hash: [u8; 32]) -> Result<PathBuf, CollectError> {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+    if sha256_file(&candidate).unwrap_or([0u8; 32]) == new_hash {
+        return Ok(candidate);
+    }
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    let ext = Path::new(name).extension().and_then(|s| s.to_str());
+    for i in 1u32.. {
+        let numbered = match ext {
+            Some(e) => format!("{stem}_{i}.{e}"),
+            None => format!("{stem}_{i}"),
+        };
+        let p = dir.join(&numbered);
+        if !p.exists() {
+            return Ok(p);
+        }
+        if sha256_file(&p).unwrap_or([0u8; 32]) == new_hash {
+            return Ok(p);
+        }
+    }
+    Err(CollectError::Io(format!(
+        "no free name for {} in {}",
+        Path::new(name).display(),
+        dir.display()
+    )))
+}
+
+/// Copy a directory tree (`src` → `dst`), adding bytes written to `bytes`.
+/// Copy-only: reads `src`, writes `dst`, never touches `src`'s contents.
+fn copy_dir_recursive(src: &Path, dst: &Path, bytes: &mut u64) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &to, bytes)?;
+        } else if ty.is_file() {
+            *bytes += std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Re-point one asset ref's stored path to `new_path` (an in-folder file or
+/// directory), filling the relative sibling where one exists. Counts into
+/// `report.re_pointed` only when a field actually changed.
+fn re_point(
+    project: &mut Project,
+    target: &AssetTarget,
+    old_path: &Path,
+    new_path: &Path,
+    project_dir: &Path,
+    report: &mut CollectReport,
+) {
+    let new_str = new_path.to_string_lossy().to_string();
+    let relative = PathResolver::make_relative(&new_str, &project_dir.to_string_lossy());
+    let old_str = old_path.to_string_lossy().to_string();
+
+    let changed = match target {
+        AssetTarget::VideoClip { clip_id } => {
+            if let Some(clip) = project.video_library.clips.iter_mut().find(|c| &c.id == clip_id) {
+                clip.file_path = new_str.clone();
+                clip.relative_file_path = relative;
+                true
+            } else {
+                false
+            }
+        }
+        AssetTarget::LayerVideoFolder { layer_id } => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) {
+                layer.video_folder_path = Some(new_str.clone());
+                layer.relative_video_folder_path = relative;
+                true
+            } else {
+                false
+            }
+        }
+        AssetTarget::AudioClip { layer_id, clip_id } => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                && let Some(clip) = layer.clips.iter_mut().find(|c| &c.id == clip_id)
+            {
+                clip.audio_file_path = new_str.clone();
+                clip.relative_audio_file_path = relative;
+                true
+            } else {
+                false
+            }
+        }
+        AssetTarget::StringParam { layer_id, key } => {
+            re_point_string_param(project, layer_id, key, &old_str, &new_str)
+        }
+    };
+
+    if changed {
+        report.re_pointed += 1;
+    }
+}
+
+/// Re-point a flagged string param (D5a). Clips whose effective value equals
+/// `old` are rewritten to `new`: an existing per-clip override is updated in
+/// place; a value that came only from the preset-def default is materialized
+/// as a per-clip override. The def's `default_value` is never touched.
+fn re_point_string_param(
+    project: &mut Project,
+    layer_id: &LayerId,
+    key: &str,
+    old: &str,
+    new: &str,
+) -> bool {
+    // Resolve the def default via the same chain collect_asset_paths uses, so
+    // "is this the def-default value" is answered by the same source that
+    // enumerated it. Owned so the immutable borrow ends before the mutation.
+    let def_default: Option<String> = {
+        let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
+            return false;
+        };
+        let Some(inst) = layer.gen_params() else {
+            return false;
+        };
+        resolve_string_defs(project, inst)
+            .into_iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, default)| default)
+    };
+
+    let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
+        return false;
+    };
+    let mut changed = false;
+    for clip in &mut layer.clips {
+        match clip.string_params.as_ref().and_then(|m| m.get(key)) {
+            Some(ov) if ov == old => {
+                if let Some(m) = clip.string_params.as_mut() {
+                    m.insert(key.to_string(), new.to_string());
+                    changed = true;
+                }
+            }
+            Some(_) => {
+                // A different explicit override — its own ref re-points it.
+            }
+            None => {
+                if def_default.as_deref() == Some(old) {
+                    let m = clip
+                        .string_params
+                        .get_or_insert_with(std::collections::BTreeMap::new);
+                    m.insert(key.to_string(), new.to_string());
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -536,5 +872,185 @@ mod tests {
         };
         let unflagged_json = serde_json::to_string(&unflagged).unwrap();
         assert!(!unflagged_json.contains("file_path"), "{unflagged_json}");
+    }
+
+    // ── P4 gate (PROJECT_FOLDERS_DESIGN.md): Collect All and Save round trip ──
+    //
+    // Synthetic project referencing fixture files in a temp dir — video + audio
+    // + a GLB carried as a flagged string param whose value lives ONLY in the
+    // preset-def default (so collect must materialize a per-clip override,
+    // never write the def's `default_value`). Collect → assert Media/ layout,
+    // relative paths, source hashes unchanged (copy-only) → reload through the
+    // full load pipeline → every reference resolves.
+
+    #[test]
+    fn collect_all_and_save_round_trips_mixed_families_copy_only() {
+        let base = std::env::temp_dir().join(format!("manifold-collect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src_dir = base.join("sources");
+        let proj_dir = base.join("MyShow");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&proj_dir).unwrap();
+
+        let video_src = src_dir.join("clip1.mp4");
+        let audio_src = src_dir.join("loop1.wav");
+        let glb_src = src_dir.join("azalea.glb");
+        std::fs::write(&video_src, b"fake mp4 bytes").unwrap();
+        std::fs::write(&audio_src, b"fake wav bytes").unwrap();
+        std::fs::write(&glb_src, b"fake glb bytes").unwrap();
+
+        let video_before = super::sha256_file(&video_src).unwrap();
+        let audio_before = super::sha256_file(&audio_src).unwrap();
+        let glb_before = super::sha256_file(&glb_src).unwrap();
+
+        let mut project = Project {
+            project_name: "MyShow".to_string(),
+            ..Project::default()
+        };
+
+        // Video library clip.
+        project.video_library.add_clip(VideoClip {
+            id: "vc1".to_string(),
+            file_path: video_src.to_string_lossy().to_string(),
+            relative_file_path: None,
+            file_name: "clip1.mp4".to_string(),
+            duration: 0.0,
+            resolution_width: 0,
+            resolution_height: 0,
+            file_size: 0,
+            last_modified_ticks: 0,
+        });
+
+        // Audio layer with one clip.
+        let mut audio_layer = Layer::new_audio("Audio".into(), 1);
+        audio_layer.clips.push(TimelineClip::new_audio(
+            audio_src.to_string_lossy().to_string(),
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(4.0),
+            manifold_core::Seconds::ZERO,
+            manifold_core::Seconds::ZERO,
+        ));
+        project.timeline.layers.push(audio_layer);
+
+        // Generator layer tracking an embedded GLB import whose `model_path`
+        // lives ONLY in the def default (no per-clip override).
+        let glb_path = glb_src.to_string_lossy().to_string();
+        let mesh_bind = StringBindingDef {
+            id: "model_path".to_string(),
+            label: "Model File".to_string(),
+            default_value: glb_path.clone(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new("mesh"),
+                param: "path".to_string(),
+            },
+        };
+        project.upsert_embedded_preset(path_preset(
+            "azalea",
+            vec![sp("model_path", &glb_path, true)],
+            vec![mesh_bind],
+            vec![node("mesh", "node.gltf_mesh_source")],
+        ));
+        let mut gen_layer = Layer::new_generator("Azalea".into(), PresetTypeId::new("azalea"), 2);
+        gen_layer.clips.push(TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(16.0),
+        ));
+        project.timeline.layers.push(gen_layer);
+
+        let audio_layer_id = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.is_audio())
+            .unwrap()
+            .layer_id
+            .clone();
+        let gen_layer_id = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.layer_type == LayerType::Generator)
+            .unwrap()
+            .layer_id
+            .clone();
+
+        let project_path = proj_dir.join("MyShow.manifold");
+        let report = collect_all_and_save(&mut project, &project_path).unwrap();
+
+        // On-disk layout: one file per family (video, audio, meshes).
+        assert!(proj_dir.join("Media/Video/clip1.mp4").is_file());
+        assert!(proj_dir.join("Media/Audio/loop1.wav").is_file());
+        assert!(proj_dir.join("Media/Meshes/azalea.glb").is_file());
+
+        // Report: three unique files copied, none missing, none already local.
+        assert_eq!(report.copied, 3, "one file per family");
+        assert_eq!(report.re_pointed, 3, "all three refs re-pointed");
+        assert_eq!(report.missing, 0);
+        assert_eq!(report.already_local, 0);
+        assert_eq!(report.bytes_copied, 42, "sum of the three fixture file sizes");
+
+        // Copy-only invariant: sources untouched.
+        assert_eq!(super::sha256_file(&video_src).unwrap(), video_before);
+        assert_eq!(super::sha256_file(&audio_src).unwrap(), audio_before);
+        assert_eq!(super::sha256_file(&glb_src).unwrap(), glb_before);
+
+        // Video re-pointed to the relative form.
+        let vc = &project.video_library.clips[0];
+        assert_eq!(vc.relative_file_path.as_deref(), Some("Media/Video/clip1.mp4"));
+        assert!(vc.file_path.ends_with("Media/Video/clip1.mp4"), "{}", vc.file_path);
+        assert!(std::path::Path::new(&vc.file_path).exists());
+
+        // Audio re-pointed to the relative form.
+        let (_, audio_layer) = project.timeline.find_layer_by_id(audio_layer_id.as_str()).unwrap();
+        let audio_clip = &audio_layer.clips[0];
+        assert_eq!(
+            audio_clip.relative_audio_file_path.as_deref(),
+            Some("Media/Audio/loop1.wav")
+        );
+        assert!(audio_clip.audio_file_path.ends_with("Media/Audio/loop1.wav"));
+        assert!(std::path::Path::new(&audio_clip.audio_file_path).exists());
+
+        // The GLB def-default-only param was materialized as a per-clip override.
+        let (_, gen_layer) = project.timeline.find_layer_by_id(gen_layer_id.as_str()).unwrap();
+        let model = gen_layer.clips[0]
+            .string_params
+            .as_ref()
+            .unwrap()
+            .get("model_path")
+            .unwrap();
+        assert!(model.ends_with("Media/Meshes/azalea.glb"), "{model}");
+        assert!(std::path::Path::new(model).exists());
+
+        // D5a: the def default is untouched — it still names the ORIGINAL source.
+        let def = project.embedded_preset(&PresetTypeId::new("azalea")).unwrap();
+        let def_default = def
+            .def
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .string_params
+            .iter()
+            .find(|s| s.id == "model_path")
+            .unwrap()
+            .default_value
+            .clone();
+        assert_eq!(def_default, glb_path, "def default never rewritten");
+
+        // Reload through the full load pipeline → every reference resolves.
+        let reloaded = crate::loader::load_project(&project_path).unwrap();
+        let vc2 = &reloaded.video_library.clips[0];
+        assert!(std::path::Path::new(&vc2.file_path).exists());
+        let (_, al2) = reloaded.timeline.find_layer_by_id(audio_layer_id.as_str()).unwrap();
+        assert!(std::path::Path::new(&al2.clips[0].audio_file_path).exists());
+        let (_, gl2) = reloaded.timeline.find_layer_by_id(gen_layer_id.as_str()).unwrap();
+        let model2 = gl2.clips[0]
+            .string_params
+            .as_ref()
+            .unwrap()
+            .get("model_path")
+            .unwrap();
+        assert!(std::path::Path::new(model2).exists(), "reloaded GLB path resolves: {model2}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

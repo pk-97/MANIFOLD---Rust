@@ -181,6 +181,54 @@ impl Application {
         self.apply_project_io_action(action);
     }
 
+    /// Collect All and Save (PROJECT_FOLDERS_DESIGN D6): copy every external
+    /// asset into the project folder's `Media/` family subfolders, re-point the
+    /// stored paths to the in-folder files, and save. Runs on the UI thread
+    /// against `local_project` — the same replica manual save serializes — so
+    /// the re-pointed paths land in the on-disk file. The copy work runs inline
+    /// (synchronous): P4 defers the background-thread split until a large-media
+    /// collect shows copy cost worth offloading.
+    pub(crate) fn collect_all_and_save(&mut self) {
+        let current_time = self.content_state.current_time;
+        let Some(current_path) = self.current_project_path.clone() else {
+            // Untitled: no folder to collect into. Save As first (creates the
+            // project folder), then Collect can run against it.
+            self.save_project_as();
+            return;
+        };
+
+        self.local_project.saved_playhead_time = current_time.as_f32();
+        self.save_viewport_state();
+        crate::project_io::snapshot_and_prune_embedded_presets(&mut self.local_project);
+
+        match manifold_io::collect::collect_all_and_save(&mut self.local_project, &current_path) {
+            Ok(report) => {
+                self.send_content_cmd(ContentCommand::MarkClean);
+                log::info!(
+                    "[ProjectIO] Collect All and Save: {} copied, {} bytes, {} re-pointed, {} missing",
+                    report.copied,
+                    report.bytes_copied,
+                    report.re_pointed,
+                    report.missing,
+                );
+                // The save pushed the previous state into history/ — keep the
+                // Revert to Snapshot menu current.
+                self.refresh_history_menu();
+            }
+            Err(e) => {
+                log::error!("[ProjectIO] Collect All and Save failed: {e}");
+                crate::alerts::error(
+                    "Collect Failed",
+                    &format!(
+                        "MANIFOLD couldn't collect media into\n{}\n\n{e}\n\n\
+                         Your work is NOT on disk — check free space and try again.",
+                        current_path.display()
+                    ),
+                );
+            }
+        }
+    }
+
     /// Start offline video export — opens file save dialog, then encodes.
     pub(crate) fn start_export(&mut self) {
         let project = &self.local_project;

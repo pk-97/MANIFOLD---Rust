@@ -539,6 +539,7 @@ impl Application {
                 }
                 M::Save => actions.push(P::Project(ProjectAction::SaveProject)),
                 M::SaveAs => actions.push(P::Project(ProjectAction::SaveProjectAs)),
+                M::CollectAllAndSave => self.collect_all_and_save(),
                 M::RestoreSnapshot(hash) => {
                     if crate::alerts::confirm(
                         "Restore snapshot",

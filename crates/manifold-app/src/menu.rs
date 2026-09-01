@@ -36,6 +36,8 @@ pub enum MenuAction {
     ClearRecentProjects,
     Save,
     SaveAs,
+    /// Collect all external media into the project folder, then save (D6).
+    CollectAllAndSave,
     /// Restore a history snapshot (by manifest hash) into the current
     /// project, in place. From the dynamic "Revert to Snapshot" submenu.
     RestoreSnapshot(String),
@@ -283,6 +285,13 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
         MenuAction::SaveAs,
         "Save As…",
         Some("CmdOrCtrl+Shift+S"),
+    ));
+    let _ = file_m.append(&item(
+        actions,
+        "file.collect",
+        MenuAction::CollectAllAndSave,
+        "Collect All and Save",
+        None,
     ));
     // "Revert to Snapshot" browses the archive's history/ entries (versioned
     // autosave + manual saves — GIG_RESILIENCE_DESIGN section 6). Populated at
