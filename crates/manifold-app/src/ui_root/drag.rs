@@ -31,7 +31,7 @@ impl UIRoot {
                 let inside = self
                     .dropdown
                     .actual_rect()
-                    .map_or(false, |r| r.contains(origin));
+                    .is_some_and(|r| r.contains(origin));
                 if !inside {
                     self.dropdown.close(&mut tree);
                     self.closed_overlays.push(OverlayId::Dropdown);
