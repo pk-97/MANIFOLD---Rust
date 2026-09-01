@@ -274,37 +274,37 @@ mod gpu_tests {
         let verts = dispatch_plane(&wgsl, CAPACITY, &bytes);
         assert_eq!(verts.len(), CAPACITY as usize);
 
-        for i in 0usize..6 {
+        for (i, vert) in verts.iter().take(6).enumerate() {
             let e = expected_vertex(i as u32, width, height);
             for c in 0..3 {
                 assert!(
-                    (verts[i].position[c] - e.position[c]).abs() < 1e-6,
+                    (vert.position[c] - e.position[c]).abs() < 1e-6,
                     "slot {i} position[{c}]: got {} expected {}",
-                    verts[i].position[c],
+                    vert.position[c],
                     e.position[c]
                 );
                 assert!(
-                    (verts[i].normal[c] - e.normal[c]).abs() < 1e-6,
+                    (vert.normal[c] - e.normal[c]).abs() < 1e-6,
                     "slot {i} normal[{c}]: got {} expected {}",
-                    verts[i].normal[c],
+                    vert.normal[c],
                     e.normal[c]
                 );
             }
             for c in 0..2 {
                 assert!(
-                    (verts[i].uv[c] - e.uv[c]).abs() < 1e-6,
+                    (vert.uv[c] - e.uv[c]).abs() < 1e-6,
                     "slot {i} uv[{c}]: got {} expected {}",
-                    verts[i].uv[c],
+                    vert.uv[c],
                     e.uv[c]
                 );
             }
         }
 
         // The two padding slots write the degenerate vertex form.
-        for i in 6..CAPACITY as usize {
-            assert_eq!(verts[i].position, [0.0, 0.0, 0.0], "slot {i} padding position");
-            assert_eq!(verts[i].normal, [0.0, 1.0, 0.0], "slot {i} padding normal");
-            assert_eq!(verts[i].uv, [0.0, 0.0], "slot {i} padding uv");
+        for (i, vert) in verts.iter().enumerate().skip(6) {
+            assert_eq!(vert.position, [0.0, 0.0, 0.0], "slot {i} padding position");
+            assert_eq!(vert.normal, [0.0, 1.0, 0.0], "slot {i} padding normal");
+            assert_eq!(vert.uv, [0.0, 0.0], "slot {i} padding uv");
         }
     }
 }

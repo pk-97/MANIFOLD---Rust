@@ -164,6 +164,9 @@ fn render_until_lit(
     start_frame: i64,
     phase: &str,
 ) -> (Vec<f32>, i64) {
+    // px is returned late: the poll loop overwrites it on every qualifying
+    // frame, so the initializer is never read.
+    #[allow(unused_assignments)]
     let mut px = Vec::new();
     let mut frac = 0.0f64;
     let mut f = start_frame;

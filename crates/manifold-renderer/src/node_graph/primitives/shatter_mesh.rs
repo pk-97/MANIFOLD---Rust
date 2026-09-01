@@ -352,23 +352,23 @@ mod gpu_tests {
         let out = dispatch_shatter(&device, &gen_wgsl, &src, None, None, 1.0, 0.0);
 
         let expected_n = cpu_face_normal(v0, v1, v2);
-        for i in 0..3 {
+        for (i, vert) in out.iter().enumerate().take(3) {
             assert!(
-                (out[i].normal[0] - expected_n[0]).abs() < 1e-5,
+                (vert.normal[0] - expected_n[0]).abs() < 1e-5,
                 "vertex {i} normal.x: got {} expected {}",
-                out[i].normal[0],
+                vert.normal[0],
                 expected_n[0]
             );
             assert!(
-                (out[i].normal[1] - expected_n[1]).abs() < 1e-5,
+                (vert.normal[1] - expected_n[1]).abs() < 1e-5,
                 "vertex {i} normal.y: got {} expected {}",
-                out[i].normal[1],
+                vert.normal[1],
                 expected_n[1]
             );
             assert!(
-                (out[i].normal[2] - expected_n[2]).abs() < 1e-5,
+                (vert.normal[2] - expected_n[2]).abs() < 1e-5,
                 "vertex {i} normal.z: got {} expected {}",
-                out[i].normal[2],
+                vert.normal[2],
                 expected_n[2]
             );
         }
