@@ -51,6 +51,15 @@ pub struct StringParamDef {
     pub default_value: &'static str,
     /// If true, the inspector shows a dropdown selector instead of text input.
     pub use_dropdown: bool,
+    /// If true, this string param holds a file path on disk (a media asset
+    /// the project references — a GLB/HDRI/etc., NOT a directory). Consumed
+    /// by the `manifold-io` asset-path inventory (`collect_asset_paths`,
+    /// PROJECT_FOLDERS_DESIGN D4/D5): preset authors flag a new path param
+    /// here and it gets collected for free — no hardcoded id list in the io
+    /// layer. `PROJECT_FOLDERS_DESIGN.md` §6.5: this flag + the graph-JSON
+    /// `"file_path": true` marker replaces the rot-on-arrival static
+    /// `["model_file", "hdri_file", "path"]` list.
+    pub is_file_path: bool,
 }
 
 // ─── Static registries (hot-reloadable, step 10) ───
@@ -549,6 +558,7 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
                 key: leak_str(&sp.id),
                 default_value: leak_str(&sp.default_value),
                 use_dropdown: sp.use_dropdown,
+                is_file_path: sp.is_file_path,
             })
             .collect(),
         osc_prefix: Some(meta.osc_prefix.clone()),

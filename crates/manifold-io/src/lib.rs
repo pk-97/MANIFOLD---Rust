@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod collect;
 pub mod loader;
 pub mod manifest;
 pub mod migrate;

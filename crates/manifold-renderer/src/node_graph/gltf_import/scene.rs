@@ -865,6 +865,9 @@ pub(super) fn build_import_graph(
                 default_value: path_str,
                 is_file_picker: true,
                 use_dropdown: false,
+                // The imported .glb is a project asset — collected by the
+                // io asset-path inventory (PROJECT_FOLDERS_DESIGN D5).
+                is_file_path: true,
             },
             StringParamSpecDef {
                 id: HDRI_FILE_PARAM_ID.to_string(),
@@ -872,6 +875,8 @@ pub(super) fn build_import_graph(
                 default_value: String::new(),
                 is_file_picker: true,
                 use_dropdown: false,
+                // Same: the HDRI envmap is a project asset.
+                is_file_path: true,
             },
         ],
         string_bindings,

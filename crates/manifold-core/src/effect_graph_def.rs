@@ -677,6 +677,16 @@ pub struct StringParamSpecDef {
     /// `is_file_picker` in practice.
     #[serde(default)]
     pub use_dropdown: bool,
+    /// This string param holds a single file path on disk (a GLB mesh / HDRI
+    /// image — NOT a directory). Consumed by the `manifold-io` asset-path
+    /// inventory (`collect_asset_paths`, PROJECT_FOLDERS_DESIGN D4/D5): a
+    /// preset author marking a new path param gets collection for free, so
+    /// path params never rot into a hardcoded io-layer id list. Marker is
+    /// the literal snake_case `"file_path"` (distinct from
+    /// [`Self::is_file_picker`], which is Browse-button UX sugar).
+    /// `skip_serializing_if` keeps non-path presets byte-identical.
+    #[serde(default, rename = "file_path", skip_serializing_if = "is_false")]
+    pub is_file_path: bool,
 }
 
 /// Routing from one outer-card string config to one inner-graph node
