@@ -33,15 +33,25 @@
 //!     `feedback` is stateful (handles alpha per-mode in its shader).
 //!
 //! Not covered here: GENERATORS (no texture input, so out of this sweep).
-//! `render_text` is guarded by its own gpu_test; `basic_shape` writes coverage
-//! to alpha correctly (verified by reading). A generator-keying probe is the
-//! natural next extension if the sparse-generator surface grows.
+//! `render_text` is guarded by its own gpu_test and by
+//! [`render_text_respects_premultiplied_alpha_producer_contract`] below;
+//! `basic_shape` writes coverage to alpha correctly (verified by reading). A
+//! generator-keying probe for the rest of the sparse-generator surface is the
+//! natural next extension if that surface grows.
 
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::Arc;
 
 use half::f16;
 
-use manifold_renderer::node_graph::{Category, PrimitiveRegistry, descriptor_for};
+use manifold_core::{Beats, Seconds};
+use manifold_gpu::GpuTextureFormat;
+use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::node_graph::primitives::RenderText;
+use manifold_renderer::node_graph::{
+    Backend, Category, Executor, FinalOutput, FrameTime, Graph, MetalBackend, ParamValue, PrimitiveRegistry,
+    Slot, compile, descriptor_for,
+};
 
 use crate::harness::{self, port_is_texture};
 
@@ -209,4 +219,138 @@ fn effects_preserve_transparency() {
          to carry the input's alpha (premultiplied-alpha contract).",
         display_violators.len(),
     );
+}
+
+/// BUG-8us3 value-level proof: a genuinely transparent generator must emit
+/// premultiplied alpha. We drive `node.render_text` headlessly because text on
+/// a transparent background is the canonical case — large guaranteed-transparent
+/// regions plus anti-aliased glyph edges that exercise the semi-transparent
+/// case in a single render.
+///
+/// Contract under test:
+/// 1. Every texel with alpha == 0 has rgb == 0 (exactly).
+/// 2. Semi-transparent texels satisfy `rgb ≈ alpha * unmultiplied_colour`.
+/// 3. Opaque-ish texels (alpha close to 1) are not all black — sanity that the
+///    generator actually drew something.
+#[test]
+fn render_text_respects_premultiplied_alpha_producer_contract() {
+    let h = harness::shared();
+    let (w, h_dim) = (h.width, h.height);
+    let format = GpuTextureFormat::Rgba16Float;
+
+    // Unmultiplied fill colour. The shader writes `rgb = fill_cov * unmul * alpha`
+    // and `a = fill_cov * alpha`, so the output ratio `rgb / a` must equal `unmul`.
+    let unmul = [1.0f32, 0.5, 0.25];
+    let fill = [unmul[0], unmul[1], unmul[2], 1.0f32];
+
+    let mut g = Graph::new();
+    let rt = g.add_node(Box::new(RenderText::new()));
+    let out = g.add_node(Box::new(FinalOutput::new()));
+
+    g.set_param(rt, "text", ParamValue::String(Arc::new("A".to_string())))
+        .unwrap();
+    g.set_param(
+        rt,
+        "fontFamily",
+        ParamValue::String(Arc::new("Helvetica".to_string())),
+    )
+    .unwrap();
+    g.set_param(rt, "fill_color", ParamValue::Color(fill)).unwrap();
+    g.set_param(rt, "size", ParamValue::Float(0.4)).unwrap();
+    g.connect((rt, "out"), (out, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+
+    let backend = MetalBackend::new(Arc::clone(&h.device), w, h_dim, format);
+    let out_slot = Slot(backend.slot_count());
+
+    let frame_time = FrameTime {
+        beats: Beats(0.0),
+        seconds: Seconds(0.0),
+        delta: Seconds(1.0 / 60.0),
+        frame_count: 0,
+    };
+
+    let mut native_enc = h.device.create_encoder("alpha-contract-render-text");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &h.device);
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time, &mut gpu);
+    }
+    native_enc.commit_and_wait_completed();
+
+    let out_tex = exec
+        .backend()
+        .texture_2d(out_slot)
+        .expect("output texture retained");
+    let bytes = h.readback(out_tex);
+
+    let px = (w * h_dim) as usize;
+    let mut transparent_count = 0usize;
+    let mut max_transparent_rgb = 0.0f32;
+    let mut max_alpha = 0.0f32;
+    let mut opaque_count = 0usize;
+    let mut max_opaque_rgb = [0.0f32; 3];
+    let mut best_edge: Option<(f32, [f32; 3])> = None;
+
+    for i in 0..px {
+        let o = i * 8;
+        let r = f16::from_le_bytes([bytes[o], bytes[o + 1]]).to_f32();
+        let g_ = f16::from_le_bytes([bytes[o + 2], bytes[o + 3]]).to_f32();
+        let b = f16::from_le_bytes([bytes[o + 4], bytes[o + 5]]).to_f32();
+        let a = f16::from_le_bytes([bytes[o + 6], bytes[o + 7]]).to_f32();
+
+        if a < 0.001 {
+            transparent_count += 1;
+            max_transparent_rgb = max_transparent_rgb.max(r.max(g_).max(b));
+        } else {
+            max_alpha = max_alpha.max(a);
+            if a > 0.9 {
+                opaque_count += 1;
+                max_opaque_rgb[0] = max_opaque_rgb[0].max(r);
+                max_opaque_rgb[1] = max_opaque_rgb[1].max(g_);
+                max_opaque_rgb[2] = max_opaque_rgb[2].max(b);
+            }
+            if a > 0.1 && a < 0.9 {
+                let closeness = (a - 0.5).abs();
+                if best_edge.map(|(best_a, _)| (best_a - 0.5).abs() > closeness).unwrap_or(true) {
+                    best_edge = Some((a, [r, g_, b]));
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "alpha-contract producer proof: transparent={transparent_count}, \
+         max_transparent_rgb={max_transparent_rgb:.5}, max_alpha={max_alpha:.5}, \
+         opaque_count={opaque_count}, best_edge={best_edge:?}"
+    );
+
+    assert!(transparent_count > 0, "expected a transparent background");
+    assert!(
+        max_transparent_rgb < 0.0001,
+        "transparent texels must have rgb == 0; max |rgb| was {max_transparent_rgb}"
+    );
+
+    assert!(opaque_count > 0, "expected opaque-ish glyph centre pixels");
+    let max_opaque = max_opaque_rgb[0].max(max_opaque_rgb[1]).max(max_opaque_rgb[2]);
+    assert!(
+        max_opaque > 0.5,
+        "opaque texels must not be black; max rgb was {max_opaque}"
+    );
+
+    let Some((a, rgb)) = best_edge else {
+        panic!("expected at least one semi-transparent anti-aliased edge pixel");
+    };
+    for c in 0..3 {
+        let expected = unmul[c] * a;
+        assert!(
+            (rgb[c] - expected).abs() < 0.05,
+            "semi-transparent edge contract violated: channel {c} got {} expected {} \
+             (alpha={a}, unmul={})",
+            rgb[c],
+            expected,
+            unmul[c]
+        );
+    }
 }
