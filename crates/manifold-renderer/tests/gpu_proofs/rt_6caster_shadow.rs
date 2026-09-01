@@ -68,7 +68,7 @@ fn six_caster_scene(shadow_mask: u8) -> String {
     let mut lights_json = String::new();
     for i in 0..6 {
         let cs = (shadow_mask >> i) & 1 == 1;
-        if i > 0 { lights_json.push_str(","); }
+        if i > 0 { lights_json.push(','); }
         lights_json.push_str(&light_json(i, cs));
     }
 

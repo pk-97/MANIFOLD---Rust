@@ -565,7 +565,7 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
         // look at the model wearing the skin.
         let dir = std::path::Path::new("/tmp/p4a_layer_skin_demo");
         std::fs::create_dir_all(dir).expect("create demo dir");
-        let mut dump_png = |texture: &manifold_gpu::GpuTexture, path: std::path::PathBuf| {
+        let dump_png = |texture: &manifold_gpu::GpuTexture, path: std::path::PathBuf| {
             let bytes_per_row = texture.width * 8;
             let buf = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
             let mut rb = device.create_encoder("layer-skin-demo-readback");
@@ -580,9 +580,9 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
             };
             let mut rgba8 = Vec::with_capacity(px.len());
             for c in px.chunks(4) {
-                for ch in 0..3 {
+                for v in c.iter().take(3) {
                     rgba8.push(crate::headless_readback::linear_to_srgb8(
-                        half::f16::from_bits(c[ch]).to_f32(),
+                        half::f16::from_bits(*v).to_f32(),
                     ));
                 }
                 rgba8.push(255);

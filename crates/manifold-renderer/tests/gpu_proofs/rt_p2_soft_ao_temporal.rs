@@ -969,9 +969,9 @@ fn refl_channel_blends_history_and_current() {
     // RS-A (caster cap 4 -> 8): 1x1 dummies for the sv2 channel, unread by this proof.
     let sv2_dummy = make_history(device, "bisect-sv2-dummy");
     let svt_dummy = make_history(device, "bisect-svt-dummy");
-    let sv2_m1_dummy = make_history(device, "bisect-sv2-m1-dummy");
-    let sv2_m2_dummy = make_history(device, "bisect-sv2-m2-dummy");
-    let sv2_hold_dummy = make_history(device, "bisect-sv2-hold-dummy");
+    let _sv2_m1_dummy = make_history(device, "bisect-sv2-m1-dummy");
+    let _sv2_m2_dummy = make_history(device, "bisect-sv2-m2-dummy");
+    let _sv2_hold_dummy = make_history(device, "bisect-sv2-hold-dummy");
 
     // ── Leg 1: reset = false — history must blend toward current ──────
     let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
