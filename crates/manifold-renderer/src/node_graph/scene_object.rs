@@ -90,6 +90,10 @@ pub struct SceneObject {
     /// `Array<InstanceTransform>` slot, for instanced draws. `None` for a
     /// single-instance object.
     pub instances: Option<Slot>,
+    /// Per-object emissive-map strength multiplier. Lives on the object, not
+    /// the material, so a skin driving `emissive_map` can be dimmed without
+    /// touching the underlying material emission factor. Default 1.0.
+    pub emission_strength: f32,
 }
 
 // Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 4): `SceneObject` stays
@@ -140,6 +144,7 @@ mod tests {
             transmission_map: None,
             volume_thickness_map: None,
             instances: None,
+            emission_strength: 1.0,
         };
         assert!(!obj.visible);
         assert!(obj.mesh.is_none());
@@ -172,6 +177,7 @@ mod tests {
             transmission_map: None,
             volume_thickness_map: None,
             instances: Some(Slot(2)),
+            emission_strength: 1.0,
         };
         let copy = obj;
         // Both usable — proves Copy, not just Clone (a move would make

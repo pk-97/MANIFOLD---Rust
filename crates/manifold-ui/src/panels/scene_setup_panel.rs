@@ -78,8 +78,6 @@ const OBJ_OFF_REMOVE: u64 = 20;
 const fn obj_key(index: usize, offset: u64) -> u64 {
     OBJ_KEY_BASE + index as u64 * OBJ_KEY_STRIDE + offset
 }
-
-
 /// Per-light dynamic keys (P3), same convention as `obj_key`: Lights is a
 /// variable-length list, so every light gets a private key range.
 const LIGHT_KEY_BASE: u64 = 84_000;
@@ -911,6 +909,9 @@ pub struct ScenePanel {
     /// P4b: `(button_node_id, scene_object_id, SkinRowVm)` for the Skin row's
     /// target-map picker.
     skin_target_ids: Vec<(NodeId, u32, SkinRowVm)>,
+    /// P4b-skin-strength: row index of the `emission_strength` param deferred
+    /// from the object's section to the Skin row; rebuilt each frame.
+    skin_strength_slot: Option<usize>,
     /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
     /// header's "Remove" button, when a Known light is selected this frame —
     /// resolves to `PanelAction::SceneSetupRemoveLight`. At most one entry
@@ -964,6 +965,7 @@ impl Default for ScenePanel {
             add_modifier_button_id: None,
             skin_source_ids: Vec::new(),
             skin_target_ids: Vec::new(),
+            skin_strength_slot: None,
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -1718,6 +1720,7 @@ impl ScenePanel {
             self.properties_card.resize(0);
             return cy;
         };
+        self.skin_strength_slot = None;
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
@@ -1801,6 +1804,13 @@ impl ScenePanel {
                 }
             }
             while i < retained.len() && config.rows[retained[i]].spec.section == cur_section {
+                // P4b-skin-strength: the object's `emission_strength` row defers
+                // to the Skin row (rendered by build_object_properties_body).
+                if config.rows[retained[i]].id.as_ref().ends_with("_emission_strength") {
+                    self.skin_strength_slot = Some(i);
+                    i += 1;
+                    continue;
+                }
                 cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w, target.clone());
                 i += 1;
             }
@@ -2029,6 +2039,12 @@ impl ScenePanel {
         // modifier stack — one row, two dropdown buttons.
         if let Some(skin) = &row.skin {
             cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
+        }
+        // P4b-skin-strength: render the deferred row via the same ParamSurface machinery.
+        if let Some(slot) = self.skin_strength_slot.take() {
+            let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(inner_w, false);
+            let target = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf).expect("full_params implies live_layer_id");
+            cy = self.build_properties_row(tree, inner_x, cy, slot, label_width, slider_w, target);
         }
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Modifiers", label_style());
         cy += ROW_H;

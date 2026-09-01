@@ -18311,6 +18311,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Whether the object draws and casts shadows. Above 0.5 is on, below is off, so it can be modulated by a driver or trigger.",
           "type": "float"
         },
         {
@@ -18325,6 +18326,18 @@
             "0",
             "1"
           ],
+          "tooltip": "Whether the object casts shadows onto direct lights. Above 0.5 is on, below skips the shadow pass.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Emission Strength",
+          "name": "emission_strength",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "How strongly the object's emissive map glows, from 0 for off up to 10. Default 1.0 leaves the skin at full strength.",
           "type": "float"
         }
       ],
@@ -21671,9 +21684,15 @@
             "10"
           ],
           "type": "float"
+        },
+        {
+          "default": "false",
+          "label": "Billboard",
+          "name": "billboard",
+          "type": "bool"
         }
       ],
-      "purpose": "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Outputs a single Transform struct (pos/rot_euler/scale) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. Matrices are composed by consumers — the wire carries plain TRS, never a matrix.",
+      "purpose": "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Plus a `billboard` bool param: when on, the consumer (e.g. node.render_scene) ignores the rotation and instead keeps the object's local +Z axis pointing at the camera each frame, so a plane mesh always faces the viewer; position and scale stay user-controlled and roll stays zero. Outputs a single Transform struct (pos/rot_euler/scale/billboard) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. Matrices are composed by consumers — the wire carries plain TRS, never a matrix.",
       "role": "Source",
       "stratum": "driver",
       "summary": "Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live.",
@@ -24163,6 +24182,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "18_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "1",
           "id": "80_axis",
           "max": "2",
@@ -24434,6 +24460,13 @@
           "max": "10",
           "min": "0.01",
           "name": "Scale Z"
+        },
+        {
+          "default": "0",
+          "id": "25_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
         },
         {
           "default": "1",
@@ -24709,6 +24742,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "32_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "1",
           "id": "84_axis",
           "max": "2",
@@ -24815,6 +24855,13 @@
         },
         {
           "default": "1",
+          "id": "86_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "87_visible",
           "max": "1",
           "min": "0",
@@ -24829,6 +24876,13 @@
         },
         {
           "default": "1",
+          "id": "87_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "88_visible",
           "max": "1",
           "min": "0",
@@ -24840,6 +24894,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "88_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         }
       ]
     },
@@ -26750,6 +26811,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "12_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "0.6",
           "id": "5_fog_color_r",
           "max": "1",
@@ -26839,6 +26907,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "7_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",
@@ -28099,11 +28174,25 @@
           "name": "Baked Look"
         },
         {
+          "default": "0",
+          "id": "13_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "1",
           "id": "11_cast_shadows",
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "11_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "1",
@@ -28486,6 +28575,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "12_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "1",
           "id": "4_mode",
           "max": "1",
@@ -28617,6 +28713,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "7_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",
@@ -30932,6 +31035,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "13_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "0.85",
           "id": "22_color_r",
           "max": "1",
@@ -31101,6 +31211,13 @@
         },
         {
           "default": "0",
+          "id": "23_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
+          "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
@@ -31164,6 +31281,13 @@
         },
         {
           "default": "1",
+          "id": "32_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
+        },
+        {
+          "default": "1",
           "id": "33_visible",
           "max": "1",
           "min": "0",
@@ -31175,6 +31299,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "33_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         }
       ]
     },
@@ -31529,6 +31660,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "12_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "1",
           "id": "4_mode",
           "max": "1",
@@ -31660,6 +31798,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "6_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",
@@ -31945,6 +32090,13 @@
         },
         {
           "default": "0",
+          "id": "4_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
+          "default": "0",
           "id": "6_mode",
           "max": "1",
           "min": "0",
@@ -32075,6 +32227,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "7_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",
@@ -32898,6 +33057,13 @@
           "name": "Scale Z"
         },
         {
+          "default": "0",
+          "id": "7_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
           "default": "0.9",
           "id": "8_color_r",
           "max": "1",
@@ -33015,6 +33181,13 @@
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "9_emission_strength",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Strength"
         },
         {
           "default": "0",

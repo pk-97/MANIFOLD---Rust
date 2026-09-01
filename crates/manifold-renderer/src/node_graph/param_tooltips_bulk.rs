@@ -520,6 +520,12 @@ crate::param_tooltips!("node.unlit_material", {
     "emission_intensity" => "How strongly the surface glows. At 0 there is no glow, and higher values push the emission colour brighter.",
 });
 
+crate::param_tooltips!("node.scene_object", {
+    "visible" => "Whether the object draws and casts shadows. Above 0.5 is on, below is off, so it can be modulated by a driver or trigger.",
+    "cast_shadows" => "Whether the object casts shadows onto direct lights. Above 0.5 is on, below skips the shadow pass.",
+    "emission_strength" => "How strongly the object's emissive map glows, from 0 for off up to 10. Default 1.0 leaves the skin at full strength.",
+});
+
 // ─── Particles 2D ───
 
 crate::param_tooltips!("node.anti_clump_particles", {

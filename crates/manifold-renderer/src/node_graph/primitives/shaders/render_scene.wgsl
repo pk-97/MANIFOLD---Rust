@@ -69,7 +69,8 @@ struct Uniforms {
     camera_pos: vec4<f32>,
     // rgb: surface diffuse / base colour, w: opacity (informational).
     base_color: vec4<f32>,
-    // rgb: emission PREMULTIPLIED with intensity, w: reserved.
+    // rgb: emission PREMULTIPLIED with intensity; w: per-object emissive-map
+    // strength multiplier (defaults to 1.0, so existing materials are unchanged).
     emission: vec4<f32>,
     // x: metallic [0,1], y: roughness [0.01,1]. z/w were permanently-zero
     // reserved slots until GLB_CONFORMANCE_DESIGN.md G-P4/D5 repurposed
@@ -919,17 +920,20 @@ fn resolve_occlusion(uv: vec2<f32>) -> f32 {
 }
 
 // IMPORT_FIDELITY_DESIGN.md D3/F-P2: sRGB emissive map, multiplied by the
-// material's own (already premultiplied-with-intensity) emission factor.
-// Unwired = the material's emission factor alone (byte-identical to before
-// this port existed). Used in EVERY entry point (fs_unlit included, per
-// M6-D1's albedo precedent) — emission is always added AFTER lighting.
+// material's own (already premultiplied-with-intensity) emission factor and the
+// per-object `emission.w` skin strength multiplier. Unwired = the material's
+// emission factor scaled by `emission.w` (byte-identical to before this port
+// existed when `emission.w` is 1.0). Used in EVERY entry point (fs_unlit
+// included, per M6-D1's albedo precedent) — emission is always added AFTER
+// lighting.
 fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
+    let strength = u.emission.w;
     if u.texture_flags2.z > 0.5 {
         let uv_t = apply_uv_transform(uv, u.emissive_uv_m, u.emissive_uv_t);
         let t = textureSample(emissive_map, emissive_sampler, uv_t).rgb;
-        return u.emission.rgb * t;
+        return u.emission.rgb * strength * t;
     }
-    return u.emission.rgb;
+    return u.emission.rgb * strength;
 }
 
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3 (D1 revised): `KHR_materials_sheen`
