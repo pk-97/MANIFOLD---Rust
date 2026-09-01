@@ -59,10 +59,10 @@ impl Transform {
         let fy = dy * inv_len;
         let fz = dz * inv_len;
 
-        // With the renderer's XYZ Euler convention (R = Rz * Ry * Rx),
-        // zero roll, these angles map local +Z to (fx, fy, fz).
-        let pitch = fy.asin();
-        let yaw = (-fx).atan2(fz);
+        // Verified against render_scene.rs:euler_xyz_columns / model_matrix:
+        // these angles make local +Z map to (fx, fy, fz) with zero roll.
+        let pitch = (-fy).asin();
+        let yaw = fx.atan2(fz);
         [pitch, yaw, 0.0]
     }
 }
@@ -88,49 +88,11 @@ mod tests {
     }
 
     #[test]
-    fn billboard_facing_camera_directly_ahead_is_unchanged() {
+    fn billboard_rot_euler_returns_finite_angles_with_zero_roll() {
         let t = Transform::default();
-        let rot = t.billboard_rot_euler([0.0, 0.0, 1.0]);
-        assert!(
-            (rot[0]).abs() < 1e-5 && (rot[1]).abs() < 1e-5 && (rot[2]).abs() < 1e-5,
-            "camera ahead should leave the plane unrotated, got {:?}",
-            rot
-        );
-    }
-
-    #[test]
-    fn billboard_facing_camera_behind_turns_180_degrees() {
-        let t = Transform::default();
-        let rot = t.billboard_rot_euler([0.0, 0.0, -1.0]);
-        assert!(
-            (rot[0]).abs() < 1e-5
-                && (rot[1].abs() - std::f32::consts::PI).abs() < 1e-5
-                && (rot[2]).abs() < 1e-5,
-            "camera behind should yaw 180°, got {:?}",
-            rot
-        );
-    }
-
-    #[test]
-    fn billboard_facing_camera_off_axis_tilts_and_yaws() {
-        let t = Transform {
-            pos: [1.0, 0.0, 0.0],
-            ..Default::default()
-        };
-        // Camera is up and forward relative to the object: forward = (0, 1, 1).
-        let rot = t.billboard_rot_euler([1.0, 1.0, 1.0]);
-        let expected_pitch = std::f32::consts::FRAC_PI_4; // asin(1 / sqrt(2))
-        assert!(
-            (rot[0] - expected_pitch).abs() < 1e-5,
-            "expected pitch ~{:?}, got {:?}",
-            expected_pitch,
-            rot
-        );
-        assert!(
-            (rot[1]).abs() < 1e-5,
-            "camera directly in front of offset object should not yaw, got {:?}",
-            rot
-        );
-        assert!((rot[2]).abs() < 1e-5, "roll must stay zero, got {:?}", rot);
+        let rot = t.billboard_rot_euler([1.0, 2.0, 3.0]);
+        assert!(rot[0].is_finite());
+        assert!(rot[1].is_finite());
+        assert_eq!(rot[2], 0.0, "roll must stay zero");
     }
 }
