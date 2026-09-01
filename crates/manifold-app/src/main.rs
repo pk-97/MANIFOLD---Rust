@@ -203,7 +203,11 @@ fn main() {
     // existing pattern) and handed to `Application` before the event loop
     // starts; the actual project load + rejoin happens once the content
     // thread + GPU are up, inside `Application::resumed()`.
-    let resume_breadcrumb_path = parse_resume_arg(std::env::args());
+    let resume_breadcrumb_path = match parse_resume_arg(std::env::args()) {
+        ResumeArg::None => None,
+        ResumeArg::Explicit(path) => Some(path),
+        ResumeArg::Auto => resolve_resume_breadcrumb_from_prefs(),
+    };
 
     // --- Panic hook (10.1, 10.12) ---
     // Install before anything else so even early panics get logged to disk.
@@ -285,16 +289,65 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
-// `--resume` CLI parsing (GIG_RESILIENCE_DESIGN section 5.2)
+// `--resume` CLI parsing (GIG_RESILIENCE_DESIGN section 5.2 / PROJECT_FOLDERS D7)
 // ---------------------------------------------------------------------------
 
-/// Parse `--resume <breadcrumb-path>` out of the process arguments. Returns
-/// `None` for a normal launch. Takes an iterator (rather than reading
-/// `std::env::args()` internally) so it's testable without a real process.
-fn parse_resume_arg(args: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
+/// What `--resume` asked for, before any prefs resolution.
+#[derive(Debug, PartialEq, Eq)]
+enum ResumeArg {
+    /// No `--resume` flag — normal launch.
+    None,
+    /// `--resume <breadcrumb-path>` — explicit path.
+    Explicit(std::path::PathBuf),
+    /// `--resume` with no following path — resolve the last-opened project's
+    /// breadcrumb from prefs (docs/PROJECT_FOLDERS_DESIGN.md D7).
+    Auto,
+}
+
+/// Parse `--resume [<breadcrumb-path>]` out of the process arguments. Takes an
+/// iterator (rather than reading `std::env::args()` internally) so it's
+/// testable without a real process.
+fn parse_resume_arg(args: impl Iterator<Item = String>) -> ResumeArg {
     let args: Vec<String> = args.collect();
-    let idx = args.iter().position(|a| a == "--resume")?;
-    args.get(idx + 1).map(std::path::PathBuf::from)
+    let Some(idx) = args.iter().position(|a| a == "--resume") else {
+        return ResumeArg::None;
+    };
+    match args.get(idx + 1).filter(|s| !s.is_empty()) {
+        Some(path) => ResumeArg::Explicit(std::path::PathBuf::from(path)),
+        None => ResumeArg::Auto,
+    }
+}
+
+/// `--resume` with no path (D7): resolve the breadcrumb of the last-opened
+/// project from `LAST_OPENED_PROJECT_PREF_KEY` and derive its breadcrumb path,
+/// so the crash-rejoin no longer needs the path typed by hand mid-panic.
+/// `None` (normal boot) when there's no last-opened project, its file is gone,
+/// or its breadcrumb is gone — the rejoin path degrades to a normal launch,
+/// never a failed one.
+fn resolve_resume_breadcrumb_from_prefs() -> Option<std::path::PathBuf> {
+    let prefs = crate::user_prefs::UserPrefs::load();
+    let last = prefs.get_string(crate::project_io::LAST_OPENED_PROJECT_PREF_KEY, "");
+    if last.is_empty() {
+        log::warn!("[Resume] --resume with no path, but no last-opened project — normal boot");
+        return None;
+    }
+    let project_path = std::path::PathBuf::from(last);
+    if !project_path.exists() {
+        log::warn!(
+            "[Resume] last-opened project {} is gone — normal boot",
+            project_path.display()
+        );
+        return None;
+    }
+    let breadcrumb = crate::breadcrumb::breadcrumb_path_for(&project_path);
+    if !breadcrumb.exists() {
+        log::warn!(
+            "[Resume] no breadcrumb at {} — normal boot",
+            breadcrumb.display()
+        );
+        return None;
+    }
+    Some(breadcrumb)
 }
 
 // ---------------------------------------------------------------------------
@@ -540,7 +593,7 @@ mod crash_log_tests {
 
 #[cfg(test)]
 mod resume_arg_tests {
-    use super::parse_resume_arg;
+    use super::{ResumeArg, parse_resume_arg};
 
     fn args(v: &[&str]) -> impl Iterator<Item = String> {
         v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
@@ -548,20 +601,20 @@ mod resume_arg_tests {
 
     #[test]
     fn no_resume_flag_is_none() {
-        assert_eq!(parse_resume_arg(args(&["manifold"])), None);
+        assert_eq!(parse_resume_arg(args(&["manifold"])), ResumeArg::None);
     }
 
     #[test]
     fn resume_flag_with_path_parses() {
         assert_eq!(
             parse_resume_arg(args(&["manifold", "--resume", "/tmp/show.manifold.breadcrumb"])),
-            Some(std::path::PathBuf::from("/tmp/show.manifold.breadcrumb"))
+            ResumeArg::Explicit(std::path::PathBuf::from("/tmp/show.manifold.breadcrumb"))
         );
     }
 
     #[test]
-    fn resume_flag_without_a_following_path_is_none() {
-        assert_eq!(parse_resume_arg(args(&["manifold", "--resume"])), None);
+    fn resume_flag_without_a_following_path_resolves_from_prefs() {
+        assert_eq!(parse_resume_arg(args(&["manifold", "--resume"])), ResumeArg::Auto);
     }
 
     #[test]
@@ -574,7 +627,7 @@ mod resume_arg_tests {
                 "--resume",
                 "/path/a.manifold.breadcrumb"
             ])),
-            Some(std::path::PathBuf::from("/path/a.manifold.breadcrumb"))
+            ResumeArg::Explicit(std::path::PathBuf::from("/path/a.manifold.breadcrumb"))
         );
     }
 }
