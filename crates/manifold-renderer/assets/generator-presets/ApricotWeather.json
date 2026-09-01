@@ -146,7 +146,8 @@
         "name": "Model File",
         "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
         "isFilePicker": true,
-        "useDropdown": false
+        "useDropdown": false,
+        "file_path": true
       }
     ],
     "stringBindings": [

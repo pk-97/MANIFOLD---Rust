@@ -294,7 +294,8 @@
         "name": "Model File",
         "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
         "isFilePicker": true,
-        "useDropdown": false
+        "useDropdown": false,
+        "file_path": true
       }
     ],
     "stringBindings": [

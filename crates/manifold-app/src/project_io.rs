@@ -153,7 +153,7 @@ pub(crate) fn embedded_presets_fingerprint(project: &Project) -> u64 {
 
 const FILE_DROP_DEFAULT_DURATION_BEATS: f32 = 4.0;
 const FILE_DROP_MIN_DURATION_BEATS: f32 = 0.125;
-const LAST_OPENED_PROJECT_PREF_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
+pub(crate) const LAST_OPENED_PROJECT_PREF_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
 /// Pref key for the recent-projects list (JSON array of absolute paths,
 /// most-recent first). Drives the File → Open Recent submenu.
 const RECENT_PROJECTS_PREF_KEY: &str = "MANIFOLD_RecentProjects";
@@ -526,60 +526,110 @@ impl ProjectIOService {
             dialog = dialog.set_directory(&last_dir);
         }
 
-        if let Some(mut path) = dialog.save_file() {
-            // Ensure .manifold extension (Unity line 212-213)
-            if path.extension().is_none_or(|e| e != "manifold") {
-                path.set_extension("manifold");
+        if let Some(dialog_path) = dialog.save_file() {
+            self.save_project_as_to_path(project, &dialog_path, editing_service, user_prefs)
+        } else {
+            ProjectIOAction::default()
+        }
+    }
+
+    /// The non-dialog half of [`Self::save_project_as`]: resolve where the
+    /// chosen path actually lands (version vs new project, D3) and write it.
+    /// Split out so the folder-layout rules are testable without the rfd
+    /// dialog, which is not scriptable (design section 4 P3 demo note).
+    fn save_project_as_to_path(
+        &mut self,
+        project: &mut Project,
+        dialog_path: &Path,
+        editing_service: &mut EditingService,
+        user_prefs: &mut UserPrefs,
+    ) -> ProjectIOAction {
+        // Ensure .manifold extension (Unity line 212-213)
+        let mut dialog_path = dialog_path.to_path_buf();
+        if dialog_path.extension().is_none_or(|e| e != "manifold") {
+            dialog_path.set_extension("manifold");
+        }
+
+        // D3 (docs/PROJECT_FOLDERS_DESIGN.md section 3.2): the dialog only
+        // picked a location + name. resolve_save_target is the ONE decision
+        // site for version-vs-new-project. For NewProject, create the folder
+        // then save into it; for Version, the file is a sibling of the
+        // existing project file.
+        let parent = dialog_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        let stem = dialog_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".to_string());
+        let save_path = match manifold_io::project_folder::resolve_save_target(&parent, &stem) {
+            manifold_io::project_folder::SaveTarget::Version { dir } => {
+                dir.join(format!("{stem}.manifold"))
             }
-
-            snapshot_and_prune_embedded_presets(project);
-            match manifold_io::saver::save_project(project, &path, None, false) {
-                Ok(()) => {
-                    // Update project name from filename (Unity line 217)
-                    if let Some(stem) = path.file_stem() {
-                        project.project_name = stem.to_string_lossy().into_owned();
-                    }
-
-                    // Persist paths (Unity lines 218-221)
-                    let path_str = path.to_string_lossy().to_string();
-                    self.last_opened_project_path = Some(path_str.clone());
-                    user_prefs.set_string(LAST_OPENED_PROJECT_PREF_KEY, &path_str);
-                    dialog_path_memory::remember_directory(
-                        DialogContext::ProjectSave,
-                        &path_str,
-                        user_prefs,
-                    );
-                    user_prefs.save();
-                    // Promote to the front of the Open Recent list.
-                    self.push_recent_project(&path_str, user_prefs);
-
-                    editing_service.mark_clean();
-                    log::info!("[ProjectIO] Saved to {}", path.display());
-
-                    ProjectIOAction {
-                        mark_clean: true,
-                        flash_save: true,
-                        set_project_path: Some(path),
-                        ..Default::default()
-                    }
-                }
-                Err(e) => {
-                    // G4: a silent Save As failure means believing work is
-                    // on disk when it isn't. Log AND surface it.
+            manifold_io::project_folder::SaveTarget::NewProject { folder, file } => {
+                if let Err(e) = std::fs::create_dir_all(&folder) {
                     log::error!("[ProjectIO] Save failed: {e}");
                     crate::alerts::error(
                         "Save Failed",
                         &format!(
-                            "MANIFOLD couldn't save to\n{}\n\n{e}\n\n\
+                            "MANIFOLD couldn't create\n{}\n\n{e}\n\n\
                              Your work is NOT on disk — check free space and try again.",
-                            path.display()
+                            folder.display()
                         ),
                     );
-                    ProjectIOAction::default()
+                    return ProjectIOAction::default();
+                }
+                file
+            }
+        };
+
+        snapshot_and_prune_embedded_presets(project);
+        match manifold_io::saver::save_project(project, &save_path, None, false) {
+            Ok(()) => {
+                // Update project name from filename (Unity line 217)
+                if let Some(stem) = save_path.file_stem() {
+                    project.project_name = stem.to_string_lossy().into_owned();
+                }
+
+                // Persist paths (Unity lines 218-221)
+                let path_str = save_path.to_string_lossy().to_string();
+                self.last_opened_project_path = Some(path_str.clone());
+                user_prefs.set_string(LAST_OPENED_PROJECT_PREF_KEY, &path_str);
+                dialog_path_memory::remember_directory(
+                    DialogContext::ProjectSave,
+                    &path_str,
+                    user_prefs,
+                );
+                user_prefs.save();
+                // Promote to the front of the Open Recent list.
+                self.push_recent_project(&path_str, user_prefs);
+
+                editing_service.mark_clean();
+                log::info!("[ProjectIO] Saved to {}", save_path.display());
+
+                ProjectIOAction {
+                    mark_clean: true,
+                    flash_save: true,
+                    set_project_path: Some(save_path),
+                    ..Default::default()
                 }
             }
-        } else {
-            ProjectIOAction::default()
+            Err(e) => {
+                // G4: a silent Save As failure means believing work is
+                // on disk when it isn't. Log AND surface it.
+                log::error!("[ProjectIO] Save failed: {e}");
+                crate::alerts::error(
+                    "Save Failed",
+                    &format!(
+                        "MANIFOLD couldn't save to\n{}\n\n{e}\n\n\
+                         Your work is NOT on disk — check free space and try again.",
+                        save_path.display()
+                    ),
+                );
+                ProjectIOAction::default()
+            }
         }
     }
 
@@ -1409,5 +1459,68 @@ mod tests {
             "self-containment snapshot alone grew the file by {isolated_delta} bytes (>5MB) — \
              escalate per PRESET_LIBRARY_DESIGN P2 gate"
         );
+    }
+
+    // ── PROJECT_FOLDERS_DESIGN.md P3 — save semantics + folder layout ──
+    //
+    // `save_project_as` itself is not scriptable (rfd dialog); the tested
+    // surface is `save_project_as_to_path`, the non-dialog half that carries
+    // the ONE `resolve_save_target` decision site. Asserts the D3 folder
+    // layout on Save As into an empty dir, plus the round-trip gate:
+    // save-as → reopen from the new folder → last_saved_path + breadcrumb
+    // path both inside the folder.
+
+    #[test]
+    fn save_as_into_empty_dir_creates_project_folder_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!("manifold-save-as-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut prefs = UserPrefs::for_test();
+        let mut service = ProjectIOService::new(&prefs);
+        let mut editing = EditingService::new();
+        let mut project = Project {
+            project_name: "MyShow".to_string(),
+            ..Project::default()
+        };
+
+        // Save As into an empty dir → a new project folder, not a loose file.
+        let dialog_path = dir.join("MyShow.manifold");
+        let action =
+            service.save_project_as_to_path(&mut project, &dialog_path, &mut editing, &mut prefs);
+
+        let expected_file = dir.join("MyShow").join("MyShow.manifold");
+        assert!(
+            expected_file.exists(),
+            "new-project folder layout: {expected_file:?} must exist"
+        );
+        assert!(
+            !dir.join("MyShow.manifold").exists(),
+            "no loose sibling file — the file goes INSIDE the folder (D3)"
+        );
+        assert_eq!(
+            action.set_project_path.as_deref(),
+            Some(expected_file.as_path()),
+            "set_project_path must be the in-folder file"
+        );
+
+        // Round-trip gate: reopen from the new folder.
+        let reopened = service.open_project_from_path(&expected_file, &mut prefs);
+        let loaded = reopened.apply_project.expect("in-folder file must reopen");
+        assert_eq!(
+            loaded.last_saved_path,
+            expected_file.to_string_lossy().to_string(),
+            "last_saved_path must be the in-folder file"
+        );
+
+        // The breadcrumb path derives from the project path, so it rides
+        // along inside the folder (D7).
+        let breadcrumb = crate::breadcrumb::breadcrumb_path_for(&expected_file);
+        assert!(
+            breadcrumb.starts_with(dir.join("MyShow")),
+            "breadcrumb {breadcrumb:?} must sit inside the project folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
