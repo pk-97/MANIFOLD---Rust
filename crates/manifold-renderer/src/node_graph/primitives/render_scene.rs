@@ -4682,7 +4682,12 @@ impl EffectNode for RenderScene {
             // unwired (D2) — matches the old scattered params' defaults
             // exactly (pos 0, rot 0, scale 1).
             let t = object.transform;
-            let model = model_matrix(t.pos, t.rot_euler, t.scale);
+            let rot_euler = if t.billboard {
+                t.billboard_rot_euler(cam.pos)
+            } else {
+                t.rot_euler
+            };
+            let model = model_matrix(t.pos, rot_euler, t.scale);
             // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
             // seeds prev = current, giving THIS object exactly-zero
@@ -7640,6 +7645,7 @@ inventory::submit! {
 mod tests {
     use super::*;
     use crate::node_graph::ports::ArrayType;
+    use crate::node_graph::transform::Transform;
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
@@ -8182,6 +8188,67 @@ mod tests {
         assert!((m[0][0] - 2.0).abs() < 1e-6);
         assert!((m[1][1] - 3.0).abs() < 1e-6);
         assert!((m[2][2] - 4.0).abs() < 1e-6);
+    }
+
+    /// Asserts that a billboard transform makes local +Z point at the camera.
+    fn assert_billboard_faces(object_pos: [f32; 3], camera_pos: [f32; 3]) {
+        let t = Transform {
+            pos: object_pos,
+            billboard: true,
+            ..Default::default()
+        };
+        let rot = t.billboard_rot_euler(camera_pos);
+        let m = model_matrix(t.pos, rot, [1.0, 1.0, 1.0]);
+        // Column 2 of the column-major model matrix is where local +Z maps.
+        let actual = [m[2][0], m[2][1], m[2][2]];
+        let dx = camera_pos[0] - object_pos[0];
+        let dy = camera_pos[1] - object_pos[1];
+        let dz = camera_pos[2] - object_pos[2];
+        let len = (dx * dx + dy * dy + dz * dz).sqrt();
+        let expected = [dx / len, dy / len, dz / len];
+        for i in 0..3 {
+            assert!(
+                (actual[i] - expected[i]).abs() < 1e-5,
+                "axis {i}: got {} expected {}",
+                actual[i],
+                expected[i]
+            );
+        }
+    }
+
+    #[test]
+    fn billboard_faces_camera_directly_ahead() {
+        assert_billboard_faces([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn billboard_faces_camera_behind() {
+        assert_billboard_faces([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn billboard_faces_camera_to_the_right() {
+        assert_billboard_faces([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn billboard_faces_camera_above() {
+        assert_billboard_faces([0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn billboard_faces_camera_off_axis_with_offset_position() {
+        assert_billboard_faces([1.0, -2.0, 3.0], [4.0, 2.0, -1.0]);
+    }
+
+    #[test]
+    fn billboard_coincident_camera_falls_back_to_existing_rotation() {
+        let t = Transform {
+            rot_euler: [0.5, -0.25, 0.1],
+            ..Default::default()
+        };
+        let rot = t.billboard_rot_euler(t.pos);
+        assert_eq!(rot, t.rot_euler);
     }
 
     // ---- GBUFFER_DESIGN.md P1, I1 — lazy `depth` output ----

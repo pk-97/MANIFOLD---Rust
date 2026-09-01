@@ -27,7 +27,7 @@ use crate::node_graph::transform::Transform;
 crate::primitive! {
     name: Transform3D,
     type_id: "node.transform_3d",
-    purpose: "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Outputs a single Transform struct (pos/rot_euler/scale) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. Matrices are composed by consumers — the wire carries plain TRS, never a matrix.",
+    purpose: "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Plus a `billboard` bool param: when on, the consumer (e.g. node.render_scene) ignores the rotation and instead keeps the object's local +Z axis pointing at the camera each frame, so a plane mesh always faces the viewer; position and scale stay user-controlled and roll stays zero. Outputs a single Transform struct (pos/rot_euler/scale/billboard) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. Matrices are composed by consumers — the wire carries plain TRS, never a matrix.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,
@@ -115,6 +115,14 @@ crate::primitive! {
             range: Some((0.01, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("billboard"),
+            label: "Billboard",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `transform` into render_scene's transform_n port (unwired = identity: pos 0, rot 0, scale 1). Rotation is XYZ Euler in radians, matching render_scene's existing model_matrix. Each of the nine params is independently port-shadowed — wire only the axes you want to animate; the rest fall back to their static param values.",
@@ -138,11 +146,13 @@ impl Primitive for Transform3D {
         let scale_x = ctx.scalar_or_param("scale_x", 1.0);
         let scale_y = ctx.scalar_or_param("scale_y", 1.0);
         let scale_z = ctx.scalar_or_param("scale_z", 1.0);
+        let billboard = matches!(ctx.params.get("billboard"), Some(ParamValue::Bool(true)));
 
         let transform = Transform {
             pos: [pos_x, pos_y, pos_z],
             rot_euler: [rot_x, rot_y, rot_z],
             scale: [scale_x, scale_y, scale_z],
+            billboard,
         };
 
         ctx.outputs.set_transform("transform", transform);
@@ -195,7 +205,7 @@ mod tests {
     /// name not overridden) and no wired scalar ports, returning the
     /// resulting `Transform`.
     fn run_with_params(overrides: &[(&'static str, f32)]) -> Transform {
-        run_with_params_and_wires(overrides, &[])
+        run_with_params_and_wires(overrides, &[], false)
     }
 
     /// Runs `Transform3D` with the given params and the given wired scalar
@@ -204,6 +214,7 @@ mod tests {
     fn run_with_params_and_wires(
         overrides: &[(&'static str, f32)],
         wires: &[(&'static str, f32)],
+        billboard: bool,
     ) -> Transform {
         let defaults: &[(&str, f32)] = &[
             ("pos_x", 0.0),
@@ -221,6 +232,7 @@ mod tests {
         let out_slot = backend.acquire(ResourceId(0), PortType::Transform, None, (0, 0));
 
         let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("billboard"), ParamValue::Bool(billboard));
         for &(name, default) in defaults {
             let value = overrides
                 .iter()
@@ -304,7 +316,7 @@ mod tests {
     fn wired_pos_x_overrides_its_same_named_param() {
         // Param says 10.0; the wire says 99.0 — the wire must win
         // (port-shadows-param).
-        let t = run_with_params_and_wires(&[("pos_x", 10.0)], &[("pos_x", 99.0)]);
+        let t = run_with_params_and_wires(&[("pos_x", 10.0)], &[("pos_x", 99.0)], false);
         assert_eq!(t.pos[0], 99.0, "wired pos_x should override the pos_x param");
         // Untouched siblings keep their param/default values.
         assert_eq!(t.pos[1], 0.0);
@@ -313,7 +325,7 @@ mod tests {
 
     #[test]
     fn wired_rot_y_overrides_its_same_named_param() {
-        let t = run_with_params_and_wires(&[("rot_y", 1.0)], &[("rot_y", 2.5)]);
+        let t = run_with_params_and_wires(&[("rot_y", 1.0)], &[("rot_y", 2.5)], false);
         assert_eq!(t.rot_euler[1], 2.5, "wired rot_y should override the rot_y param");
         assert_eq!(t.rot_euler[0], 0.0);
         assert_eq!(t.rot_euler[2], 0.0);
@@ -321,9 +333,21 @@ mod tests {
 
     #[test]
     fn wired_scale_z_overrides_its_same_named_param() {
-        let t = run_with_params_and_wires(&[("scale_z", 3.0)], &[("scale_z", 7.0)]);
+        let t = run_with_params_and_wires(&[("scale_z", 3.0)], &[("scale_z", 7.0)], false);
         assert_eq!(t.scale[2], 7.0, "wired scale_z should override the scale_z param");
         assert_eq!(t.scale[0], 1.0);
         assert_eq!(t.scale[1], 1.0);
+    }
+
+    #[test]
+    fn billboard_defaults_to_false() {
+        let t = run_with_params(&[]);
+        assert!(!t.billboard);
+    }
+
+    #[test]
+    fn billboard_param_is_read() {
+        let t = run_with_params_and_wires(&[], &[], true);
+        assert!(t.billboard);
     }
 }
