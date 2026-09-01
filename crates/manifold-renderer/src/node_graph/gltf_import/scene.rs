@@ -17,7 +17,6 @@ use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use crate::node_graph::gltf_load;
 use crate::node_graph::gltf_load::GltfImportSummary;
-use crate::node_graph::primitives::DEFAULT_FAR as CAMERA_FAR_DEFAULT;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use crate::node_graph::scene_exposure::metadata_for_node_type;
 
@@ -111,69 +110,14 @@ pub(super) fn build_import_graph(
         );
     }
 
-    let center = [
-        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
-        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
-        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
-    ];
-    let dims = [
-        summary.bbox_max[0] - summary.bbox_min[0],
-        summary.bbox_max[1] - summary.bbox_min[1],
-        summary.bbox_max[2] - summary.bbox_min[2],
-    ];
-    let radius =
-        ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
-    // Camera vertical FOV — hoisted here so both the framing-distance fit
-    // below and the camera node's own `fov_y` param (set further down) read
-    // the SAME value; a duplicated literal is how BUG-206-style drift
-    // happens in the first place.
-    let fov_y = 0.9_f32;
-    // `2.2 * radius` alone frames by the bbox half-DIAGONAL,
-    // which for an elongated (tall/thin) object barely exceeds its dominant
-    // axis — the frame's vertical span contains the object with almost no
-    // margin, and camera tilt + perspective push it past the top/bottom
-    // edges. Frame by PER-AXIS fit instead: for each axis, the distance
-    // required so that half the axis's extent subtends no more than the
-    // half-FOV, with a 1.15 safety margin. The render aspect isn't known at
-    // import time, so the horizontal half-angle is conservatively treated
-    // as equal to the vertical one (square-aspect assumption — never
-    // UNDER-frames a wider-than-tall render).
-    let half_fov_tan = (fov_y * 0.5).tan();
-    let per_axis_fit = dims
-        .iter()
-        .map(|&extent| (extent * 0.5) / half_fov_tan * 1.15)
-        .fold(0.0f32, f32::max);
-    // The `2.2 * radius` floor keeps every COMPACT asset's framing IDENTICAL
-    // to before this fix (the golden-stability guarantee: per_axis_fit is
-    // only ever larger than the floor for objects dominated by one axis,
-    // where the diagonal-based distance genuinely under-frames).
-    let distance = (2.2 * radius).max(per_axis_fit);
-    // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
-    // P1's `--trace` instrument): `node.orbit_camera`'s `near` default was
-    // never scaled to the framed object, so for any object with `radius`
-    // below ~0.042 (BoomBox, MetalRoughSpheresNoTextures) the fixed near
-    // plane sat IN FRONT of the object and the whole frame clipped to black.
-    //
-    // Fix: `near` always tracks the object's own front-face distance with a
-    // 2x safety margin, in BOTH directions. Down keeps tiny assets rendering
-    // (BUG-165/169); up keeps 24-bit depth precision at the object's actual
-    // distance — BUG-774a (kuma_heavy_robot: front face ~3300 units out,
-    // near pinned at the floor gives ~10 units of depth resolution there,
-    // so the model's two overlapping mesh shells z-fight into a triangle
-    // mosaic). At `front_margin * 0.5` the front face always gets ~2^23
-    // depth slices per unit distance, at any scene scale.
-    let front_margin = (distance - radius).max(1e-4);
-    let near_clip = front_margin * 0.5;
-    // `far` is the same class of bug as `near` above, at the opposite end:
-    // the orbit camera's fixed default (CAMERA_FAR_DEFAULT, 200) was never
-    // scaled to the framed object either, so any asset whose POSED bbox
-    // puts geometry past 200 units depth-clips to a black frame at the
-    // default framing (kuma_heavy_robot — 100% black until `far` is raised
-    // by hand). The DEFAULT floor keeps every currently-passing asset's far
-    // IDENTICAL to before; the 10000 ceiling is `node.orbit_camera`'s
-    // declared range max, past which the value would clamp at param load
-    // anyway.
-    let far_clip = CAMERA_FAR_DEFAULT.max(distance + 1.5 * radius).min(10_000.0);
+    // Scene framing geometry (camera distance / near / far / focus seed) —
+    // extracted to `scene_scale.rs`'s `Framing` (pure bbox math, no
+    // import state). `center` and `radius` also feed the per-object
+    // recenter and the sun/light placement below.
+    let framing = super::scene_scale::Framing::compute(summary.bbox_min, summary.bbox_max);
+    let center = framing.center;
+    let radius = framing.radius;
+    let distance = framing.distance;
 
     let path_str = path.to_string_lossy().into_owned();
     let stem = path
@@ -276,12 +220,12 @@ pub(super) fn build_import_graph(
     cam_node.params.insert("orbit".to_string(), float(0.7));
     cam_node.params.insert("tilt".to_string(), float(0.3));
     cam_node.params.insert("distance".to_string(), float(distance));
-    cam_node.params.insert("fov_y".to_string(), float(fov_y));
+    cam_node.params.insert("fov_y".to_string(), float(framing.fov_y));
     cam_node.params.insert("look_y".to_string(), float(0.0));
-    // BUG-165/BUG-169 fix — see `near_clip` computation above.
-    cam_node.params.insert("near".to_string(), float(near_clip));
-    // See `far_clip` above — the far-plane half of the same fix.
-    cam_node.params.insert("far".to_string(), float(far_clip));
+    // BUG-165/BUG-169 fix — see `Framing::compute` (`near_clip`).
+    cam_node.params.insert("near".to_string(), float(framing.near_clip));
+    // See `Framing::compute` (`far_clip`) — the far-plane half of the same fix.
+    cam_node.params.insert("far".to_string(), float(framing.far_clip));
     let cam_node_params = cam_node.params.clone();
     nodes.push(cam_node);
     stamp_scene_node_exposures_into(
