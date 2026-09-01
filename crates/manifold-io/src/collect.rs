@@ -753,18 +753,18 @@ mod tests {
         // Video clip.
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Video
-                && r.path == PathBuf::from("/mnt/video/clip1.mp4")
+                && r.path == std::path::Path::new("/mnt/video/clip1.mp4")
                 && r.target == AssetTarget::VideoClip { clip_id: "vc1".to_string() }
         }));
         // Layer video folder.
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Video
-                && r.path == PathBuf::from("/mnt/footage")
+                && r.path == std::path::Path::new("/mnt/footage")
                 && r.target == AssetTarget::LayerVideoFolder { layer_id: folder_layer_id.clone() }
         }));
         // Audio clip.
         assert!(refs.iter().any(|r| {
-            r.kind == AssetKind::Audio && r.path == PathBuf::from("/mnt/audio/loop1.wav")
+            r.kind == AssetKind::Audio && r.path == std::path::Path::new("/mnt/audio/loop1.wav")
         }));
     }
 
@@ -776,7 +776,7 @@ mod tests {
         // mesh_path → Mesh, from the embedded preset's def default.
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Mesh
-                && r.path == PathBuf::from("/mnt/models/azalea.glb")
+                && r.path == std::path::Path::new("/mnt/models/azalea.glb")
                 && matches!(&r.target, AssetTarget::StringParam { key, .. } if key == "mesh_path")
         }));
         // env_path is empty in the def and has no per-clip override → skipped.
@@ -803,9 +803,9 @@ mod tests {
 
         let refs = collect_asset_paths(&project);
         assert!(refs.iter().any(|r| {
-            r.kind == AssetKind::Mesh && r.path == PathBuf::from("/mnt/models/swap.glb")
+            r.kind == AssetKind::Mesh && r.path == std::path::Path::new("/mnt/models/swap.glb")
         }));
-        assert!(!refs.iter().any(|r| r.path == PathBuf::from("/mnt/models/azalea.glb")));
+        assert!(!refs.iter().any(|r| r.path == std::path::Path::new("/mnt/models/azalea.glb")));
     }
 
     #[test]
