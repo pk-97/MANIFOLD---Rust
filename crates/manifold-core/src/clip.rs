@@ -629,8 +629,10 @@ mod tests {
             "unset relative sibling must be omitted, got: {json}"
         );
 
-        let mut set = TimelineClip::default();
-        set.relative_audio_file_path = Some("Media/Audio/loop.wav".to_string());
+        let set = TimelineClip {
+            relative_audio_file_path: Some("Media/Audio/loop.wav".to_string()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&set).unwrap();
         assert!(json.contains("\"relativeAudioFilePath\""));
         let back: TimelineClip = serde_json::from_str(&json).unwrap();

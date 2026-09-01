@@ -29,8 +29,10 @@ fn temp_root(tag: &str) -> PathBuf {
 /// `model_file` string param, both pointing at the (now-broken) original
 /// absolute locations.
 fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
-    let mut project = Project::default();
-    project.project_name = "P2 Relink".to_string();
+    let mut project = Project {
+        project_name: "P2 Relink".to_string(),
+        ..Default::default()
+    };
 
     // Audio layer — the clip's path is broken, no relative sibling yet.
     let mut audio_layer = Layer::new_audio("Audio".into(), 0);
