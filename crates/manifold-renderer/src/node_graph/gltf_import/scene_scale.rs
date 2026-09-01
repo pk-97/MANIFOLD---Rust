@@ -75,6 +75,15 @@ pub(super) const FOCUS_MULTIPLIER: f32 = 4.0;
 /// keeping fine control in the near half.
 pub(super) const LIGHT_RANGE_MULTIPLIER: f32 = 4.0;
 
+/// F-stop slider range (`node.camera_lens`) top multiplier (BUG-bdwd):
+/// `0.5..max(32, 64·radius)`. The radius multiplier is needed because the
+/// migration multiplies stored f_stops by the scene radius (look-preserving
+/// — blur ∝ world_to_mm/f_stop, so f_stop×R at world_to_mm=1000/R keeps the
+/// image identical); a huge scene's migrated values (up to f/64·R) must stay
+/// on-slider. 64 is the generic band's top, so unit-scale scenes keep the
+/// CinematicScene default band exactly.
+pub(super) const F_STOP_MAX_MULTIPLIER: f32 = 64.0;
+
 /// Camera-framing geometry for the synthesized orbit camera, derived from
 /// the import bbox. Computed once at the top of `build_import_graph` and
 /// shared by every placement decision below it (camera node params, lens
@@ -187,6 +196,8 @@ impl Framing {
 /// - `node.transform_3d` / `node.light` `pos_*` / `aim_*` → ±2·radius
 /// - `node.light` `range` → 0.01..4·radius
 /// - `node.camera_lens` `focus_distance` → 0..4·radius
+/// - `node.camera_lens` `f_stop` → 0.5..max(32, 64·radius) (BUG-bdwd — the
+///   scene-derived DoF aperture band; see [`F_STOP_MAX_MULTIPLIER`])
 ///
 /// Each override is a range-only edit: `default_value` is never moved (the
 /// `.min`/`.max` widen rule only guarantees the range still CONTAINS the
@@ -206,6 +217,11 @@ pub(super) fn apply_scene_ranges(
     // Min pinned at 0.01, the primitive's own range floor — the falloff
     // half-distance never meaningfully goes smaller on a healthy scene.
     let light_range = (0.01, LIGHT_RANGE_MULTIPLIER * r);
+    // Scene-relative f-stop band. 0.5 is the lens's photographic floor; the
+    // top is 32 (the default band) or 64·radius for a larger scene — a
+    // scene-derived f/64+ turns the huge scenes that used to need absurd
+    // f-stops into on-slider values (migrated projects carry f_stop × R).
+    let f_stop_range = (0.5, (32.0f32).max(F_STOP_MAX_MULTIPLIER * r));
 
     for spec in params.iter_mut() {
         // Enum/toggle/whole-number sliders are index or label spaces, not
@@ -231,6 +247,7 @@ pub(super) fn apply_scene_ranges(
             }
             "node.light" if param.as_str() == "range" => Some(light_range),
             "node.camera_lens" if param.as_str() == "focus_distance" => Some(focus),
+            "node.camera_lens" if param.as_str() == "f_stop" => Some(f_stop_range),
             _ => None,
         };
         let Some((new_min, new_max)) = new_range else {

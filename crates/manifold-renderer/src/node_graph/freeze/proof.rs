@@ -1028,10 +1028,11 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     set_by_node_id(&mut fused_graph, "lens", "focus_distance", focus_distance);
     set_by_node_id(&mut fused_graph, "lens", "f_stop", f_stop);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
-    // coc_from_depth has one exposed param (max_radius) but this fixture
-    // leaves it at its default on both sides, so no retarget lookup is
-    // needed here beyond confirming the field exists (parity with I6's
-    // pattern of driving the fused node's port-shadow through `retarget`).
+    // coc_from_depth has two params (max_radius, world_to_mm) but this
+    // fixture leaves them at their defaults on both sides, so no retarget
+    // lookup is needed here beyond confirming the field exists (parity with
+    // I6's pattern of driving the fused node's port-shadow through
+    // `retarget`).
     let _ = retarget;
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");

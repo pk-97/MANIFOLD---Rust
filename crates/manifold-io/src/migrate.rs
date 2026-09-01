@@ -123,6 +123,19 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.13.0".to_string());
     }
 
+    // v1.13.0 -> v1.14.0: BUG-bdwd — calibrate stored CoC graphs to their
+    // scene scale. `node.coc_from_depth` gained a `world_to_mm` param
+    // (imported scenes stamp 1000/scene_radius); this rung carries existing
+    // projects across: graphs with a coc node + sceneBounds get
+    // world_to_mm = 1000/R and every stored f_stop × R (look-preserving);
+    // everything else is a byte-identical passthrough.
+    if is_version_less_than(&version, "1.14.0") {
+        crate::migrations::scene_scale_coc_v1140::migrate(&mut root);
+        // Literal "1.14.0" — see the "1.11.0" rung above for why this must
+        // NOT be `CURRENT_PROJECT_VERSION`.
+        root["projectVersion"] = Value::String("1.14.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

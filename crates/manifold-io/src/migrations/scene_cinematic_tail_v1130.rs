@@ -554,7 +554,12 @@ mod tests {
     #[test]
     fn layer_graph_gains_full_tail_with_inserted_lens() {
         let v = migrated_fixture();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.13.0"));
+        // The full ladder now runs to CURRENT_PROJECT_VERSION (the 1.14.0
+        // scene-scale CoC rung follows this one).
+        assert_eq!(
+            v["projectVersion"].as_str(),
+            Some(manifold_core::project::CURRENT_PROJECT_VERSION)
+        );
         let g = layer_graph(&v);
         for ty in [COC, COC_DILATE, BOKEH, MOTION_BLUR, CAMERA_LENS] {
             assert!(has_type(g, ty), "migrated layer graph must contain {ty}");

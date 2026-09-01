@@ -30,16 +30,18 @@
 // it never becomes a GPU binding, which is what lets this atom fuse with a
 // pointwise neighbour instead of being a permanent boundary (P0/D7).
 //
-// PARAMS: [max_radius]. DERIVED_UNIFORMS: [fov_y, near, far, focus_distance,
-// f_stop]. Matches coc_from_depth.wgsl (the hand parity oracle).
+// PARAMS: [max_radius, world_to_mm]. DERIVED_UNIFORMS: [fov_y, near, far,
+// focus_distance, f_stop]. Matches coc_from_depth.wgsl (the hand parity
+// oracle). `world_to_mm` calibrates the mm-per-world-unit reading for the
+// scene at hand (BUG-bdwd); default 1000.0 reproduces the old behavior.
 const SENSOR_H_MM: f32 = 24.0;
-const WORLD_TO_MM: f32 = 1000.0;
 
 fn body(
     c_depth: vec4<f32>,
     uv: vec2<f32>,
     dims: vec2<f32>,
     max_radius: f32,
+    world_to_mm: f32,
     fov_y: f32,
     near: f32,
     far: f32,
@@ -48,8 +50,8 @@ fn body(
 ) -> vec4<f32> {
     let f_mm = SENSOR_H_MM / (2.0 * tan(fov_y * 0.5));
     let a_mm = f_mm / f_stop;
-    let d_mm = linearize_depth(c_depth.r, near, far) * WORLD_TO_MM;
-    let s_mm = focus_distance * WORLD_TO_MM;
+    let d_mm = linearize_depth(c_depth.r, near, far) * world_to_mm;
+    let s_mm = focus_distance * world_to_mm;
     let signed_delta = d_mm - s_mm;
     let coc_mm = a_mm * f_mm * signed_delta / (d_mm * max(s_mm - f_mm, 1.0));
     let coc_px = clamp(abs(coc_mm) / SENSOR_H_MM * dims.y, 0.0, max_radius);
