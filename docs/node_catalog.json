@@ -3372,9 +3372,15 @@
             "64"
           ],
           "type": "float"
+        },
+        {
+          "default": "1000",
+          "label": "World To Mm",
+          "name": "world_to_mm",
+          "type": "float"
         }
       ],
-      "purpose": "Physically-based circle-of-confusion from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); A_mm = f_mm/f_stop; D_mm = linearize_depth(raw_depth, near, far) * 1000; S_mm = focus_distance * 1000; signed = D_mm - S_mm; coc_mm = A_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_px = clamp(|coc_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_px / max_radius (the [0,1] magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the magnitude zero everywhere. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
+      "purpose": "Physically-based circle-of-confusion from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); A_mm = f_mm/f_stop; D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_mm = A_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_px = clamp(|coc_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_px / max_radius (the [0,1] magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the magnitude zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens.",

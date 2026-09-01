@@ -63,7 +63,7 @@ impl EmbeddedPreset {
 /// The schema version this build writes and is the newest it can open. Bumped
 /// by every migration step that changes on-disk field shape; the migrate chain's
 /// final target and the forward-compat guard both read it. Single source of truth.
-pub const CURRENT_PROJECT_VERSION: &str = "1.13.0";
+pub const CURRENT_PROJECT_VERSION: &str = "1.14.0";
 
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]

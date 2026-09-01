@@ -7,6 +7,7 @@ use std::cell::RefCell;
 
 pub mod param_storage_v14;
 pub mod scene_cinematic_tail_v1130;
+pub mod scene_scale_coc_v1140;
 pub mod scene_transform_v1120;
 
 thread_local! {

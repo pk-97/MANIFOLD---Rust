@@ -661,7 +661,13 @@ pub(super) fn build_import_graph(
     // lives in `cinematic_tail.rs` (god-file ceiling); the lens node above
     // feeds both the DoF chain and motion_blur so depth-of-field and
     // shutter read the SAME lens the exposure and FOV card knob surface.
-    let tail = super::cinematic_tail::build_cinematic_tail(&mut fresh_id);
+    //
+    // The scene radius is derived once here and shared: the tail's CoC node
+    // gets its `world_to_mm = 1000/radius` calibration (BUG-bdwd) from it,
+    // and the P1+P2 range stamp below reuses the same `SceneScale` (the
+    // slider-width multiplier). Same bbox math, both consumers.
+    let scene_scale = super::scene_scale::SceneScale::from_bbox(summary.bbox_min, summary.bbox_max);
+    let tail = super::cinematic_tail::build_cinematic_tail(&mut fresh_id, scene_scale.radius);
     let dof_group_id = tail.dof_group_id;
     let motion_blur_id = tail.motion_blur_id;
     let bokeh_id = tail.bokeh_id;
@@ -833,7 +839,6 @@ pub(super) fn build_import_graph(
     // the generic primitive defaults for the scene's position / focus /
     // light-range sliders, so a model at any scale gets usable bands. See
     // `scene_scale.rs` for the per-param multipliers and their reasoning.
-    let scene_scale = super::scene_scale::SceneScale::from_bbox(summary.bbox_min, summary.bbox_max);
     super::scene_scale::apply_scene_ranges(
         &mut card_params,
         &card_bindings,

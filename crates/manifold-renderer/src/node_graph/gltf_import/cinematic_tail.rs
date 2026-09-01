@@ -43,7 +43,16 @@ pub(super) struct CinematicTail {
 /// on close-up scenes. Off-by-default also preserves every pre-tail
 /// project's look). The caller wires the shared lens in, so depth-of-field
 /// and shutter read the SAME lens the exposure and FOV card knob surface.
-pub(super) fn build_cinematic_tail(fresh_id: &mut impl FnMut() -> u32) -> CinematicTail {
+///
+/// `scene_radius` is the imported bbox bounding-sphere radius (BUG-bdwd):
+/// the CoC node gets `world_to_mm = 1000/radius` so the scene's model units
+/// read as real meter-scale distances in the lens physics (a unit-scale
+/// scene reads 1 unit = 1 meter, the old constant — a 0.01-unit scene reads
+/// 1 unit = 100m; see `docs/CINEMATIC_POST_DESIGN.md` D1's `WORLD_TO_MM`).
+pub(super) fn build_cinematic_tail(
+    fresh_id: &mut impl FnMut() -> u32,
+    scene_radius: f32,
+) -> CinematicTail {
     let mut dof_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut dof_wires: Vec<EffectGraphWire> = Vec::new();
     let dof_in_id = fresh_id();
@@ -51,6 +60,12 @@ pub(super) fn build_cinematic_tail(fresh_id: &mut impl FnMut() -> u32) -> Cinema
     let coc_id = fresh_id();
     let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
     coc_node.params.insert("max_radius".to_string(), float(24.0));
+    // world_to_mm = 1000 / scene_radius, floored so a tiny/degenerate bbox
+    // can't produce an absurd calibration (>100,000 mm/unit). This is the
+    // plumbing that makes musical f-stops work at any scene scale.
+    coc_node
+        .params
+        .insert("world_to_mm".to_string(), float((1000.0 / scene_radius).min(100_000.0)));
     dof_nodes.push(coc_node);
     let coc_dilate_id = fresh_id();
     dof_nodes.push(plain_node(

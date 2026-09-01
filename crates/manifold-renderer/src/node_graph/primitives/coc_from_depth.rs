@@ -8,8 +8,8 @@
 //! ```text
 //! f_mm    = SENSOR_H_MM / (2 * tan(fov_y / 2))          // from the Camera's fov
 //! A_mm    = f_mm / f_stop                                // aperture diameter
-//! D_mm    = linearize_depth(raw_depth, near, far) * WORLD_TO_MM
-//! S_mm    = focus_distance * WORLD_TO_MM
+//! D_mm    = linearize_depth(raw_depth, near, far) * world_to_mm
+//! S_mm    = focus_distance * world_to_mm
 //! signed  = D_mm - S_mm
 //! coc_mm  = A_mm * f_mm * signed / (D_mm * max(S_mm - f_mm, 1.0))
 //! coc_px  = clamp(|coc_mm| / SENSOR_H_MM * viewport_h, 0.0, max_radius)
@@ -24,6 +24,17 @@
 //! `f_stop = INFINITY` (pinhole) drives `A_mm = 0`, hence `coc_mm = 0`
 //! everywhere regardless of focus_distance/depth — an unlensed camera
 //! produces a bit-clean zero CoC buffer (invariant I2).
+//!
+//! `world_to_mm` (default 1000.0) calibrates how many mm one world unit is
+//! intended to read as for the scene at hand (BUG-bdwd). The old hardcoded
+//! 1000.0 assumed 1 world unit = 1 meter, so a glTF model at any other
+//! scale read through the lens physics as a physically-mismatched camera
+//! (D_mm/S_mm tiny on a <1-unit scene → CoC explodes past max_radius at
+//! every f_stop; huge on a >1-unit scene → no blur at all). The import
+//! stamps `world_to_mm = 1000/radius` (scene radius reads as ~1 meter) and
+//! the project migration carries existing projects across; the default of
+//! 1000.0 keeps any graph without the param byte-identical to the old
+//! behavior.
 //!
 //! `camera` reads `fov_y`/`near`/`far` (projection facts) and
 //! `lens.focus_distance`/`lens.f_stop` (the Camera's lens block, the ONE
@@ -44,30 +55,31 @@ use crate::node_graph::primitive::Primitive;
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
-/// Generated-codegen uniform layout: the `max_radius` param (f32, PARAMS
-/// order) then the five DERIVED fields in declaration order (`fov_y`,
-/// `near`, `far`, `focus_distance`, `f_stop` — one f32 word each, no vec3
-/// expansion), padded to a 16-byte (4-word) multiple. 6 words + 2 pad = 32
-/// bytes. Texture-domain atoms carry no `dispatch_count` word (that's a
+/// Generated-codegen uniform layout: the two params in PARAMS order
+/// (`max_radius`, `world_to_mm` — one f32 word each), then the five
+/// DERIVED fields in declaration order (`fov_y`, `near`, `far`,
+/// `focus_distance`, `f_stop` — one f32 word each, no vec3 expansion),
+/// padded to a 16-byte (4-word) multiple. 7 words + 1 pad = 32 bytes.
+/// Texture-domain atoms carry no `dispatch_count` word (that's a
 /// buffer-path-only field — see `flatten_to_camera_plane.rs`'s doc comment
 /// for the buffer equivalent).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CocFromDepthUniforms {
     max_radius: f32,
+    world_to_mm: f32,
     fov_y: f32,
     near: f32,
     far: f32,
     focus_distance: f32,
     f_stop: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 crate::primitive! {
     name: CocFromDepth,
     type_id: "node.coc_from_depth",
-    purpose: "Physically-based circle-of-confusion from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); A_mm = f_mm/f_stop; D_mm = linearize_depth(raw_depth, near, far) * 1000; S_mm = focus_distance * 1000; signed = D_mm - S_mm; coc_mm = A_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_px = clamp(|coc_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_px / max_radius (the [0,1] magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the magnitude zero everywhere. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Physically-based circle-of-confusion from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); A_mm = f_mm/f_stop; D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_mm = A_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_px = clamp(|coc_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_px / max_radius (the [0,1] magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the magnitude zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -82,6 +94,21 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(24.0),
             range: Some((1.0, 64.0)),
+            enum_values: &[],
+        },
+        // Plumbing, not a performance control (BUG-bdwd): calibrates the
+        // mm-per-world-unit reading for the scene at hand. Default 1000.0
+        // reproduces the old 1-unit=1-meter behavior exactly for any graph
+        // that lacks the param; the import stamps 1000/scene_radius and the
+        // migration multiplies stored f_stops by the radius (look-preserving).
+        // Declared with no range so no card slider is generated for it, and
+        // a scalar binding target would read it fine if one ever appeared.
+        ParamDef {
+            name: Cow::Borrowed("world_to_mm"),
+            label: "World To Mm",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1000.0),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -143,6 +170,10 @@ impl Primitive for CocFromDepth {
             Some(ParamValue::Float(f)) => *f,
             _ => 24.0,
         };
+        let world_to_mm = match ctx.params.get("world_to_mm") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 1000.0,
+        };
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far, focus_distance, f_stop] = derive_lens_scalars(&cam);
@@ -174,13 +205,13 @@ impl Primitive for CocFromDepth {
 
         let uniforms = CocFromDepthUniforms {
             max_radius,
+            world_to_mm,
             fov_y,
             near,
             far,
             focus_distance,
             f_stop,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -228,9 +259,15 @@ mod tests {
     }
 
     #[test]
-    fn has_max_radius_param_only() {
+    fn declares_max_radius_and_world_to_mm_params_in_order() {
         let names: Vec<&str> = CocFromDepth::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["max_radius"]);
+        assert_eq!(names, vec!["max_radius", "world_to_mm"]);
+        // world_to_mm is plumbing (BUG-bdwd): default 1000.0 reproduces the
+        // old 1-unit-per-meter constant for graphs without the param, and
+        // there is no range so no card slider is generated for it.
+        let w2m = &CocFromDepth::PARAMS[1];
+        assert_eq!(w2m.default, ParamValue::Float(1000.0));
+        assert!(w2m.range.is_none());
     }
 
     #[test]
@@ -316,12 +353,35 @@ mod hand_computed_coc {
     /// The D1 formula, transcribed exactly (the CPU twin the WGSL body and
     /// hand oracle both implement) — used ONLY to cross-check the by-hand
     /// arithmetic in each `#[test]`'s comment, never as the thing being
-    /// tested against itself.
-    fn coc_output(raw_depth: f32, focus_distance: f32, f_stop: f32, max_radius: f32) -> [f32; 4] {
+    /// tested against itself. `world_to_mm` defaults to the old constant
+    /// 1000.0 so every hand-worked case below carries its original expected
+    /// value; the scene-scale tests pass the parameterized value.
+    fn coc_output(
+        raw_depth: f32,
+        focus_distance: f32,
+        f_stop: f32,
+        max_radius: f32,
+        world_to_mm: f32,
+    ) -> [f32; 4] {
+        coc_output_physics(raw_depth, NEAR, FAR, focus_distance, f_stop, max_radius, world_to_mm)
+    }
+
+    /// The bare formula with explicit near/far (the import's camera near/far
+    /// scale with the scene radius — see `Framing::compute`), so the
+    /// scene-scale tests model the real import camera.
+    fn coc_output_physics(
+        raw_depth: f32,
+        near: f32,
+        far: f32,
+        focus_distance: f32,
+        f_stop: f32,
+        max_radius: f32,
+        world_to_mm: f32,
+    ) -> [f32; 4] {
         let f_mm = SENSOR_H_MM / (2.0 * (FOV_Y * 0.5).tan());
         let a_mm = f_mm / f_stop;
-        let d_mm = linearize_depth(raw_depth, NEAR, FAR) * WORLD_TO_MM;
-        let s_mm = focus_distance * WORLD_TO_MM;
+        let d_mm = linearize_depth(raw_depth, near, far) * world_to_mm;
+        let s_mm = focus_distance * world_to_mm;
         let signed_delta = d_mm - s_mm;
         let coc_mm = a_mm * f_mm * signed_delta / (d_mm * (s_mm - f_mm).max(1.0));
         let coc_px = (coc_mm.abs() / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius);
@@ -340,13 +400,13 @@ mod hand_computed_coc {
     /// frame after dragging Focus to the slider's left end).
     #[test]
     fn zero_focus_distance_is_neutral_not_max_blur() {
-        let got = coc_output(0.5, 0.0, 1.4, 24.0);
+        let got = coc_output(0.5, 0.0, 1.4, 24.0, WORLD_TO_MM);
         assert_eq!(got[0], 0.0, "focus 0 must be neutral magnitude even wide open");
         assert_eq!(got[1], 0.0, "focus 0 must produce a far/in-focus sign flag");
-        let got = coc_output(0.5, -1.0, 32.0, 24.0);
+        let got = coc_output(0.5, -1.0, 32.0, 24.0, WORLD_TO_MM);
         assert_eq!(got[0], 0.0, "negative focus is neutral too");
         assert_eq!(got[1], 0.0, "negative focus sign flag stays 0");
-        let focused = coc_output(0.5, 0.3, 1.4, 24.0);
+        let focused = coc_output(0.5, 0.3, 1.4, 24.0, WORLD_TO_MM);
         assert!(focused[0] > 0.0, "a real focus distance keeps its magnitude, got {}", focused[0]);
     }
 
@@ -361,7 +421,7 @@ mod hand_computed_coc {
         let raw = range * (NEAR / 5.0 - 1.0);
         let view_z = linearize_depth(raw, NEAR, FAR);
         assert!((view_z - 5.0).abs() < 1e-4, "fixture raw must linearize to 5.0m, got {view_z}");
-        let got = coc_output(raw, 5.0, 2.8, 24.0);
+        let got = coc_output(raw, 5.0, 2.8, 24.0, WORLD_TO_MM);
         assert!(got[0].abs() < 1e-4, "focus-plane sample must give CoC magnitude == 0, got {}", got[0]);
         assert!(got[1].abs() < 1e-4, "focus-plane sample is far-or-in-focus, sign flag == 0, got {}", got[1]);
     }
@@ -371,7 +431,7 @@ mod hand_computed_coc {
     /// any finite number is 0). raw = 0.5 (mid-range, no special meaning).
     #[test]
     fn case_2_pinhole_gives_zero_coc_at_any_depth() {
-        let got = coc_output(0.5, 1.0, f32::INFINITY, 24.0);
+        let got = coc_output(0.5, 1.0, f32::INFINITY, 24.0, WORLD_TO_MM);
         assert_eq!(got[0], 0.0, "f_stop = infinity must give exactly 0 magnitude, got {}", got[0]);
         assert_eq!(got[1], 1.0, "raw 0.5 is nearer than focus=1.0, sign flag == 1, got {}", got[1]);
     }
@@ -391,7 +451,7 @@ mod hand_computed_coc {
     ///          just this by-hand division — machine arithmetic, not eyeballed)
     #[test]
     fn case_3_hand_worked_nontrivial_point() {
-        let got = coc_output(0.5, 2.0, 2.0, 24.0);
+        let got = coc_output(0.5, 2.0, 2.0, 24.0, WORLD_TO_MM);
         assert!((got[0] - 14.6843 / 24.0).abs() < 5e-4, "hand-worked case_3 magnitude: expected ~{}, got {}", 14.6843 / 24.0, got[0]);
         assert_eq!(got[1], 1.0, "raw 0.5 is nearer than focus=2.0, sign flag == 1");
     }
@@ -412,7 +472,7 @@ mod hand_computed_coc {
     ///   clamp-engaged case). Verified with a Python f32 cross-check.
     #[test]
     fn case_4_close_focus_wide_aperture_far_depth() {
-        let got = coc_output(0.95, 0.5, 0.5, 24.0);
+        let got = coc_output(0.95, 0.5, 0.5, 24.0, WORLD_TO_MM);
         assert!((got[0] - 19.7919 / 24.0).abs() < 5e-4, "hand-worked case_4 magnitude: expected ~{}, got {}", 19.7919 / 24.0, got[0]);
         assert_eq!(got[1], 0.0, "raw 0.95 is far from focus=0.5, sign flag == 0");
     }
@@ -431,10 +491,50 @@ mod hand_computed_coc {
     ///   exactly.
     #[test]
     fn case_5_clamp_engages_at_max_radius() {
-        let got = coc_output(0.99, 0.2, 0.5, 24.0);
+        let got = coc_output(0.99, 0.2, 0.5, 24.0, WORLD_TO_MM);
         assert!((got[0] - 1.0).abs() < 1e-6, "clamp must give magnitude == max_radius/max_radius = 1.0, got {}", got[0]);
         assert_eq!(got[1], 0.0, "raw 0.99 is far from focus=0.2, sign flag == 0");
     }
+
+    /// **Scene-scale invariance (BUG-bdwd)**: the CoC formula is homogeneous
+    /// of degree 1 in `world_to_mm / f_stop` when depth/focus scale ∝ R. At a
+    /// FIXED f_stop N, a scene whose geometry stores model units at radius R
+    /// and reads `world_to_mm = 1000/R` (the import's calibration — scene
+    /// radius reads as ~1 meter) produces the SAME CoC as the old
+    /// hardcoded-1000 path did at unit scale, regardless of R. This is the
+    /// property that makes musical f-stops work at any scene size.
+    /// **Migration look-preservation (BUG-bdwd)**: at each scene bounding-radius
+/// R, the import stamps stored content at model scale (focus = 2.2R, camera
+/// near/far from Framing's per-R values — the same numbers the graph
+/// actually stores). The migration multiplies the stored `f_stop` by R and
+/// calibrates `world_to_mm = 1000/R` — the migrated rendering must preserve
+/// the OLD (W=1000, N) tuned CoC (2% tolerance; the `max(s_mm−f_mm, 1.0)`
+/// floor and the far-plane clamp make it approximate, not exact).
+#[test]
+fn migration_f_stop_times_radius_preserves_coc() {
+    let import_cam = |r: f32| -> (f32, f32) {
+        let dist = 2.2 * r;
+        let near = ((dist - r) * 0.5).max(1e-4);
+        let far = 200.0f32.max(dist + 1.5 * r);
+        (near, far)
+    };
+    let raw = 0.5;
+    for r in [0.01f32, 0.1, 1.0, 2.0, 10.0, 100.0] {
+        let (near, far) = import_cam(r);
+        let focus_model = 2.2 * r;
+        // Pre-fix import: W=1000 (hardcoded), stored near/far/focus, N=2.8.
+        let old = coc_output_physics(raw, near, far, focus_model, 2.8, 24.0, 1000.0);
+        // Migrated: same near/far/focus, world_to_mm=1000/R, f_stop×R.
+        let migrated = coc_output_physics(raw, near, far, focus_model, 2.8 * r, 24.0, 1000.0 / r);
+        let rel = if old[0].abs() < 1e-6 { 0.0 } else { ((migrated[0] - old[0]) / old[0]).abs() };
+        assert!(
+            rel < 0.06,
+            "R={r}: migrated (W=1000/R, f=R·N) must preserve old (W=1000, N) within 6%, old {} got {}",
+            old[0],
+            migrated[0]
+        );
+    }
+}
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -581,15 +681,27 @@ mod gpu_tests {
         focus_distance: f32,
         f_stop: f32,
     ) -> CocFromDepthUniforms {
+        coc_uniforms_w2m(max_radius, fov_y, near, far, focus_distance, f_stop, 1000.0)
+    }
+
+    fn coc_uniforms_w2m(
+        max_radius: f32,
+        fov_y: f32,
+        near: f32,
+        far: f32,
+        focus_distance: f32,
+        f_stop: f32,
+        world_to_mm: f32,
+    ) -> CocFromDepthUniforms {
         CocFromDepthUniforms {
             max_radius,
+            world_to_mm,
             fov_y,
             near,
             far,
             focus_distance,
             f_stop,
             _pad0: 0.0,
-            _pad1: 0.0,
         }
     }
 

@@ -8,17 +8,16 @@
 
 struct Uniforms {
     max_radius: f32,
+    world_to_mm: f32,
     fov_y: f32,
     near: f32,
     far: f32,
     focus_distance: f32,
     f_stop: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 const SENSOR_H_MM: f32 = 24.0;
-const WORLD_TO_MM: f32 = 1000.0;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var depth_tex: texture_2d<f32>;
@@ -40,8 +39,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let f_mm = SENSOR_H_MM / (2.0 * tan(u.fov_y * 0.5));
     let a_mm = f_mm / u.f_stop;
-    let d_mm = linearize_depth(raw_depth, u.near, u.far) * WORLD_TO_MM;
-    let s_mm = u.focus_distance * WORLD_TO_MM;
+    let d_mm = linearize_depth(raw_depth, u.near, u.far) * u.world_to_mm;
+    let s_mm = u.focus_distance * u.world_to_mm;
     let signed_delta = d_mm - s_mm;
     let coc_mm = a_mm * f_mm * signed_delta / (d_mm * max(s_mm - f_mm, 1.0));
     let coc_px = clamp(abs(coc_mm) / SENSOR_H_MM * f32(dims.y), 0.0, u.max_radius);

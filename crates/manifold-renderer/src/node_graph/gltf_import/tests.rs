@@ -6482,6 +6482,64 @@ fn scene_light_range_scales_and_keeps_zero_one_floor() {
     assert!(range_spec.default_value >= range_spec.min && range_spec.default_value <= range_spec.max);
 }
 
+/// BUG-bdwd: an import's CoC node carries `world_to_mm = 1000/scene_radius`
+/// (the scene reads as real meter-scale distances in the lens physics) and
+/// no card slider is stamped for it — it is plumbing. The f_stop card
+/// slider range is scene-derived (`0.5..max(32, 64·radius)`) so a migrated
+/// project's `f_stop × R` values stay on-slider.
+#[test]
+fn import_stamps_world_to_mm_and_scene_f_stop_range() {
+    let (def, _) = scene_import_with_half_extent(5.0);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let r = super::scene_scale::SceneScale::from_bbox([-5.0; 3], [5.0; 3]).radius;
+
+    // The coc node lives inside the dof group; find it by type recursively.
+    fn find_coc(
+        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+    ) -> Option<&manifold_core::effect_graph_def::EffectGraphNode> {
+        nodes
+            .iter()
+            .find(|n| n.type_id == "node.coc_from_depth")
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .find_map(|n| n.group.as_ref().and_then(|g| find_coc(&g.nodes)))
+            })
+    }
+    let coc = find_coc(&def.nodes)
+        .expect("import must carry a coc_from_depth node (inside the dof group)");
+    let w2m = match coc.params.get("world_to_mm") {
+        Some(SerializedParamValue::Float { value }) => *value,
+        other => panic!("coc world_to_mm must be a stamped float, got {other:?}"),
+    };
+    assert!(
+        (w2m - 1000.0 / r).abs() < 1e-3,
+        "coc world_to_mm must be 1000/radius, got {w2m}, radius {r}"
+    );
+    assert!(w2m <= 100_000.0, "coc world_to_mm must be floored at 100,000, got {w2m}");
+
+    // No card slider surfaced for world_to_mm (plumbing, not a control).
+    assert!(
+        !meta
+            .params
+            .iter()
+            .any(|p| p.id.starts_with(&coc.id.to_string()) && p.id.contains("world_to_mm")),
+        "world_to_mm must not be stamped as a card slider"
+    );
+
+    // f_stop card range is scene-derived, one-sided top.
+    let lens_list: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.camera_lens").collect();
+    let lens_id = lens_list[0].id;
+    let fstop = stamped_card_param(meta, lens_id, "f_stop");
+    assert_eq!(fstop.min, 0.5, "f_stop band keeps the photographic 0.5 floor");
+    assert!(
+        (fstop.max - (32.0f32).max(64.0 * r)).abs() < 1e-3,
+        "f_stop band top must be max(32, 64·radius), got {} radius {r}",
+        fstop.max
+    );
+    assert!(fstop.default_value >= fstop.min && fstop.default_value <= fstop.max);
+}
+
 /// BUG-upfq P1: merged object transform sliders get the scene-derived range
 /// too (blanket per-object cards) — the merge path stamps them from the
 /// incoming bbox, not the existing scene's.
