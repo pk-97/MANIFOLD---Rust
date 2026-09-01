@@ -43,6 +43,7 @@ mod merge;
 mod object_group;
 mod report;
 mod scene;
+mod scene_scale;
 #[cfg(test)]
 mod card_precedence_tests;
 #[cfg(test)]

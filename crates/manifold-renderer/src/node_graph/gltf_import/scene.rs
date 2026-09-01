@@ -877,6 +877,19 @@ pub(super) fn build_import_graph(
     // bucket list (generators carry no category validation; see that
     // module's doc comment — "Text & Media" on `MriVolume`, a generator,
     // already isn't in that list either).
+
+    // BUG-upfq P1+P2: stamp scene-derived slider RANGES (never values) over
+    // the generic primitive defaults for the scene's position / focus /
+    // light-range sliders, so a model at any scale gets usable bands. See
+    // `scene_scale.rs` for the per-param multipliers and their reasoning.
+    let scene_scale = super::scene_scale::SceneScale::from_bbox(summary.bbox_min, summary.bbox_max);
+    super::scene_scale::apply_scene_ranges(
+        &mut card_params,
+        &card_bindings,
+        &super::scene_scale::node_types_by_id(&nodes),
+        scene_scale,
+    );
+
     let metadata = PresetMetadata {
         id: PresetTypeId::from_string(sanitized),
         display_name: stem.clone(),

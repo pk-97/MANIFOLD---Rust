@@ -410,6 +410,18 @@ pub(super) fn merge_import_into_graph(
         ));
     }
 
+    // BUG-upfq P1+P2: scene-derived slider ranges on the merged objects'
+    // transform cards (same display-only override as `build_import_graph`).
+    // The merge keyed on `new_nodes`, so target the scale the incoming
+    // asset parses to, not the existing scene's.
+    let scene_scale = super::scene_scale::SceneScale::from_bbox(summary.bbox_min, summary.bbox_max);
+    super::scene_scale::apply_scene_ranges(
+        &mut new_card_params,
+        &new_card_bindings,
+        &super::scene_scale::node_types_by_id(&new_nodes),
+        scene_scale,
+    );
+
     Ok(MergePlan {
         render_scene_node_id,
         new_nodes,
