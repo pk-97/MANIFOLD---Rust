@@ -6330,3 +6330,151 @@ fn duck_import_adds_extra_camera_card_default_camera_unchanged() {
         "lens must still read from the synthesized orbit camera, not the imported one"
     );
 }
+
+// -----------------------------------------------------------------
+// BUG-upfq P1+P2 — scene-derived slider ranges at import
+// -----------------------------------------------------------------
+
+/// Build the import graph for a synthetic summary whose bbox is a cube of
+/// half-extent `half_extent` centered at the origin. Uses the full importer
+/// (`build_import_graph`), which is where the P1/P2 range override runs.
+fn scene_import_with_half_extent(half_extent: f32) -> (manifold_core::effect_graph_def::EffectGraphDef, ImportReport) {
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "Hero", 500)],
+        bbox_min: [-half_extent, -half_extent, -half_extent],
+        bbox_max: [half_extent, half_extent, half_extent],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_scene_scale.glb");
+    build_import_graph(&summary, path).expect("build scene-scale import graph")
+}
+
+/// Find the stamped card param for `node_id`+`param` on an import def.
+fn stamped_card_param<'a>(
+    meta: &'a manifold_core::effect_graph_def::PresetMetadata,
+    node_id: u32,
+    param: &str,
+) -> &'a manifold_core::effect_graph_def::ParamSpecDef {
+    let id = format!("{node_id}_{param}");
+    meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| {
+        panic!("no stamped card param `{id}`; have: {:?}", meta.params.iter().map(|p| &p.id).collect::<Vec<_>>())
+    })
+}
+
+/// BUG-upfq P1: an import's light / focus / light-range slider ranges must
+/// scale with the bbox, never stay at the primitive's generic defaults.
+/// Uses half-extents 5 and 50 — the import's fixed sun rig (5, 2, 3) sits
+/// INSIDE both derived position bands (±2·radius), so neither band gets the
+/// widen-for-default distortion and the pure derived ratio is exactly 10.
+#[test]
+fn scene_range_scales_with_bbox_size() {
+    assert!(scene_derived_range_ratio_matches_bbox(5.0, 50.0));
+}
+
+/// The workhorse assertion used by the small-vs-large range test.
+fn scene_derived_range_ratio_matches_bbox(small_half: f32, large_half: f32) -> bool {
+    let (small_def, _) = scene_import_with_half_extent(small_half);
+    let (large_def, _) = scene_import_with_half_extent(large_half);
+
+    let small_meta = small_def.preset_metadata.as_ref().unwrap();
+    let large_meta = large_def.preset_metadata.as_ref().unwrap();
+
+    let small_sun_id = small_def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
+    let large_sun_id = large_def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
+    let small_lens_id = small_def.nodes.iter().find(|n| n.type_id == "node.camera_lens").unwrap().id;
+    let large_lens_id = large_def.nodes.iter().find(|n| n.type_id == "node.camera_lens").unwrap().id;
+
+    let small_r = super::scene_scale::SceneScale::from_bbox([-small_half; 3], [small_half; 3]).radius;
+    let large_r = super::scene_scale::SceneScale::from_bbox([-large_half; 3], [large_half; 3]).radius;
+    assert!((large_r / small_r - 10.0).abs() < 1e-3, "bbox radius ratio must be exactly 10");
+
+    // Position slider (sun): ±2·radius, symmetric around 0.
+    let small_pos = stamped_card_param(small_meta, small_sun_id, "pos_x");
+    let large_pos = stamped_card_param(large_meta, large_sun_id, "pos_x");
+    assert!((small_pos.min - -2.0 * small_r).abs() < 1e-3, "small sun pos band is ±2·radius, got min {}", small_pos.min);
+    assert!((small_pos.max - 2.0 * small_r).abs() < 1e-3, "small sun pos band is ±2·radius, got max {}", small_pos.max);
+    assert!((large_pos.max - 2.0 * large_r).abs() < 1e-3, "large sun pos band is ±2·radius, got max {}", large_pos.max);
+    assert!((large_pos.min - -2.0 * large_r).abs() < 1e-3, "large sun pos band is ±2·radius, got min {}", large_pos.min);
+
+    // Focus distance: 0..4·radius, one-sided.
+    let small_focus = stamped_card_param(small_meta, small_lens_id, "focus_distance");
+    let large_focus = stamped_card_param(large_meta, large_lens_id, "focus_distance");
+    assert!(small_focus.min == 0.0, "focus band starts at the hyperfocal 0");
+    assert!((small_focus.max - 4.0 * small_r).abs() < 1e-3, "small focus band is 0..4·radius, got max {}", small_focus.max);
+    assert!((large_focus.max - 4.0 * large_r).abs() < 1e-3, "large focus band is 0..4·radius, got max {}", large_focus.max);
+    // Focus default is the framing distance (~2.2·radius) — inside 0..4·radius.
+    assert!(small_focus.default_value >= small_focus.min && small_focus.default_value <= small_focus.max);
+
+    true
+}
+
+/// BUG-upfq P1: the position slider default — the import-stamped value, not
+/// the primitive's generic 0.0 — is never moved by the range override, only
+/// the min/max metadata.
+#[test]
+fn scene_range_override_never_moves_defaults() {
+    let (def, _) = scene_import_with_half_extent(5.0);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let sun_id = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
+    let sun_node = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
+
+    let pos = stamped_card_param(meta, sun_id, "pos_x");
+    // Default stays whatever the import stamped on the sun node.
+    let stamped_default = match sun_node.params.get("pos_x") {
+        Some(SerializedParamValue::Float { value }) => *value,
+        other => panic!("sun pos_x must be a stamped float, got {other:?}"),
+    };
+    assert_eq!(pos.default_value, stamped_default, "default value must match the node's stamped value, not the primitive default (BUG-303)");
+}
+
+/// BUG-upfq P1: the light attenuation (`range`) slider scales with the
+/// bbox and keeps its primitive's 0.01 floor. The sun's shadow range is
+/// seeded at 1.5·radius — the band must contain it.
+#[test]
+fn scene_light_range_scales_and_keeps_zero_one_floor() {
+    let (def, _) = scene_import_with_half_extent(2.0);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let sun_id = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
+    let range_spec = stamped_card_param(meta, sun_id, "range");
+
+    let r = super::scene_scale::SceneScale::from_bbox([-2.0; 3], [2.0; 3]).radius;
+    assert!((range_spec.max - 4.0 * r).abs() < 1e-3, "light range max = 4·radius, got {}", range_spec.max);
+    assert_eq!(range_spec.min, 0.01, "light range min stays at the primitive's 0.01 floor");
+    // The sun's seeded shadow range (1.5·radius) must stay inside the slide band.
+    assert!(range_spec.default_value >= range_spec.min && range_spec.default_value <= range_spec.max);
+}
+
+/// BUG-upfq P1: merged object transform sliders get the scene-derived range
+/// too (blanket per-object cards) — the merge path stamps them from the
+/// incoming bbox, not the existing scene's.
+#[test]
+fn merge_stamps_scene_ranges_on_transform_cards() {
+    let target = scene_def_with_bbox_half_extent(1.0);
+    // Merge a 10×-larger asset — its transform pos slider must widen 10×.
+    let summary = merge_summary(vec![full_material(0, "Big", 100)], 10.0);
+    let path = std::path::Path::new("/tmp/synthetic_merge_scene_range.glb");
+    let plan = merge_import_into_graph(&target, &summary, path).expect("merge");
+
+    let transformed = plan
+        .new_nodes
+        .iter()
+        .find_map(|n| n.group.as_ref())
+        .and_then(|g| g.nodes.iter().find(|n| n.type_id == "node.transform_3d"))
+        .expect("merged object has a transform_3d");
+    let r = super::scene_scale::SceneScale::from_bbox([-10.0; 3], [10.0; 3]).radius;
+    let pos = plan
+        .new_card_params
+        .iter()
+        .find(|p| p.id == format!("{}_pos_x", transformed.id))
+        .expect("merged object's transform pos_x card param");
+    assert_eq!(pos.default_value, 0.0);
+    assert!((pos.max - 2.0 * r).abs() < 1e-3, "merged transform pos slider must be ±2·incoming-radius, got {}", pos.max);
+}
