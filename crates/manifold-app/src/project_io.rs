@@ -376,6 +376,20 @@ impl ProjectIOService {
                     &mut project,
                 );
 
+                // BUG-q6j4: older embedded 3D scene presets have no
+                // `scene_bounds`, so the scene-exposure repair pass falls back
+                // to generic slider bands on every load. Backfill bounds from
+                // the source GLB (JSON chunk only, cheap for photoscans), run
+                // the migration on the def, then refresh the overlay + manifests
+                // so layer instances pick up the repaired ranges.
+                let backfilled = manifold_renderer::node_graph::gltf_import::
+                    repair_project_embedded_scene_bounds(&mut project);
+                if backfilled > 0 {
+                    install_project_preset_overlay(&project);
+                    project.load_report.unresolved_preset_templates =
+                        project.reconcile_param_manifests();
+                }
+
                 // D5 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md): the Scene Setup
                 // panel reads a generator layer's stored graph override
                 // directly (`Layer::generator_graph`), never through

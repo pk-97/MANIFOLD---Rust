@@ -37,52 +37,13 @@ pub(super) struct SceneScale {
     pub radius: f32,
 }
 
-/// The smallest per-scene radius we'll ever derive — explicitly the brief's
-/// BUG-upfq floor so a zero-extent or all-dimension-collapsed bbox can't
-/// divide or hand back a zero-width slider range.
-pub(super) const SCENE_SCALE_FLOOR: f32 = 0.01;
-
 impl SceneScale {
-    /// Derive from a `(min, max)` bbox — the exact same half-diagonal
-    /// computation `build_import_graph` and `merge_import_into_graph` use
-    /// for their camera/radius facts, plus the 0.01 floor.
+    /// Derive from a `(min, max)` bbox — delegates to the shared
+    /// `scene_radius_from_bounds` in manifold-core.
     pub fn from_bbox(min: [f32; 3], max: [f32; 3]) -> Self {
-        let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-        let radius = ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5)
-            .max(SCENE_SCALE_FLOOR);
-        Self { radius }
+        Self { radius: manifold_core::scene_exposure::scene_radius_from_bounds((min, max)) }
     }
 }
-
-/// Position slider range (`pos_*` on `node.transform_3d` and `node.light`,
-/// `aim_*` on `node.light`): `±2·radius`. One scene-radius covers the whole
-/// model from its recentered origin; two gives the model plus its
-/// immediate neighbourhood — enough platform to dock something at the edge
-/// of the shot, not so much that the useful band squeezes into the slider's
-/// first few percent.
-pub(super) const POSITION_MULTIPLIER: f32 = 2.0;
-
-/// Focus-distance slider range (`node.camera_lens`): `0..4·radius`. The
-/// near end is the hyperfocal pin (focus_distance <= 0 = off); the far end
-/// reaches two scene-widths out — the import camera sits at `2.2·radius`,
-/// so a full focus pull from the model's face out to the lens is on-slider.
-pub(super) const FOCUS_MULTIPLIER: f32 = 4.0;
-
-/// Light attenuation (`node.light` `range`) slider range:
-/// `0.01..4·radius`, matching the focus band. `node.light`'s `range` is a
-/// soft falloff half-distance (`1/(1+d²/range²)` — 50% at d == range), so
-/// capping the slider at 4·radius lets a light fill the whole set while
-/// keeping fine control in the near half.
-pub(super) const LIGHT_RANGE_MULTIPLIER: f32 = 4.0;
-
-/// F-stop slider range (`node.camera_lens`) top multiplier (BUG-bdwd):
-/// `0.5..max(32, 64·radius)`. The radius multiplier is needed because the
-/// migration multiplies stored f_stops by the scene radius (look-preserving
-/// — blur ∝ world_to_mm/f_stop, so f_stop×R at world_to_mm=1000/R keeps the
-/// image identical); a huge scene's migrated values (up to f/64·R) must stay
-/// on-slider. 64 is the generic band's top, so unit-scale scenes keep the
-/// CinematicScene default band exactly.
-pub(super) const F_STOP_MAX_MULTIPLIER: f32 = 64.0;
 
 /// Camera-framing geometry for the synthesized orbit camera, derived from
 /// the import bbox. Computed once at the top of `build_import_graph` and
@@ -209,20 +170,6 @@ pub(super) fn apply_scene_ranges(
     scale: SceneScale,
 ) {
     let r = scale.radius;
-    // Position is centered on the recentered origin — an object docked at
-    // the origin's edge (off in one direction) gets the same band the other
-    // way, so the model can always come back to center.
-    let position = (-POSITION_MULTIPLIER * r, POSITION_MULTIPLIER * r);
-    let focus = (0.0, FOCUS_MULTIPLIER * r);
-    // Min pinned at 0.01, the primitive's own range floor — the falloff
-    // half-distance never meaningfully goes smaller on a healthy scene.
-    let light_range = (0.01, LIGHT_RANGE_MULTIPLIER * r);
-    // Scene-relative f-stop band. 0.5 is the lens's photographic floor; the
-    // top is 32 (the default band) or 64·radius for a larger scene — a
-    // scene-derived f/64+ turns the huge scenes that used to need absurd
-    // f-stops into on-slider values (migrated projects carry f_stop × R).
-    let f_stop_range = (0.5, (32.0f32).max(F_STOP_MAX_MULTIPLIER * r));
-
     for spec in params.iter_mut() {
         // Enum/toggle/whole-number sliders are index or label spaces, not
         // physical quantities — never scale them.
@@ -238,19 +185,9 @@ pub(super) fn apply_scene_ranges(
         let Some(type_id) = nodes_by_id.get(node_id.as_str()) else {
             continue;
         };
-        let new_range = match type_id.as_str() {
-            "node.transform_3d" if matches!(param.as_str(), "pos_x" | "pos_y" | "pos_z") => {
-                Some(position)
-            }
-            "node.light" if matches!(param.as_str(), "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z") => {
-                Some(position)
-            }
-            "node.light" if param.as_str() == "range" => Some(light_range),
-            "node.camera_lens" if param.as_str() == "focus_distance" => Some(focus),
-            "node.camera_lens" if param.as_str() == "f_stop" => Some(f_stop_range),
-            _ => None,
-        };
-        let Some((new_min, new_max)) = new_range else {
+        let Some((new_min, new_max)) =
+            manifold_core::scene_exposure::scene_scaled_range(type_id, param, r)
+        else {
             continue;
         };
         // Range-only edit; keep the stamped default inside the band.
