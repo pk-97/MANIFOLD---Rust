@@ -549,6 +549,7 @@ pub struct SceneSetupVm {
     /// environment/bake node + the atmosphere/fog node, whichever are
     /// wired) — see `ObjectKnownRow::sections`.
     pub world_sections: Vec<String>,
+    pub scene_loop: Option<super::scene_setup_loop::SceneLoopRow>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when bounds are available (stored import bounds or camera-distance proxy),
     /// used to compute scene-relative slider ranges (center ± 2×extent per axis).
@@ -567,6 +568,7 @@ pub enum SceneSelection {
     Light(u32),
     Camera,
     World,
+    SceneLoop,
     /// scene-panel-ux lane: outliner group fold toggle (Scene/Lights/Objects)
     OutlinerFold(&'static str),
 }
@@ -809,7 +811,7 @@ pub struct ScenePanel {
     panel_w: f32,
     host: ChromeHost,
     scroll: ScrollContainer,
-    content_parent: NodeId,
+    pub(crate) content_parent: NodeId,
     bg_id: NodeId,
     close_id: NodeId,
     add_environment_id: Option<NodeId>,
@@ -842,6 +844,9 @@ pub struct ScenePanel {
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
     import_model_id: Option<NodeId>,
+    /// P2 Scene Loop section's UI ids + wrap-debug resume rate (lives in the
+    /// module, not the godfile).
+    pub(crate) scene_loop: super::scene_setup_loop::SceneLoopUi,
     /// P5 (D7): the outliner selection, per layer — UI-local workspace
     /// state, like fold state, NEVER serialized. Missing entry = the
     /// default (first object, else World) — resolved by
@@ -951,6 +956,7 @@ impl Default for ScenePanel {
             add_light_id: None,
             add_plane_id: None,
             import_model_id: None,
+            scene_loop: Default::default(),
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
@@ -1144,6 +1150,7 @@ impl ScenePanel {
         self.add_light_id = None;
         self.add_plane_id = None;
         self.import_model_id = None;
+        self.scene_loop = Default::default();
         self.outliner_row_ids.clear();
         self.outliner_eye_ids.clear();
         self.object_name_ids.clear();
@@ -1310,7 +1317,7 @@ impl ScenePanel {
 
     fn selection_exists(vm: &SceneSetupVm, sel: SceneSelection) -> bool {
         match sel {
-            SceneSelection::Camera | SceneSelection::World => true,
+            SceneSelection::Camera | SceneSelection::World | SceneSelection::SceneLoop => true,
             SceneSelection::OutlinerFold(_) => true, // Fold headers always exist
             SceneSelection::Object(id) => {
                 vm.objects.iter().any(|o| matches!(o, ObjectRowVm::Known(r) if r.object_node_id == id))
@@ -1359,6 +1366,8 @@ impl ScenePanel {
             cy = self.build_outliner_row(
                 tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, EyeSlot::Empty,
             );
+            let loop_lbl = if vm.scene_loop.is_some() { "\u{1F501} Scene Loop" } else { "\u{1F501} Scene Loop (off)" };
+            cy = self.build_outliner_row(tree, inner_x, inner_w, cy, loop_lbl, SceneSelection::SceneLoop, selected, EyeSlot::Empty);
         }
 
         // Lights group header
@@ -1680,11 +1689,7 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// The properties region: a header (name, plus Duplicate/Remove for
-    /// Object/Light selections) then the selection's own rows — the EXISTING
-    /// curated builders, relocated intact (never a generic param-tree
-    /// renderer, v1 D3's named wrong turn).
-    /// P2 slice 2a: the panel's ONE param-row renderer. Filters
+    /// The panel's ONE param-row renderer (P2 slice 2a). Filters
     /// `self.full_params` (the layer's real generator `ParamSurface`)
     /// down to `sections` — an ORDERED list; rendered in that order, one
     /// header per distinct section, rows within a section in the manifest's
@@ -1697,7 +1702,7 @@ impl ScenePanel {
     /// (`sync_properties_values`) resolves against — no retained-index list
     /// (BUG-313). Renders nothing when there's no config or no section
     /// matches — callers render their own honest empty/custom messaging.
-    fn build_filtered_properties(
+    pub(crate) fn build_filtered_properties(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
@@ -1940,6 +1945,9 @@ impl ScenePanel {
             }
             SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
+            SceneSelection::SceneLoop => {
+                super::scene_setup_loop::build_properties(self, tree, inner_x, inner_w, cy, vm)
+            }
             SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
         }
     }
@@ -2532,6 +2540,10 @@ impl ScenePanel {
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                         )));
+                    } else if let Some(act) = super::scene_setup_loop::click_dispatch(
+                        self, *node_id, vm,
+                    ) {
+                        actions.push(act);
                     } else if let Some((group_node_id, _, current_name)) =
                         self.object_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -2770,23 +2782,10 @@ impl ScenePanel {
     }
 
     /// Route a resolved `(row, role)` hit on the unified properties card to
-    /// the `PanelAction` it emits — the scene-panel twin of
-    /// `ParamCardPanel::row_action` (`docs/WIDGET_TREE_DESIGN.md` section 4/section 5b):
-    /// bundle roles (`DriverConfig`/`AbletonConfig`/`AudioConfig`) delegate
-    /// to the bundle's own `resolve`, this function only knows which row it
-    /// belongs to. `target` is the caller's `GraphParamTarget::GeneratorOf(
-    /// vm.layer_id)` (BUG-292) — `SceneCardState` has no `live_layer_id` of
-    /// its own to derive it from.
-    /// Route a resolved scene-row `(row, role)` hit to its `PanelAction` by
-    /// delegating to the SHARED [`RowHost::row_action`] — the exact same
-    /// routing core `ParamCardPanel` uses (P-S3). The card's own model (rows,
-    /// current values, mod state, active tab) is passed in by reference; the
-    /// widget-id bundles the routing reads live on the embedded `row_host`.
-    ///
-    /// Scene rows carry no OSC-copy flash — `copied_flash` is a throwaway
-    /// local, genuinely unused — but fold state IS now real (scene-panel-ux
-    /// lane): `section_folded` lives on `ScenePanel` and persists across
-    /// rebuilds.
+    /// its `PanelAction` by delegating to the shared [`RowHost::row_action`]
+    /// — the same core `ParamCardPanel` uses (WIDGET_TREE_DESIGN section 4/5b).
+    /// `target` is the caller's `GraphParamTarget::GeneratorOf(vm.layer_id)`
+    /// (BUG-292), since `SceneCardState` has no `live_layer_id` of its own.
     fn properties_row_action(
         &mut self,
         row: usize,
@@ -2881,6 +2880,7 @@ fn outliner_row_key(sel: SceneSelection) -> u64 {
     match sel {
         SceneSelection::Camera => OUTLINER_KEY_BASE,
         SceneSelection::World => OUTLINER_KEY_BASE + 1,
+        SceneSelection::SceneLoop => OUTLINER_KEY_BASE + 50,
         SceneSelection::OutlinerFold(name) => match name {
             "Scene" => KEY_OUTLINER_SCENE,
             "Lights" => KEY_OUTLINER_LIGHTS,
@@ -2930,7 +2930,7 @@ pub(crate) fn btn_style() -> UIStyle {
     UIStyle { font_size: color::FONT_LABEL, ..crate::chrome::components::segment_style(false) }
 }
 
-fn label_style() -> UIStyle {
+pub(crate) fn label_style() -> UIStyle {
     UIStyle {
         text_color: Color32::new(150, 150, 160, 255),
         font_size: color::FONT_LABEL,
@@ -3074,6 +3074,7 @@ mod tests {
             lights: Vec::new(),
             camera: CameraRowVm::None,
             camera_sections: Vec::new(), world_sections: Vec::new(),
+            scene_loop: None,
             scene_bounds: None,
         })));
         let mut tree = UITree::new();
@@ -3171,6 +3172,7 @@ mod tests {
                 }),
             })),
             camera_sections: Vec::new(), world_sections: Vec::new(),
+            scene_loop: None,
             scene_bounds: None,
         }
     }
@@ -3182,11 +3184,11 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Outliner rows: Scene fold + Camera + World + Lights fold + 1 Known light + Objects fold + 1 Known object are
+        // Outliner rows: Scene fold + Camera + World + Scene Loop + Lights fold + 1 Known light + Objects fold + 1 Known object are
         // selectable (`outliner_row_ids`); the Custom object/light are
         // listed too but as plain labels (D3: never hidden, but no
         // addressable node id to select by, D12).
-        assert_eq!(panel.outliner_row_ids.len(), 7, "Scene/Camera/World fold headers + Lights fold + 1 known light + Objects fold + 1 known object");
+        assert_eq!(panel.outliner_row_ids.len(), 8, "Scene/Camera/World/Scene Loop fold rows + Lights fold + 1 known light + Objects fold + 1 known object");
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");

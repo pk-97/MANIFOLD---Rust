@@ -55,6 +55,8 @@ const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
 const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
 const LOOK_AT_CAMERA_TYPE_ID: &str = "node.look_at_camera";
 const LOOP_CAMERA_TYPE_ID: &str = "node.loop_camera";
+const SCENE_ARRAY_TYPE_ID: &str = "node.scene_array";
+const BEAT_RAMP_TYPE_ID: &str = "node.beat_ramp";
 const CAMERA_LENS_TYPE_ID: &str = "node.camera_lens";
 const MOTION_BLUR_TYPE_ID: &str = "node.motion_blur";
 const BOKEH_GATHER_TYPE_ID: &str = "node.bokeh_gather";
@@ -111,6 +113,9 @@ pub struct SceneVm {
     pub camera: CameraVm,
     pub environment: EnvironmentVm,
     pub atmosphere: AtmosphereVm,
+    /// SCENE_LOOP_DESIGN P2: `Some` when the graph contains loop nodes
+    /// (structural trace, never a flag — the panel derives state from this).
+    pub scene_loop: Option<SceneLoopInfo>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when the graph stores import-time bounds (populated by the glTF importer
     /// from `GltfImportSummary`), read at VM-build time to compute scene-relative
@@ -367,6 +372,23 @@ pub struct LoopCameraRow {
     pub lens: Option<LensRow>,
 }
 
+/// SCENE_LOOP_DESIGN P2: info about the scene loop nodes when applied.
+/// `Some` = loop is applied (structural trace, never a flag).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneLoopInfo {
+    /// Doc id of the `node.beat_ramp` (loop_phase).
+    pub beat_ramp_doc_id: u32,
+    /// The loop_phase `node.beat_ramp`'s current `rate` (1/bars) — read for
+    /// the panel's wrap-debug toggle to restore after parking at phase 0.
+    pub beat_ramp_rate: Option<f32>,
+    /// Doc id of the `node.scene_array`.
+    pub scene_array_doc_id: u32,
+    /// Doc id of the `node.loop_camera`.
+    pub loop_camera_doc_id: u32,
+    /// Doc id of the `node.atmosphere` if the apply-command minted one.
+    pub loop_fog_doc_id: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CameraVm {
     None,
@@ -509,6 +531,7 @@ impl SceneVm {
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
+        let scene_loop = trace_scene_loop(&root);
 
         let object_count = objects.len();
         let light_count = lights.len();
@@ -568,6 +591,7 @@ impl SceneVm {
             camera,
             environment,
             atmosphere,
+            scene_loop,
             scene_bounds,
         })
     }
@@ -1116,6 +1140,49 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
         return AtmosphereVm::None;
     }
     AtmosphereVm::Wired(Box::new(AtmosphereRow { node_doc_id: node.id }))
+}
+
+/// SCENE_LOOP_DESIGN P2: trace for loop nodes in the graph. Returns `Some`
+/// when the graph contains a `node.beat_ramp` with node_id "loop_phase", a
+/// `node.scene_array`, and a `node.loop_camera` — the three atoms the
+/// apply-command always creates. The atmosphere node is optional (only minted
+/// when the graph had none).
+fn trace_scene_loop(level: &Level) -> Option<SceneLoopInfo> {
+    let mut beat_ramp_doc_id = None;
+    let mut beat_ramp_rate = None;
+    let mut scene_array_doc_id = None;
+    let mut loop_camera_doc_id = None;
+    let mut loop_fog_doc_id = None;
+
+    for node in level.nodes {
+        match node.type_id.as_str() {
+            BEAT_RAMP_TYPE_ID if node.node_id.as_ref() == "loop_phase" => {
+                beat_ramp_doc_id = Some(node.id);
+                beat_ramp_rate = node.params.get("rate").and_then(|v| match v {
+                    SerializedParamValue::Float { value } => Some(*value),
+                    _ => None,
+                });
+            }
+            SCENE_ARRAY_TYPE_ID => {
+                scene_array_doc_id = Some(node.id);
+            }
+            LOOP_CAMERA_TYPE_ID => {
+                loop_camera_doc_id = Some(node.id);
+            }
+            ATMOSPHERE_TYPE_ID if node.node_id.as_ref() == "loop_fog" => {
+                loop_fog_doc_id = Some(node.id);
+            }
+            _ => {}
+        }
+    }
+
+    Some(SceneLoopInfo {
+        beat_ramp_doc_id: beat_ramp_doc_id?,
+        beat_ramp_rate,
+        scene_array_doc_id: scene_array_doc_id?,
+        loop_camera_doc_id: loop_camera_doc_id?,
+        loop_fog_doc_id,
+    })
 }
 
 /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether `param_id`
