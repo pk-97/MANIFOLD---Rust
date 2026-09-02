@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** IN PROGRESS — P1 on main 2026-09-02 (atoms, apply/remove commands, wrap-parity net); P2 (panel section) landed on lane 2026-09-02 (renderer-side plan builder, D10 camera-home addendum, flow + gates); P3 (fog polish) not started. · 2026-09-02 · k3 (lead)
+**Status:** IN PROGRESS — P1+P2 on main 2026-09-02 (atoms, apply/remove commands, wrap-parity net; panel section, renderer-side plan builder, D10 camera-home addendum); P3 (fog polish) in this phase. · 2026-09-02 · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 

@@ -125,6 +125,59 @@ fn build_loop_graph() -> EffectGraphDef {
     }
 }
 
+/// P3 fog-driver graph: same as build_loop_graph but adds atmosphere +
+/// scale_offset_value driver so fog_density oscillates ±20% over the loop.
+/// cell_size = 10.0 → base_fog_density = 1/(1.5*10) ≈ 0.0667.
+/// scale = 0.4 * base ≈ 0.0267, offset = 0.8 * base ≈ 0.0533.
+fn build_loop_graph_with_fog() -> EffectGraphDef {
+    let mut def = build_loop_graph();
+
+    let cell_size = 10.0_f32;
+    let base_fog_density = 1.0 / (1.5 * cell_size);
+    let driver_scale = 0.4 * base_fog_density;
+    let driver_offset = 0.8 * base_fog_density;
+
+    let mut params_atmo = BTreeMap::new();
+    params_atmo.insert(
+        "fog_density".to_string(),
+        SerializedParamValue::Float {
+            value: base_fog_density,
+        },
+    );
+
+    let mut params_driver = BTreeMap::new();
+    params_driver.insert(
+        "scale".to_string(),
+        SerializedParamValue::Float {
+            value: driver_scale,
+        },
+    );
+    params_driver.insert(
+        "offset".to_string(),
+        SerializedParamValue::Float {
+            value: driver_offset,
+        },
+    );
+
+    // Node 9 = fog_driver (scale_offset_value), node 10 = loop_fog (atmosphere).
+    def.nodes.push(node(
+        9,
+        "fog_driver",
+        "node.scale_offset_value",
+        params_driver,
+    ));
+    def.nodes.push(node(10, "loop_fog", "node.atmosphere", params_atmo));
+
+    // beat_ramp.out → fog_driver.a (phase input)
+    def.wires.push(wire(1, "out", 9, "a"));
+    // fog_driver.out → loop_fog.fog_density (P3 wrap-pure driver)
+    def.wires.push(wire(9, "out", 10, "fog_density"));
+    // loop_fog.atmosphere → render_scene.atmosphere
+    def.wires.push(wire(10, "atmosphere", 7, "atmosphere"));
+
+    def
+}
+
 /// RED graph: same cube + scene_object, but `node.orbit_camera` (static,
 /// non-looping) instead of loop_camera. Used to prove the scene renders
 /// visible geometry and is camera-dependent — orbit_camera and loop_camera
@@ -265,5 +318,47 @@ fn wrap_parity_phase_0_vs_phase_1() {
     assert_eq!(
         diff, 0,
         "INV-3: wrap purity violated — phase 0 vs phase 1 (beat=8) max pixel diff = {diff}"
+    );
+}
+
+/// P3: wrap parity MUST hold with the fog driver wired. The driver is
+/// loop-phased (phase rides the same beat_ramp as the camera), so phase 0
+/// and phase 8 (fract wraps back to 0) produce identical fog density and
+/// identical pixels.
+#[test]
+fn wrap_parity_with_fog_driver() {
+    let def = build_loop_graph_with_fog();
+
+    let frame_a = render_frame(&def, 0.0);
+    let frame_b = render_frame(&def, 8.0);
+
+    let diff = max_pixel_diff(&frame_a, &frame_b);
+    assert_eq!(
+        diff, 0,
+        "P3 INV-3: fog driver broke wrap purity — phase 0 vs phase 1 (beat=8) max pixel diff = {diff}"
+    );
+}
+
+/// P3: numeric fog-swing assertion. The fog density driver maps loop phase
+/// through scale_offset_value(out = phase * scale + offset) where
+/// scale = 0.4 * base, offset = 0.8 * base. At phase 0.25 the driver
+/// output is 0.9 * base; at phase 0.75 it is 1.1 * base. The difference
+/// is 0.2 * base ≈ 0.0133 for cell_size=10. Different fog densities
+/// produce different pixel output, so max_pixel_diff > 0 proves the swing
+/// is live. beat=2 → phase=0.25, beat=6 → phase=0.75 (rate=0.125).
+#[test]
+fn fog_density_swings_over_loop() {
+    let def = build_loop_graph_with_fog();
+
+    // phase 0.25: beat=2, rate=0.125 → fract(2*0.125) = 0.25
+    let frame_lo = render_frame(&def, 2.0);
+    // phase 0.75: beat=6, rate=0.125 → fract(6*0.125) = 0.75
+    let frame_hi = render_frame(&def, 6.0);
+
+    let diff = max_pixel_diff(&frame_lo, &frame_hi);
+    assert!(
+        diff > 0,
+        "P3 fog-swing assertion failed: phase 0.25 and 0.75 produced identical pixels \
+         (max diff = 0) — fog density driver is not affecting the render"
     );
 }
