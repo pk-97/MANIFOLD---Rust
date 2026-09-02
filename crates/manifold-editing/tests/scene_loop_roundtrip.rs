@@ -95,7 +95,7 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
         new_nodes: vec![
             EffectGraphNode {
                 id: 10,
-                node_id: manifold_core::NodeId::new("loop_phase".to_string()),
+                node_id: manifold_core::NodeId::new("loop_phase"),
                 type_id: "node.beat_ramp".to_string(),
                 handle: Some("loop_phase".to_string()),
                 params: {
@@ -114,7 +114,7 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
             },
             EffectGraphNode {
                 id: 11,
-                node_id: manifold_core::NodeId::new("scene_array".to_string()),
+                node_id: manifold_core::NodeId::new("scene_array"),
                 type_id: "node.scene_array".to_string(),
                 handle: Some("scene_array".to_string()),
                 params: {
@@ -134,7 +134,7 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
             },
             EffectGraphNode {
                 id: 12,
-                node_id: manifold_core::NodeId::new("loop_camera".to_string()),
+                node_id: manifold_core::NodeId::new("loop_camera"),
                 type_id: "node.loop_camera".to_string(),
                 handle: Some("loop_camera".to_string()),
                 params: {
@@ -160,8 +160,8 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
         render_scene_node_id: 0,
         loop_metadata: vec![],
         card_params: vec![],
-        loop_camera_node_id: manifold_core::NodeId::new("loop_camera".to_string()),
-        scene_array_node_id: manifold_core::NodeId::new("scene_array".to_string()),
+        loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
+        scene_array_node_id: manifold_core::NodeId::new("scene_array"),
     };
 
     let layer_id = project.timeline.layers[idx].layer_id.clone();
@@ -268,8 +268,8 @@ fn scene_loop_apply_rejects_multi_scene() {
         render_scene_node_id: 0,
         loop_metadata: vec![],
         card_params: vec![],
-        loop_camera_node_id: manifold_core::NodeId::new("loop_camera".to_string()),
-        scene_array_node_id: manifold_core::NodeId::new("scene_array".to_string()),
+        loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
+        scene_array_node_id: manifold_core::NodeId::new("scene_array"),
     };
 
     let layer_id = project.timeline.layers[idx].layer_id.clone();
