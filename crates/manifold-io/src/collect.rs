@@ -245,36 +245,55 @@ fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String,
 
 /// The `StringParamSpecDef`s of a graph that carry a file-loading binding.
 /// Each def is paired with the `NodeFileLoad` its binding's target node reads,
-/// resolved through the graph's node table. Defs whose binding is absent,
-/// non-node, or bound to a non-file-loading node are skipped. A def with NO
-/// binding entry but a bound counterpart that loaded is skipped — enumeration
-/// is per-binding, so every def needs a resolvable binding.
+/// resolved through the graph's node table. Defs whose bindings are all absent,
+/// non-node, or bound to non-file-loading nodes are skipped.
+///
+/// Two real-project shapes drive the lookup (both from grouped 3D-scene
+/// presets, BUG-gqne follow-up): one param id fans out to MANY bindings (a
+/// `model_file` feeding six mesh/texture nodes) — the def collects if ANY of
+/// its bindings targets a file loader; and binding targets sit INSIDE `group`
+/// node bodies — the node search recurses through group subgraphs.
 fn defs_from_meta(graph: &EffectGraphDef) -> Vec<(String, String, NodeFileLoad)> {
     let Some(meta) = graph.preset_metadata.as_ref() else {
         return Vec::new();
     };
-    // Map param name → StringBindingDef id, so (1) each def gets its own
-    // binding lookup and (2) multiple string params bound to DIFFERENT nodes
-    // classify independently (e.g. MriVolume's axial/sagittal/coronal folders).
-    let binding_by_id: std::collections::HashMap<&str, &manifold_core::effect_graph_def::StringBindingDef> =
-        meta.string_bindings.iter().map(|b| (b.id.as_str(), b)).collect();
     let mut out = Vec::new();
     for sp in &meta.string_params {
-        let Some(bind) = binding_by_id.get(sp.id.as_str()) else {
-            continue;
-        };
-        let BindingTarget::Node { node_id, .. } = &bind.target else {
-            continue;
-        };
-        let Some(node) = graph.nodes.iter().find(|n| &n.node_id == node_id) else {
-            continue;
-        };
-        let Some(load) = file_loader_kind(&node.type_id) else {
-            continue;
-        };
-        out.push((sp.id.clone(), sp.default_value.clone(), load));
+        let load = meta
+            .string_bindings
+            .iter()
+            .filter(|b| b.id == sp.id)
+            .find_map(|b| match &b.target {
+                BindingTarget::Node { node_id, .. } => {
+                    find_node_type(&graph.nodes, node_id).and_then(file_loader_kind)
+                }
+                _ => None,
+            });
+        if let Some(load) = load {
+            out.push((sp.id.clone(), sp.default_value.clone(), load));
+        }
     }
     out
+}
+
+/// Depth-first search for a node's `type_id` by `node_id`, descending into
+/// group bodies (a group node's `group` field holds a nested node list, which
+/// may itself contain groups).
+fn find_node_type<'a>(
+    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    id: &manifold_core::id::NodeId,
+) -> Option<&'a str> {
+    for n in nodes {
+        if &n.node_id == id {
+            return Some(n.type_id.as_str());
+        }
+        if let Some(group) = &n.group
+            && let Some(found) = find_node_type(&group.nodes, id)
+        {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// The full `EffectGraphDef` carried directly on a `PresetInstance`'s own
@@ -853,6 +872,63 @@ mod tests {
         assert!(!refs.iter().any(|r| {
             matches!(&r.target, AssetTarget::StringParam { key, .. } if key == "env_path")
         }));
+    }
+
+    /// V5 live-fire follow-up (BUG-gqne): the real V5 embedded presets nest
+    /// their mesh/texture nodes INSIDE `group` bodies and fan one param id out
+    /// to several bindings. A flat-graph test passed while the real project
+    /// collected nothing — this test pins both shapes.
+    #[test]
+    fn bindings_resolve_through_groups_and_fanout() {
+        let mut project = Project::default();
+        let bind = |node_id: &str| StringBindingDef {
+            id: "model_file".to_string(),
+            label: "Model File".to_string(),
+            default_value: "/mnt/models/periwinkle.glb".to_string(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new(node_id),
+                param: "path".to_string(),
+            },
+        };
+        let mut group_node = node("obj0", "group");
+        group_node.group = Some(Box::new(manifold_core::effect_graph_def::GroupDef {
+            interface: manifold_core::effect_graph_def::GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: Vec::new(),
+            },
+            nodes: vec![
+                node("mesh_in_group", "node.gltf_mesh_source"),
+                node("tex_in_group", "node.gltf_texture_source"),
+            ],
+            wires: Vec::new(),
+            tint: None,
+        }));
+        let embedded = path_preset(
+            "periwinkle",
+            // NO `is_file_path` flag — the pre-flag embedded-preset shape.
+            vec![sp("model_file", "/mnt/models/periwinkle.glb", false)],
+            // One param id, two bindings — both nested inside the group.
+            vec![bind("mesh_in_group"), bind("tex_in_group")],
+            vec![group_node],
+        );
+        project.upsert_embedded_preset(embedded);
+        let preset_id = PresetTypeId::new("periwinkle");
+        let mut gen_layer = Layer::new_generator("Periwinkle".into(), preset_id, 0);
+        gen_layer
+            .clips
+            .push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(16.0)));
+        project.timeline.layers.push(gen_layer);
+
+        let refs = collect_asset_paths(&project);
+        assert!(
+            refs.iter().any(|r| {
+                r.kind == AssetKind::Mesh
+                    && r.path == std::path::Path::new("/mnt/models/periwinkle.glb")
+                    && matches!(&r.target, AssetTarget::StringParam { key, .. } if key == "model_file")
+            }),
+            "grouped + fanned-out binding must collect; got {refs:?}"
+        );
     }
 
     #[test]
