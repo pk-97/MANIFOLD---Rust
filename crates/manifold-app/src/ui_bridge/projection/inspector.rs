@@ -754,6 +754,12 @@ pub fn sync_inspector_data(
                                 manifold_renderer::node_graph::scene_vm::CameraVm::Custom { .. } => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Custom
                                 }
+                                // Loop camera rows live in the Scene Loop
+                                // section (SCENE_LOOP_DESIGN P2), not the
+                                // Camera card.
+                                manifold_renderer::node_graph::scene_vm::CameraVm::Loop(_) => {
+                                    manifold_ui::panels::scene_setup_panel::CameraRowVm::Custom
+                                }
                                 manifold_renderer::node_graph::scene_vm::CameraVm::None => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::None
                                 }
@@ -782,12 +788,14 @@ pub fn sync_inspector_data(
                                     CameraVm::Orbit(c) => vec![c.node_doc_id],
                                     CameraVm::Free(c) => vec![c.node_doc_id],
                                     CameraVm::LookAt(c) => vec![c.node_doc_id],
+                                    CameraVm::Loop(c) => vec![c.node_doc_id],
                                     CameraVm::Custom { .. } | CameraVm::None => Vec::new(),
                                 };
                                 let lens_id = match &vm.camera {
                                     CameraVm::Orbit(c) => c.lens.as_ref().map(|l| l.node_doc_id),
                                     CameraVm::Free(c) => c.lens.as_ref().map(|l| l.node_doc_id),
                                     CameraVm::LookAt(c) => c.lens.as_ref().map(|l| l.node_doc_id),
+                                    CameraVm::Loop(c) => c.lens.as_ref().map(|l| l.node_doc_id),
                                     CameraVm::Custom { .. } | CameraVm::None => None,
                                 };
                                 if let Some(id) = lens_id {
@@ -801,6 +809,7 @@ pub fn sync_inspector_data(
                                     CameraVm::Orbit(c) => c.lens.as_ref(),
                                     CameraVm::Free(c) => c.lens.as_ref(),
                                     CameraVm::LookAt(c) => c.lens.as_ref(),
+                                    CameraVm::Loop(c) => c.lens.as_ref(),
                                     CameraVm::Custom { .. } | CameraVm::None => None,
                                 };
                                 if let Some(lens) = tail_ids {
