@@ -225,10 +225,18 @@ fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String,
             .iter()
             .filter(|sp| sp.is_file_path)
             .map(|sp| {
+                // No graph to walk bindings against here — the extension hint
+                // is the only family signal (pre-P5 behavior for this fallback).
+                let family = match sp.default_value.rsplit('.').next() {
+                    Some(ext) if ext.eq_ignore_ascii_case("exr") || ext.eq_ignore_ascii_case("hdr") => {
+                        AssetFamily::Hdri
+                    }
+                    _ => AssetFamily::Mesh,
+                };
                 (
                     sp.key.to_string(),
                     sp.default_value.to_string(),
-                    NodeFileLoad::File(AssetFamily::Mesh),
+                    NodeFileLoad::File(family),
                 )
             })
             .collect()
