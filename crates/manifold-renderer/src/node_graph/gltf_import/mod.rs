@@ -43,6 +43,7 @@ mod merge;
 mod object_group;
 mod report;
 mod scene;
+mod scene_loop;
 mod scene_scale;
 #[cfg(test)]
 mod card_precedence_tests;
@@ -53,6 +54,7 @@ mod tests;
 
 pub use merge::{MergePlan, assemble_merge_plan};
 pub use report::ImportReport;
+pub use scene_loop::assemble_scene_loop_plan;
 
 use scene::build_import_graph;
 

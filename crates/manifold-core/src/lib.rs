@@ -35,6 +35,7 @@ pub mod preset_type_registry;
 pub mod project;
 pub mod recording;
 pub mod scene_exposure;
+pub mod scene_loop;
 pub mod scene_object_migration;
 pub mod selection;
 pub mod session;

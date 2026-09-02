@@ -1,17 +1,19 @@
 //! Scene Loop apply/remove commands (SCENE_LOOP_DESIGN.md D5).
 //!
 //! Composite commands that splice loop infrastructure into an imported scene
-//! graph. The plan (nodes, wires, group wiring) is built by the renderer-side
-//! plan builder in `manifold-app` (which depends on both crates), then passed
-//! as plain `manifold_core` fields to these commands.
+//! graph. The plan (nodes, wires, group wiring) is built renderer-side by
+//! `manifold_renderer::node_graph::gltf_import::assemble_scene_loop_plan` and
+//! travels as `manifold_core::scene_loop::SceneLoopPlan` — the same
+//! `assemble_merge_plan` → `ImportModelIntoSceneCommand` split the import
+//! merge uses (renderer builds plain core fields; editing applies them).
 
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, InterfacePortDef,
-    ParamSpecDef, PresetMetadata,
+    PresetMetadata,
 };
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
+use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
 use std::collections::BTreeMap;
 
@@ -22,47 +24,10 @@ use super::{
     with_target_graph_mut,
 };
 
-/// Data needed to wire scene_array into one object group's instances port.
-#[derive(Debug, Clone)]
-pub struct InstanceWiring {
-    /// The group node id (scope_path for descend_level).
-    pub group_node_id: u32,
-    /// The `node.scene_object` doc id INSIDE the group body whose `instances`
-    /// input receives the splice (`object_k_bind`). Resolved by the plan
-    /// builder (which can read the group body); the command descends into
-    /// `group_node_id`'s body to wire `group_input.instances → scene_object.instances`.
-    pub scene_object_node_id: u32,
-}
-
-/// Plan data for applying a scene loop. Built by the renderer-side plan builder
-/// (`manifold-app`), handed to [`ApplySceneLoopCommand::new`].
-#[derive(Debug, Clone)]
-pub struct SceneLoopPlan {
-    /// New loop nodes to add at the scene graph level (loop_phase, scene_array,
-    /// loop_camera, optionally loop_fog).
-    pub new_nodes: Vec<EffectGraphNode>,
-    /// New wires connecting the loop nodes to each other and to existing nodes.
-    pub new_wires: Vec<EffectGraphWire>,
-    /// Per-group wiring: scene_array.out → each group's scene_object instances port.
-    pub instance_wirings: Vec<InstanceWiring>,
-    /// The render_scene node's doc id (for INV-1 check and camera rewiring).
-    pub render_scene_node_id: u32,
-    /// Exposure metadata for the new loop nodes' params, keyed by each node's
-    /// stable `node_id` — the command stamps `spec.section = Some("Scene
-    /// Loop")` for every node from ITS OWN metadata, never a shared union
-    /// (a shared union would stamp phantom rows for params the node doesn't
-    /// have — INV-6).
-    pub node_metadata: Vec<(manifold_core::NodeId, Vec<SceneParamMetadata>)>,
-    /// Retained for callers that pass a single metadata set — the command
-    /// still covers legacy `loop_metadata` when `node_metadata` is empty.
-    pub loop_metadata: Vec<SceneParamMetadata>,
-    /// Card-level param specs for the loop nodes' exposed params.
-    pub card_params: Vec<ParamSpecDef>,
-    /// The stable node_id of the loop_camera (for the camera rewiring wire).
-    pub loop_camera_node_id: manifold_core::NodeId,
-    /// The stable node_id of the scene_array (for instance wiring).
-    pub scene_array_node_id: manifold_core::NodeId,
-}
+// The plan travels as plain manifold_core data; the editing crate re-exports
+// it (and its `InstanceWiring`) so existing call sites stay on the
+// `commands::graph::` path.
+pub use manifold_core::scene_loop::{InstanceWiring, SceneLoopPlan};
 
 /// "Apply Scene Loop" — splice loop nodes into the scene graph.
 ///
@@ -107,28 +72,6 @@ impl Command for ApplySceneLoopCommand {
             true,
             |def| {
                 let prev_metadata = def.preset_metadata.clone();
-
-                // Card-spec additions land on the WHOLE def's preset_metadata
-                // (same pattern as ImportModelIntoSceneCommand).
-                if !plan.card_params.is_empty() {
-                    let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                        id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                        display_name: "Scene".to_string(),
-                        category: "Geometry".to_string(),
-                        osc_prefix: "scene".to_string(),
-                        legacy_discriminant: None,
-                        available: true,
-                        is_line_based: false,
-                        params: Vec::new(),
-                        bindings: Vec::new(),
-                        param_aliases: Vec::new(),
-                        value_aliases: Vec::new(),
-                        string_params: Vec::new(),
-                        string_bindings: Vec::new(),
-                        scene_bounds: None,
-                    });
-                    meta.params.extend(plan.card_params);
-                }
 
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev_nodes_wires = (nodes.clone(), wires.clone());
@@ -269,14 +212,13 @@ impl Command for ApplySceneLoopCommand {
                 for node in &plan_ref.new_nodes {
                     // Per-node metadata (INV-6: each node gets ONLY its own
                     // params — a shared union would stamp phantom rows for
-                    // params the node doesn't have). Falls back to the legacy
-                    // shared `loop_metadata` only when the new field is empty.
+                    // params the node doesn't have).
                     let node_meta = plan_ref
                         .node_metadata
                         .iter()
                         .find(|(nid, _)| nid.as_str() == node.node_id.as_str())
                         .map(|(_, m)| m.clone())
-                        .unwrap_or_else(|| plan_ref.loop_metadata.clone());
+                        .unwrap_or_default();
                     stamp_scene_node_exposures_into(
                         &mut meta.params,
                         &mut meta.bindings,

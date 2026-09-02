@@ -158,9 +158,7 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
         ],
         instance_wirings: vec![],
         render_scene_node_id: 0,
-        loop_metadata: vec![],
         node_metadata: vec![],
-        card_params: vec![],
         loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
         scene_array_node_id: manifold_core::NodeId::new("scene_array"),
     };
@@ -267,9 +265,7 @@ fn scene_loop_apply_rejects_multi_scene() {
         new_wires: vec![],
         instance_wirings: vec![],
         render_scene_node_id: 0,
-        loop_metadata: vec![],
         node_metadata: vec![],
-        card_params: vec![],
         loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
         scene_array_node_id: manifold_core::NodeId::new("scene_array"),
     };
@@ -522,9 +518,7 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             InstanceWiring { group_node_id: 20, scene_object_node_id: 21 },
         ],
         render_scene_node_id: 2,
-        loop_metadata: vec![],
         node_metadata: vec![],
-        card_params: vec![],
         loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
         scene_array_node_id: manifold_core::NodeId::new("scene_array"),
     };

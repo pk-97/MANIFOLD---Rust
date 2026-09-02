@@ -2477,6 +2477,7 @@ dependencies = [
  "inventory",
  "log",
  "manifold-core",
+ "manifold-editing",
  "manifold-foundation",
  "manifold-gpu",
  "manifold-io",
