@@ -1,6 +1,6 @@
 # PROJECT_FOLDERS — project-folder semantics, Collect All and Save, breadcrumb inside the folder
 
-**Status:** IN PROGRESS — P1–P4 landed 2026-09-02 (inventory, resolver extension, save semantics + `--resume`, Collect All and Save); P5 (binding-driven collection, no flags) in flight, owed: live L4 verification by Peter.
+**Status:** IN PROGRESS — P1–P5 landed (P5 2026-09-02: binding-driven collection, no flags; image clips; folder params). Owed: live L4 verification by Peter.
 **Prerequisites:** none — extends `manifold-io` and `manifold-app/src/project_io.rs` as they stand.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
