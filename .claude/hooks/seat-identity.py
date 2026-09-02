@@ -43,7 +43,8 @@ SEATS = {
         "decisions only. Delegate early: lanes are 3-5x faster than you. "
         "When you spawn lanes, the Agent `name` must carry the model-slot "
         "prefix: haiku -> v25-*, sonnet -> k27-*, opus -> flash-*, "
-        "fable -> k3-* (agent-launch-guard denies anything else).",
+        "fable -> k3-* (agent-launch-guard auto-fixes anything else; still "
+        "pass `model` explicitly — a missing model denies).",
     ),
     "opencode": (
         "EXECUTOR",

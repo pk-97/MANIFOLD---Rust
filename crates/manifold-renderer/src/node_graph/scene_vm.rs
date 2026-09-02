@@ -54,6 +54,7 @@ const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
 const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
 const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
 const LOOK_AT_CAMERA_TYPE_ID: &str = "node.look_at_camera";
+const LOOP_CAMERA_TYPE_ID: &str = "node.loop_camera";
 const CAMERA_LENS_TYPE_ID: &str = "node.camera_lens";
 const MOTION_BLUR_TYPE_ID: &str = "node.motion_blur";
 const BOKEH_GATHER_TYPE_ID: &str = "node.bokeh_gather";
@@ -359,12 +360,20 @@ pub struct LookAtCameraRow {
     pub lens: Option<LensRow>,
 }
 
+/// Payload for [`CameraVm::Loop`] (SCENE_LOOP_DESIGN D3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopCameraRow {
+    pub node_doc_id: u32,
+    pub lens: Option<LensRow>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CameraVm {
     None,
     Orbit(Box<OrbitCameraRow>),
     Free(Box<FreeCameraRow>),
     LookAt(Box<LookAtCameraRow>),
+    Loop(Box<LoopCameraRow>),
     Custom { node_doc_id: u32 },
 }
 
@@ -519,7 +528,7 @@ impl SceneVm {
                 let camera = &camera;
                 let known_camera = match camera {
                     CameraVm::Orbit(row) => row,
-                    CameraVm::None | CameraVm::Custom { .. } | CameraVm::Free(_) | CameraVm::LookAt(_) => return None,
+                    CameraVm::None | CameraVm::Custom { .. } | CameraVm::Free(_) | CameraVm::LookAt(_) | CameraVm::Loop(_) => return None,
                 };
 
                 let camera_node = root.node(known_camera.node_doc_id)?;
@@ -1041,6 +1050,9 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
         }
         t if t == LOOK_AT_CAMERA_TYPE_ID => {
             CameraVm::LookAt(Box::new(LookAtCameraRow { node_doc_id: node.id, lens }))
+        }
+        t if t == LOOP_CAMERA_TYPE_ID => {
+            CameraVm::Loop(Box::new(LoopCameraRow { node_doc_id: node.id, lens }))
         }
         _ => CameraVm::Custom { node_doc_id: node.id },
     }

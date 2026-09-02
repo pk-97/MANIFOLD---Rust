@@ -6604,7 +6604,7 @@ fn orbit_camera_ranges_scale_with_bbox_radius() {
     // so small scenes get far=200 which is wider than 20·r).
     let small_far = stamped_card_param(small_meta, small_cam_id, "far");
     let large_far = stamped_card_param(large_meta, large_cam_id, "far");
-    let small_far_expected = ((20.0 * small_r).min(10_000.0)).max(200.0); // widened by stamped default
+    let small_far_expected = (20.0 * small_r).clamp(200.0, 10_000.0); // widened by stamped default
     let large_far_expected = (20.0 * large_r).min(10_000.0);
     assert!((small_far.max - small_far_expected).abs() < 1e-3, "small orbit far max = min(20·radius, 10000) widened to contain stamped default, got {}", small_far.max);
     assert!((large_far.max - large_far_expected).abs() < 1e-3, "large orbit far max = min(20·radius, 10000), got {}", large_far.max);

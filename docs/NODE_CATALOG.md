@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 261 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 263 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (59)
+### 3D Geometry (61)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -186,6 +186,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | Hypercube Edges (4D) | `node.hypercube_edges` | Source | Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube. |
 | Hypercube Points (4D) | `node.hypercube_points` | Source | Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animat… |
 | Look-At Camera | `node.look_at_camera` | Source | A camera positioned directly and aimed at a target point, instead of orbiting or using Euler angles. |
+| Loop Camera | `node.loop_camera` | Source | A camera that flies through a scene in a perfect loop, locked to the beat. |
 | Make Triangles | `node.make_triangles` | Filter | Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render. |
 | Melt | `node.melt_mesh` | Filter | Pulls every vertex downward by a noise-driven amount, making a mesh appear to melt or slump. |
 | Mesh Edges | `node.mesh_edges` | Filter | Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges. |
@@ -209,6 +210,7 @@ _Generated from the node registry. Do not hand-edit. 261 nodes registered, group
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
+| Scene Array | `node.scene_array` | Source | Lays out copies in a line along one axis, spacing them evenly for a looping flythrough. |
 | Scene Object | `node.scene_object` | Source | Binds one object's mesh, transform, material, maps, and instances into a single wire. Wire it into a render_scene object slot. |
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
