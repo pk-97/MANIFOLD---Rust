@@ -1,6 +1,6 @@
 # PROJECT_FOLDERS — project-folder semantics, Collect All and Save, breadcrumb inside the folder
 
-**Status:** IN PROGRESS — P1–P4 landed 2026-09-02 (inventory, resolver extension, save semantics + `--resume`, Collect All and Save); live L4 verification by Peter owed.
+**Status:** IN PROGRESS — P1–P4 landed 2026-09-02 (inventory, resolver extension, save semantics + `--resume`, Collect All and Save); P5 (binding-driven collection, no flags) in flight, owed: live L4 verification by Peter.
 **Prerequisites:** none — extends `manifold-io` and `manifold-app/src/project_io.rs` as they stand.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -191,16 +191,6 @@ when the file is moved into `Media/` — round-trip passes.
 version/new-project branching; `--resume` no-arg auto-discovery.
 Gate: unit tests for `resolve_save_target`; integration test asserting the folder
 layout on Save As into an empty dir.
-
-**P3 — Save semantics + breadcrumb.** Folder creation on first save; Save As
-version/new-project branching; `--resume` no-arg auto-discovery.
-Gate: unit tests for `resolve_save_target`; integration test asserting the folder
-layout on Save As into an empty dir.
-
-**P3 — Save semantics + breadcrumb.** Folder creation on first save; Save As
-version/new-project branching; `--resume` no-arg auto-discovery.
-Gate: unit tests for `resolve_save_target`; integration test asserting the folder
-layout on Save As into an empty dir.
 Demo: L1 — `cargo nextest run -p manifold-io -p manifold-app save_target` (the rfd dialog itself is not scriptable;
 the pure decision function is the tested surface). Forbidden moves: auto-suffixing version names; adding a marker file; the rfd
 dialog calling resolve_save_target from more than one call site (the seam is exactly one call in `save_project_as`).
@@ -218,6 +208,33 @@ relative, project opens on another machine (temp dir) with zero missing files.
 Test scope: P1–P4 are io+core+app seams — run `cargo nextest run -p manifold-io`, `-p manifold-core`, and
 `-p manifold-app` (the save seam). Clippy on the same crates before every commit.
 
+**P5 — Binding-driven collection, no flags (closes BUG-gqne (embedded-preset GLB skip), BUG-2jbn (image_path not inventoried), BUG-3i1p (folder params uncollectable)).**
+P1's `file_path` flag made collection opt-in per preset author; embedded presets saved
+before the flag existed silently skipped their GLBs (BUG-gqne (embedded-preset GLB skip),
+verified on a real project 2026-09-02). Peter's ruling: the human never chooses what is
+collected — it just works, like Ableton. So the flag's meaning flips from opt-in to
+redundant: a string param whose `stringBinding` targets a file-loading node type IS a
+collected path, whatever the metadata says. One table in `manifold-core`
+(`file_loader_kind(type_id) -> Option<{File(family) | Folder(family)}>`) names which node
+types load files — today `node.gltf_mesh_source`, `node.gltf_skinned_mesh_source`,
+`node.gltf_morph_deltas_source`, `node.gltf_morph_weights`,
+`node.gltf_skeleton_pose`, `node.gltf_animation_source`, `node.gltf_texture_source`
+(GLB → Mesh), `node.hdri_source` (→ Hdri), `node.image_folder` (folder → Images,
+new family). (`node.skin_mesh` is the pure per-vertex GPU skinning kernel — no
+file IO; the GLB it deforms is loaded by `node.gltf_skinned_mesh_source`
+`node.gltf_skeleton_pose`.) The
+`file_path`/`is_file_path` schema field stays for serde compat but collection no longer
+depends on it. Also in P5: `TimelineClip.image_path` joins the inventory with a new
+`relative_image_path` sibling + re-point arm (BUG-2jbn (image_path not inventoried));
+folder-valued params copy recursively through the existing video-folder arm (BUG-3i1p
+(folder params uncollectable)).
+Enforcement, so the class stays closed: a renderer test asserts every primitive declaring
+a path/folder string param has an entry in the core table (a new file-loading primitive
+without an entry is a red test, not a silent skip); an io test source-scans
+`manifold-core` model files for `pub …path…: String` fields and asserts each is
+inventory-covered. Gates: `cargo nextest run -p manifold-io -p manifold-core -p
+manifold-renderer`; a synthetic embedded-preset-without-flag test proves the V5 case.
+
 ## 5. Invariants & enforcement
 
 - A project folder is detected by `.manifold` presence only, never a marker file —
@@ -227,8 +244,10 @@ Test scope: P1–P4 are io+core+app seams — run `cargo nextest run -p manifold
   file hash before == after.
 - The breadcrumb sits next to its project file — enforcement: existing `breadcrumb_path_for` test stays
   untouched; the app-side breadcrumb integration test from `breadcrumb.rs` stays green (P3).
-- No path param is enumerated by a hardcoded id list — enforcement: negative gate
-  `rg 'model_file|hdri_file' crates/manifold-io/src` → zero hits (P1); enumeration is flag-driven only.
+- No path param is enumerated by a hardcoded param-id list — enforcement: negative gate
+  `rg 'model_file|hdri_file' crates/manifold-io/src` → zero hits (P1). From P5, enumeration
+  follows the stringBinding to the node type; the single list of file-loading node types is
+  `file_loader_kind` in `manifold-core`, exhaustiveness-tested from the renderer side.
 - `resolve_save_target` is pure (no I/O beyond reading the target dir) — enforcement: the P3
   integration test constructs projects entirely in temp dirs.
 

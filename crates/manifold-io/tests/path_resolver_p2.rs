@@ -1,14 +1,21 @@
 //! P2 gate — PathResolver extension (PROJECT_FOLDERS_DESIGN.md section 4 P2).
 //!
-//! A temp-dir project whose audio clip and flagged GLB string param reference
+//! A temp-dir project whose audio clip and GLB string param reference
 //! now-broken absolute paths must re-link after the files are moved into a
 //! `Media/` folder sitting beside the project folder (the filename+size search
 //! fallback in `PathResolver::resolve_all` finds them there). Runs through the
 //! real save → load pipeline so the audio relative-sibling field and the
 //! `TimelineClip.string_params` write-back both survive the full round trip.
+//! The preset's `model_file` param is binding-driven (P5): it carries a
+//! `stringBinding` to a `node.gltf_mesh_source`, not an `is_file_path` flag —
+//! collection follows the binding.
 
 use manifold_core::clip::TimelineClip;
-use manifold_core::effect_graph_def::{EffectGraphDef, PresetMetadata, StringParamSpecDef};
+use manifold_core::effect_graph_def::{
+    BindingTarget, EffectGraphDef, EffectGraphNode, PresetMetadata, StringBindingDef,
+    StringParamSpecDef,
+};
+use manifold_core::id::NodeId;
 use manifold_core::layer::Layer;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::preset_type_id::PresetTypeId;
@@ -45,9 +52,10 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
     ));
     project.timeline.layers.push(audio_layer);
 
-    // Generator layer tracking an embedded preset whose `model_file` param is
-    // flagged `is_file_path` (D5). The per-clip override carries the broken GLB
-    // path — the home `resolve_all` writes the re-linked path back into.
+    // Generator layer tracking an embedded preset whose `model_file` param has
+    // a `stringBinding` to `node.gltf_mesh_source` (P5 binding-driven — no
+    // `is_file_path` flag). The per-clip override carries the broken GLB path —
+    // the home `resolve_all` writes the re-linked path back into.
     let meta = PresetMetadata {
         id: PresetTypeId::new("p2_glb"),
         display_name: "P2 GLB".to_string(),
@@ -66,9 +74,17 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
             default_value: broken_glb.to_string_lossy().to_string(),
             is_file_picker: false,
             use_dropdown: false,
-            is_file_path: true,
+            is_file_path: false,
         }],
-        string_bindings: Vec::new(),
+        string_bindings: vec![StringBindingDef {
+            id: "model_file".to_string(),
+            label: "Model File".to_string(),
+            default_value: broken_glb.to_string_lossy().to_string(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new("mesh"),
+                param: "path".to_string(),
+            },
+        }],
         scene_bounds: None,
     };
     let embedded = EmbeddedPreset {
@@ -78,7 +94,20 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
             name: Some("P2 GLB".to_string()),
             description: None,
             preset_metadata: Some(meta),
-            nodes: Vec::new(),
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                node_id: NodeId::new("mesh"),
+                type_id: "node.gltf_mesh_source".to_string(),
+                handle: Some("mesh".to_string()),
+                params: Default::default(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: Default::default(),
+                output_canvas_scales: Default::default(),
+                group: None,
+            }],
             wires: Vec::new(),
         },
         origin: EmbeddedOrigin::Saved,

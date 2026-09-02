@@ -38,6 +38,14 @@ pub struct TimelineClip {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub image_path: String,
 
+    /// Relative form of `image_path`, filled on save by
+    /// `PathResolver::store_relative_paths` and preferred on load by
+    /// `resolve_all` — the same store-relative / re-link chain video clips
+    /// and audio clips get (PROJECT_FOLDERS_DESIGN P5, BUG-2jbn).
+    /// Additive-optional: old builds ignore it, new builds fill it on save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_image_path: Option<String>,
+
     /// Per-clip percussion detection state (settings + cached analysis), present
     /// only on audio clips that have a detection config. See
     /// `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
@@ -352,6 +360,7 @@ impl Default for TimelineClip {
             audio_file_path: String::new(),
             relative_audio_file_path: None,
             image_path: String::new(),
+            relative_image_path: None,
             audio_detection: None,
             detection_source: None,
             layer_id: crate::id::LayerId::default(),

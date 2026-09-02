@@ -73,6 +73,16 @@ impl PathResolver {
                         &mut result,
                     );
                 }
+                AssetTarget::ImageClip { layer_id, clip_id } => {
+                    Self::resolve_image_clip(
+                        project,
+                        &layer_id,
+                        &clip_id,
+                        &project_dir,
+                        &search_dirs,
+                        &mut result,
+                    );
+                }
                 AssetTarget::StringParam { layer_id, key } => {
                     Self::resolve_string_param(
                         project,
@@ -132,6 +142,13 @@ impl PathResolver {
                         && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id)
                     {
                         clip.relative_audio_file_path = relative;
+                    }
+                }
+                AssetTarget::ImageClip { layer_id, clip_id } => {
+                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                        && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == *clip_id)
+                    {
+                        clip.relative_image_path = relative;
                     }
                 }
                 AssetTarget::StringParam { .. } => {}
@@ -256,6 +273,49 @@ impl PathResolver {
         } else {
             result.unresolved_count += 1;
             result.unresolved.push(clip.audio_file_path.clone());
+        }
+    }
+
+    fn resolve_image_clip(
+        project: &mut Project,
+        layer_id: &LayerId,
+        clip_id: &ClipId,
+        project_dir: &str,
+        search_dirs: &HashSet<String>,
+        result: &mut PathResolutionResult,
+    ) {
+        let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
+            return;
+        };
+        let Some(clip) = layer.clips.iter_mut().find(|c| &c.id == clip_id) else {
+            return;
+        };
+        if clip.image_path.is_empty() {
+            return;
+        }
+
+        if Path::new(&clip.image_path).exists() {
+            result.already_valid_count += 1;
+            return;
+        }
+
+        // Image clips carry no file size — pass -1 to skip the size check.
+        let resolved = Self::try_resolve(
+            &clip.image_path,
+            clip.relative_image_path.as_deref(),
+            -1,
+            project_dir,
+            search_dirs,
+        );
+
+        if let Some(resolved_path) = resolved {
+            let relative = Self::make_relative(&resolved_path, project_dir);
+            clip.image_path = resolved_path;
+            clip.relative_image_path = relative;
+            result.resolved_count += 1;
+        } else {
+            result.unresolved_count += 1;
+            result.unresolved.push(clip.image_path.clone());
         }
     }
 

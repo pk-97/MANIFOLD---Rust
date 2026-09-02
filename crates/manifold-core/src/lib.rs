@@ -11,6 +11,7 @@ pub mod color;
 pub mod effect_graph_def;
 pub mod effect_registration;
 pub mod effects;
+pub mod file_loader;
 pub mod flatten;
 pub mod generator;
 pub mod generator_metadata_submissions;
