@@ -84,6 +84,23 @@ pub(super) const LIGHT_RANGE_MULTIPLIER: f32 = 4.0;
 /// CinematicScene default band exactly.
 pub(super) const F_STOP_MAX_MULTIPLIER: f32 = 64.0;
 
+/// Orbit-camera `distance` slider range (`node.orbit_camera`): `0.01..6·radius`.
+/// The min stays at the primitive's absolute 0.01 floor (close inspection is
+/// legitimate); 6·radius gives ~3× pull-out headroom past the 2.2·radius
+/// framing distance, so the full orbit range is on-slider.
+pub(super) const ORBIT_DISTANCE_MULTIPLIER: f32 = 6.0;
+
+/// Orbit-camera `near` slider range (`node.orbit_camera`): `0.001..2·radius`.
+/// The import stamps near at `front_margin * 0.5` ≈ 0.6·radius, so 2·radius
+/// contains it with room; 0.001 is the primitive's generic floor.
+pub(super) const ORBIT_NEAR_MULTIPLIER: f32 = 2.0;
+
+/// Orbit-camera `far` slider range (`node.orbit_camera`):
+/// `1.0..min(20·radius, 10_000)`. The import stamps far at
+/// `max(DEFAULT_FAR, distance + 1.5·radius)` — the 20× multiplier covers
+/// that with headroom while capping at the primitive's declared range max.
+pub(super) const ORBIT_FAR_MULTIPLIER: f32 = 20.0;
+
 /// Camera-framing geometry for the synthesized orbit camera, derived from
 /// the import bbox. Computed once at the top of `build_import_graph` and
 /// shared by every placement decision below it (camera node params, lens
@@ -222,6 +239,12 @@ pub(super) fn apply_scene_ranges(
     // scene-derived f/64+ turns the huge scenes that used to need absurd
     // f-stops into on-slider values (migrated projects carry f_stop × R).
     let f_stop_range = (0.5, (32.0f32).max(F_STOP_MAX_MULTIPLIER * r));
+    // Orbit camera bands: distance/near/far are per-world-unit quantities
+    // that must scale with scene radius so the slider's useful range isn't
+    // squeezed into the first few percent on small or large imports.
+    let orbit_distance = (0.01, ORBIT_DISTANCE_MULTIPLIER * r);
+    let orbit_near = (0.001, ORBIT_NEAR_MULTIPLIER * r);
+    let orbit_far = (1.0, (ORBIT_FAR_MULTIPLIER * r).min(10_000.0));
 
     for spec in params.iter_mut() {
         // Enum/toggle/whole-number sliders are index or label spaces, not
@@ -248,6 +271,9 @@ pub(super) fn apply_scene_ranges(
             "node.light" if param.as_str() == "range" => Some(light_range),
             "node.camera_lens" if param.as_str() == "focus_distance" => Some(focus),
             "node.camera_lens" if param.as_str() == "f_stop" => Some(f_stop_range),
+            "node.orbit_camera" if param.as_str() == "distance" => Some(orbit_distance),
+            "node.orbit_camera" if param.as_str() == "near" => Some(orbit_near),
+            "node.orbit_camera" if param.as_str() == "far" => Some(orbit_far),
             _ => None,
         };
         let Some((new_min, new_max)) = new_range else {

@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    BindingDef, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID,
-    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, PresetMetadata,
-    SerializedParamValue, StringBindingDef,
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    ParamSpecDef, PresetMetadata, SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
@@ -1247,6 +1247,25 @@ impl Command for AddSceneFogCommand {
                 &BTreeMap::new(),
             );
 
+            // BUG-p6x7: fog density is per-world-unit — override the generic
+            // 0..1 band to (0, 2/radius) when scene_bounds are present so the
+            // slider covers the useful range for this scene's scale.
+            if let Some((new_min, new_max)) = fog_density_range(meta.scene_bounds)
+                && let Some(density_spec) = meta.params.iter_mut().find(|p| {
+                    meta.bindings.iter().any(|b| {
+                        b.id == p.id
+                            && matches!(
+                                &b.target,
+                                BindingTarget::Node { node_id, param }
+                                    if *node_id == fog_node_id && param == "fog_density"
+                            )
+                    })
+                })
+            {
+                density_spec.min = new_min.min(density_spec.default_value);
+                density_spec.max = new_max.max(density_spec.default_value);
+            }
+
             Some((prev, prev_metadata))
         });
         if let Some((pnw, pmeta)) = result.flatten() {
@@ -1273,6 +1292,20 @@ impl Command for AddSceneFogCommand {
     fn description(&self) -> &str {
         "Add Fog"
     }
+}
+
+/// BUG-p6x7: fog `density` is per-world-unit (`1 - exp(-density·distance)`),
+/// so the useful slider range must scale inversely with the scene's bounding-
+/// sphere radius. Returns `Some((0.0, 2.0 / radius))` when scene_bounds are
+/// present, `None` for procedural scenes (generic 0..1 band untouched).
+pub(crate) fn fog_density_range(
+    scene_bounds: Option<([f32; 3], [f32; 3])>,
+) -> Option<(f32, f32)> {
+    let (min, max) = scene_bounds?;
+    let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    let radius = ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5)
+        .max(0.01);
+    Some((0.0, 2.0 / radius))
 }
 
 // ---------------------------------------------------------------------------
@@ -2820,6 +2853,126 @@ mod tests {
 
         cmd.execute(&mut project); // redo
         assert!(has_fog_row(&project), "redo must restore the live fog row");
+    }
+
+    /// BUG-p6x7: fog density slider range must scale with scene radius when
+    /// scene_bounds are present. A scene whose bbox diagonal is 20 units
+    /// (radius 10) gets density range (0, 0.2) — the slider covers the
+    /// useful per-world-unit range instead of the generic 0..1 band.
+    #[test]
+    fn add_scene_fog_scales_density_with_scene_bounds() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph({
+            let mut def = render_scene_graph(0, 0);
+            def.preset_metadata = Some(manifold_core::effect_graph_def::PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("TestScene".to_string()),
+                display_name: "Test".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "test".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+                // bbox diagonal = sqrt(20^2+20^2+20^2) = 34.64 -> radius = 17.32
+                scene_bounds: Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])),
+            });
+            def
+        });
+
+        let mut cmd = AddSceneFogCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            (30.0, 40.0),
+            vec![scene_param_meta("fog_density", "Density")],
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let fog = def.nodes.iter().find(|n| n.type_id == "node.atmosphere").unwrap();
+
+        let density_spec = meta.params.iter().find(|p| {
+            meta.bindings.iter().any(|b| {
+                b.id == p.id
+                    && matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "fog_density"
+                    )
+            })
+        }).expect("fog density exposure must be stamped");
+
+        let (expected_min, expected_max) = super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])))
+            .unwrap();
+        assert_eq!(density_spec.min, expected_min, "density min must be 0.0");
+        // The widen rule expands the band to contain the stamped default (0.5
+        // from scene_param_meta) when it falls outside the derived range.
+        assert!(
+            density_spec.max >= expected_max,
+            "density max must be >= 2/radius ({}), got {}", expected_max, density_spec.max
+        );
+        assert!(
+            density_spec.default_value <= density_spec.max,
+            "density max must contain the stamped default"
+        );
+    }
+
+    /// BUG-p6x7: without scene_bounds (procedural scene), fog density keeps
+    /// the generic 0..1 band.
+    #[test]
+    fn add_scene_fog_keeps_generic_density_band_without_scene_bounds() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        let mut cmd = AddSceneFogCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            (30.0, 40.0),
+            vec![scene_param_meta("fog_density", "Density")],
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let fog = def.nodes.iter().find(|n| n.type_id == "node.atmosphere").unwrap();
+
+        let density_spec = meta.params.iter().find(|p| {
+            meta.bindings.iter().any(|b| {
+                b.id == p.id
+                    && matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "fog_density"
+                    )
+            })
+        }).expect("fog density exposure must be stamped");
+
+        // scene_param_meta defaults: min=0.0, max=1.0 — generic band untouched.
+        assert_eq!(density_spec.min, 0.0, "density min must stay 0.0 without scene_bounds");
+        assert_eq!(density_spec.max, 1.0, "density max must stay 1.0 without scene_bounds");
+    }
+
+    /// Unit test for the fog_density_range helper.
+    #[test]
+    fn fog_density_range_unit() {
+        assert_eq!(super::super::fog_density_range(None), None);
+        let (min, max) = super::super::fog_density_range(Some(([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]))).unwrap();
+        assert_eq!(min, 0.0);
+        // radius = max(0, 0.01) = 0.01 → max = 2/0.01 = 200.0
+        assert!((max - 200.0).abs() < 1e-6);
+        let (_, max) = super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0]))).unwrap();
+        // bbox diagonal = sqrt(20^2+20^2+20^2) = sqrt(1200) = 20*sqrt(3)
+        // radius = diagonal/2 = 10*sqrt(3) ≈ 17.32 -> max = 2/(10*sqrt(3)) ≈ 0.11547
+        let expected_radius = 10.0 * (3.0_f32).sqrt();
+        assert!((max - 2.0 / expected_radius).abs() < 1e-4);
     }
 
     /// BUG-295 value-preservation proof: `refresh_manifest_from_graph`
