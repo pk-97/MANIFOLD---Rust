@@ -36,6 +36,7 @@ use super::gltf_load;
 
 mod animation;
 mod assembly;
+mod bounds_probe;
 mod cards;
 mod cinematic_tail;
 mod materials;
@@ -51,6 +52,7 @@ mod synthetic_glbs;
 #[cfg(test)]
 mod tests;
 
+pub use bounds_probe::repair_project_embedded_scene_bounds;
 pub use merge::{MergePlan, assemble_merge_plan};
 pub use report::ImportReport;
 
