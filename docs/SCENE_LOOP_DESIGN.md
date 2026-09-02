@@ -146,9 +146,14 @@ don't redesign.
 - **D9 — v1 is raster `render_scene` only.** RT compatibility is unverified
   (the RT path's handling of `instances_n` is unknown) and is Deferred with a
   trigger, not promised.
-- **D10 — Copy count default 3, hard max from the P0 probe.** One copy behind
-  (for the wrap), the cell you're in, one ahead; fog eats anything further.
-  P0 measures ×1/×3/×5 and sets the ceiling.
+- **D10 — Copy count default 3.** One copy behind (for the wrap), the cell
+  you're in, one ahead; fog eats anything further. No standalone perf probe:
+  static analysis predicts the shape (no frustum culling ⇒ vertex cost scales
+  linearly with copies, fragment cost at 4K is flat for behind-camera copies —
+  shared depth rejects them before rasterization), and the real number comes
+  free as a byproduct of P1's demo render. If that number blows the 4K frame
+  budget at ×3, escalate to Peter — far-copy degradation is a redesign, not a
+  lane decision.
 
 ---
 
@@ -242,14 +247,6 @@ panel rows or synthesized ids (D6) · a camera-travel param the user must match
 to cell spacing by hand (D4) · gating on a PNG an agent judges (agent gates
 are numbers; PNGs are for Peter).
 
-- **P0 — Perf probe (gate phase).** Headless `graph-tool render` of the apricot
-  fixture (or heavier real GLB) with `instances_n` wired ×1/×3/×5 at 1920 and
-  4K; report frame ms and draw counts. Deliverables: the probe graph JSON +
-  measured numbers written into this section. Gate: ×3 at 4K holds frame
-  budget (16.6 ms; report the number either way). If it fails, the design
-  continues with far-copy degradation (decimated far instances) — that
-  redesign is an escalation to Peter, not a lane decision.
-  Demo: none — L1.
 - **P1 — Atoms + composite command.** `node.scene_array` (D2, freeze-path
   atom + gpu_tests value proof), `node.loop_camera` (D3 + curated camera-type
   registration), apply/remove commands (D5), fog wiring (D7), exposure
@@ -260,7 +257,10 @@ are numbers; PNGs are for Peter).
   Test scope: `manifold-renderer` + `manifold-editing` focused; gpu-proofs
   suite for the new atom. Acceptance demo (L2): `graph-tool render` of a looped
   apricot graph at phase 0.25 — a PNG Peter looks at, plus the wrap-parity
-  number. Performer gesture: change bars 8→16 mid-set — phase rescales, no
+  number. The same demo render is timed at 1920 and 4K (×3 copies) — the
+  frame-cost number is a byproduct, not a probe phase (D10); over budget at 4K
+  = escalate, don't degrade silently.
+  Performer gesture: change bars 8→16 mid-set — phase rescales, no
   position jump (asserted in test via phase continuity at the rate change).
 - **P2 — Panel section.** `scene_setup_loop.rs` fold section in the three
   states of section 3.3, wrap-debug toggle, ui-snap flow
@@ -287,7 +287,8 @@ are numbers; PNGs are for Peter).
 3. Loop camera is a curated primitive, not a composition of math atoms (D3).
 4. Apply/remove is one undoable composite command each way (D5).
 5. Panel section rides exposure stamping; zero new id systems (D6).
-6. Raster-only v1 (D9); copy count 3 default, ceiling from P0 (D10).
+6. Raster-only v1 (D9); copy count 3 default, frame-cost measured on P1's
+   demo render (D10).
 
 ## 7. Deferred
 
@@ -302,7 +303,7 @@ are numbers; PNGs are for Peter).
   drivers shipped (P3) and Peter wants moving geometry in the loop.
 - **Nested loop periods per element** (camera 4 bars, lights 16) — trigger:
   v1 loops feel monotonous in the set.
-- **Frustum culling for instances** — trigger: P0-style numbers showing
-  behind-camera vertex cost matters at real copy counts.
+- **Frustum culling for instances** — trigger: the P1 demo timing (D10)
+  showing behind-camera vertex cost matters at real copy counts.
 - **Per-cell material variation** — requires group duplication; only if
   identical cells read as repetitive on stage.
