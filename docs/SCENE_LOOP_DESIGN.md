@@ -234,7 +234,7 @@ room lit from one end. Sunlit/enclosed scans are the good candidates.
 | INV-2 | Every minted node carries a stable `nodeId` | Round-trip test: apply → save → load → structural trace re-finds all loop nodes (`scene_loop_roundtrip.rs`). |
 | INV-3 | **Wrap purity:** frame at phase 0 == frame at phase 1 | Headless render at phase 0.0 vs phase 0.99999 via `render_viewport_frame` (`viewport_render.rs:148`); pixel diff must be zero (deterministic raster path). Test `scene_loop_wrap_parity.rs`. A red result = a non-loop-phased driver snuck in — the test IS the class fix. |
 | INV-4 | Camera travel per loop == instance spacing | Both derive from the single cell_size the plan builder computes (D4); test asserts the two stamped params match the plan value. |
-| INV-5 | Panel rows id-joined, writes target `GeneratorOf(layer_id)` | Existing panel row-value assert + ui-snap flow `scene-loop-toggle.json` asserts a bars edit lands on the looped clip's beat_ramp (not the active layer's) — BUG-292 (scene-panel-wrong-layer-target) regression net. |
+| INV-5 | Panel rows id-joined, writes target `GeneratorOf(layer_id)` | Existing panel row-value assert + ui-snap flow `scene-setup-loop.json` asserts a bars edit lands on the looped clip's beat_ramp (not the active layer's) — BUG-292 (scene-panel-wrong-layer-target) regression net. |
 | INV-6 | No synthesized param ids / panel-side id maps | Review rule + negative gate: `rg 'scene_loop' crates/manifold-ui/src/panels/` shows no `format!`-built param id strings. |
 
 ## 5. Phasing
@@ -268,8 +268,14 @@ PNG — every gate in this design is a computed number or exit code (Peter
   position jump (asserted in test via phase continuity at the rate change).
 - **P2 — Panel section.** `scene_setup_loop.rs` fold section in the three
   states of section 3.3, wrap-debug toggle, ui-snap flow
-  `scripts/ui-flows/scene-loop-toggle.json` (enable → bars row visible → edit
-  bars → assert write landed on the looped layer). Read-back: section 3.3,
+  `scripts/ui-flows/scene-setup-loop.json` (enable → bars row visible → edit
+  bars → assert write landed on the looped layer). **Flow wiring, both
+  mandatory in the same commit** (the manifest's own rule, and the
+  green-landing/dead-flow escape class): (1) the flow name MUST match the
+  `scene-setup-*` prefix — that prefix is what maps it to the `gltfscene`
+  fixture in `scripts/ui-flows/manifest.json`; (2) add a `path_triggers` row
+  for the NEW file `crates/manifold-ui/src/panels/scene_setup_loop.rs` →
+  `scene-setup-loop`, or the landing flow gate runs nothing for it. Read-back: section 3.3,
   plus the historic panel bug classes from the audit — BUG-313 (positional-value-join),
   BUG-292 (scene-panel-wrong-layer-target), the rebuild-less-state class
   (internal state change with no structural action = dead UI), and the
