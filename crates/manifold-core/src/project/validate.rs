@@ -97,6 +97,9 @@ pub struct LoadReport {
     pub orphaned_clips_purged: usize,
     pub orphaned_midi_purged: usize,
     pub missing_media_files: Vec<String>,
+    /// BUG-q6j4: embedded scene presets whose scene_bounds were missing and
+    /// backfilled from the source GLB at load.
+    pub scene_bounds_backfilled: usize,
     /// BUG-079: preset instances whose def couldn't be resolved at load
     /// (deleted/unregistered/missing) — kept on a placeholder spec
     /// (keep-don't-drop) rather than dropped. Was console-only (`eprintln!`
@@ -117,6 +120,7 @@ impl LoadReport {
             && self.orphaned_midi_purged == 0
             && self.missing_media_files.is_empty()
             && self.unresolved_preset_templates == 0
+            && self.scene_bounds_backfilled == 0
             && self.migration_notes.is_empty()
     }
 
@@ -172,6 +176,13 @@ impl LoadReport {
                 "{} unresolved preset {} kept with saved values (preset not registered)",
                 self.unresolved_preset_templates,
                 plural(self.unresolved_preset_templates, "reference", "references")
+            ));
+        }
+        if self.scene_bounds_backfilled > 0 {
+            lines.push(format!(
+                "{} scene {} backfilled with GLB bounds",
+                self.scene_bounds_backfilled,
+                plural(self.scene_bounds_backfilled, "preset", "presets")
             ));
         }
         lines.extend(self.migration_notes.iter().cloned());
