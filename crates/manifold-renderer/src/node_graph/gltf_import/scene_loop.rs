@@ -79,6 +79,7 @@ pub fn assemble_scene_loop_plan(
     let scene_array_id = max_id + 2;
     let loop_camera_id = max_id + 3;
     let loop_fog_id = max_id + 4;
+    let fog_driver_id = max_id + 5; // P3: scale_offset_value for fog density swing
 
     // D7: mint a fog node only when the graph has no atmosphere producer.
     let has_atmosphere =
@@ -182,7 +183,18 @@ pub fn assemble_scene_loop_plan(
     // world-unit; for cell_size ~ a few units the exp falloff covers a couple
     // of cells (enclosed scenes hide their own ends). Honest default, not a
     // beat-match — the panel's fog row lets the performer dial it.
+    //
+    // P3 — fog density driver: fog far ≈ 1.5 × cell_size is the base; a
+    // scale_offset_value node feeds loop_phase (0..1 sawtooth) into the
+    // atmosphere's fog_density input so density oscillates ±20% over the loop.
+    // scale = 0.4 × base, offset = 0.8 × base → output swings [0.8, 1.2] × base.
+    // Shaft intensity driver deferred — it needs new atoms beyond simple
+    // scale/offset (see verdict).
     if !has_atmosphere {
+        let base_fog_density = 1.0_f32 / (1.5 * cell_size).max(0.1);
+        let driver_scale = 0.4 * base_fog_density;
+        let driver_offset = 0.8 * base_fog_density;
+
         new_nodes.push(EffectGraphNode {
             id: loop_fog_id,
             node_id: manifold_core::NodeId::new("loop_fog"),
@@ -190,7 +202,9 @@ pub fn assemble_scene_loop_plan(
             handle: Some("loop_fog".to_string()),
             params: {
                 let mut p = std::collections::BTreeMap::new();
-                p.insert("fog_density".to_string(), SerializedParamValue::Float { value: 0.05 });
+                // fog_density param stays as the unwired fallback; the wired
+                // driver overrides it at runtime (scalar_or_param priority).
+                p.insert("fog_density".to_string(), SerializedParamValue::Float { value: base_fog_density });
                 p.insert("height_falloff".to_string(), SerializedParamValue::Float { value: 0.0 });
                 p
             },
@@ -202,6 +216,43 @@ pub fn assemble_scene_loop_plan(
             output_canvas_scales: Default::default(),
             group: None,
         });
+        // P3: fog density driver — scale_offset_value remaps the 0..1 loop
+        // phase into [0.8, 1.2] × base_fog_density so density breathes.
+        new_nodes.push(EffectGraphNode {
+            id: fog_driver_id,
+            node_id: manifold_core::NodeId::new("fog_driver"),
+            type_id: "node.scale_offset_value".to_string(),
+            handle: Some("fog_driver".to_string()),
+            params: {
+                let mut p = std::collections::BTreeMap::new();
+                p.insert("scale".to_string(), SerializedParamValue::Float { value: driver_scale });
+                p.insert("offset".to_string(), SerializedParamValue::Float { value: driver_offset });
+                p
+            },
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        });
+
+        // beat_ramp (loop_phase) → fog_driver.a (phase input)
+        new_wires.push(EffectGraphWire {
+            from_node: beat_ramp_id,
+            from_port: "out".to_string(),
+            to_node: fog_driver_id,
+            to_port: "a".to_string(),
+        });
+        // fog_driver.out → loop_fog.fog_density (P3 wrap-pure driver)
+        new_wires.push(EffectGraphWire {
+            from_node: fog_driver_id,
+            from_port: "out".to_string(),
+            to_node: loop_fog_id,
+            to_port: "fog_density".to_string(),
+        });
+        // atmosphere → render_scene
         new_wires.push(EffectGraphWire {
             from_node: loop_fog_id,
             // `node.atmosphere`'s output port is `atmosphere`, never `out`
