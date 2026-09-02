@@ -1295,17 +1295,14 @@ impl Command for AddSceneFogCommand {
 }
 
 /// BUG-p6x7: fog `density` is per-world-unit (`1 - exp(-density·distance)`),
-/// so the useful slider range must scale inversely with the scene's bounding-
-/// sphere radius. Returns `Some((0.0, 2.0 / radius))` when scene_bounds are
-/// present, `None` for procedural scenes (generic 0..1 band untouched).
+/// so the shared scene-scaled range table handles the radius derivation.
+/// Delegates to `manifold_core::scene_exposure::scene_scaled_range`.
 pub(crate) fn fog_density_range(
     scene_bounds: Option<([f32; 3], [f32; 3])>,
 ) -> Option<(f32, f32)> {
-    let (min, max) = scene_bounds?;
-    let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    let radius = ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5)
-        .max(0.01);
-    Some((0.0, 2.0 / radius))
+    let bounds = scene_bounds?;
+    let radius = manifold_core::scene_exposure::scene_radius_from_bounds(bounds);
+    manifold_core::scene_exposure::scene_scaled_range("node.atmosphere", "fog_density", radius)
 }
 
 // ---------------------------------------------------------------------------

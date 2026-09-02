@@ -291,6 +291,60 @@ fn unique_param_id(params: &[ParamSpecDef], base: &str) -> String {
     }
 }
 
+// ── Scene-scale range table (single source of truth) ─────────────────
+
+/// Compute the bounding-sphere radius from a `(min, max)` bbox. Same math as
+/// `SceneScale::from_bbox` — half the diagonal, floored at 0.01 so a
+/// degenerate/empty bbox still yields nonzero slider widths.
+pub fn scene_radius_from_bounds(bounds: ([f32; 3], [f32; 3])) -> f32 {
+    let (min, max) = bounds;
+    let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(0.01)
+}
+
+/// The single scene-scaled slider range table. Radius in world units; every
+/// band is a multiple of it so a scene twice as big gets sliders twice as wide.
+/// Returns `None` for params not in the table (the generic refresh path).
+///
+/// Multiplier rationale (compressed from `scene_scale.rs` doc comments):
+/// - Position (`pos_*`, `aim_*`): ±2·radius — one radius covers the model,
+///   two gives the model plus neighbourhood, enough to dock at the edge of
+///   the shot without squeezing the useful band into the first few percent.
+/// - Light range: 0.01..4·radius — the soft falloff half-distance fills the
+///   whole set while keeping fine control in the near half.
+/// - Focus distance: 0..4·radius — 0 is the hyperfocal pin (focus off),
+///   far end reaches two scene-widths out (import camera sits at ~2.2·radius).
+/// - F-stop: 0.5..max(32, 64·radius) — 0.5 is the photographic floor; 64·R
+///   keeps migrated f_stop×R values on-slider; 32 keeps unit-scale default.
+/// - Orbit distance: 0.01..6·radius — ~3× headroom past the 2.2·radius
+///   framing distance so the full orbit range is on-slider.
+/// - Orbit near: 0.001..2·radius — import stamps near at ~0.6·radius, so
+///   2·radius contains it with room.
+/// - Orbit far: 1.0..min(20·radius, 10_000) — 20× covers the import-stamped
+///   far with headroom; 10_000 is the primitive's declared range max.
+/// - Fog density: 0.0..2/radius — fog is per-world-unit (1 - exp(-d·dist)),
+///   so the useful slider range scales inversely with scene size.
+pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f32, f32)> {
+    match type_id {
+        "node.transform_3d" if matches!(param, "pos_x" | "pos_y" | "pos_z") => {
+            Some((-2.0 * radius, 2.0 * radius))
+        }
+        "node.light" if matches!(param, "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z") => {
+            Some((-2.0 * radius, 2.0 * radius))
+        }
+        "node.light" if param == "range" => Some((0.01, 4.0 * radius)),
+        "node.camera_lens" if param == "focus_distance" => Some((0.0, 4.0 * radius)),
+        "node.camera_lens" if param == "f_stop" => {
+            Some((0.5, (32.0_f32).max(64.0 * radius)))
+        }
+        "node.orbit_camera" if param == "distance" => Some((0.01, 6.0 * radius)),
+        "node.orbit_camera" if param == "near" => Some((0.001, 2.0 * radius)),
+        "node.orbit_camera" if param == "far" => Some((1.0, (20.0 * radius).min(10_000.0))),
+        "node.atmosphere" if param == "fog_density" => Some((0.0, 2.0 / radius)),
+        _ => None,
+    }
+}
+
 /// `(doc_id, node_id, type_id, section, params)` for one vocab-matched node,
 /// collected by `collect_vocab_nodes` and consumed by `migrate_scene_exposures`.
 type VocabNodeEntry = (u32, NodeId, String, String, BTreeMap<String, SerializedParamValue>);
@@ -461,13 +515,18 @@ where
     // stuck at 0.5–1000, two Camera-card toggles both labeled "Enabled").
     // Re-derive all three from the current metadata on every load, keeping
     // the stamper's widen rule so a seeded value outside the band (a
-    // 300-unit camera distance) still fits. Repair runs over EVERY node with
-    // a stamp, not just the vocabulary — the vocabulary gates STAMPING, but
-    // non-vocab atoms carry stamps too (the cinematic tail's bokeh/motion_blur
-    // Camera-section toggles, stamped by the import assembly and the v1130
-    // migration). The id-shape guard (`{doc_id}_{param}`) excludes curated
-    // fan-out exposures, whose labels and ranges are authored, never copies.
+    // 300-unit camera distance) still fits. When scene_bounds are present,
+    // use the shared scene-scaled range table instead of the generic metadata
+    // — this prevents import-time scene bands from being silently reverted to
+    // generic bands on project load (BUG-upfq follow-up).
+    // Repair runs over EVERY node with a stamp, not just the vocabulary — the
+    // vocabulary gates STAMPING, but non-vocab atoms carry stamps too (the
+    // cinematic tail's bokeh/motion_blur Camera-section toggles, stamped by
+    // the import assembly and the v1130 migration). The id-shape guard
+    // (`{doc_id}_{param}`) excludes curated fan-out exposures, whose labels
+    // and ranges are authored, never copies.
     // Idempotent: a second run re-derives the same values and writes nothing.
+    let scene_radius = meta.scene_bounds.map(scene_radius_from_bounds);
     fn collect_all_nodes(
         nodes: &[EffectGraphNode],
         out: &mut Vec<(u32, NodeId, String)>,
@@ -509,13 +568,16 @@ where
                 changed = true;
             }
             let widen = !spec.whole_numbers && !spec.is_toggle && !spec.is_trigger;
+            // When scene_bounds are present, use the scene-scaled range as
+            // the base band (import-time bands preserved across load) instead
+            // of the generic metadata band (which reverts scene bands).
+            let (base_min, base_max) = scene_radius
+                .and_then(|r| scene_scaled_range(type_id, &meta_entry.name, r))
+                .unwrap_or((meta_entry.min, meta_entry.max));
             let (min, max) = if widen {
-                (
-                    meta_entry.min.min(spec.default_value),
-                    meta_entry.max.max(spec.default_value),
-                )
+                (base_min.min(spec.default_value), base_max.max(spec.default_value))
             } else {
-                (meta_entry.min, meta_entry.max)
+                (base_min, base_max)
             };
             if spec.min != min || spec.max != max {
                 spec.min = min;
@@ -1423,5 +1485,305 @@ mod tests {
             section: Some(section.to_string()),
             ..Default::default()
         }
+    }
+
+    // ── scene_scaled_range table tests ────────────────────────────────
+
+    #[test]
+    fn scene_radius_from_bounds_zero_is_floor() {
+        let r = scene_radius_from_bounds(([0.0; 3], [0.0; 3]));
+        assert!((r - 0.01).abs() < 1e-6, "degenerate bbox floors at 0.01, got {r}");
+    }
+
+    #[test]
+    fn scene_radius_from_bounds_symmetric() {
+        // [-10, -10, -10]..[10, 10, 10]: diagonal = sqrt(600), radius = sqrt(600)/2
+        let r = scene_radius_from_bounds(([-10.0; 3], [10.0; 3]));
+        let expected = (300.0_f32).sqrt(); // sqrt(1200)/2 = sqrt(300)
+        assert!((r - expected).abs() < 1e-3, "symmetric bbox radius, got {r} expected {expected}");
+    }
+
+    #[test]
+    fn scene_scaled_range_returns_none_for_unknown() {
+        assert!(scene_scaled_range("node.value", "value", 1.0).is_none());
+        assert!(scene_scaled_range("node.transform_3d", "scale_x", 1.0).is_none());
+    }
+
+    #[test]
+    fn scene_scaled_range_position_is_symmetric() {
+        let (min, max) = scene_scaled_range("node.transform_3d", "pos_x", 5.0).unwrap();
+        assert!((min - -10.0).abs() < 1e-6);
+        assert!((max - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scene_scaled_range_orbit_far_capped_at_10000() {
+        let (_, max) = scene_scaled_range("node.orbit_camera", "far", 1000.0).unwrap();
+        assert!((max - 10_000.0).abs() < 1e-6, "far capped at 10_000, got {max}");
+    }
+
+    #[test]
+    fn scene_scaled_range_fog_density_inversely_scales() {
+        let (_, max_small) = scene_scaled_range("node.atmosphere", "fog_density", 1.0).unwrap();
+        let (_, max_large) = scene_scaled_range("node.atmosphere", "fog_density", 10.0).unwrap();
+        assert!((max_small - 2.0).abs() < 1e-6);
+        assert!((max_large - 0.2).abs() < 1e-6);
+    }
+
+    // ── pass 4 scene-scaled range integration tests ───────────────────
+
+    /// Pass 4 with scene_bounds rewrites an auto-stamped orbit_camera distance
+    /// from the generic band to the scene-scaled band; second run is idempotent.
+    #[test]
+    fn pass4_scene_bounds_rewrites_distance_band_and_is_idempotent() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.orbit_camera" {
+                    vec![SceneParamMetadata {
+                        name: "distance".to_string(),
+                        label: "Distance".to_string(),
+                        min: 0.01,
+                        max: 100.0, // generic band — should be overwritten
+                        default_value: SerializedParamValue::Float { value: 2.0 },
+                        ..float_meta("distance", "Distance")
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(3, "node.orbit_camera");
+        let node_id = node.node_id.clone();
+
+        let stale_spec = ParamSpecDef {
+            id: "3_distance".to_string(),
+            name: "Distance".to_string(),
+            min: 0.01,
+            max: 100.0, // generic band
+            default_value: 2.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: Some("Camera".to_string()),
+            card_visible: true,
+        };
+        let stale_binding = BindingDef {
+            id: "3_distance".to_string(),
+            label: "Distance".to_string(),
+            default_value: 2.0,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "distance".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        // scene_bounds: [-5, -5, -5]..[5, 5, 5] → radius = sqrt(75) ≈ 8.66
+        // scene-scaled distance band: 0.01..6·radius ≈ 0.01..51.96
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec],
+                bindings: vec![stale_binding],
+                scene_bounds: Some(([-5.0; 3], [5.0; 3])),
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let vocab = ["node.orbit_camera"];
+        assert!(
+            migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
+            "first run must repair the distance band"
+        );
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "3_distance").unwrap();
+        let r = scene_radius_from_bounds(([-5.0; 3], [5.0; 3]));
+        let expected_max = 6.0 * r;
+        assert!(
+            (spec.max - expected_max).abs() < 1e-3,
+            "distance max must be scene-scaled 6·radius ({expected_max}), got {}",
+            spec.max
+        );
+        assert_eq!(spec.min, 0.01, "distance min stays at 0.01");
+        // default_value (2.0) is inside 0.01..51.96 — widen rule doesn't distort
+        assert_eq!(spec.default_value, 2.0);
+
+        let after = def.clone();
+        assert!(
+            !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
+            "second run must be a no-op"
+        );
+        assert_eq!(def, after, "second run must not touch a single byte");
+    }
+
+    /// Pass 4 with scene_bounds gives transform_3d pos_x ±2·radius.
+    #[test]
+    fn pass4_scene_bounds_rewrites_position_band() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.transform_3d" {
+                    vec![float_meta("pos_x", "X")]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(2, "node.transform_3d");
+        let node_id = node.node_id.clone();
+
+        let stale_spec = ParamSpecDef {
+            id: "2_pos_x".to_string(),
+            name: "X".to_string(),
+            min: -100.0,
+            max: 100.0, // generic band — should be overwritten
+            default_value: 0.5,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: Some("Transform".to_string()),
+            card_visible: true,
+        };
+        let stale_binding = BindingDef {
+            id: "2_pos_x".to_string(),
+            label: "X".to_string(),
+            default_value: 0.5,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "pos_x".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        // scene_bounds: [-2, -2, -2]..[2, 2, 2] → radius = sqrt(12) ≈ 3.464
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec],
+                bindings: vec![stale_binding],
+                scene_bounds: Some(([-2.0; 3], [2.0; 3])),
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let vocab = ["node.transform_3d"];
+        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "2_pos_x").unwrap();
+        let r = scene_radius_from_bounds(([-2.0; 3], [2.0; 3]));
+        assert!((spec.min - -2.0 * r).abs() < 1e-3, "pos_x min = -2·radius ({})", -2.0 * r);
+        assert!((spec.max - 2.0 * r).abs() < 1e-3, "pos_x max = 2·radius ({})", 2.0 * r);
+    }
+
+    /// A param NOT in the scene-scaled table keeps the generic metadata
+    /// refresh path even when scene_bounds are present.
+    #[test]
+    fn pass4_unknown_param_keeps_generic_path() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.transform_3d" {
+                    vec![SceneParamMetadata {
+                        name: "scale_x".to_string(),
+                        label: "Scale X".to_string(),
+                        min: 0.0,
+                        max: 10.0,
+                        default_value: SerializedParamValue::Float { value: 1.0 },
+                        ..float_meta("scale_x", "Scale X")
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(4, "node.transform_3d");
+        let node_id = node.node_id.clone();
+
+        let stale_spec = ParamSpecDef {
+            id: "4_scale_x".to_string(),
+            name: "Scale X".to_string(),
+            min: 0.0,
+            max: 5.0, // stale generic band
+            default_value: 1.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: Some("Transform".to_string()),
+            card_visible: true,
+        };
+        let stale_binding = BindingDef {
+            id: "4_scale_x".to_string(),
+            label: "Scale X".to_string(),
+            default_value: 1.0,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "scale_x".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec],
+                bindings: vec![stale_binding],
+                scene_bounds: Some(([-5.0; 3], [5.0; 3])),
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let vocab = ["node.transform_3d"];
+        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "4_scale_x").unwrap();
+        // scale_x is NOT in the scene-scaled table, so generic metadata applies
+        assert!((spec.min - 0.0).abs() < 1e-6, "scale_x min stays generic");
+        assert!((spec.max - 10.0).abs() < 1e-6, "scale_x max refreshes to generic 10.0");
     }
 }
