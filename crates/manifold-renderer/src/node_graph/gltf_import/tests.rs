@@ -6566,3 +6566,69 @@ fn merge_stamps_scene_ranges_on_transform_cards() {
     assert_eq!(pos.default_value, 0.0);
     assert!((pos.max - 2.0 * r).abs() < 1e-3, "merged transform pos slider must be ±2·incoming-radius, got {}", pos.max);
 }
+
+/// BUG-upfq follow-up: orbit camera `distance`/`near`/`far` slider ranges
+/// must scale with the bbox radius. Small-bbox import (half-extent 0.137,
+/// photoscan branch scale) and large-bbox import (half-extent 50) both get
+/// distance max ≈ 6·radius, near max ≈ 2·radius, far max ≈ 20·radius.
+#[test]
+fn orbit_camera_ranges_scale_with_bbox_radius() {
+    let (small_def, _) = scene_import_with_half_extent(0.137);
+    let (large_def, _) = scene_import_with_half_extent(50.0);
+
+    let small_meta = small_def.preset_metadata.as_ref().unwrap();
+    let large_meta = large_def.preset_metadata.as_ref().unwrap();
+
+    let small_cam_id = small_def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap().id;
+    let large_cam_id = large_def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap().id;
+
+    let small_r = super::scene_scale::SceneScale::from_bbox([-0.137; 3], [0.137; 3]).radius;
+    let large_r = super::scene_scale::SceneScale::from_bbox([-50.0; 3], [50.0; 3]).radius;
+
+    // distance band: 0.01..6·radius
+    let small_dist = stamped_card_param(small_meta, small_cam_id, "distance");
+    let large_dist = stamped_card_param(large_meta, large_cam_id, "distance");
+    assert!((small_dist.max - 6.0 * small_r).abs() < 1e-3, "small orbit distance max = 6·radius, got {}", small_dist.max);
+    assert!((large_dist.max - 6.0 * large_r).abs() < 1e-3, "large orbit distance max = 6·radius, got {}", large_dist.max);
+    assert_eq!(small_dist.min, 0.01, "distance min stays at the primitive's 0.01 floor");
+
+    // near band: 0.001..2·radius
+    let small_near = stamped_card_param(small_meta, small_cam_id, "near");
+    let large_near = stamped_card_param(large_meta, large_cam_id, "near");
+    assert!((small_near.max - 2.0 * small_r).abs() < 1e-3, "small orbit near max = 2·radius, got {}", small_near.max);
+    assert!((large_near.max - 2.0 * large_r).abs() < 1e-3, "large orbit near max = 2·radius, got {}", large_near.max);
+    assert_eq!(small_near.min, 0.001, "near min stays at the primitive's 0.001 floor");
+
+    // far band: 1.0..min(20·radius, 10_000), widened to contain the stamped
+    // default (the import stamps far at max(DEFAULT_FAR=200, distance+1.5·r),
+    // so small scenes get far=200 which is wider than 20·r).
+    let small_far = stamped_card_param(small_meta, small_cam_id, "far");
+    let large_far = stamped_card_param(large_meta, large_cam_id, "far");
+    let small_far_expected = ((20.0 * small_r).min(10_000.0)).max(200.0); // widened by stamped default
+    let large_far_expected = (20.0 * large_r).min(10_000.0);
+    assert!((small_far.max - small_far_expected).abs() < 1e-3, "small orbit far max = min(20·radius, 10000) widened to contain stamped default, got {}", small_far.max);
+    assert!((large_far.max - large_far_expected).abs() < 1e-3, "large orbit far max = min(20·radius, 10000), got {}", large_far.max);
+    assert_eq!(small_far.min, 1.0, "far min stays at the primitive's 1.0 floor");
+}
+
+/// BUG-upfq follow-up: a stamped default that falls outside the derived band
+/// must be contained by the widen rule, never moved.
+#[test]
+fn orbit_camera_range_override_never_moves_defaults() {
+    let (def, _) = scene_import_with_half_extent(0.137);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let cam_id = def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap();
+    let cam_node = &cam_id;
+    let cam_id = cam_id.id;
+
+    for param in &["distance", "near", "far"] {
+        let spec = stamped_card_param(meta, cam_id, param);
+        let stamped_default = match cam_node.params.get(*param) {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("{param} must be a stamped float, got {other:?}"),
+        };
+        assert_eq!(spec.default_value, stamped_default, "{param}: default value must match the node's stamped value");
+        assert!(spec.default_value >= spec.min, "{param}: default {} must be >= min {}", spec.default_value, spec.min);
+        assert!(spec.default_value <= spec.max, "{param}: default {} must be <= max {}", spec.default_value, spec.max);
+    }
+}
