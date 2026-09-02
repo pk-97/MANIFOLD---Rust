@@ -224,6 +224,7 @@ mod tests {
                 "LFO",
                 "Light",
                 "Look-At Camera",
+                "Loop Camera",
                 "Luminance",
                 "Math",
                 "One Euro Filter",

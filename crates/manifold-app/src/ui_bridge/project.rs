@@ -625,7 +625,7 @@ pub(super) fn dispatch_project(
                         }
                     }
                 }
-                CameraVm::Free(_) | CameraVm::Custom { .. } | CameraVm::None => {
+                CameraVm::Free(_) | CameraVm::Custom { .. } | CameraVm::None | CameraVm::Loop(_) => {
                     eprintln!("[Scene] frame-selected unsupported for this camera type");
                     return DispatchResult::handled();
                 }
