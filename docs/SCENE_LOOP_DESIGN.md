@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** IN PROGRESS — P1 on main 2026-09-02 (atoms, apply/remove commands, wrap-parity net); P2 (panel section) + P3 (fog polish) not started. · 2026-09-02 · k3 (lead)
+**Status:** IN PROGRESS — P1 on main 2026-09-02 (atoms, apply/remove commands, wrap-parity net); P2 (panel section) landed on lane 2026-09-02 (renderer-side plan builder, D10 camera-home addendum, flow + gates); P3 (fog polish) not started. · 2026-09-02 · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -154,6 +154,15 @@ don't redesign.
   free as a byproduct of P1's demo render. If that number blows the 4K frame
   budget at ×3, escalate to Peter — far-copy degradation is a redesign, not a
   lane decision.
+  **P2 addendum — camera home (lead ruling 2026-09-02):** the loop camera's
+  phase-0 home is the CORRIDOR ENTRY, never the scene center: `home =
+  -cell_size/2` along the travel axis (imports recenter the scene at the
+  origin, so the near face is not 0), cross-section center + lateral/height
+  offsets, looking along +axis. The view from the cell-0 near face down
+  copies 0/+1/+2 is period-identical to a `-cell/0/+cell` framing, so cycles
+  stay bit-identical (D4) — behind-camera geometry never enters the frame.
+  `home` is a real `node.loop_camera` param the plan builder sets; copies
+  stay at `i*cell_size` (D2's atom contract, not reopened).
 
 ---
 

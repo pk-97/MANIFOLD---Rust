@@ -132,8 +132,13 @@ pub fn assemble_scene_loop_plan(
         group: None,
     });
 
-    // loop_camera: flies phase*cell_size along the travel axis each loop.
-    // Param names match `node.loop_camera`'s primitive manifest (fov_y, not fov).
+    // loop_camera: flies one cell per loop from the corridor ENTRY (D10
+    // addendum: home = -cell/2 = the scene's near face along the travel axis —
+    // imports recenter the scene at the origin, so the near face is not 0).
+    // The phase-0 camera at the near face looks down copies 0/+1/+2 — the view
+    // is period-identical to a -cell/0/+cell framing, and behind-camera
+    // geometry never enters the frame (lead ruling). Phase 0 == phase 1 by
+    // construction (D4 wrap purity). fov_y (not fov) matches the manifest.
     new_nodes.push(EffectGraphNode {
         id: loop_camera_id,
         node_id: manifold_core::NodeId::new("loop_camera"),
@@ -143,6 +148,7 @@ pub fn assemble_scene_loop_plan(
             let mut p = std::collections::BTreeMap::new();
             p.insert("cell_size".to_string(), SerializedParamValue::Float { value: cell_size });
             p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z — must match scene_array
+            p.insert("home".to_string(), SerializedParamValue::Float { value: -cell_size * 0.5 });
             p.insert("lateral".to_string(), SerializedParamValue::Float { value: 0.0 });
             p.insert("height".to_string(), SerializedParamValue::Float { value: 1.5 });
             p.insert("fov_y".to_string(), SerializedParamValue::Float { value: 0.9 });
