@@ -51,14 +51,11 @@ pub struct StringParamDef {
     pub default_value: &'static str,
     /// If true, the inspector shows a dropdown selector instead of text input.
     pub use_dropdown: bool,
-    /// If true, this string param holds a file path on disk (a media asset
-    /// the project references — a GLB/HDRI/etc., NOT a directory). Consumed
-    /// by the `manifold-io` asset-path inventory (`collect_asset_paths`,
-    /// PROJECT_FOLDERS_DESIGN D4/D5): preset authors flag a new path param
-    /// here and it gets collected for free — no hardcoded id list in the io
-    /// layer. `PROJECT_FOLDERS_DESIGN.md` §6.5: this flag + the graph-JSON
-    /// `"file_path": true` marker replaces the rot-on-arrival static
-    /// `["model_file", "hdri_file", "path"]` list.
+    /// If true, this string param holds a file path on disk. Superseded by
+    /// binding-driven collection (PROJECT_FOLDERS_DESIGN P5): collection no
+    /// longer reads this flag — a string param whose `stringBinding` targets
+    /// a file-loading node type is collected regardless
+    /// ([`crate::file_loader::file_loader_kind`]). Kept for serde compat.
     pub is_file_path: bool,
 }
 

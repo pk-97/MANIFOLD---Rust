@@ -1,19 +1,24 @@
 //! The asset-path inventory (PROJECT_FOLDERS_DESIGN.md D4).
 //!
 //! [`collect_asset_paths`] is THE enumeration of every external file a project
-//! references — video library clips, audio clips, layer video folders, and
-//! every string param flagged `is_file_path` on any generator instance. Path
-//! Resolver extension (P2), Collect All and Save (P4), and any future
-//! missing-file report all read it. No second list anywhere.
+//! references — video library clips, audio clips, layer video folders, image
+//! clips, and every string param whose `stringBinding` targets a file-loading
+//! node type on any generator instance. Path Resolver extension (P2), Collect
+//! All and Save (P4), and any future missing-file report all read it. No
+//! second list anywhere.
 //!
-//! The string-param half is flag-driven by design (D5): a preset author marks
-//! a new path param and it gets collected for free. The io layer never names a
-//! param id — the design's negative `rg` gate (no path-param id literal in the
-//! io crate) enforces that.
+//! The string-param half is binding-driven (P5): a string param is collected
+//! when its binding targets a node whose `type_id` is in the core
+//! `file_loader_kind` table — independent of any `is_file_path` flag, so
+//! presets embedded before the flag existed collect their GLBs too. The io
+//! layer never names a param id and never names a node type id — both live in
+//! `manifold_core::file_loader` (P5). Enumeration precedence mirrors the
+//! runtime merge: a present per-clip override wins, else the def default.
 
 use crate::path_resolver::PathResolver;
-use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::effects::PresetInstance;
+use manifold_core::file_loader::{file_loader_kind, AssetFamily, NodeFileLoad};
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
@@ -22,13 +27,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Which media family an asset belongs to — the `Media/` subfolder it collects
-/// into (D2): `Media/Video`, `Media/Audio`, `Media/Meshes`, `Media/HDRIs`.
+/// into (D2): `Media/Video`, `Media/Audio`, `Media/Meshes`, `Media/HDRIs`,
+/// `Media/Images`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     Video,
     Audio,
     Mesh,
     Hdri,
+    Images,
 }
 
 /// Where a collected asset lives in the project, used to re-point the stored
@@ -41,9 +48,12 @@ pub enum AssetTarget {
     LayerVideoFolder { layer_id: LayerId },
     /// A `TimelineClip`'s `audio_file_path`, by layer + clip id.
     AudioClip { layer_id: LayerId, clip_id: ClipId },
-    /// A flagged string param on a generator layer, keyed by param id. The
-    /// value lives per-clip (`TimelineClip.string_params`) with a fallback to
-    /// the preset-def default.
+    /// A `TimelineClip`'s `image_path` (a still-image clip), by layer + clip
+    /// id.
+    ImageClip { layer_id: LayerId, clip_id: ClipId },
+    /// A string param on a generator layer, keyed by param id. The value lives
+    /// per-clip (`TimelineClip.string_params`) with a fallback to the
+    /// preset-def default.
     StringParam { layer_id: LayerId, key: String },
 }
 
@@ -61,12 +71,14 @@ pub struct AssetRef {
 /// - video library clips (`file_path`)
 /// - layer video folders (`video_folder_path`)
 /// - audio source clips (`audio_file_path`)
-/// - every string param flagged `is_file_path` on any generator instance
-///   (the model/HDRI globs a preset loads — any preset's path param, flagged
-///   by its author) — flag-driven, from the instance's own def first, then the
-///   project's embedded preset, then the global definition registry (which
-///   already reflects this project's embedded presets through the app's
-///   overlay).
+/// - still-image clips (`image_path`)
+/// - every string param whose `stringBinding` targets a file-loading node
+///   type on any generator instance (the model/HDRI/image-folder paths a
+///   preset loads) — binding-driven (P5): the binding's node type_id is looked
+///   up in `manifold_core::file_loader`, independent of any `is_file_path`
+///   flag. Resolution from the instance's own def first, then the project's
+///   embedded preset, then the global definition registry (which already
+///   reflects this project's embedded presets through the app's overlay).
 ///
 /// Empty paths are skipped (an unset HDRI path is `""` and means "no envmap").
 /// Paths are returned verbatim — existence is NOT checked: the same inventory
@@ -113,10 +125,21 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                     },
                 });
             }
+            // Still-image clips (BUG-2jbn).
+            if !clip.image_path.is_empty() {
+                out.push(AssetRef {
+                    kind: AssetKind::Images,
+                    path: PathBuf::from(&clip.image_path),
+                    target: AssetTarget::ImageClip {
+                        layer_id: layer.layer_id.clone(),
+                        clip_id: clip.id.clone(),
+                    },
+                });
+            }
         }
     }
 
-    // Flagged string params on every generator layer. Only `LayerType::Generator`
+    // String params on every generator layer. Only `LayerType::Generator`
     // layers carry a `gen_params` instance today; effects gain string params as
     // the capability gap closes — the same walk extends to them unchanged.
     for layer in &project.timeline.layers {
@@ -127,7 +150,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
             continue;
         };
         let defs = resolve_string_defs(project, inst);
-        for (key, default) in &defs {
+        for (key, default, load) in &defs {
             // Value precedence mirrors the runtime merge (`generator_renderer`):
             // a present per-clip override wins ANY other clip's (and the def
             // default), even when empty — an explicit `""` clears the param.
@@ -148,7 +171,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                     continue;
                 }
                 out.push(AssetRef {
-                    kind: classify_string_param(key, value, inst_graph(inst)),
+                    kind: kind_of(*load),
                     path: PathBuf::from(value),
                     target: AssetTarget::StringParam {
                         layer_id: layer.layer_id.clone(),
@@ -165,35 +188,34 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
     out
 }
 
-/// The flagged string-param defs for a generator instance, as owned `(key,
-/// default_value)` pairs, ordered by the def. Resolution order (same as the
-/// runtime load): the instance's own graph metadata first, then the project's
-/// embedded preset by tracked id, then the global definition registry.
-fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String, String)> {
+/// The file-loading string-param defs for a generator instance, as owned
+/// `(key, default_value, load)` triples where `load` names what the bound node
+/// reads (file vs folder + family). Resolution order (same as the runtime
+/// load): the instance's own graph metadata first, then the project's embedded
+/// preset by tracked id, then the global definition registry.
+///
+/// Enumeration is binding-driven (P5): a def is included iff its `stringBinding`
+/// targets a node whose type_id has a `file_loader_kind` entry — the
+/// `is_file_path` flag is NOT consulted. To walk a binding we need the graph
+/// that carries the binding (`bindings` live in the same `PresetMetadata` as
+/// the `string_params`), so the registry fallback (which only carries defs by
+/// key, not their targets) cannot resolve bindings: static registry presets
+/// carry `is_file_path` as their author's declaration, which is the best
+/// binding signal available there — still independent of the io layer naming
+/// any id.
+fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String, String, NodeFileLoad)> {
     // 1. The instance's own graph metadata carries the full `StringParamSpecDef`
     //    list when it has diverged (or was just imported as an embedded graph).
     if let Some(graph) = inst_graph(inst)
-        && let Some(meta) = graph.preset_metadata.as_ref()
+        && graph.preset_metadata.is_some()
     {
-        return meta
-            .string_params
-            .iter()
-            .filter(|sp| sp.is_file_path)
-            .map(|sp| (sp.id.clone(), sp.default_value.clone()))
-            .collect();
+        return defs_from_meta(graph);
     }
     // 2. An embedded preset by the tracked id is self-contained (graph +
     //    metadata) — the import case, where the layer tracks by id (graph: None).
     let id = inst.generator_type();
-    if let Some(embedded) = project.embedded_preset(id)
-        && let Some(meta) = embedded.def.preset_metadata.as_ref()
-    {
-        return meta
-            .string_params
-            .iter()
-            .filter(|sp| sp.is_file_path)
-            .map(|sp| (sp.id.clone(), sp.default_value.clone()))
-            .collect();
+    if let Some(embedded) = project.embedded_preset(id) {
+        return defs_from_meta(&embedded.def);
     }
     // 3. Stock/user catalog preset — the global registry. (The app's overlay
     //    installs this project's embedded presets into it at load, so 2 would
@@ -202,9 +224,57 @@ fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String,
         def.string_param_defs
             .iter()
             .filter(|sp| sp.is_file_path)
-            .map(|sp| (sp.key.to_string(), sp.default_value.to_string()))
+            .map(|sp| {
+                // No graph to walk bindings against here — the extension hint
+                // is the only family signal (pre-P5 behavior for this fallback).
+                let family = match sp.default_value.rsplit('.').next() {
+                    Some(ext) if ext.eq_ignore_ascii_case("exr") || ext.eq_ignore_ascii_case("hdr") => {
+                        AssetFamily::Hdri
+                    }
+                    _ => AssetFamily::Mesh,
+                };
+                (
+                    sp.key.to_string(),
+                    sp.default_value.to_string(),
+                    NodeFileLoad::File(family),
+                )
+            })
             .collect()
     })
+}
+
+/// The `StringParamSpecDef`s of a graph that carry a file-loading binding.
+/// Each def is paired with the `NodeFileLoad` its binding's target node reads,
+/// resolved through the graph's node table. Defs whose binding is absent,
+/// non-node, or bound to a non-file-loading node are skipped. A def with NO
+/// binding entry but a bound counterpart that loaded is skipped — enumeration
+/// is per-binding, so every def needs a resolvable binding.
+fn defs_from_meta(graph: &EffectGraphDef) -> Vec<(String, String, NodeFileLoad)> {
+    let Some(meta) = graph.preset_metadata.as_ref() else {
+        return Vec::new();
+    };
+    // Map param name → StringBindingDef id, so (1) each def gets its own
+    // binding lookup and (2) multiple string params bound to DIFFERENT nodes
+    // classify independently (e.g. MriVolume's axial/sagittal/coronal folders).
+    let binding_by_id: std::collections::HashMap<&str, &manifold_core::effect_graph_def::StringBindingDef> =
+        meta.string_bindings.iter().map(|b| (b.id.as_str(), b)).collect();
+    let mut out = Vec::new();
+    for sp in &meta.string_params {
+        let Some(bind) = binding_by_id.get(sp.id.as_str()) else {
+            continue;
+        };
+        let BindingTarget::Node { node_id, .. } = &bind.target else {
+            continue;
+        };
+        let Some(node) = graph.nodes.iter().find(|n| &n.node_id == node_id) else {
+            continue;
+        };
+        let Some(load) = file_loader_kind(&node.type_id) else {
+            continue;
+        };
+        out.push((sp.id.clone(), sp.default_value.clone(), load));
+    }
+    out
 }
 
 /// The full `EffectGraphDef` carried directly on a `PresetInstance`'s own
@@ -213,41 +283,22 @@ fn inst_graph(inst: &PresetInstance) -> Option<&EffectGraphDef> {
     inst.graph.as_ref()
 }
 
-/// Classify a flagged string param into a media family. Binding-following:
-/// the param's `stringBinding` targets a node; `node.hdri_source` reads an
-/// `.exr` envmap → Hdri, every other file-loading node in a generator reads
-/// the GLB → Mesh. Fallback (no metadata / no binding / no matching node) is
-/// extension-based: `.hdr`/`.exr` → Hdri, else Mesh.
-fn classify_string_param(key: &str, value: &str, graph: Option<&EffectGraphDef>) -> AssetKind {
-    if let Some(graph) = graph
-        && let Some(meta) = graph.preset_metadata.as_ref()
-    {
-        let binding = meta.string_bindings.iter().find(|b| b.id == key);
-        if let Some(binding) = binding
-            && let manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } =
-                &binding.target
-        {
-            let node_type = graph
-                .nodes
-                .iter()
-                .find(|n| &n.node_id == node_id)
-                .map(|n| n.type_id.as_str());
-            return match node_type {
-                Some(t) if t.contains("hdri") => AssetKind::Hdri,
-                _ => AssetKind::Mesh,
-            };
+/// The `AssetKind` an enumerated `NodeFileLoad` collects into. The table
+/// currently has no Folder(Mesh)/Folder(Hdri) entries; map them defensively to
+/// the same family as their File sibling so a future `Folder(Mesh)` entry
+/// (e.g. a model-drop folder) collects without a red-match refactor — the
+/// family, not the file-vs-folder split, decides the `Media/` subfolder.
+fn kind_of(load: NodeFileLoad) -> AssetKind {
+    match load {
+        NodeFileLoad::File(AssetFamily::Mesh) | NodeFileLoad::Folder(AssetFamily::Mesh) => {
+            AssetKind::Mesh
         }
-    }
-    // No binding-informed signal — fall back to the file extension.
-    let ext = Path::new(value)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if matches!(ext.as_str(), "hdr" | "exr") {
-        AssetKind::Hdri
-    } else {
-        AssetKind::Mesh
+        NodeFileLoad::File(AssetFamily::Hdri) | NodeFileLoad::Folder(AssetFamily::Hdri) => {
+            AssetKind::Hdri
+        }
+        NodeFileLoad::File(AssetFamily::Images) | NodeFileLoad::Folder(AssetFamily::Images) => {
+            AssetKind::Images
+        }
     }
 }
 
@@ -396,6 +447,7 @@ fn media_family_dir(project_dir: &Path, kind: AssetKind) -> PathBuf {
         AssetKind::Audio => "Audio",
         AssetKind::Mesh => "Meshes",
         AssetKind::Hdri => "HDRIs",
+        AssetKind::Images => "Images",
     };
     project_dir.join("Media").join(sub)
 }
@@ -518,6 +570,17 @@ fn re_point(
                 false
             }
         }
+        AssetTarget::ImageClip { layer_id, clip_id } => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                && let Some(clip) = layer.clips.iter_mut().find(|c| &c.id == clip_id)
+            {
+                clip.image_path = new_str.clone();
+                clip.relative_image_path = relative;
+                true
+            } else {
+                false
+            }
+        }
         AssetTarget::StringParam { layer_id, key } => {
             re_point_string_param(project, layer_id, key, &old_str, &new_str)
         }
@@ -528,7 +591,7 @@ fn re_point(
     }
 }
 
-/// Re-point a flagged string param (D5a). Clips whose effective value equals
+/// Re-point a file-loading string param (D5a). Clips whose effective value equals
 /// `old` are rewritten to `new`: an existing per-clip override is updated in
 /// place; a value that came only from the preset-def default is materialized
 /// as a per-clip override. The def's `default_value` is never touched.
@@ -551,8 +614,8 @@ fn re_point_string_param(
         };
         resolve_string_defs(project, inst)
             .into_iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, default)| default)
+            .find(|(k, _, _)| k == key)
+            .map(|(_, default, _)| default)
     };
 
     let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
@@ -724,8 +787,10 @@ mod tests {
         let embedded = path_preset(
             "azalea",
             vec![
-                sp("mesh_path", "/mnt/models/azalea.glb", true),
-                sp("env_path", "", true),
+                // NO `is_file_path` flag — a pre-flag embedded preset (V5):
+                // collection must follow the binding regardless (BUG-gqne).
+                sp("mesh_path", "/mnt/models/azalea.glb", false),
+                sp("env_path", "", false),
             ],
             vec![mesh_bind, hdri_bind],
             vec![
@@ -768,12 +833,17 @@ mod tests {
         }));
     }
 
+    /// V5 regression (BUG-gqne): a string param with a `stringBinding` to
+    /// `node.gltf_mesh_source` is collected as Mesh even though the
+    /// `is_file_path` flag was never set — the class of embedded preset that
+    /// silently skipped its GLB before P5.
     #[test]
-    fn flagged_string_params_collect_mesh_and_hdri() {
+    fn binding_driven_string_params_collect_without_file_path_flag() {
         let (project, _folder_layer_id, _audio_layer_id) = project_with_all_families();
         let refs = collect_asset_paths(&project);
 
-        // mesh_path → Mesh, from the embedded preset's def default.
+        // mesh_path → Mesh, from the embedded preset's def default, with NO
+        // flag on the def (the fixture sets is_file_path: false).
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Mesh
                 && r.path == std::path::Path::new("/mnt/models/azalea.glb")
@@ -817,7 +887,18 @@ mod tests {
                 sp("mesh_path", "/mnt/models/empty.glb", true),
                 sp("text", "HELLO", false),
             ],
-            vec![],
+            vec![
+                // `text` has no binding → never enumerated.
+                StringBindingDef {
+                    id: "text".to_string(),
+                    label: "Text".to_string(),
+                    default_value: "HELLO".to_string(),
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("mesh"),
+                        param: "path".to_string(),
+                    },
+                },
+            ],
             vec![node("mesh", "node.gltf_mesh_source")],
         );
         project.upsert_embedded_preset(embedded);
@@ -877,11 +958,11 @@ mod tests {
     // ── P4 gate (PROJECT_FOLDERS_DESIGN.md): Collect All and Save round trip ──
     //
     // Synthetic project referencing fixture files in a temp dir — video + audio
-    // + a GLB carried as a flagged string param whose value lives ONLY in the
-    // preset-def default (so collect must materialize a per-clip override,
-    // never write the def's `default_value`). Collect → assert Media/ layout,
-    // relative paths, source hashes unchanged (copy-only) → reload through the
-    // full load pipeline → every reference resolves.
+    // + a GLB carried as a binding-driven string param (no flag) whose value
+    // lives ONLY in the preset-def default (so collect must materialize a
+    // per-clip override, never write the def's `default_value`). Collect →
+    // assert Media/ layout, relative paths, source hashes unchanged (copy-only)
+    // → reload through the full load pipeline → every reference resolves.
 
     #[test]
     fn collect_all_and_save_round_trips_mixed_families_copy_only() {
@@ -946,7 +1027,9 @@ mod tests {
         };
         project.upsert_embedded_preset(path_preset(
             "azalea",
-            vec![sp("model_path", &glb_path, true)],
+            // No `is_file_path` flag — the pre-flag embedded preset case
+            // (BUG-gqne): collect follows the binding, not the marker.
+            vec![sp("model_path", &glb_path, false)],
             vec![mesh_bind],
             vec![node("mesh", "node.gltf_mesh_source")],
         ));
@@ -1052,5 +1135,212 @@ mod tests {
         assert!(std::path::Path::new(model2).exists(), "reloaded GLB path resolves: {model2}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── P5 (PROJECT_FOLDERS_DESIGN.md) ─────────────────────────────
+
+    /// `node.image_folder` string param → folder-valued ref enumerates Images,
+    /// Collect copies the tree into `Media/Images/`, and the per-clip override
+    /// is re-pointed to the in-folder tree (BUG-3i1p).
+    #[test]
+    fn image_folder_param_collects_tree_into_media_images() {
+        let base = std::env::temp_dir().join(format!("manifold-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src_dir = base.join("scan");
+        std::fs::create_dir_all(src_dir.join("sub")).unwrap();
+        std::fs::write(src_dir.join("slice01.png"), b"png1").unwrap();
+        std::fs::write(src_dir.join("sub/slice02.png"), b"png2").unwrap();
+
+        let folder_path = src_dir.to_string_lossy().to_string();
+        let folder_bind = StringBindingDef {
+            id: "volume_folder".to_string(),
+            label: "Volume Folder".to_string(),
+            default_value: folder_path.clone(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new("vol"),
+                param: "folder".to_string(),
+            },
+        };
+        let mut project = Project::default();
+        project.upsert_embedded_preset(path_preset(
+            "mri",
+            vec![sp("volume_folder", &folder_path, false)],
+            vec![folder_bind],
+            vec![node("vol", "node.image_folder")],
+        ));
+        let mut gen_layer = Layer::new_generator("MRI".into(), PresetTypeId::new("mri"), 0);
+        gen_layer.clips.push(TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(8.0),
+        ));
+        let gen_layer_id = gen_layer.layer_id.clone();
+        project.timeline.layers.push(gen_layer);
+
+        // Enumeration: the folder is a single Images ref (directory-valued).
+        let refs = collect_asset_paths(&project);
+        let folder_refs: Vec<_> = refs
+            .iter()
+            .filter(|r| matches!(&r.target, AssetTarget::StringParam { key, .. } if key == "volume_folder"))
+            .collect();
+        assert_eq!(folder_refs.len(), 1);
+        assert_eq!(folder_refs[0].kind, AssetKind::Images);
+        assert_eq!(folder_refs[0].path, std::path::Path::new(&folder_path));
+
+        // Collect: tree copied, override re-pointed to the in-folder tree.
+        let proj_dir = base.join("Show");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        let project_path = proj_dir.join("Show.manifold");
+        collect_all_and_save(&mut project, &project_path).unwrap();
+
+        assert!(proj_dir.join("Media/Images/scan/slice01.png").is_file());
+        assert!(proj_dir.join("Media/Images/scan/sub/slice02.png").is_file());
+        // The DEF default is untouched (D5a): it still names the original.
+        let def = project.embedded_preset(&PresetTypeId::new("mri")).unwrap();
+        let def_folder = def
+            .def
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .string_params
+            .iter()
+            .find(|s| s.id == "volume_folder")
+            .unwrap()
+            .default_value
+            .clone();
+        assert_eq!(def_folder, folder_path);
+        let (_, layer) = project.timeline.find_layer_by_id(gen_layer_id.as_str()).unwrap();
+        let stored = layer.clips[0].string_params.as_ref().unwrap()["volume_folder"].clone();
+        let stored_path = std::path::Path::new(&stored);
+        assert!(stored_path.is_dir(), "override re-pointed to in-folder tree: {stored}");
+        assert!(
+            stored_path.starts_with(proj_dir.join("Media/Images")),
+            "re-pointed folder lives under Media/Images: {stored}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Image clip round trip (BUG-2jbn): a still-image clip's file collects to
+    /// `Media/Images/`, `image_path` + `relative_image_path` re-point, save +
+    /// reload resolves.
+    #[test]
+    fn image_clip_collects_and_round_trips() {
+        let base = std::env::temp_dir().join(format!("manifold-image-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src_dir = base.join("sources");
+        let proj_dir = base.join("ImageShow");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        let img_src = src_dir.join("logo.png");
+        std::fs::write(&img_src, b"fake png bytes").unwrap();
+        let img_before = super::sha256_file(&img_src).unwrap();
+
+        let mut project = Project {
+            project_name: "ImageShow".to_string(),
+            ..Project::default()
+        };
+        let mut layer = Layer::new_video("Img".into(), 0);
+        let mut clip = TimelineClip::new_image(
+            img_src.to_string_lossy().to_string(),
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(4.0),
+        );
+        clip.id = manifold_core::id::ClipId::new("img1");
+        layer.clips.push(clip);
+        project.timeline.layers.push(layer);
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+
+        let project_path = proj_dir.join("ImageShow.manifold");
+        let report = collect_all_and_save(&mut project, &project_path).unwrap();
+
+        assert!(proj_dir.join("Media/Images/logo.png").is_file());
+        assert_eq!(report.copied, 1);
+        assert_eq!(report.re_pointed, 1);
+        assert_eq!(super::sha256_file(&img_src).unwrap(), img_before, "copy-only invariant");
+
+        let (_, l) = project.timeline.find_layer_by_id(layer_id.as_str()).unwrap();
+        assert_eq!(l.clips[0].relative_image_path.as_deref(), Some("Media/Images/logo.png"));
+        assert!(l.clips[0].image_path.ends_with("Media/Images/logo.png"));
+        assert!(std::path::Path::new(&l.clips[0].image_path).exists());
+
+        // Reload through the full load pipeline → the image path resolves.
+        let reloaded = crate::loader::load_project(&project_path).unwrap();
+        let (_, rl) = reloaded.timeline.find_layer_by_id(layer_id.as_str()).unwrap();
+        assert!(std::path::Path::new(&rl.clips[0].image_path).exists(), "reloaded image resolves");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Coverage guard (PROJECT_FOLDERS_DESIGN P5 enforcement): source-scans the
+    /// manifold-core model files for `pub …path…: String` / `Option<String>`
+    /// field declarations and asserts each field name is named in this test's
+    /// known-covered list. A NEW path field in the model must fail this test
+    /// until the collect inventory is extended to cover it.
+    #[test]
+    fn every_model_path_field_is_inventory_covered() {
+        let files = [
+            "../manifold-core/src/clip.rs",
+            "../manifold-core/src/video.rs",
+            "../manifold-core/src/layer.rs",
+            "../manifold-core/src/project/mod.rs",
+        ];
+        // Bookkeeping fields, explicitly exempt:
+        // - `last_saved_path` — the .manifold file's own path, never collected.
+        // - `legacy_perc_audio_path` — a legacy percent-analysis path, inert.
+        let exempt = ["last_saved_path", "legacy_perc_audio_path"];
+        let covered = [
+            "file_path",
+            "relative_file_path",
+            "video_folder_path",
+            "relative_video_folder_path",
+            "audio_file_path",
+            "relative_audio_file_path",
+            "image_path",
+            "relative_image_path",
+        ];
+        let mut found = Vec::new();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for f in &files {
+            let text = std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+            for line in text.lines() {
+                let t = line.trim();
+                // Match `pub name: String` / `pub name: Option<String>` /
+                // `pub relative_image_path: Option<String>`.
+                let Some(start) = t.find("pub ") else { continue };
+                let body = &t[start + 4..];
+                let Some(colon) = body.find(':') else { continue };
+                let (name, ty) = body.split_at(colon);
+                let name = name.trim();
+                let ty = ty
+                    .trim_start_matches(':')
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim();
+                if !(name.ends_with("path") || name.ends_with("_path"))
+                    || !(ty == "String" || ty.starts_with("Option<"))
+                {
+                    continue;
+                }
+                found.push(name.to_string());
+            }
+        }
+        for name in &found {
+            if exempt.contains(&name.as_str()) {
+                continue;
+            }
+            assert!(
+                covered.contains(&name.as_str()),
+                "model path field `{name}` is NOT named in the collect inventory's \
+                 covered list — add it to collect_asset_paths and this test"
+            );
+        }
+        // Sanity: the scan actually found the fields; the covered list is not
+        // silently rot (a removed field would keep the list artificially green).
+        for name in &covered {
+            assert!(
+                found.contains(&name.to_string()),
+                "covered field `{name}` no longer exists in the model — remove it from the list"
+            );
+        }
     }
 }
