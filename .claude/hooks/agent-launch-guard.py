@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """PreToolUse hook for Agent: one-pass launch guard — model tier + teammate naming.
 
-Checks everything in one pass; a deny spells the complete corrected call — model AND
-exact name — so one retry always lands. Never auto-fills the model or rewrites the name:
-passing the tier explicitly IS the sign-off.
+Mechanical name defects are AUTO-FIXED via updatedInput (PreToolUse decision field,
+verified against the 2.1.258 hook docs 2026-09-02): casing, stray characters, a
+missing or wrong slot prefix. The correct name is derived from the `model` param —
+zero judgment — so the hook rewrites it and allows the launch with a note saying
+what it did. Two defect classes still deny, because fixing them is a decision, not
+a rewrite:
 
-Model rule:
-- `model` absent -> deny. House default for workers is "sonnet"; "opus"/"fable" are an explicit per-launch decision.
-- "opus"/"fable" -> allowed with a reminder attached.
+- `model` absent -> deny. House default for workers is "sonnet"; "opus"/"fable" are an explicit per-launch decision. Silent inherit of the orchestrator's tier double-billed a worker (2026-07-06); passing the tier explicitly IS the sign-off.
+- task part not descriptive -> deny (the hook will not invent words for you).
 
 Naming rule: name = "<slot>-<descriptive-task>", kebab-case, task part >= 2 plain words
 (opaque labels like T1/D-52 denied: no-opaque-task-labels rule). The slot label is
@@ -82,24 +84,18 @@ def describe_map(env=os.environ) -> str:
     )
 
 
-def decide(tool_input: dict, env=os.environ) -> tuple[str, str]:
-    """(deny_reason, allow_note). Deny reason lists EVERY defect and spells
-    the one corrected call; allow_note carries the opus/fable reminder."""
+def decide(tool_input: dict, env=os.environ) -> tuple[str, str, dict | None]:
+    """(deny_reason, allow_note, fixed_input).
+
+    fixed_input is the full tool_input with a mechanically corrected `name`
+    when that is the ONLY defect — main() emits it as updatedInput. Denies
+    (fixed_input None) spell the complete corrected call so one retry lands.
+    """
     if (tool_input.get("subagent_type") or "").strip().lower() == "fork":
-        return "", ""
+        return "", "", None
 
-    defects: list[str] = []
     note = ""
-
     model = tool_input.get("model")
-    if model is None:
-        defects.append(
-            "no explicit `model` — it would silently inherit the "
-            "orchestrator's tier and double-bill the worker (2026-07-06 "
-            f'incident). "{DEFAULT_MODEL}" is the house worker default; '
-            '"opus"/"fable" only when the task genuinely needs that tier — '
-            "passing it explicitly IS the sign-off"
-        )
     effective_model = str(DEFAULT_MODEL if model is None else model).strip().lower()
 
     if model is not None and effective_model in ("opus", "fable"):
@@ -110,68 +106,80 @@ def decide(tool_input: dict, env=os.environ) -> tuple[str, str]:
         )
 
     name = (tool_input.get("name") or "").strip()
-    suggested_name = ""
+    expected_slot = ""
+    corrected_name = ""
+    name_deny = ""
     if name:
         mapping = slot_map(env)
         valid_slots = {label for _, label in mapping.values()}
         _, expected_slot = mapping.get(effective_model, ("", DEFAULT_MODEL))
         expected_slot = expected_slot or DEFAULT_MODEL
 
-        fixed = name.lower().replace("_", "-")
-        if fixed != name:
-            defects.append(f"name '{name}' is not kebab-case lowercase")
-        if not re.fullmatch(r"[a-z0-9-]+", fixed):
-            defects.append(f"name '{name}' has characters outside [a-z0-9-]")
-            fixed = re.sub(r"[^a-z0-9-]", "-", fixed).strip("-")
-
+        fixed = re.sub(r"[^a-z0-9-]", "-", name.lower().replace("_", "-")).strip("-")
         slot, _, task_part = fixed.partition("-")
         if slot not in valid_slots:
-            task_part = fixed  # no slot prefix at all
-            defects.append(
-                f"name '{name}' lacks its model-slot prefix (live map: "
-                f"{describe_map(env)})"
-            )
-        elif slot != expected_slot:
-            defects.append(
-                f"name '{name}' claims slot '{slot}' but "
-                f'model="{effective_model}" runs slot \'{expected_slot}\' in '
-                f"this session (map: {describe_map(env)})"
-            )
+            task_part = fixed  # no slot prefix at all — prepend expected below
 
         task_segs = [s for s in task_part.split("-") if s]
         alpha_words = [s for s in task_segs if re.search(r"[a-z]{3,}", s)]
         if not task_part or len(alpha_words) < 2 or all(
             OPAQUE_SEG.match(s) for s in task_segs
         ):
-            defects.append(
+            name_deny = (
                 f"task part '{task_part or '(empty)'}' is not descriptive — "
                 "name the WORK in plain words (>=2 words), never bare labels "
                 "like T1/D-52 (no-opaque-task-labels rule)"
             )
             task_part = "<two-plain-words>"
-        suggested_name = f"{expected_slot}-{task_part}"
+        corrected = f"{expected_slot}-{task_part}"
+        if corrected != name:
+            corrected_name = corrected
 
-    if defects:
-        corrected = f'model="{effective_model}"' + (
-            f", name=\"{suggested_name}\"" if suggested_name else ""
+    denies: list[str] = []
+    if model is None:
+        denies.append(
+            "no explicit `model` — it would silently inherit the "
+            "orchestrator's tier and double-bill the worker (2026-07-06 "
+            f'incident). "{DEFAULT_MODEL}" is the house worker default; '
+            '"opus"/"fable" only when the task genuinely needs that tier — '
+            "passing it explicitly IS the sign-off"
         )
-        head = "Agent launch has 1 defect" if len(defects) == 1 else (
-            f"Agent launch has {len(defects)} defects"
+    if name_deny:
+        denies.append(name_deny + f" (live map: {describe_map(env)})")
+
+    if denies:
+        corrected_call = f'model="{effective_model}"' + (
+            f', name="{corrected_name}"' if corrected_name else ""
         )
-        listed = "; ".join(f"({i}) {d}" for i, d in enumerate(defects, 1))
+        head = "Agent launch has 1 defect" if len(denies) == 1 else (
+            f"Agent launch has {len(denies)} defects"
+        )
+        listed = "; ".join(f"({i}) {d}" for i, d in enumerate(denies, 1))
         return (
-            f"{head} — fix ALL in ONE re-issued call: {corrected} "
+            f"{head} — fix ALL in ONE re-issued call: {corrected_call} "
             f"(swap the slot prefix if you choose a different model). "
             f"Defects: {listed}.",
             "",
+            None,
         )
-    return "", note
+
+    if corrected_name:
+        fixed_input = dict(tool_input)
+        fixed_input["name"] = corrected_name
+        auto_note = (
+            f"agent-launch-guard auto-fixed name '{name}' -> '{corrected_name}' "
+            f'(model="{effective_model}" runs slot \'{expected_slot}\' here; '
+            "the prefix is derived, not chosen)"
+        )
+        return "", f"{note} {auto_note}".strip(), fixed_input
+    return "", note, None
 
 
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
-        deny, note = decide(payload.get("tool_input") or {})
+        tool_input = payload.get("tool_input") or {}
+        deny, note, fixed_input = decide(tool_input)
         if deny:
             out = {
                 "hookSpecificOutput": {
@@ -180,14 +188,17 @@ def main() -> None:
                     "permissionDecisionReason": deny,
                 }
             }
-        elif note:
-            out = {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": note,
-                }
+        elif fixed_input is not None or note:
+            spec = {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": note,
             }
+            if fixed_input is not None:
+                # Full corrected input, not a patch — safe whether the harness
+                # merges updatedInput or replaces tool_input wholesale.
+                spec["updatedInput"] = fixed_input
+            out = {"hookSpecificOutput": spec}
         else:
             sys.exit(0)
         print(json.dumps(out))
