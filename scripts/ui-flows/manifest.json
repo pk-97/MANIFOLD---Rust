@@ -8,6 +8,9 @@
       "scene-panel",
       "scene-skin"
     ],
+    "crates/manifold-ui/src/panels/scene_setup_loop.rs": [
+      "scene-setup-loop"
+    ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
       "scene-card",
@@ -102,6 +105,7 @@
     "scene-setup-modifier-stack": "gltfscene",
     "scene-setup-numeric-typein-box": "gltfscene",
     "scene-setup-select-updates": "gltfscene",
+    "scene-setup-loop": "gltfscene",
     "scene-skin": "gltfscene",
     "scene-setup-shadow-softness-dropdown": "gltfscene",
     "select-and-inspect": "inspector",

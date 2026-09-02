@@ -282,6 +282,14 @@ pub enum ProjectAction {
     /// RT Quality settings: replace entire RtQualitySettings struct.
     /// Dispatches `ChangeRtQualityCommand`. One undo unit covers all changes.
     ChangeRtQuality(manifold_foundation::settings::RtQualitySettings),
+    /// SCENE_LOOP_DESIGN P2: "Enable Scene Loop" button. Dispatches
+    /// `ApplySceneLoopCommand` with a plan built from the scene's bounds.
+    /// `(layer_id, render_scene_node_doc_id)`.
+    SceneSetupApplyLoop(LayerId, u32),
+    /// SCENE_LOOP_DESIGN P2: "Remove Scene Loop" action. Dispatches
+    /// `RemoveSceneLoopCommand` with the pre-loop state snapshot.
+    /// `(layer_id, render_scene_node_doc_id)`.
+    SceneSetupRemoveLoop(LayerId, u32),
 }
 
 #[derive(Debug, Clone)]

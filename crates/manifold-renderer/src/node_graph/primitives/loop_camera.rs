@@ -64,6 +64,20 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("home"),
+            label: "Home",
+            // Phase-0 corridor entry along the travel axis (SCENE_LOOP_DESIGN
+            // D10 addendum): a recentered imported scene spans [-cell/2,+cell/2]
+            // along the axis, so the plan builder sets home = -cell/2 to put the
+            // camera at the near face looking down the corridor. Default 0 keeps
+            // the primitive's standalone behaviour unchanged (phase-0 at the
+            // origin, pre-addendum semantics).
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-100000.0, 100000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("fov_y"),
             label: "FOV Y",
             ty: ParamType::Angle,
@@ -111,6 +125,10 @@ impl Primitive for LoopCamera {
         };
         let lateral = ctx.scalar_or_param("lateral", 0.0);
         let height = ctx.scalar_or_param("height", 1.5);
+        // Phase-0 corridor entry (D10 addendum): plan builder sets
+        // home = -cell/2 so the camera starts at the scene's near face and
+        // flies exactly one cell per loop (D4).
+        let home = ctx.scalar_or_param("home", 0.0);
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
         let near = match ctx.params.get("near") {
             Some(ParamValue::Float(f)) => *f,
@@ -130,8 +148,8 @@ impl Primitive for LoopCamera {
             }
         };
 
-        // Travel distance along the axis.
-        let travel = phase * cell_size;
+        // Travel distance along the axis, from the corridor entry `home`.
+        let travel = home + phase * cell_size;
 
         // Build position: travel along axis + lateral/height offsets.
         // Lateral offsets perpendicular to travel; height is Y offset.
@@ -180,11 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn loop_camera_has_seven_params() {
+    fn loop_camera_has_eight_params() {
         let names: Vec<&str> = LoopCamera::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["cell_size", "axis", "lateral", "height", "fov_y", "near", "far"]
+            vec!["cell_size", "axis", "lateral", "height", "home", "fov_y", "near", "far"]
         );
     }
 

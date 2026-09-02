@@ -11242,6 +11242,16 @@
           "type": "float"
         },
         {
+          "default": "0",
+          "label": "Home",
+          "name": "home",
+          "range": [
+            "-100000",
+            "100000"
+          ],
+          "type": "float"
+        },
+        {
           "default": "0.9",
           "label": "FOV Y",
           "name": "fov_y",

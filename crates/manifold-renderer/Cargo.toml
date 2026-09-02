@@ -94,6 +94,11 @@ parking_lot = { workspace = true }
 # only makes an already-transitive edge direct, test-only, dev-dependency
 # scoped. Precedent for the fixture-path resolution: `manifold-io/tests/load_project.rs`.
 manifold-io = { path = "../manifold-io" }
+# SCENE_LOOP_DESIGN P2 end-to-end gate: applies the REAL plan builder +
+# REAL command to a REAL imported GLB, then renders count=1 vs count=3 and
+# diffs. `manifold-renderer` (lib) never imports editing; this edge is
+# test-only, exactly like the `manifold-io` dev-dependency above.
+manifold-editing = { path = "../manifold-editing" }
 
 [[bin]]
 name = "check-presets"

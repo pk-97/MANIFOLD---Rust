@@ -164,6 +164,7 @@ pub fn sync_inspector_data(
             AtmosphereRowVm, EnvironmentRowVm, ObjectMaterialVm, ObjectRowVm, RowAddr, RowValue,
             SceneSetupState, SceneSetupVm, TransformRowVm,
         };
+        use manifold_ui::panels::scene_setup_loop::SceneLoopRow;
 
         let sel_layer_idx = selection
             .selected_layer_id_for_clip
@@ -992,6 +993,13 @@ pub fn sync_inspector_data(
                                 camera,
                                 camera_sections,
                                 world_sections,
+                                scene_loop: vm.scene_loop.as_ref().map(|loop_info| SceneLoopRow {
+                                    section: "Scene Loop".to_string(),
+                                    beat_ramp_doc_id: loop_info.beat_ramp_doc_id,
+                                    rate: loop_info
+                                        .beat_ramp_rate
+                                        .unwrap_or(1.0 / 8.0),
+                                }),
                                 scene_bounds: vm.scene_bounds,
                             }))
                         }

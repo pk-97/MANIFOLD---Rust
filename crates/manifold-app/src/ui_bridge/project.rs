@@ -331,6 +331,53 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+
+        // SCENE_LOOP_DESIGN P2: "Enable Scene Loop" button dispatches
+        // `ApplySceneLoopCommand` with a plan built from the scene's bounds.
+        ProjectAction::SceneSetupApplyLoop(layer_id, render_scene_node_id) => {
+            let Some(default) = generator_catalog_default(project, layer_id) else {
+                return DispatchResult::handled();
+            };
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            let plan = match build_scene_loop_plan(project, layer_id, *render_scene_node_id) {
+                Some(plan) => plan,
+                None => return DispatchResult::handled(),
+            };
+            let cmd = manifold_editing::commands::graph::ApplySceneLoopCommand::new(
+                target,
+                Vec::new(),
+                plan,
+                default,
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+        // SCENE_LOOP_DESIGN P2: "Remove Scene Loop" dispatches
+        // `RemoveSceneLoopCommand` — the plan it needs to invert is built the
+        // same way apply builds it; the command derives the pre-loop state
+        // from the current graph (D5 symmetric removal, no panel-side
+        // snapshot).
+        ProjectAction::SceneSetupRemoveLoop(layer_id, render_scene_node_id) => {
+            if generator_catalog_default(project, layer_id).is_none() {
+                return DispatchResult::handled();
+            }
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            let Some(plan) = build_scene_loop_plan(project, layer_id, *render_scene_node_id) else {
+                return DispatchResult::handled();
+            };
+            let cmd = manifold_editing::commands::graph::RemoveSceneLoopCommand::new(
+                target,
+                Vec::new(),
+                plan,
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+
         // P2 "+ Object"/"+ Light" buttons: the SAME `AddSceneObjectCommand`/
         // `AddSceneLightCommand` the graph editor's own canvas buttons
         // dispatch (SCENE_BUILD P5) — no new mutation path. `next_index`
@@ -1018,6 +1065,29 @@ fn map_skin_target_map(
         Ui::Emissive => manifold_editing::commands::graph::SkinTargetMap::Emissive,
         Ui::BaseColor => manifold_editing::commands::graph::SkinTargetMap::BaseColor,
     }
+}
+
+// ── SCENE_LOOP_DESIGN P2: plan builder (renderer-side, D5) ────────────
+
+/// Build a `SceneLoopPlan` for `layer_id`'s scene graph. The plan is built
+/// RENDERER-side by `assemble_scene_loop_plan` (D5 — it can read the
+/// primitive manifests the exposure stamping needs), so this app-side helper
+/// only resolves the current effective `EffectGraphDef` and delegates. The
+/// plan is built even when the camera/atmosphere re-points already exist
+/// (i.e. the graph is already looped — `RemoveSceneLoopCommand` reuses this
+/// builder to know the loop shape it inverts), so nothing here assumes a
+/// pre-loop graph.
+fn build_scene_loop_plan(
+    project: &Project,
+    layer_id: &LayerId,
+    render_scene_node_id: u32,
+) -> Option<manifold_core::scene_loop::SceneLoopPlan> {
+    let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
+    let def = match layer.generator_graph().cloned() {
+        Some(d) => d,
+        None => generator_catalog_default(project, layer_id)?,
+    };
+    manifold_renderer::node_graph::gltf_import::assemble_scene_loop_plan(&def, render_scene_node_id)
 }
 
 #[cfg(test)]

@@ -1,0 +1,164 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "🔁 Scene Loop (off)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "🔁 Scene Loop (off)"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Enable Scene Loop"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Enable Scene Loop"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "🔁 Scene Loop (off)"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "🔁 Scene Loop"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "🔁 Scene Loop"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Rate (cycles/beat)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "0.12"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.39_rate.slider",
+          "node_type": "ParamSlider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 780.0,
+              "y": 428.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "0.12"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "14.25"
+        }
+      },
+      "check": "Exists"
+    }
+  }
+]
