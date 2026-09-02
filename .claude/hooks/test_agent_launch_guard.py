@@ -64,61 +64,77 @@ def spawn(name=None, subagent_type="general-purpose", env=SEAT_ENV, **kw):
 
 
 # Clean launches.
-check("good name allowed", spawn("flash-beads-migration", model="haiku") == ("", ""))
-check("good sonnet name allowed", spawn("glm47-doc-sweep", model="sonnet") == ("", ""))
-check("nameless with model allowed", spawn(model="haiku") == ("", ""))
-check("fork exempt even without model", hook.decide({"subagent_type": "fork"}, SEAT_ENV) == ("", ""))
-check("missing subagent_type allowed", spawn("flash-beads-migration", model="haiku", subagent_type="") == ("", ""))
+check("good name allowed", spawn("flash-beads-migration", model="haiku") == ("", "", None))
+check("good sonnet name allowed", spawn("glm47-doc-sweep", model="sonnet") == ("", "", None))
+check("nameless with model allowed", spawn(model="haiku") == ("", "", None))
+check("fork exempt even without model", hook.decide({"subagent_type": "fork"}, SEAT_ENV) == ("", "", None))
+check(
+    "missing subagent_type allowed",
+    spawn("flash-beads-migration", model="haiku", subagent_type="") == ("", "", None),
+)
 
 # opus/fable: allowed with reminder note.
-d, n = spawn("glm52-doc-sweep", model="opus")
-check("explicit opus allowed with reminder", d == "" and "deliberate" in n)
-d, n = spawn(model="fable")
-check("explicit fable nameless allowed with reminder", d == "" and "Sonnet" in n)
+d, n, f = spawn("glm52-doc-sweep", model="opus")
+check("explicit opus allowed with reminder", d == "" and f is None and "deliberate" in n)
+d, n, f = spawn(model="fable")
+check("explicit fable nameless allowed with reminder", d == "" and f is None and "Sonnet" in n)
 
-# Missing model alone -> one deny, corrected call uses house default.
-d, _ = spawn(model=None)
-check("missing model denied", "2026-07-06" in d and 'model="sonnet"' in d)
+# Mechanical name defects -> AUTO-FIXED via fixed_input, never a deny.
+d, n, f = spawn("Flash-Beads-Migration", model="haiku")
+check(
+    "bad casing auto-fixed",
+    d == "" and f is not None and f["name"] == "flash-beads-migration" and "auto-fixed" in n,
+)
+check("auto-fix preserves other input", f.get("model") == "haiku" and f.get("subagent_type") == "general-purpose")
+
+d, n, f = spawn("worker-beads-migration", model="haiku")
+check(
+    "missing slot prefix auto-fixed",
+    d == "" and f is not None and f["name"] == "flash-worker-beads-migration" and "auto-fixed" in n,
+)
+
+d, n, f = spawn("glm52-beads-migration", model="haiku")
+check(
+    "slot/model mismatch auto-fixed to model's slot",
+    d == "" and f is not None and f["name"] == "flash-beads-migration",
+)
+
+d, n, f = spawn("Scene_Loop Wrap!!", model="sonnet")
+check(
+    "chars + casing + prefix all auto-fixed in one pass",
+    d == "" and f is not None and f["name"] == "glm47-scene-loop-wrap",
+)
+
+# Judgment defects still deny: opaque task part, missing model.
+d, n, f = spawn("flash-t1", model="haiku")
+check(
+    "opaque task part denied with placeholder",
+    f is None and "descriptive" in d and 'name="flash-<two-plain-words>"' in d,
+)
+
+d, n, f = spawn(model=None)
+check("missing model denied", f is None and "2026-07-06" in d and 'model="sonnet"' in d)
 check("missing model deny is single-defect", "1 defect " in d)
 
-# THE incident class (2026-07-30): missing model AND unprefixed name must be
-# ONE deny that spells the complete corrected call.
-d, _ = spawn("wr-live-status-lane")
+# Missing model AND unprefixed name: the name fix is mechanical (spelled in the
+# corrected call), the model is the one judgment defect — ONE deny.
+d, n, f = spawn("wr-live-status-lane")
 check(
-    "both defects in one deny",
-    "2 defects" in d and "2026-07-06" in d and "slot prefix" in d,
+    "missing model is the single defect",
+    f is None and "1 defect " in d and "2026-07-06" in d,
 )
 check(
     "combined deny spells full corrected call",
     'model="sonnet"' in d and 'name="glm47-wr-live-status-lane"' in d,
 )
 
-# Naming defects with an explicit model still deny with the corrected name.
-d, _ = spawn("Flash-Beads-Migration", model="haiku")
-check("bad casing denied", "kebab-case" in d and 'name="flash-beads-migration"' in d)
-
-d, _ = spawn("worker-beads-migration", model="haiku")
-check(
-    "unknown slot denied names live map",
-    "deepseek-v4-flash" in d and 'name="flash-worker-beads-migration"' in d,
-)
-
-d, _ = spawn("glm52-beads-migration", model="haiku")
-check(
-    "slot/model mismatch denied with correction",
-    "glm52" in d and "flash" in d and 'name="flash-beads-migration"' in d,
-)
-
-d, _ = spawn("flash-t1", model="haiku")
-check(
-    "opaque task part denied with placeholder",
-    "descriptive" in d and 'name="flash-<two-plain-words>"' in d,
-)
-
 # Anthropic path end-to-end: tier names are the slots.
-check("anthropic slot name allowed", spawn("sonnet-doc-sweep", model="sonnet", env={}) == ("", ""))
-d, _ = spawn("flash-doc-sweep", model="sonnet", env={})
-check("anthropic denies provider slot", "sonnet" in d)
+check("anthropic slot name allowed", spawn("sonnet-doc-sweep", model="sonnet", env={}) == ("", "", None))
+d, n, f = spawn("flash-doc-sweep", model="sonnet", env={})
+check(
+    "anthropic provider slot auto-fixed to tier name",
+    d == "" and f is not None and f["name"] == "sonnet-flash-doc-sweep",
+)
 
 print()
 if FAILURES:
