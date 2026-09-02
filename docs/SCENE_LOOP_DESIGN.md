@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** PROPOSED design, not built · 2026-09-02 · k3 (lead)
+**Status:** IN PROGRESS — P1 on main 2026-09-02 (atoms, apply/remove commands, wrap-parity net); P2 (panel section) + P3 (fog polish) not started. · 2026-09-02 · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -248,15 +248,17 @@ to cell spacing by hand (D4) · gating on anyone (agent OR Peter) looking at a
 PNG — every gate in this design is a computed number or exit code (Peter
 2026-09-02, automated orchestration over stop-and-approve).
 
-- **P1 — Atoms + composite command.** `node.scene_array` (D2, freeze-path
+- **P1 — Atoms + composite command. ✅ LANDED 2026-09-02 (merge 44ec74f7f).** `node.scene_array` (D2, freeze-path
   atom + gpu_tests value proof), `node.loop_camera` (D3 + curated camera-type
   registration), apply/remove commands (D5), fog wiring (D7), exposure
   stamping both paths (D6). Read-back: sections 1–3 whole, `modifiers.rs:211`,
   `scene.rs:1148,1411`, `commands/graph/mod.rs:68`. Gate: INV-1..4 tests green;
   `scene_loop_wrap_parity` red on a deliberately non-phased driver (gate must
   see red before green); round-trip save/load re-traces the group.
-  Test scope: `manifold-renderer` + `manifold-editing` focused; gpu-proofs
-  suite for the new atom. Acceptance demo — fully numeric, no human look
+  Test scope: `manifold-renderer` + `manifold-editing` + **`manifold-app`
+  clippy/compile** (the CameraVm arm lands in renderer but its match-site
+  consumers live in app — P1 execution missed this and the landing gate
+  caught it; the scope line is the fix); gpu-proofs suite for the new atom. Acceptance demo — fully numeric, no human look
   (Peter 2026-09-02: "not a huge fan of these stop and approval things for
   single png checks"), all computed from `render_viewport_frame` buffers:
   (1) wrap parity — phase 0 vs 0.99999 max abs pixel diff == 0;
