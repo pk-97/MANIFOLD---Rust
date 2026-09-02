@@ -244,8 +244,9 @@ is a 2026-09-02 snapshot). Forbidden across all phases: duplicating object
 groups per copy (D1) · a second render_scene (INV-1) · inserting into
 per-object mesh modifier chains (the duplicated curated lists trap) · bespoke
 panel rows or synthesized ids (D6) · a camera-travel param the user must match
-to cell spacing by hand (D4) · gating on a PNG an agent judges (agent gates
-are numbers; PNGs are for Peter).
+to cell spacing by hand (D4) · gating on anyone (agent OR Peter) looking at a
+PNG — every gate in this design is a computed number or exit code (Peter
+2026-09-02, automated orchestration over stop-and-approve).
 
 - **P1 — Atoms + composite command.** `node.scene_array` (D2, freeze-path
   atom + gpu_tests value proof), `node.loop_camera` (D3 + curated camera-type
@@ -255,11 +256,14 @@ are numbers; PNGs are for Peter).
   `scene_loop_wrap_parity` red on a deliberately non-phased driver (gate must
   see red before green); round-trip save/load re-traces the group.
   Test scope: `manifold-renderer` + `manifold-editing` focused; gpu-proofs
-  suite for the new atom. Acceptance demo (L2): `graph-tool render` of a looped
-  apricot graph at phase 0.25 — a PNG Peter looks at, plus the wrap-parity
-  number. The same demo render is timed at 1920 and 4K (×3 copies) — the
-  frame-cost number is a byproduct, not a probe phase (D10); over budget at 4K
-  = escalate, don't degrade silently.
+  suite for the new atom. Acceptance demo — fully numeric, no human look
+  (Peter 2026-09-02: "not a huge fan of these stop and approval things for
+  single png checks"), all computed from `render_viewport_frame` buffers:
+  (1) wrap parity — phase 0 vs 0.99999 max abs pixel diff == 0;
+  (2) copies present — count=1 vs count=3 frame diff above threshold, and
+  far-half region mean shifts toward fog color with copies on;
+  (3) frame time at 1920 and 4K ×3 reported as a number; over 16.6 ms at 4K
+  = escalate, don't degrade silently (D10).
   Performer gesture: change bars 8→16 mid-set — phase rescales, no
   position jump (asserted in test via phase continuity at the rate change).
 - **P2 — Panel section.** `scene_setup_loop.rs` fold section in the three
@@ -272,11 +276,13 @@ are numbers; PNGs are for Peter).
   unstamped-section silent no-render trap.
   Gate: flow green (L3); INV-5/INV-6 nets green; round-trip gate — save,
   reload, section still finds and edits the loop nodes.
-  Acceptance demo (L3): the flow, plus a ui-snap PNG of the section for Peter.
+  Acceptance demo (L3): the ui-snap flow — scripted, numeric asserts, no
+  human look. A PNG of the section is produced as a byproduct, never gated.
 - **P3 — Atmosphere polish.** Loop-phased fog density/shaft drivers wired off
   `loop_phase`, sensible defaults per cell_size. Read-back: `atmosphere.rs`
-  port list. Gate: wrap parity still green with drivers live. Demo (L2):
-  two PNGs at phase 0.25/0.75 showing fog motion, Peter's eyes.
+  port list. Gate: wrap parity still green with drivers live, and far-region
+  mean color differs between phase 0.25 and 0.75 by at least the driver's
+  stated swing — numeric, no eyeballs. Demo: the computed numbers — L1.
 
 ## 6. Decided — do not reopen
 
