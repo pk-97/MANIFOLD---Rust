@@ -330,7 +330,7 @@ mod tests {
     fn json_to_glb(doc: serde_json::Value) -> Vec<u8> {
         let mut json_bytes = serde_json::to_vec(&doc).unwrap();
         // GLB JSON chunk must be 4-byte aligned.
-        while json_bytes.len() % 4 != 0 {
+        while !json_bytes.len().is_multiple_of(4) {
             json_bytes.push(b' ');
         }
         let total = 12 + 8 + json_bytes.len();
