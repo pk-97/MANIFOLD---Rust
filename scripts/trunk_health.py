@@ -81,6 +81,10 @@ def main():
     log_lines.append(f"trunk-health for origin/main @ {sha} ({datetime.now().strftime('%Y-%m-%d')})\n")
 
     gates = [
+        # Ignored-test ratchet: any #[ignore] beyond the baseline is a red
+        # gate made invisible (SCENE_LOOP shipped broken behind one).
+        # Cheap, runs first so it files before the long legs.
+        ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
         ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
         ["cargo", "nextest", "run", "--workspace"],
         ["cargo", "deny", "check", "bans"],

@@ -25,6 +25,7 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Commit messages:** backticks and `$()` inside `-m "..."` are live substitution — single-quote or use a heredoc.
 - **Never add or widen a `permissions.allow` rule without `docs/PERMISSION_BOUNDARY.md` section 4.** The bar: can any argument the rule permits run code or destroy state the reviewer never sees in the command text? Auto mode silently ignores interpreter-prefixed rules (section 3) — invoke repo scripts directly (`scripts/x.py`), never via `python3`.
 - **No bare `#[allow(dead_code)]`.** Every suppression names what un-suppresses it, or the code gets deleted. Hook-enforced.
+- **No `#[ignore]` on tests.** An ignored gate is a red gate made invisible — a flaky or nondeterministic test gets fixed (seed control, like the RT noise gate) or deleted, never muted. Hook-enforced at edit time (`ignored-test-guard.py`, its docstring is the spec), ratchet-baselined at landing and nightly.
 - **All GPU through `manifold-gpu`.** Cross-platform is a product requirement: native Metal today, native Vulkan approved but not built (`docs/VULKAN_BACKEND_DESIGN.md`). Never describe the app as Metal-only by design.
 - **No new shared state.** No new `Arc<Mutex<>>`/`Arc<RwLock<>>` without approval. The content thread owns `Project`; the UI gets `Arc<Project>` snapshots.
 - **All mutations through `EditingService`** via `ContentCommand::Execute` / `MutateProject`. No direct model writes from the UI.

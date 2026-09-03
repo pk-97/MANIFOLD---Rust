@@ -274,6 +274,16 @@ def main():
     results.append((status, "deny", duration, tail))
     print_result("deny", status, duration, tail if exit_ != 0 else None)
 
+    # d2. ignored-tests — no new #[ignore] beyond the ratchet baseline
+    # (spec: .claude/hooks/ignored-test-guard.py docstring).
+    exit_, out, err, duration = run_cmd(
+        ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
+        cwd=repo, timeout=120)
+    tail = (out + err).rstrip().splitlines()[-20:]
+    status = "PASS" if exit_ == 0 else "FAIL"
+    results.append((status, "ignored-tests", duration, tail))
+    print_result("ignored-tests", status, duration, tail if exit_ != 0 else None)
+
     # e. clippy (if packages touched)
     if gate_packages:
         pkg_args = []
