@@ -2,6 +2,7 @@
 
 **Status:** SHIPPED 2026-09-02 — P1–P3 on main (atoms, apply/remove commands, wrap-parity net; panel section + renderer-side plan builder + D10 camera-home addendum; loop-phased fog driver). Owed: VD bead BUG-nkxg (pixel-level copies gate on a real lit import). Doc kept as the cited contract. · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
+Lifecycle: contract — scene-loop atoms and commands remain the cited contract for any future scene-loop work.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 A classic VJ loop is a fixed 10-second render. This design makes an imported GLB

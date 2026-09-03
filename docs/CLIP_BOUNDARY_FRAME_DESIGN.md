@@ -2,6 +2,7 @@
 
 **Status:** SHIPPED — P1–P3 on main · 2026-09-03 · k3 (lead)  
 **Prerequisites:** none  
+Lifecycle: contract — cited by `PlaybackEngine` boundary-ownership implementation (`visual_boundary_epsilon`, `is_boundary_owned`, scheduler min-remaining bypass).  
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.  
 
 Shipped 2026-09-03: boundary ownership implemented via `visual_boundary_epsilon` in `PlaybackEngine` and `is_boundary_owned` in `ActiveClipRef`. The scheduler's min-remaining guard is bypassed only for boundary-owned clips, so generators, scenes, and images render at the edge while video clips keep their warm-up guard everywhere except exact boundaries.
