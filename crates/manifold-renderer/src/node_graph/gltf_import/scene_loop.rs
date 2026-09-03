@@ -88,18 +88,22 @@ pub fn assemble_scene_loop_plan(
     let beat_ramp_id = max_id + 1;
     let scene_array_id = max_id + 2;
     let loop_camera_id = max_id + 3;
-    let loop_fog_id = max_id + 4;
-    let fog_driver_id = max_id + 5; // P3: scale_offset_value for fog density swing
 
-    // D7: mint a fog node only when the graph has no atmosphere producer.
-    let has_atmosphere =
-        def.wires.iter().any(|w| w.to_node == render_scene_node_id && w.to_port == "atmosphere");
+    // D7 (P4): apply mints EXACTLY three nodes — loop_phase, scene_array,
+    // loop_camera. Fog is never minted: the D4 gap rule makes every copy
+    // self-contained, so there is no seam to hide, and the auto-minted
+    // atmosphere + driver was unrequested complexity. A scene's own
+    // atmosphere, if it has one, is left alone.
 
     let mut new_nodes = Vec::new();
     let mut new_wires = Vec::new();
 
-    // beat_ramp (loop_phase): rate = 1/bars, attack = 1.0 — with attack 1 the
-    // output is exactly the 0..1 loop phase (D3).
+    // beat_ramp (loop_phase): bars = 8 (D10 default) — with bars > 0 the ramp
+    // runs at 1/bars cycles/beat, so the panel's Bars row reads and writes
+    // bars directly (rate = 1/bars by construction, D6). attack = 1.0 makes
+    // the output exactly the 0..1 loop phase (D3). rate stays 0.0: it is the
+    // disabled fallback, so bars = 0 (the wrap-debug park) freezes the phase
+    // at 0 instead of resurrecting a stale rate.
     let bars = 8.0_f32; // D10 default
     new_nodes.push(EffectGraphNode {
         id: beat_ramp_id,
@@ -108,7 +112,8 @@ pub fn assemble_scene_loop_plan(
         handle: Some("loop_phase".to_string()),
         params: {
             let mut p = std::collections::BTreeMap::new();
-            p.insert("rate".to_string(), SerializedParamValue::Float { value: 1.0 / bars });
+            p.insert("bars".to_string(), SerializedParamValue::Float { value: bars });
+            p.insert("rate".to_string(), SerializedParamValue::Float { value: 0.0 });
             p.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
             p
         },
@@ -195,96 +200,21 @@ pub fn assemble_scene_loop_plan(
         to_port: "camera".to_string(),
     });
 
-    // D7 fog: mint when no atmosphere producer exists. fog_density is per
-    // world-unit; for cell_size ~ a few units the exp falloff covers a couple
-    // of cells (enclosed scenes hide their own ends). Honest default, not a
-    // beat-match — the panel's fog row lets the performer dial it.
-    //
-    // P3 — fog density driver: fog far ≈ 1.5 × cell_size is the base; a
-    // scale_offset_value node feeds loop_phase (0..1 sawtooth) into the
-    // atmosphere's fog_density input so density oscillates ±20% over the loop.
-    // scale = 0.4 × base, offset = 0.8 × base → output swings [0.8, 1.2] × base.
-    // Shaft intensity driver deferred — it needs new atoms beyond simple
-    // scale/offset (see verdict).
-    if !has_atmosphere {
-        let base_fog_density = 1.0_f32 / (1.5 * cell_size).max(0.1);
-        let driver_scale = 0.4 * base_fog_density;
-        let driver_offset = 0.8 * base_fog_density;
-
-        new_nodes.push(EffectGraphNode {
-            id: loop_fog_id,
-            node_id: manifold_core::NodeId::new("loop_fog"),
-            type_id: "node.atmosphere".to_string(),
-            handle: Some("loop_fog".to_string()),
-            params: {
-                let mut p = std::collections::BTreeMap::new();
-                // fog_density param stays as the unwired fallback; the wired
-                // driver overrides it at runtime (scalar_or_param priority).
-                p.insert("fog_density".to_string(), SerializedParamValue::Float { value: base_fog_density });
-                p.insert("height_falloff".to_string(), SerializedParamValue::Float { value: 0.0 });
-                p
-            },
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: Default::default(),
-            output_canvas_scales: Default::default(),
-            group: None,
-        });
-        // P3: fog density driver — scale_offset_value remaps the 0..1 loop
-        // phase into [0.8, 1.2] × base_fog_density so density breathes.
-        new_nodes.push(EffectGraphNode {
-            id: fog_driver_id,
-            node_id: manifold_core::NodeId::new("fog_driver"),
-            type_id: "node.scale_offset_value".to_string(),
-            handle: Some("fog_driver".to_string()),
-            params: {
-                let mut p = std::collections::BTreeMap::new();
-                p.insert("scale".to_string(), SerializedParamValue::Float { value: driver_scale });
-                p.insert("offset".to_string(), SerializedParamValue::Float { value: driver_offset });
-                p
-            },
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: Default::default(),
-            output_canvas_scales: Default::default(),
-            group: None,
-        });
-
-        // beat_ramp (loop_phase) → fog_driver.a (phase input)
-        new_wires.push(EffectGraphWire {
-            from_node: beat_ramp_id,
-            from_port: "out".to_string(),
-            to_node: fog_driver_id,
-            to_port: "a".to_string(),
-        });
-        // fog_driver.out → loop_fog.fog_density (P3 wrap-pure driver)
-        new_wires.push(EffectGraphWire {
-            from_node: fog_driver_id,
-            from_port: "out".to_string(),
-            to_node: loop_fog_id,
-            to_port: "fog_density".to_string(),
-        });
-        // atmosphere → render_scene
-        new_wires.push(EffectGraphWire {
-            from_node: loop_fog_id,
-            // `node.atmosphere`'s output port is `atmosphere`, never `out`
-            // (P1's original plan builder used `out` — a latent dead wire the
-            // e2e render gate caught).
-            from_port: "atmosphere".to_string(),
-            to_node: render_scene_node_id,
-            to_port: "atmosphere".to_string(),
-        });
-    }
-
     // Per-node exposure metadata — each node's REAL primitive manifest
-    // (INV-6: never a shared union across nodes).
+    // (INV-6: never a shared union across nodes), curated to the D6 P4
+    // performer whitelist. Stamping every param shipped the atoms' internals
+    // (duplicate Axis/Cell Size rows, Home, Near/Far) and desynced the panel
+    // from the loop — the whitelist is exactly Bars, Copies, Height, Lateral.
     let mut node_metadata = Vec::new();
     for node in &new_nodes {
-        let manifest = metadata_for_node_type(&node.type_id);
+        let manifest: Vec<_> = metadata_for_node_type(&node.type_id)
+            .into_iter()
+            .filter_map(|m| loop_row_label(&node.node_id, &m.name).map(|label| {
+                let mut m = m;
+                m.label = label.to_string();
+                m
+            }))
+            .collect();
         if !manifest.is_empty() {
             node_metadata.push((node.node_id.clone(), manifest));
         }
@@ -299,4 +229,20 @@ pub fn assemble_scene_loop_plan(
         loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
         scene_array_node_id: manifold_core::NodeId::new("scene_array"),
     })
+}
+
+/// D6 P4 whitelist: the ONLY params stamped as "Scene Loop" panel rows, as
+/// `(stable node_id, param) → row label`. Everything else on the loop nodes —
+/// cell_size, axis, home, near, far, fov_y, attack — is internal: the plan
+/// builder computes it once and a panel row for it would desync the loop
+/// (a Spacing row that edits only the array's cell breaks INV-4). Returns
+/// `None` for non-whitelisted params so the caller filters them out.
+fn loop_row_label(node_id: &manifold_core::NodeId, param: &str) -> Option<&'static str> {
+    match (node_id.as_str(), param) {
+        ("loop_phase", "bars") => Some("Bars"),
+        ("scene_array", "count") => Some("Copies"),
+        ("loop_camera", "height") => Some("Height"),
+        ("loop_camera", "lateral") => Some("Lateral"),
+        _ => None,
+    }
 }

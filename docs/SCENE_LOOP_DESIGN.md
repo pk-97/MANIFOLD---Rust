@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** IN PROGRESS — P1–P3 on main but the feature failed adversarial contact (BUG-70wo (camera-inside-solid-mesh black): camera never left solid meshes; panel surface shipped the atoms' raw internals and desynced — duplicate Axis/Cell Size rows from double stamping). P4 (MVP rebuild: curated panel, single-sourced internals, fog cut, value-pipeline fix) pending. Owed: VD bead BUG-nkxg (pixel-level copies gate on a real lit import). · k3 (lead)
+**Status:** IN PROGRESS — P1–P4 on main (P4 2026-09-03: D6 whitelist panel Bars/Copies/Height/Lateral, D7 fog cut, D11 round-trip gate green; BUG-twa6 wrap gate deleted not muted, INV-3 on minimal graph). Awaiting Peter's sakura acceptance run (enable → play → save → reload; four rows). Owed: VD BUG-nkxg (pixel-level copies gate), BUG-twa6 (real-import wrap parity blocked on AO seed control), BUG-59j1 (legacy fog on Remove). · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 Lifecycle: contract — scene-loop atoms and commands remain the cited contract for any future scene-loop work.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
@@ -329,7 +329,7 @@ PNG — every gate in this design is a computed number or exit code (Peter
   sensible defaults per cell_size. Gate: wrap parity still green with drivers
   live, and far-region mean color differs between phase 0.25 and 0.75 by at
   least the driver's stated swing — numeric, no eyeballs.
-- **P4 — MVP rebuild: performer panel + value-pipeline fix.** The adversarial
+- **P4 — MVP rebuild: performer panel + value-pipeline fix. ✅ LANDED 2026-09-03.** The adversarial
   review (Peter 2026-09-03, after BUG-70wo (camera-inside-solid-mesh black))
   found the panel shipped the atoms' internals and the stamp/reload path
   desynced them. Work order: (1) root-cause + fix the save/reload scramble —

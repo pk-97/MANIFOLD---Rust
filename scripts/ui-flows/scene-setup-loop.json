@@ -101,7 +101,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Rate (cycles/beat)"
+          "text": "Bars"
         }
       },
       "check": "Exists"
@@ -111,17 +111,20 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "0.12"
+          "name": "param_row.39_bars.value",
+          "node_type": "ParamSlider"
         }
       },
-      "check": "Exists"
+      "check": {
+        "TextEquals": "8"
+      }
     }
   },
   {
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.39_rate.slider",
+          "name": "param_row.39_bars.slider",
           "node_type": "ParamSlider"
         }
       },
@@ -143,22 +146,13 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "0.12"
+          "name": "param_row.39_bars.value",
+          "node_type": "ParamSlider"
         }
       },
       "check": {
-        "Count": 0
+        "TextEquals": "57"
       }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "14.25"
-        }
-      },
-      "check": "Exists"
     }
   }
 ]

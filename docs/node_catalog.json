@@ -1556,6 +1556,16 @@
           "type": "float"
         },
         {
+          "default": "0",
+          "label": "Bars",
+          "name": "bars",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
           "default": "0.15",
           "label": "Attack",
           "name": "attack",

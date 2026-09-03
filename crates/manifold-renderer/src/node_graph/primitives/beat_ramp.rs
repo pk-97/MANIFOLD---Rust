@@ -34,6 +34,19 @@ crate::primitive! {
             range: Some((0.0625, 16.0)),
             enum_values: &[],
         },
+        // SCENE_LOOP_DESIGN D6: when bars > 0 the ramp runs at 1/bars
+        // cycles/beat and `rate` is shadowed — the loop's Bars row reads and
+        // writes this param directly (rate = 1/bars by construction, no
+        // panel-side transform). 0 = off, `rate` governs (legacy behavior —
+        // every existing beat_ramp node lacks this param and is untouched).
+        ParamDef {
+            name: Cow::Borrowed("bars"),
+            label: "Bars",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 64.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("attack"),
             label: "Attack",
@@ -59,6 +72,12 @@ impl Primitive for BeatRamp {
         let rate = match ctx.params.get("rate") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
+        };
+        // bars > 0 shadows rate (1/bars cycles/beat); bars absent/0 keeps the
+        // legacy rate behavior. See the ParamDef's SCENE_LOOP_DESIGN note.
+        let rate = match ctx.params.get("bars") {
+            Some(ParamValue::Float(f)) if *f > 0.0 => 1.0 / f,
+            _ => rate,
         };
         let attack = match ctx.params.get("attack") {
             Some(ParamValue::Float(f)) => f.max(1e-5),

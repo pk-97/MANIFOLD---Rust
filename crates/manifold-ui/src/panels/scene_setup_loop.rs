@@ -6,8 +6,8 @@
 //!
 //! Three states (section 3.3):
 //! - **Not applied** → "Enable Scene Loop" button dispatching the apply-command.
-//! - **Applied** → manifest-backed rows (bars, axis, count, trim, camera
-//!   height/lateral, fog toggle + density, wrap-debug toggle).
+//! - **Applied** → manifest-backed rows (the D6 P4 whitelist: Bars, Copies,
+//!   Height, Lateral) plus a remove button and wrap-debug toggle.
 //! - **Hand-edited graph** → the structural trace (`SceneLoopInfo`) is
 //!   all-or-nothing on the three core nodes; a hand-edit that removes one
 //!   shows "Not applied" (re-apply is then a fresh splice, never a silent
@@ -30,12 +30,12 @@ pub struct SceneLoopRow {
     /// The section string for manifest filtering (always "Scene Loop").
     pub section: String,
     /// The beat_ramp's doc id — the wrap-debug toggle parks the camera at
-    /// phase 0 by writing its `rate` param to 0 through the same
+    /// phase 0 by writing its `bars` param to 0 through the same
     /// `SceneSetupParamChanged` write path every manifest row uses.
     pub beat_ramp_doc_id: u32,
-    /// The beat_ramp's current `rate` (1/bars). The wrap-debug toggle writes
-    /// 0 to park; writing this value back resumes the loop.
-    pub rate: f32,
+    /// The beat_ramp's current `bars` (0 = parked). Writing this value back
+    /// resumes the loop.
+    pub bars: f32,
 }
 
 /// Stable key for the "Enable Scene Loop" button.
@@ -53,10 +53,11 @@ pub(crate) struct SceneLoopUi {
     pub(crate) enable_id: Option<NodeId>,
     pub(crate) remove_id: Option<NodeId>,
     pub(crate) wrap_debug_id: Option<NodeId>,
-    /// The `rate` to write when the wrap-debug toggle resumes — the pre-park
-    /// value, stashed the first time the toggle parks (the applied rate is
-    /// otherwise lost once rate=0 lands in the graph). `None` until armed.
-    pub(crate) wrap_debug_resume_rate: Option<f32>,
+    /// The `bars` value to write when the wrap-debug toggle resumes — the
+    /// pre-park value, stashed the first time the toggle parks (the applied
+    /// bars value is otherwise lost once bars=0 lands in the graph). `None`
+    /// until armed.
+    pub(crate) wrap_debug_resume_bars: Option<f32>,
 }
 
 /// Build the Scene Loop properties section. Called when `SceneSelection::SceneLoop`
@@ -102,15 +103,16 @@ pub(crate) fn build_properties(
             cy = panel.build_filtered_properties(tree, inner_x, inner_w, cy, &sections);
 
             // Wrap-debug toggle (parks camera at phase 0, D-3.3): the state is
-            // the beat_ramp's REAL `rate` — 0 means parked. The label reads the
+            // the beat_ramp's REAL `bars` — 0 means parked. The label reads the
             // VM, never a panel-side flag (a stale flag would report ON when
             // the performer already resumed, or OFF when the project reloaded
-            // parked — the rebuild-less UI class). The pre-park rate is stashed
-            // here (build-time, `&mut self`) so a parked loop can resume to its
-            // real bars value — the graph no longer carries it once rate=0.
-            let parked = loop_row.rate.abs() < f32::EPSILON;
+            // parked — the rebuild-less UI class). The pre-park bars value is
+            // stashed here (build-time, `&mut self`) so a parked loop can
+            // resume to its real bars value — the graph no longer carries it
+            // once bars=0 lands.
+            let parked = loop_row.bars.abs() < f32::EPSILON;
             if !parked {
-                panel.scene_loop.wrap_debug_resume_rate = Some(loop_row.rate);
+                panel.scene_loop.wrap_debug_resume_bars = Some(loop_row.bars);
             }
             tree.add_label(
                 Some(panel.content_parent),
@@ -176,19 +178,20 @@ pub(crate) fn click_dispatch(
     }
     if panel.scene_loop.wrap_debug_id == Some(node_id) {
         // Wrap-debug toggle: parks the camera at phase 0 (the seam is
-        // inspectable) by writing loop_phase `rate` to 0 — a REAL param
+        // inspectable) by writing loop_phase `bars` to 0 — a REAL param
         // write through the same `SceneSetupParamChanged` path every manifest
-        // row uses, never a UI-local flag. The VM carries the applied rate so
-        // toggling OFF resumes the loop exactly as it was.
+        // row uses, never a UI-local flag. The VM carries the applied bars
+        // value so toggling OFF resumes the loop exactly as it was. (bars = 0
+        // falls back to the minted rate = 0, so the phase holds at 0.)
         if let Some(loop_row) = &vm.scene_loop {
-            let parked = loop_row.rate.abs() < f32::EPSILON;
-            // Resume to the STASHED pre-park rate (the graph no longer
+            let parked = loop_row.bars.abs() < f32::EPSILON;
+            // Resume to the STASHED pre-park bars value (the graph no longer
             // carries it while parked); park at 0 when running.
-            let rate_target = if parked {
+            let bars_target = if parked {
                 panel
                     .scene_loop
-                    .wrap_debug_resume_rate
-                    .unwrap_or(1.0 / 8.0)
+                    .wrap_debug_resume_bars
+                    .unwrap_or(8.0)
             } else {
                 0.0
             };
@@ -197,8 +200,8 @@ pub(crate) fn click_dispatch(
                     vm.layer_id.clone(),
                     Vec::new(),
                     loop_row.beat_ramp_doc_id,
-                    "rate".to_string(),
-                    rate_target,
+                    "bars".to_string(),
+                    bars_target,
                 ),
             ));
         }
@@ -216,7 +219,7 @@ mod tests {
         NodeId::from_parts(i, 1)
     }
 
-    fn vm(applied: bool, rate: f32) -> SceneSetupVm {
+    fn vm(applied: bool, bars: f32) -> SceneSetupVm {
         SceneSetupVm {
             layer_id: manifold_foundation::LayerId::new("layer-9"),
             scene_name: "Loop Scene".to_string(),
@@ -237,7 +240,7 @@ mod tests {
             scene_loop: applied.then(|| SceneLoopRow {
                 section: "Scene Loop".to_string(),
                 beat_ramp_doc_id: 40,
-                rate,
+                bars,
             }),
             scene_bounds: None,
         }
@@ -262,16 +265,16 @@ mod tests {
     }
 
     /// The wrap-debug toggle (loop applied, un-parked) dispatches a real
-    /// `SceneSetupParamChanged` to the beat_ramp's `rate` at 0 — parking the
+    /// `SceneSetupParamChanged` to the beat_ramp's `bars` at 0 — parking the
     /// camera at phase 0 through the SAME GeneratorOf write path a manifest
     /// row uses, never a UI-local flag. Selecting SceneLoop is not required for
     /// the dispatch itself; the write is what this nets.
     #[test]
-    fn wrap_debug_park_writes_beat_ramp_rate_zero() {
+    fn wrap_debug_park_writes_beat_ramp_bars_zero() {
         let mut panel = ScenePanel::new();
         panel.scene_loop.wrap_debug_id = Some(test_id(9001));
-        // Loop applied, rate 0.125 (running) → park writes rate 0.
-        let act = click_dispatch(&panel, test_id(9001), &vm(true, 0.125)).expect("handled");
+        // Loop applied, bars 8 (running) → park writes bars 0.
+        let act = click_dispatch(&panel, test_id(9001), &vm(true, 8.0)).expect("handled");
         match act {
             PanelAction::Project(ProjectAction::SceneSetupParamChanged(
                 _,
@@ -282,25 +285,27 @@ mod tests {
             )) => {
                 assert_eq!(scope, Vec::<u32>::new(), "beat_ramp is a top-level node");
                 assert_eq!(node, 40, "writes to the beat_ramp's doc id");
-                assert_eq!(param, "rate");
-                assert_eq!(value, 0.0, "park = rate 0");
+                assert_eq!(param, "bars");
+                assert_eq!(value, 0.0, "park = bars 0 (rate fallback is the minted 0)");
             }
             other => panic!("expected wrap-debug param write, got {other:?}"),
         }
     }
 
-    /// Wrap-debug resume: when the loop is already parked (rate 0), clicking
-    /// resumes to the STASHED pre-park rate — the graph no longer carries it.
+    /// Wrap-debug resume: when the loop is already parked (bars 0), clicking
+    /// resumes to the STASHED pre-park bars value — the graph no longer
+    /// carries it.
     #[test]
-    fn wrap_debug_resume_uses_stashed_rate() {
+    fn wrap_debug_resume_uses_stashed_bars() {
         let mut panel = ScenePanel::new();
         panel.scene_loop.wrap_debug_id = Some(test_id(9002));
-        panel.scene_loop.wrap_debug_resume_rate = Some(0.125);
+        panel.scene_loop.wrap_debug_resume_bars = Some(16.0);
         let act = click_dispatch(&panel, test_id(9002), &vm(true, 0.0)).expect("handled");
         match act {
-            PanelAction::Project(ProjectAction::SceneSetupParamChanged(_, _, node, _, value)) => {
+            PanelAction::Project(ProjectAction::SceneSetupParamChanged(_, _, node, param, value)) => {
                 assert_eq!(node, 40);
-                assert_eq!(value, 0.125, "resume restores the stashed pre-park rate");
+                assert_eq!(param, "bars");
+                assert_eq!(value, 16.0, "resume restores the stashed pre-park bars value");
             }
             other => panic!("expected wrap-debug param write, got {other:?}"),
         }
