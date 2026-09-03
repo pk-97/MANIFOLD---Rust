@@ -422,7 +422,10 @@ pub fn push_state(
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
             ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
-            ui.layer_headers.set_led_state(tree, i, layer.blit_to_led);
+            // routes_to_led (not the raw flag): an LED-type layer always feeds
+            // the strips, so its (indicator, non-toggle) L chip stays truthfully
+            // on — blit_to_led is inert on LED layers (LED_STRIPS_DESIGN.md D11).
+            ui.layer_headers.set_led_state(tree, i, layer.routes_to_led());
             ui.layer_headers
                 .set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
 

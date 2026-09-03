@@ -1,0 +1,99 @@
+{
+  "version": 2,
+  "name": "LED Fill",
+  "description": "MVP-P1b placeholder fill for LED layers (LED_STRIPS_DESIGN.md section 5b D12): a full-frame solid colour at full blast. Composed from existing atoms only (section 2.5 audit: exists + exists, no new primitive): node.circle_mask with radii 4 covers the whole UV frame with white (mask=1 everywhere), then node.colorize with amount=1 and focus=0 replaces it with tint_rgb * luma = HSV(hue, saturation, 1) — a flat, full-brightness colour that fills every strip cell at any grid resolution. Value is pinned at 1 by design (strips are an accent instrument, D1: mostly dark, hits at full blast); MVP-P2 grows this graph under the same preset id.",
+  "presetMetadata": {
+    "id": "LED Fill",
+    "displayName": "LED Fill",
+    "category": "Pattern",
+    "oscPrefix": "ledFill",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 140.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 140.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "hue" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "saturation" },
+        "convert": { "type": "Float" }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.circle_mask",
+      "handle": "fill_mask",
+      "nodeId": "fill_mask",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 140.0 },
+        "saturation": { "type": "Float", "value": 1.0 },
+        "focus": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+  ]
+}

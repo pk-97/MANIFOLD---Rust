@@ -33,11 +33,15 @@ pub enum Icon {
     /// Playhead head marker (section 24 5e) — a downward triangle at the top of the
     /// ruler so the "now" position is unmissable next to the insert cursor.
     Playhead = 10,
+    /// LED layer-type badge — a 2×4 dot grid, the strip array read as a glyph.
+    /// Distinct from the generator starburst: an LED layer drives the strips,
+    /// not the screen.
+    LayerLed = 11,
 }
 
 impl Icon {
     /// Number of distinct atlas icons (the atlas slot count).
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 12;
 
     /// The atlas id (== PUA offset).
     #[inline]
@@ -101,9 +105,7 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
         LayerType::Generator => Icon::LayerGenerator,
         LayerType::Group => Icon::LayerGroup,
         LayerType::Audio => Icon::LayerAudio,
-        // Placeholder until the LED UI lane picks a badge: an LED layer is
-        // generator-driven, so it wears the generator glyph.
-        LayerType::Led => Icon::LayerGenerator,
+        LayerType::Led => Icon::LayerLed,
     }
 }
 
@@ -125,6 +127,7 @@ mod tests {
             Icon::LayerGroup,
             Icon::LayerAudio,
             Icon::Playhead,
+            Icon::LayerLed,
         ]
         .into_iter()
         .enumerate()
@@ -137,8 +140,8 @@ mod tests {
 
     #[test]
     fn count_matches_highest_id() {
-        // COUNT must cover every variant — Playhead is the last id.
-        assert_eq!(Icon::Playhead.id() as usize, Icon::COUNT - 1);
+        // COUNT must cover every variant — LayerLed is the last id.
+        assert_eq!(Icon::LayerLed.id() as usize, Icon::COUNT - 1);
     }
 
     #[test]
@@ -167,6 +170,7 @@ mod tests {
             layer_badge(LayerType::Generator),
             layer_badge(LayerType::Group),
             layer_badge(LayerType::Audio),
+            layer_badge(LayerType::Led),
         ];
         for i in 0..badges.len() {
             for j in (i + 1)..badges.len() {

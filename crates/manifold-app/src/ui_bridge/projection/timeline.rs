@@ -66,7 +66,13 @@ pub fn sync_project_data(
                                 .any(|l| l.layer_id == *pid && l.is_solo)
                         }),
                     analysis_only: layer.analysis_only,
-                    is_led: layer.blit_to_led,
+                    // The LED lane treatment: true for a mirror-flagged layer
+                    // OR an LED-type layer — `routes_to_led` is the one model
+                    // predicate for "feeds the LED composite" (LED_STRIPS_DESIGN.md
+                    // D11). The mirror toggle renders non-interactive on LED
+                    // layers; this keeps its style truthfully "on".
+                    is_led: layer.routes_to_led(),
+                    is_led_layer: layer.is_led(),
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                     blend_mode: format!("{:?}", layer.default_blend_mode),
                     generator_type: layer.gen_params().map(|g| {

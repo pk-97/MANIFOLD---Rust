@@ -3015,7 +3015,8 @@
       ],
       "category": "Mask",
       "examples": [
-        "DepthOfField"
+        "DepthOfField",
+        "LED Fill"
       ],
       "fusion": "source",
       "inputs": [
@@ -3521,7 +3522,8 @@
       ],
       "category": "Color & Tone",
       "examples": [
-        "ColorGrade"
+        "ColorGrade",
+        "LED Fill"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -23635,6 +23637,7 @@
         "Infrared",
         "Invert",
         "Kaleidoscope",
+        "LED Fill",
         "Lantern",
         "LightOrbit",
         "Lightning",
@@ -23705,6 +23708,7 @@
         "FluidSim2D",
         "FluidSim3D",
         "FogBlast",
+        "LED Fill",
         "Lantern",
         "LightOrbit",
         "Lightning",
@@ -23871,7 +23875,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 58,
+  "preset_count": 59,
   "presets": [
     {
       "category": "Geometry",
@@ -27309,6 +27313,29 @@
           "max": "16",
           "min": "2",
           "name": "Segments"
+        }
+      ]
+    },
+    {
+      "category": "Pattern",
+      "id": "LED Fill",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Fill",
+      "params": [
+        {
+          "default": "140",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "1",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
         }
       ]
     },

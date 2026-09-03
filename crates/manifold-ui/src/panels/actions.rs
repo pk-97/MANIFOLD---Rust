@@ -79,6 +79,7 @@ pub enum EditingAction {
     ContextPasteAtTrack(f32, usize), // beat, layer (track-content click; positional by design — no stable layer identity at that hit-test site)
     ContextAddVideoLayer(LayerId),     // after_layer
     ContextAddGeneratorLayer(LayerId), // after_layer
+    ContextAddLedLayer(LayerId),       // after_layer
     ContextAddAudioLayer(LayerId),     // after_layer
     ContextDeleteLayer(LayerId),       // layer
     ContextDuplicateLayer(LayerId),    // layer
