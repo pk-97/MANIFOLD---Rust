@@ -305,7 +305,7 @@ impl Command for RemoveSceneLoopCommand {
 
             // Drop wires touching any loop node (scene_array fans to every
             // group's instances input; loop_camera feeds lens.camera; beat_ramp
-            // feeds loop_camera.phase; loop_fog feeds render.atmosphere).
+            // feeds loop_camera.phase).
             wires.retain(|w| {
                 !loop_ids.contains(&w.from_node) && !loop_ids.contains(&w.to_node)
             });

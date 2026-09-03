@@ -1,17 +1,23 @@
 //! SCENE_LOOP_DESIGN P2 end-to-end gate: drive the REAL renderer-side plan
 //! builder (`assemble_scene_loop_plan`) through the REAL editing command
 //! (`ApplySceneLoopCommand`) against a REAL imported GLB graph
-//! (`assemble_import_graph` on `tests/fixtures/gltf/apricot_tl05.glb`), then
-//! RENDER one frame and assert copies present: count=1 vs count=3 frames must
-//! differ above threshold (the P1 wrap test's `max_pixel_diff`, same family).
+//! (`assemble_import_graph` on `tests/fixtures/gltf/apricot_tl05.glb`) and
+//! assert the applied graph's structural facts.
 //!
 //! This is the seam that let P1 ship: a hand-built `SceneLoopPlan` in a unit
 //! test never exercised production plan construction. Here the plan comes
 //! from the SAME builder the panel's "Enable Scene Loop" dispatches.
+//!
+//! Wrap parity (INV-3) on this real-import path was attempted and DELETED
+//! (P4): two frames of ONE session through ONE shared GpuDevice still differ
+//! (≈80 max pixel diff) — the import's AO/cinematic path is nondeterministic
+//! in-session, not just per device instance. BUG-twa6 (device-seed) tracks
+//! the retirement; until it lands, INV-3 gates on the deterministic minimal
+//! graph (`scene_loop_wrap_parity.rs`) and this file gates structure only.
 
 use std::path::Path;
 
-use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
@@ -21,21 +27,11 @@ use manifold_renderer::node_graph::gltf_import::{
     assemble_import_graph, assemble_scene_loop_plan,
 };
 use manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
-use manifold_renderer::node_graph::{PrimitiveRegistry, render_viewport_frame};
-use manifold_renderer::preset_context::PresetContext;
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/gltf/apricot_tl05.glb"
 );
-
-fn max_pixel_diff(a: &[u8], b: &[u8]) -> u8 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| x.abs_diff(*y))
-        .max()
-        .unwrap_or(0)
-}
 
 // The end-to-end gate: the REAL plan builder → REAL command → REAL import
 // path, verified on the applied graph's structure AND the pipeline facts the
@@ -159,115 +155,12 @@ fn scene_loop_apply_import_renders_copies() {
         );
     }
 
-    // 4. The fog node (when minted) wires from the `atmosphere` output port.
-    if let Some(fog) = applied.nodes.iter().find(|n| n.node_id.as_str() == "loop_fog") {
-        assert!(
-            applied
-                .wires
-                .iter()
-                .any(|w| w.from_node == fog.id && w.from_port == "atmosphere"),
-            "loop_fog must wire from its atmosphere port"
-        );
-    }
-}
-
-/// The wrap-parity contract against the REAL import + REAL plan: phase 0 vs
-/// phase 0.99999 must be pixel-identical through the applied graph (INV-3,
-/// re-proven on the production path — a hand-built minimal graph can't catch
-/// an import-only driver sneaking in).
-///
-/// Known fixture limitation (lead-accepted, beaded): the real import's
-/// AO/cinematic render path is non-deterministic across `GpuDevice`s
-/// (same-input diff ≈80; same-session shared-device diff is 0), so this gate
-/// can only run on the deterministic minimal graph (`scene_loop_wrap_parity.rs`,
-/// which stays green on INV-3). Kept runnable via `--ignored`; a future seed
-/// control (like the RT noise gate) retires the limitation.
-#[test]
-#[ignore = "real-import render nondeterministic per GpuDevice (import AO/cinematic path) — INV-3 gate on the minimal graph; see lead-accepted limitation"]
-fn scene_loop_import_wrap_parity_phases_match() {
-    let (def, _) = assemble_import_graph(Path::new(FIXTURE))
-        .unwrap_or_else(|e| panic!("assemble_import_graph({FIXTURE}) failed: {e}"));
-    let render_scene_id = def
-        .nodes
-        .iter()
-        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
-        .expect("render_scene").id;
-    let plan = assemble_scene_loop_plan(&def, render_scene_id).expect("plan");
-
-    let mut project = Project::default();
-    let idx = project.timeline.add_layer(
-        "Apricot Loop Parity",
-        LayerType::Generator,
-        PresetTypeId::from_string("ApricotLoopParityTest".to_string()),
-    );
-    {
-        let layer = &mut project.timeline.layers[idx];
-        layer.gen_params_or_init().graph = Some(def);
-    }
-    let layer_id = project.timeline.layers[idx].layer_id.clone();
-    let target = manifold_core::GraphTarget::Generator(layer_id);
-    let catalog = EffectGraphDef {
-        version: 1,
-        name: None,
-        description: None,
-        preset_metadata: None,
-        nodes: Vec::new(),
-        wires: Vec::new(),
-    };
-    let mut cmd = ApplySceneLoopCommand::new(target, Vec::new(), plan, catalog);
-    cmd.execute(&mut project);
-
-    let applied = project.timeline.layers[idx]
-        .generator_graph()
-        .expect("graph after apply");
-
-    // rate = 1/8 (8 bars per loop). beat 0 → phase 0; beat 8 → fract(1.0) →
-    // phase 0 exactly, the same wrap the P1 unit test asserts.
-    // Same buffer size contract as the P1 unit test. One shared device and
-    // registry across both frames — the real app renders consecutive frames
-    // through the SAME device, so a model that is deterministic between two
-    // frames of ONE session is what wrap purity means on stage (a
-    // per-device seed must not separate two beats of the same run).
-    let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
-    let registry = PrimitiveRegistry::with_builtin();
-    let (w, h) = (64u32, 64u32);
-    let render_at = |beat: f64| -> Vec<u8> {
-        let ctx = PresetContext {
-            time: beat * 0.5,
-            beat,
-            dt: 0.016,
-            width: w,
-            height: h,
-            output_width: w,
-            output_height: h,
-            aspect: w as f32 / h as f32,
-            owner_key: 0,
-            is_clip_level: false,
-            frame_count: 0,
-            anim_progress: 0.0,
-            trigger_count: 0,
-        };
-        let (rgba, _, _) = render_viewport_frame(
-            applied.clone(),
-            &registry,
-            device.clone(),
-            w,
-            h,
-            &ctx,
-        )
-        .expect("render_viewport_frame");
-        rgba
-    };
-    // Phase wrap on the real import: beat 0 vs beat 8 (both → phase 0 exactly).
-    // This gate is `#[ignore]`d — the known device nondeterminism on this
-    // fixture (lead-accepted, beaded) makes the raw frames wobble across
-    // device instances, so a hard equality can't be asserted reliably here;
-    // the canonical INV-3 gate is the minimal graph (`scene_loop_wrap_parity.rs`).
-    let a = render_at(0.0);
-    let b = render_at(8.0);
-    let diff = max_pixel_diff(&a, &b);
-    assert_eq!(
-        diff, 0,
-        "INV-3: phase 0 vs ~1 through the real import + real plan disagree (diff={diff})"
+    // 4. D7 P4: apply mints exactly the three loop nodes — no fog.
+    assert!(
+        applied
+            .nodes
+            .iter()
+            .all(|n| n.node_id.as_str() != "loop_fog" && n.node_id.as_str() != "fog_driver"),
+        "P4 fog cut: the plan builder must not mint loop_fog or fog_driver"
     );
 }

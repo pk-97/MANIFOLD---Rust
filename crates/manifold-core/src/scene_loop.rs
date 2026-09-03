@@ -33,8 +33,8 @@ pub struct InstanceWiring {
 /// (as the inverse-it-knows) [`RemoveSceneLoopCommand`].
 #[derive(Debug, Clone)]
 pub struct SceneLoopPlan {
-    /// New loop nodes to add at the scene graph level (loop_phase, scene_array,
-    /// loop_camera, optionally loop_fog).
+    /// New loop nodes to add at the scene graph level (D7 P4: exactly
+    /// loop_phase, scene_array, loop_camera — fog is never minted).
     pub new_nodes: Vec<EffectGraphNode>,
     /// New wires connecting the loop nodes to each other and to existing nodes.
     pub new_wires: Vec<EffectGraphWire>,

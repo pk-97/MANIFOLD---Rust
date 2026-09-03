@@ -996,9 +996,7 @@ pub fn sync_inspector_data(
                                 scene_loop: vm.scene_loop.as_ref().map(|loop_info| SceneLoopRow {
                                     section: "Scene Loop".to_string(),
                                     beat_ramp_doc_id: loop_info.beat_ramp_doc_id,
-                                    rate: loop_info
-                                        .beat_ramp_rate
-                                        .unwrap_or(1.0 / 8.0),
+                                    bars: loop_info.beat_ramp_bars.unwrap_or(8.0),
                                 }),
                                 scene_bounds: vm.scene_bounds,
                             }))

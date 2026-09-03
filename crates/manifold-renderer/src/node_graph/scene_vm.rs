@@ -378,15 +378,14 @@ pub struct LoopCameraRow {
 pub struct SceneLoopInfo {
     /// Doc id of the `node.beat_ramp` (loop_phase).
     pub beat_ramp_doc_id: u32,
-    /// The loop_phase `node.beat_ramp`'s current `rate` (1/bars) — read for
-    /// the panel's wrap-debug toggle to restore after parking at phase 0.
-    pub beat_ramp_rate: Option<f32>,
+    /// The loop_phase `node.beat_ramp`'s current `bars` (0 = parked at phase
+    /// 0) — read for the panel's wrap-debug toggle to restore after parking.
+    /// `None` for a pre-P4 loop node that carries only the legacy `rate`.
+    pub beat_ramp_bars: Option<f32>,
     /// Doc id of the `node.scene_array`.
     pub scene_array_doc_id: u32,
     /// Doc id of the `node.loop_camera`.
     pub loop_camera_doc_id: u32,
-    /// Doc id of the `node.atmosphere` if the apply-command minted one.
-    pub loop_fog_doc_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1149,16 +1148,18 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
 /// when the graph had none).
 fn trace_scene_loop(level: &Level) -> Option<SceneLoopInfo> {
     let mut beat_ramp_doc_id = None;
-    let mut beat_ramp_rate = None;
+    let mut beat_ramp_bars = None;
     let mut scene_array_doc_id = None;
     let mut loop_camera_doc_id = None;
-    let mut loop_fog_doc_id = None;
 
     for node in level.nodes {
         match node.type_id.as_str() {
             BEAT_RAMP_TYPE_ID if node.node_id.as_ref() == "loop_phase" => {
                 beat_ramp_doc_id = Some(node.id);
-                beat_ramp_rate = node.params.get("rate").and_then(|v| match v {
+                // bars governs the loop phase (1/bars cycles/beat); 0 = parked
+                // at phase 0. Pre-P4 loops carry only `rate` — treat a missing
+                // bars as the 8-bar default rather than parked.
+                beat_ramp_bars = node.params.get("bars").and_then(|v| match v {
                     SerializedParamValue::Float { value } => Some(*value),
                     _ => None,
                 });
@@ -1169,19 +1170,15 @@ fn trace_scene_loop(level: &Level) -> Option<SceneLoopInfo> {
             LOOP_CAMERA_TYPE_ID => {
                 loop_camera_doc_id = Some(node.id);
             }
-            ATMOSPHERE_TYPE_ID if node.node_id.as_ref() == "loop_fog" => {
-                loop_fog_doc_id = Some(node.id);
-            }
             _ => {}
         }
     }
 
     Some(SceneLoopInfo {
         beat_ramp_doc_id: beat_ramp_doc_id?,
-        beat_ramp_rate,
+        beat_ramp_bars,
         scene_array_doc_id: scene_array_doc_id?,
         loop_camera_doc_id: loop_camera_doc_id?,
-        loop_fog_doc_id,
     })
 }
 
