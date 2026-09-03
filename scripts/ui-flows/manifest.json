@@ -73,6 +73,9 @@
       "toggle-lanes",
       "automation"
     ],
+    "crates/manifold-ui/src/panels/layer_header.rs": [
+      "led-layer"
+    ],
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
       "audio-setup"
     ],
@@ -86,6 +89,7 @@
     "bug060-inspector-footer-containment": "bug060",
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
+    "led-layer-create": "timeline",
     "envelope-modulation": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",

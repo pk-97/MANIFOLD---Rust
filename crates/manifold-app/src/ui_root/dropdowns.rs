@@ -682,6 +682,10 @@ impl UIRoot {
                             .with_action(PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone()))),
                     );
                     items.push(
+                        DropdownItem::new("Insert LED Layer")
+                            .with_action(PanelAction::Editing(EditingAction::ContextAddLedLayer(layer_id.clone()))),
+                    );
+                    items.push(
                         DropdownItem::new("Insert Audio Layer")
                             .with_action(PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id))),
                     );
@@ -734,6 +738,10 @@ impl UIRoot {
                 items.push(
                     DropdownItem::new("Insert Generator Layer")
                         .with_action(PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone()))),
+                );
+                items.push(
+                    DropdownItem::new("Insert LED Layer")
+                        .with_action(PanelAction::Editing(EditingAction::ContextAddLedLayer(layer_id.clone()))),
                 );
                 items.push(
                     DropdownItem::new("Insert Audio Layer")

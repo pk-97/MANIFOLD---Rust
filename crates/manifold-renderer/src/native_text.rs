@@ -514,8 +514,23 @@ fn generate_atlas_icons() -> [Vec<u8>; ICON_COUNT] {
         x if x == Icon::LayerGroup.id() => generate_folder_icon(),
         x if x == Icon::LayerAudio.id() => generate_level_bars_icon(),
         x if x == Icon::Playhead.id() => generate_playhead_head_icon(),
+        x if x == Icon::LayerLed.id() => generate_led_grid_icon(),
         // Waveform shapes occupy ids 0..=4 in declaration order.
         _ => generate_single_waveform(i),
+    })
+}
+
+/// LED layer-type badge — a 2×4 grid of round dots, the 8-strip array read as
+/// a glyph. Distinct from the generator starburst at badge size.
+fn generate_led_grid_icon() -> Vec<u8> {
+    const DOT_R: f32 = 0.075;
+    const COLS: [f32; 2] = [0.36, 0.64];
+    const ROWS: [f32; 4] = [0.22, 0.40, 0.58, 0.76];
+    supersample_icon(move |nx, ny| {
+        COLS.iter().any(|&cx| {
+            ROWS.iter()
+                .any(|&cy| (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy) <= DOT_R * DOT_R)
+        })
     })
 }
 

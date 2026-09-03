@@ -122,6 +122,18 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         LayerAction::ToggleLed(id) => {
+            // LED-type layers: `blit_to_led` is inert on them (the layer routes
+            // Direct regardless — LED_STRIPS_DESIGN.md section 5b D11), and the
+            // header chip is a state indicator, not this toggle. Flipping the
+            // persisted mirror flag here would be a write the UI can't truthfully
+            // show, so the action is a no-op for them.
+            if project
+                .timeline
+                .find_layer_by_id(id.as_str())
+                .is_some_and(|(_, l)| l.is_led())
+            {
+                return DispatchResult::handled();
+            }
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
                 && selection.is_layer_selected(id)
             {

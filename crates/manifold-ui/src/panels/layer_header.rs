@@ -255,6 +255,11 @@ pub struct LayerInfo {
     /// send. Drives the teal `A` toggle on the audio row. See LAYER_CONTROLS section 5.3.
     pub analysis_only: bool,
     pub is_led: bool,
+    /// True for `LayerType::Led`. The lane's L chip is then an LED state
+    /// indicator, not the mirror toggle: rendered permanently on and
+    /// non-interactive (`blit_to_led` is inert on LED layers —
+    /// LED_STRIPS_DESIGN.md section 5b D11).
+    pub is_led_layer: bool,
     pub parent_layer_id: Option<String>,
     pub blend_mode: String,
     pub generator_type: Option<String>,
@@ -575,19 +580,19 @@ fn compute_layer_row(
         let val_w = (right_edge - val_x).max(20.0);
         let mode_x = right_edge - MODE_TOGGLE_W;
 
-        // FOLDER label | folder-path value chip — video layers only (generators
-        // have no source folder). section K11: the static label sits in the label column
-        // (PathLabel), the interactive picker chip in the value column (Folder).
-        if !is_generator {
+        // Generator-name line (generators, and LED layers — an LED layer is
+        // generator-driven with no source folder, LED_STRIPS_DESIGN.md section
+        // 5b D12) occupies the exact row/height budget FOLDER would use for a
+        // video layer. Decided by the gen label, not the layer type: any lane
+        // carrying a generator preset shows its name.
+        if has_gen_label {
+            d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+            y += BTN_H + ROUTING_ROW_GAP;
+        } else if !is_generator {
+            // FOLDER label | folder-path value chip — video layers only
+            // (generators have no source folder).
             d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
-            y += BTN_H + ROUTING_ROW_GAP;
-        } else if has_gen_label {
-            // P0.5: the generator name occupies the exact row/height budget
-            // FOLDER would use for a video layer — one line under the name,
-            // not an extra row. Full-width (no separate label column): the
-            // brief asks for "the generator name", not a label+value pair.
-            d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
             y += BTN_H + ROUTING_ROW_GAP;
         }
         // MIDI | note input + trigger-mode toggle.
@@ -1809,15 +1814,26 @@ impl LayerHeaderPanel {
                     analysis_style(layer.analysis_only, layer.color),
                     "A",
                 ),
-                C::Led => tree.add_button(
-                    clip_parent,
-                    r.x,
-                    r.y,
-                    r.width,
-                    r.height,
-                    led_style(layer.is_led, layer.color),
-                    "L",
-                ),
+                C::Led => {
+                    let led = tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        led_style(layer.is_led, layer.color),
+                        "L",
+                    );
+                    if layer.is_led_layer {
+                        // LED-type layer: the chip is a state indicator, not
+                        // the mirror toggle — the model flag is inert here
+                        // (D11), so the toggle is hidden (no click, no lie).
+                        // The LED-on styling itself is the existing is_led
+                        // treatment, driven by `routes_to_led` upstream.
+                        tree.set_flag(led, UIFlags::DISABLED);
+                    }
+                    led
+                }
                 C::Blend => {
                     // section M: a dim "BLEND" micro-label prefixes the mode (the mockup's
                     // `<b>BLEND</b> Normal`). The label is a renderer-painted prefix
@@ -2502,6 +2518,7 @@ mod tests {
             is_solo: false,
             analysis_only: false,
             is_led: false,
+            is_led_layer: false,
             parent_layer_id: None,
             blend_mode: "Normal".into(),
             generator_type: None,
@@ -3104,12 +3121,14 @@ mod tests {
             let val_x = pad + LBL_W + 6.0;
             let val_w = (right_edge - val_x).max(20.0);
             let mode_x = right_edge - MODE_TOGGLE_W;
-            if !is_generator {
+            if has_gen_label {
+                // Generator-name line — generators and LED layers (mirrors
+                // compute_layer_row; the equivalence gate enforces it).
+                d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+                y += BTN_H + ROUTING_ROW_GAP;
+            } else if !is_generator {
                 d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
                 d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
-                y += BTN_H + ROUTING_ROW_GAP;
-            } else if has_gen_label {
-                d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
                 y += BTN_H + ROUTING_ROW_GAP;
             }
             d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
@@ -3163,6 +3182,17 @@ mod tests {
             let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
             assert_row_eq(&live, &oracle, label);
         }
+
+        // LED layer (MVP-P1b): generator-driven but NOT `LayerType::Generator` —
+        // is_generator=false with a gen label. The generator-name line must
+        // show and the FOLDER row must not.
+        let live = compute_layer_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, true);
+        let oracle = oracle_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, true);
+        assert_row_eq(&live, &oracle, "led");
+        assert!(
+            live.has(LayerControl::GenType) && !live.has(LayerControl::Folder),
+            "LED layer shows the generator-name line, not the source-folder row",
+        );
     }
 
     #[test]

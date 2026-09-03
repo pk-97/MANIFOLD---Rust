@@ -45,6 +45,16 @@ impl Command for AddLayerCommand {
         } else {
             let mut new_layer = if self.layer_type == LayerType::Generator {
                 Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0)
+            } else if self.layer_type == LayerType::Led {
+                // An LED layer is generator-driven (LED_STRIPS_DESIGN.md section
+                // 5b D12): seeded exactly like a generator layer so the standard
+                // clip workflow plays the LED preset out of the box.
+                // `Layer::new_generator` hardcodes `LayerType::Generator` and
+                // `gen_params` has no public setter, so the type is flipped here.
+                let mut layer =
+                    Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0);
+                layer.layer_type = LayerType::Led;
+                layer
             } else {
                 Layer::new(self.name.clone(), self.layer_type, 0)
             };
@@ -958,6 +968,38 @@ mod tests {
 
     fn video(name: &str, index: i32) -> Layer {
         Layer::new(name.to_string(), LayerType::Video, index)
+    }
+
+    /// MVP-P1b default-preset contract (LED_STRIPS_DESIGN.md section 5b D12):
+    /// creating an LED layer seeds `gen_params` with the bundled LED Fill
+    /// preset id — the id is the contract; MVP-P2 grows the graph underneath
+    /// it. A missing gen_params here is the "cleared generator" black-render
+    /// trap, and a wrong id means the layer silently falls back to no preset.
+    #[test]
+    fn add_led_layer_seeds_led_fill_gen_params() {
+        let mut project = Project::default();
+        project.timeline.layers.push(video("A", 0));
+
+        let mut cmd = AddLayerCommand::new(
+            "LED 2".to_string(),
+            LayerType::Led,
+            PresetTypeId::new("LED Fill"),
+            1,
+            None,
+        );
+        cmd.execute(&mut project);
+
+        let layer = &project.timeline.layers[1];
+        assert_eq!(layer.layer_type, LayerType::Led);
+        assert!(layer.is_led());
+        let genp = layer
+            .gen_params()
+            .expect("LED layer must carry gen_params (D12)");
+        assert_eq!(
+            genp.generator_type(),
+            &PresetTypeId::new("LED Fill"),
+            "new LED layers default to the LED Fill preset",
+        );
     }
 
     /// Grouping a non-contiguous selection then undoing must restore the exact

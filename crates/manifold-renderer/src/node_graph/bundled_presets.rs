@@ -228,9 +228,29 @@ mod tests {
         }
     }
 
+    /// MVP-P1b default-preset contract (LED_STRIPS_DESIGN.md section 5b D12):
+    /// the LED Fill generator — the default for new LED layers — must resolve
+    /// in the bundled catalog with metadata and a graph that validates and
+    /// compiles. A miss here is the "missing-id fallback" the creation flow
+    /// must never hit: the layer would render as a cleared (black) generator.
     #[test]
-    fn bundled_preset_json_returns_embedded_bytes() {
-        let raw = bundled_preset_json(&PresetTypeId::MIRROR).expect("Mirror preset registered");
+    fn led_fill_bundled_generator_resolves_and_compiles() {
+        let registry = PrimitiveRegistry::with_builtin();
+        let id = PresetTypeId::new("LED Fill");
+        let def = bundled_preset_def(&id)
+            .expect("LED Fill must be a bundled generator (filename stem = preset id)")
+            .clone();
+        assert!(
+            def.preset_metadata.is_some(),
+            "LED Fill must carry presetMetadata so the picker/inspector can show its params",
+        );
+        let graph = def.into_graph(&registry).expect("LED Fill must build a graph");
+        validate(&graph).expect("LED Fill graph must validate");
+        compile(&graph).expect("LED Fill graph must compile");
+    }
+
+    #[test]
+    fn bundled_preset_json_returns_embedded_bytes() {        let raw = bundled_preset_json(&PresetTypeId::MIRROR).expect("Mirror preset registered");
         // Sanity: the embedded JSON must parse as a valid def and name itself "Mirror".
         let def: EffectGraphDef = serde_json::from_str(&raw).expect("Mirror preset parses");
         assert_eq!(def.name.as_deref(), Some("Mirror"));

@@ -1147,6 +1147,7 @@ fn icon_badge_sheet() {
         ("LayerGroup (folder)", Icon::LayerGroup),
         ("LayerAudio (bars)", Icon::LayerAudio),
         ("Playhead (triangle)", Icon::Playhead),
+        ("LayerLed (dot grid)", Icon::LayerLed),
     ];
 
     // A layer-colour tile to check the badge's contrast colour (as in the header).

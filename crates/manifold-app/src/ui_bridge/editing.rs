@@ -264,6 +264,32 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
+        EditingAction::ContextAddLedLayer(after_layer) => {
+            {
+                if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
+                    let idx = idx + 1;
+                    let name = format!("LED {}", project.timeline.layers.len() + 1);
+                    // D12: a new LED layer defaults to the bundled LED Fill
+                    // preset so the standard clip workflow works with zero
+                    // setup. The id is the contract — MVP-P2 grows the graph
+                    // underneath it.
+                    let cmd = AddLayerCommand::new(
+                        name,
+                        LayerType::Led,
+                        PresetTypeId::new("LED Fill"),
+                        idx,
+                        None,
+                    );
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
         EditingAction::ContextAddAudioLayer(after_layer) => {
             {
                 if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
