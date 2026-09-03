@@ -168,8 +168,12 @@ pub struct PlaybackEngine {
     last_sync_time: Seconds,
     drift_correction_count: i32,
     is_export_mode: bool,
+    /// Half-frame tolerance for the visual active-clip query. Clips within this
+    /// epsilon of a start or end edge are considered active, so the playhead on
+    /// a clip boundary still renders the clip. Logical time (transport/triggers/
+    /// audio) uses exact `current_beat`.
+    visual_boundary_epsilon: Beats,
 
-    // Clock state (for out-of-tick operations)
     last_realtime_now: f64,
     last_frame_count: u64,
 
@@ -321,6 +325,7 @@ impl PlaybackEngine {
             last_sync_time: Seconds::ZERO,
             drift_correction_count: 0,
             is_export_mode: false,
+            visual_boundary_epsilon: Beats::ZERO,
             last_realtime_now: 0.0,
             last_frame_count: 0,
             stop_buffer: Vec::with_capacity(16),
@@ -691,8 +696,19 @@ impl PlaybackEngine {
         self.sync_project_bpm_from_current_beat();
     }
 
-    /// Set time from a seek. Returns beat delta for feedback buffer clearing.
-    /// Port of C# PlaybackEngine.SeekTo (lines 530-538).
+    /// Update the half-frame boundary epsilon used by the visual active-clip
+    /// query. Called at the top of every tick before sync, using the same dt
+    /// that drives time advancement.
+    fn update_visual_boundary_epsilon(&mut self, dt_seconds: Seconds) {
+        let bpm = self
+            .project
+            .as_ref()
+            .map(|p| p.settings.bpm.0 as f64)
+            .unwrap_or(120.0);
+        let frame_beat_delta = (bpm / 60.0) * dt_seconds.0;
+        self.visual_boundary_epsilon = Beats(0.5 * frame_beat_delta.max(0.0));
+    }
+
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
@@ -828,6 +844,10 @@ impl PlaybackEngine {
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
+        // Epsilon for the visual active-clip query: half a frame in beats.
+        // Updated before any sync so boundary frames render the owning clip.
+        self.update_visual_boundary_epsilon(ctx.dt_seconds);
+
         // 1. Advance time (unless external sync source is the clock authority).
         //    Port of C# lines 1141-1150.
         if !self.external_time_sync {
@@ -970,6 +990,9 @@ impl PlaybackEngine {
 
     /// Non-playing (paused/stopped) tick. Matches C# PlaybackController.Update lines 1114-1133.
     fn tick_non_playing(&mut self, ctx: TickContext) -> TickResult {
+        // Epsilon for the visual active-clip query: half a frame in beats.
+        self.update_visual_boundary_epsilon(ctx.dt_seconds);
+
         // 1. Reconcile desired membership every tick (P1: unconditional reconcile).
         //    Seek active clips only when membership actually changed — re-seeking
         //    every paused frame would churn every active video player.
@@ -1093,8 +1116,9 @@ impl PlaybackEngine {
         self.timeline_active_scratch.clear();
         if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            project.timeline.get_active_clips_at_beat_ref(
+            project.timeline.get_active_clips_at_beat_ref_epsilon(
                 beat,
+                self.visual_boundary_epsilon,
                 &mut self.active_indices_scratch,
                 &mut self.active_layer_indices_scratch,
             );
@@ -1114,6 +1138,9 @@ impl PlaybackEngine {
                     continue;
                 }
                 if let Some(clip) = layer.clips.get(*ci) {
+                    let end_beat = clip.end_beat().0;
+                    let is_boundary_owned = self.current_beat < clip.start_beat.0
+                        || self.current_beat >= end_beat;
                     self.timeline_active_scratch.push(ActiveClipRef {
                         clip_id: clip.id.clone(),
                         layer_index: *li as i32,
@@ -1123,6 +1150,7 @@ impl PlaybackEngine {
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
                         is_muted: clip.is_muted,
+                        is_boundary_owned,
                         layer_id: layer.layer_id.clone(),
                     });
                 }

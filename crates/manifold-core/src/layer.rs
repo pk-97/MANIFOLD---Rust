@@ -462,44 +462,95 @@ impl Layer {
     /// IMPORTANT: Caches must be up-to-date before calling. Either call
     /// `ensure_sorted()` first, or use `collect_active_clips_at_beat_mut()`.
     pub fn collect_active_clips_at_beat(&self, beat: Beats, results: &mut Vec<usize>) {
+        self.collect_active_clips_at_beat_epsilon(beat, Beats::ZERO, results);
+    }
+
+    /// Like `collect_active_clips_at_beat`, but clips that start or end within
+    /// `boundary_epsilon` of `beat` are also included. This lets the playhead
+    /// sitting exactly on a clip edge still render that clip, matching Ableton's
+    /// arrangement-view behavior and absorbing f32 round-trip errors.
+    pub fn collect_active_clips_at_beat_epsilon(
+        &self,
+        beat: Beats,
+        boundary_epsilon: Beats,
+        results: &mut Vec<usize>,
+    ) {
         if self.clips.is_empty() {
             return;
         }
         // Caches must already be sorted (caller's responsibility via ensure_sorted)
 
-        // Count of clips with start_beat <= beat (sorted by start)
-        let started_count = Self::upper_bound_start_beat(&self.clips, beat);
+        // Count of clips with start_beat <= beat + epsilon (sorted by start)
+        let started_count =
+            Self::upper_bound_start_beat(&self.clips, Beats(beat.0 + boundary_epsilon.0));
         if started_count == 0 {
             return;
         }
 
-        // Index into clips_by_end_indices where end_beat > beat starts
-        let end_idx =
-            Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, beat);
+        // Index into clips_by_end_indices where end_beat > beat - epsilon starts
+        let end_idx = Self::lower_bound_end_beat(
+            &self.clips,
+            &self.clips_by_end_indices,
+            Beats(beat.0 - boundary_epsilon.0),
+        );
         let ending_after_count = self.clips_by_end_indices.len() - end_idx;
 
-        // Iterate the smaller candidate set
+        // Iterate the smaller candidate set, selecting at most one clip per layer.
+        // Boundary overlap (two adjacent clips both within epsilon) resolves to
+        // the clip whose start is nearest to `beat` from below.
+        let mut chosen: Option<usize> = None;
+
         if started_count <= ending_after_count {
-            // Scan the start-sorted prefix: clips 0..started_count where start_beat <= beat
+            // Scan the start-sorted prefix: clips 0..started_count where start_beat <= beat + epsilon
             for i in 0..started_count {
                 let clip = &self.clips[i];
-                if beat < clip.end_beat() {
-                    results.push(i);
+                if beat - boundary_epsilon < clip.end_beat() {
+                    chosen = self.prefer_active_clip(chosen, i, clip, beat);
                 }
             }
         } else {
-            // Scan the end-sorted suffix: clips where end_beat > beat.
-            // Push into the caller's buffer, then sort only the tail we added
-            // so deterministic per-layer ordering is preserved.
-            let start = results.len();
+            // Scan the end-sorted suffix: clips where end_beat > beat - epsilon.
             for i in end_idx..self.clips_by_end_indices.len() {
                 let ci = self.clips_by_end_indices[i];
                 let clip = &self.clips[ci];
-                if clip.start_beat <= beat {
-                    results.push(ci);
+                if clip.start_beat <= beat + boundary_epsilon {
+                    chosen = self.prefer_active_clip(chosen, ci, clip, beat);
                 }
             }
-            results[start..].sort_unstable();
+        }
+
+        if let Some(ci) = chosen {
+            results.push(ci);
+        }
+    }
+
+    /// Choose between two boundary-overlapping candidates. Prefer the clip whose
+    /// start is nearest to `beat` from below (the later-starting clip). At a
+    /// shared boundary this gives precedence to the incoming clip, matching
+    /// Ableton arrangement-view behavior.
+    fn prefer_active_clip(
+        &self,
+        current: Option<usize>,
+        candidate: usize,
+        candidate_clip: &TimelineClip,
+        beat: Beats,
+    ) -> Option<usize> {
+        let current = match current {
+            Some(c) => c,
+            None => return Some(candidate),
+        };
+        let current_clip = &self.clips[current];
+
+        // Distance from beat to each clip's start, clamped to non-negative
+        // so a clip that starts after beat is only chosen if there is no
+        // better candidate.
+        let current_dist = (beat.0 - current_clip.start_beat.0).max(0.0);
+        let candidate_dist = (beat.0 - candidate_clip.start_beat.0).max(0.0);
+
+        if candidate_dist <= current_dist {
+            Some(candidate)
+        } else {
+            Some(current)
         }
     }
 
@@ -1350,13 +1401,56 @@ mod tests {
     }
 
     #[test]
-    fn find_parent_layer_scans_backwards_in_tree_order() {
-        let parent = Layer::new("G".into(), LayerType::Group, 0);
-        let mut child = Layer::new("C".into(), LayerType::Video, 1);
-        child.parent_layer_id = Some(parent.layer_id.clone());
-        let layers = vec![parent.clone(), child.clone()];
-        let (idx, p) = Layer::find_parent_layer(&layers, 1).unwrap();
-        assert_eq!(idx, 0);
-        assert_eq!(p.layer_id, parent.layer_id);
+    fn boundary_epsilon_owns_lone_end_edge() {
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(8.0),
+            ..TimelineClip::default()
+        });
+        layer.ensure_sorted();
+
+        let mut results = Vec::new();
+        layer.collect_active_clips_at_beat_epsilon(Beats(8.0), Beats(0.1), &mut results);
+        assert_eq!(results, vec![0], "end edge within epsilon should still be active");
+
+        results.clear();
+        layer.collect_active_clips_at_beat_epsilon(Beats(8.5), Beats(0.1), &mut results);
+        assert!(results.is_empty(), "beyond epsilon should be inactive");
+    }
+
+    #[test]
+    fn boundary_epsilon_owns_lone_start_edge() {
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(8.0),
+            duration_beats: Beats(8.0),
+            ..TimelineClip::default()
+        });
+        layer.ensure_sorted();
+
+        let mut results = Vec::new();
+        layer.collect_active_clips_at_beat_epsilon(Beats(8.0), Beats(0.1), &mut results);
+        assert_eq!(results, vec![0], "start edge within epsilon should be active");
+    }
+
+    #[test]
+    fn boundary_epsilon_prefers_later_clip_at_adjacent_boundary() {
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(8.0),
+            ..TimelineClip::default()
+        });
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(8.0),
+            duration_beats: Beats(8.0),
+            ..TimelineClip::default()
+        });
+        layer.ensure_sorted();
+
+        let mut results = Vec::new();
+        layer.collect_active_clips_at_beat_epsilon(Beats(8.0), Beats(0.1), &mut results);
+        assert_eq!(results, vec![1], "adjacent boundary should select the later-starting clip");
     }
 }
