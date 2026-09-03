@@ -523,7 +523,7 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = tail_start;
                 tail.duration_beats = tail_duration;
-                if !clip.video_clip_id.is_empty() && clip.duration_beats > Beats::ZERO {
+                if clip.is_source_media() && clip.duration_beats > Beats::ZERO {
                     tail.in_point = clip.in_point + Seconds(new_duration.0 * spb as f64);
                 }
                 return Some(SplitClipCommand::new(
@@ -654,8 +654,8 @@ impl EditingService {
         trimmed.start_beat = new_start;
         trimmed.duration_beats = new_duration;
 
-        // Adjust in_point for video clips
-        if !clip.video_clip_id.is_empty() {
+        // Adjust in_point for source-media clips (video/audio)
+        if clip.is_source_media() {
             trimmed.in_point =
                 clip.in_point + Seconds((new_start - clip.start_beat).0 * spb as f64);
         }
@@ -861,7 +861,7 @@ impl EditingService {
                         interior_clip.id = interior_id.clone();
                         interior_clip.start_beat = region_start;
                         interior_clip.duration_beats = tail_end - region_start;
-                        if !orig.video_clip_id.is_empty() && orig.duration_beats > Beats::ZERO {
+                        if orig.is_source_media() && orig.duration_beats > Beats::ZERO {
                             let offset = region_start - orig.start_beat;
                             interior_clip.in_point = orig.in_point + Seconds(offset.0 * spb as f64);
                         }

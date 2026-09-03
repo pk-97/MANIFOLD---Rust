@@ -4,7 +4,7 @@ use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::*;
 use manifold_core::units::Bpm;
-use manifold_core::{Beats, ClipId};
+use manifold_core::{Beats, ClipId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::service::EditingService;
 use std::collections::HashSet;
@@ -522,6 +522,31 @@ fn split_at_boundary_returns_none() {
     assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(0.0), spb).is_none());
     // Split at end — invalid
     assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(8.0), spb).is_none());
+}
+
+#[test]
+fn split_audio_clip_advances_tail_in_point() {
+    let mut project = make_project();
+    let clip = TimelineClip {
+        audio_file_path: "test.wav".into(),
+        start_beat: Beats(0.0),
+        duration_beats: Beats(8.0),
+        ..Default::default()
+    };
+    let id = clip.id.clone();
+    project.timeline.layers[0].restore_clip(clip);
+    project.timeline.mark_clip_lookup_dirty();
+
+    let spb = 60.0 / project.settings.bpm.0; // 0.5s/beat at 120bpm
+    let mut cmd = EditingService::split_clip_at_beat(&project, &id, Beats(4.0), spb).unwrap();
+    cmd.execute(&mut project);
+
+    let tail = project.timeline.layers[0]
+        .clips
+        .iter()
+        .find(|c| c.id != id)
+        .unwrap();
+    assert!((tail.in_point - Seconds(2.0)).abs() < Seconds(0.001));
 }
 
 // ─── Extend/Shrink ───
