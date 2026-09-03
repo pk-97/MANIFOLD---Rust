@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** SHIPPED 2026-09-02 — P1–P3 on main (atoms, apply/remove commands, wrap-parity net; panel section + renderer-side plan builder + D10 camera-home addendum; loop-phased fog driver). Owed: VD bead BUG-nkxg (pixel-level copies gate on a real lit import). Doc kept as the cited contract. · k3 (lead)
+**Status:** IN PROGRESS — P1–P3 on main but the feature failed adversarial contact (BUG-70wo (camera-inside-solid-mesh black): camera never left solid meshes; panel surface shipped the atoms' raw internals and desynced — duplicate Axis/Cell Size rows from double stamping). P4 (MVP rebuild: curated panel, single-sourced internals, fog cut, value-pipeline fix) pending. Owed: VD bead BUG-nkxg (pixel-level copies gate on a real lit import). · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -137,12 +137,34 @@ don't redesign.
   section 3, the zero-new-systems test): no synthesized param ids, no
   panel-side id map, no resolution funnel** — the reference failure is
   BUG-237 (scene-setup-camera-world-light-param-scrub) and its siblings.
-- **D7 — Fog is the default seam strategy, auto-sized.** When the graph has
-  no atmosphere node (import default), the apply-command adds one and sets
-  fog far ≈ 1.5 × cell_size (overridable). Enclosed scenes hide their own
-  ends; fog covers the rest. **Consequences, stated honestly:** open-landscape
-  scans will show the joint no matter what — scene selection is part of the
-  feature, and the doc's demo scene is an enclosed one.
+  **P4 revision — curate the stamped set (performer controls only):** stamping
+  every param of every loop node shipped the atoms' internals (Rate in
+  cycles/beat, Home, Near/Far, duplicate Axis/Cell Size) — the desync Peter
+  hit. The stamped whitelist is exactly: `loop_phase.rate` (labeled in BARS),
+  `scene_array.count` (Copies), `loop_camera.height` + `lateral` (flight
+  path). Everything else is internal — including `cell_size`: a Spacing row
+  that edits only the array's cell desyncs camera travel from instance
+  spacing (INV-4), so the gap stays a fixed 1.0× extent (D4) until a
+  single-source write path exists.
+- **D11 — Shared values are single-sourced and stamping is idempotent.**
+  `cell_size`/`axis`/`home`/`near`/`far` are computed once by the plan builder
+  and must never be editable rows. The load-migration stamper matches existing
+  exposures by BINDING TARGET (nodeId, param), never by stamped param id —
+  renumbered doc ids after flatten must not mint a second exposure (the
+  duplicate-rows bug: apply stamped ids from pre-flatten doc ids, migration
+  re-stamped post-flatten ids, and the two sets disagreed on axis and cell
+  size, sending copies along -X while the camera flew +Z). Scale-derived
+  values (cell, near, far, home) are re-derived from `scene_bounds` at apply;
+  near/far default to extent/200 and cell×count+extent respectively so
+  photoscan-scale scenes (a ~150-unit tree) frame like meter-scale ones.
+- **D7 — Fog is opt-in, never minted by default (P4 revision).** Fog was the
+  corridor seam strategy (D4's original cell == extent tiling needed entry/exit
+  cross-sections to match). The gap rule (D4) makes every copy self-contained
+  — objects never touch, so there is no seam to hide on solid assets, and the
+  auto-minted atmosphere + loop-phased driver was unrequested complexity
+  (Peter 2026-09-03: cut it). Apply mints exactly three nodes: `loop_phase`,
+  `scene_array`, `loop_camera`. A scene's own atmosphere, if it has one, is
+  left alone. Fog returns only as an explicit performer action, later.
 - **D8 — Wrap purity is an invariant, not a hope.** Inside a looped scene,
   every time-varying input rides the loop phase wire. Camera shake, audio
   modulation, exposure pulses that aren't loop-phased produce a one-frame jump
@@ -300,11 +322,32 @@ PNG — every gate in this design is a computed number or exit code (Peter
   reload, section still finds and edits the loop nodes.
   Acceptance demo (L3): the ui-snap flow — scripted, numeric asserts, no
   human look. A PNG of the section is produced as a byproduct, never gated.
-- **P3 — Atmosphere polish.** Loop-phased fog density/shaft drivers wired off
-  `loop_phase`, sensible defaults per cell_size. Read-back: `atmosphere.rs`
-  port list. Gate: wrap parity still green with drivers live, and far-region
-  mean color differs between phase 0.25 and 0.75 by at least the driver's
-  stated swing — numeric, no eyeballs. Demo: the computed numbers — L1.
+- **P3 — Atmosphere polish. ⏪ REVERTED BY P4** (D7 revision: auto-minted fog
+  + loop-phased driver was unrequested complexity; apply mints three nodes
+  only). Loop-phased fog density/shaft drivers wired off `loop_phase`,
+  sensible defaults per cell_size. Gate: wrap parity still green with drivers
+  live, and far-region mean color differs between phase 0.25 and 0.75 by at
+  least the driver's stated swing — numeric, no eyeballs.
+- **P4 — MVP rebuild: performer panel + value-pipeline fix.** The adversarial
+  review (Peter 2026-09-03, after BUG-70wo (camera-inside-solid-mesh black))
+  found the panel shipped the atoms' internals and the stamp/reload path
+  desynced them. Work order: (1) root-cause + fix the save/reload scramble —
+  migration stamper matches by binding target, never mints a second exposure
+  for a renumbered node (D11); reconcile must see stamped entries, never drop
+  them (the `no template descriptor, no inline spec` drops + INV-6 frozen
+  rows in the 2026-09-03 app log). (2) Curate the stamped set to the D6
+  whitelist — Bars, Copies, Height, Lateral; Bars row labeled in bars,
+  writing rate = 1/bars. (3) Fog no longer minted (D7); near/far derived
+  from scene_bounds (D11). (4) Strip the fog-driver and scale_offset_value
+  minting from the plan builder. Gates: the existing INV-1..6 net; a new
+  round-trip gate — apply → save → reload → stamped rows are exactly the
+  whitelist, values unchanged, no duplicates (would have caught the
+  double-stamp); the ignored real-import wrap gate is fixed or deleted per
+  the no-`#[ignore]` rule — its nondeterminism is BUG-twa6 (device-seed).
+  Acceptance: Peter runs the sakura through enable → play → save → reload
+  and the loop looks right AND the panel shows four rows. The headless
+  harness cannot light real imports (BUG-bgcr (import lighting)) — the
+  visual gate is Peter's run until that lands.
 
 ## 6. Decided — do not reopen
 
