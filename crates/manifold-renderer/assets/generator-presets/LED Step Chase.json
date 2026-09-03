@@ -1,0 +1,611 @@
+{
+  "version": 2,
+  "name": "LED Step Chase",
+  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): a comet that jumps hard between positions, one step per note division, constant between jumps — the 8x120 grid reads hard steps better than sweeps. beat_ramp at attack=1 gives the tempo phase; floor(phase * Steps) / Steps + 1/Steps places the head at the column's right edge so the one-cell head fills it, and jumps land exactly on division boundaries (Steps = positions per cycle; at Rate 0.5 cycles/beat and Steps 8 the comet jumps one column per 16th). Direction flips the sign; the rest is the Chase Sweep comet (negated u-ramp + signed phase offset, wrap, power tail, invert, colorize). Section 2.5 audit: every atom exists (beat_ramp, math, switch_value, uv_field + field_combine, scale_offset_image, wrap, smoothstep, invert, colorize) — no new primitive.",
+  "presetMetadata": {
+    "id": "LED Step Chase",
+    "displayName": "LED Step Chase",
+    "category": "Pattern",
+    "oscPrefix": "ledStepChase",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.0625,
+        "max": 16.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "rate"
+      },
+      {
+        "id": "steps",
+        "name": "Steps",
+        "min": 2.0,
+        "max": 32.0,
+        "defaultValue": 8.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "steps"
+      },
+      {
+        "id": "tail",
+        "name": "Tail",
+        "min": 0.05,
+        "max": 1.0,
+        "defaultValue": 0.4,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "tail"
+      },
+      {
+        "id": "direction",
+        "name": "Direction",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Forward",
+          "Reverse"
+        ],
+        "formatString": "F0",
+        "oscSuffix": "direction"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 200.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "division_phase",
+          "param": "rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "steps",
+        "label": "Steps",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "step_scale",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "steps",
+        "label": "Steps",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "step_divide",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tail",
+        "label": "Tail",
+        "defaultValue": 0.4,
+        "target": {
+          "kind": "node",
+          "nodeId": "tail_end",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "direction",
+        "label": "Direction",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "direction_mux",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 200.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "steps",
+        "label": "Steps",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "step_half",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.beat_ramp",
+      "handle": "division_phase",
+      "nodeId": "division_phase",
+      "params": {
+        "rate": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "bars": {
+          "type": "Int",
+          "value": 0
+        },
+        "attack": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Division Phase"
+    },
+    {
+      "id": 3,
+      "typeId": "node.math",
+      "handle": "step_scale",
+      "nodeId": "step_scale",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Phase x Steps"
+    },
+    {
+      "id": 4,
+      "typeId": "node.math",
+      "handle": "step_floor",
+      "nodeId": "step_floor",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 10
+        }
+      },
+      "title": "Step Floor"
+    },
+    {
+      "id": 5,
+      "typeId": "node.math",
+      "handle": "step_divide",
+      "nodeId": "step_divide",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "title": "Step Position"
+    },
+    {
+      "id": 6,
+      "typeId": "node.switch_value",
+      "handle": "direction_mux",
+      "nodeId": "direction_mux",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "in_0": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": -1.0
+        }
+      },
+      "title": "Direction"
+    },
+    {
+      "id": 7,
+      "typeId": "node.math",
+      "handle": "direction_scale",
+      "nodeId": "direction_scale",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Signed Position"
+    },
+    {
+      "id": 8,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 9,
+      "typeId": "node.scale_offset_image",
+      "handle": "comet_offset",
+      "nodeId": "comet_offset",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": -1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Position Offset"
+    },
+    {
+      "id": 10,
+      "typeId": "node.wrap",
+      "handle": "comet_wrap",
+      "nodeId": "comet_wrap",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Wrap"
+    },
+    {
+      "id": 12,
+      "typeId": "node.smoothstep",
+      "handle": "tail_shape",
+      "nodeId": "tail_shape",
+      "params": {
+        "low": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "high": {
+          "type": "Float",
+          "value": 0.525
+        }
+      },
+      "title": "Tail Shape"
+    },
+    {
+      "id": 13,
+      "typeId": "node.invert",
+      "handle": "comet",
+      "nodeId": "comet",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Comet (1-d)"
+    },
+    {
+      "id": 14,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "hue": {
+          "type": "Float",
+          "value": 200.0
+        },
+        "saturation": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "focus": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 15,
+      "typeId": "node.field_combine",
+      "handle": "u_ramp",
+      "nodeId": "u_ramp",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "U Ramp"
+    },
+    {
+      "id": 16,
+      "typeId": "node.math",
+      "handle": "step_half",
+      "nodeId": "step_half",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "title": "Cell Width"
+    },
+    {
+      "id": 17,
+      "typeId": "node.math",
+      "handle": "center_offset",
+      "nodeId": "center_offset",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Cell Centre"
+    },
+    {
+      "id": 18,
+      "typeId": "node.math",
+      "handle": "tail_end",
+      "nodeId": "tail_end",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.4
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "op": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Tail End"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "offset"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "high"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in"
+    }
+  ]
+}

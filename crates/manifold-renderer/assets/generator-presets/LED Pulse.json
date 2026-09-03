@@ -1,0 +1,148 @@
+{
+  "version": 2,
+  "name": "LED Pulse",
+  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): brightness breathes up all strips at once. A Musical-mode lfo (sine, min=0, max=1) is the breathing brightness; circle_mask at radii 4 fills the frame with white (LED Fill's field); node.exposure multiplies the field by the lfo; colorize at amount=1/focus=0 turns luma into HSV(hue, sat, 1) * brightness. Period picks the note rate (1/1 = one breath per whole note = 4 beats at 4/4). Section 2.5 audit: every atom exists (lfo, circle_mask, exposure, colorize) — no new primitive.",
+  "presetMetadata": {
+    "id": "LED Pulse",
+    "displayName": "LED Pulse",
+    "category": "Pattern",
+    "oscPrefix": "ledPulse",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "period",
+        "name": "Period",
+        "min": 0.0,
+        "max": 9.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": ["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"],
+        "formatString": "F0",
+        "oscSuffix": "period"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 200.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "period",
+        "label": "Period",
+        "defaultValue": 0.0,
+        "target": { "kind": "node", "nodeId": "breath", "param": "rate" },
+        "convert": { "type": "EnumRound" }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 200.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "hue" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "saturation" },
+        "convert": { "type": "Float" }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.lfo",
+      "handle": "breath",
+      "nodeId": "breath",
+      "params": {
+        "rate_mode": { "type": "Enum", "value": 0 },
+        "rate": { "type": "Enum", "value": 0 },
+        "angular_rate": { "type": "Float", "value": 1.0 },
+        "shape": { "type": "Enum", "value": 0 },
+        "phase": { "type": "Float", "value": 0.0 },
+        "min": { "type": "Float", "value": 0.0 },
+        "max": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Breath"
+    },
+    {
+      "id": 3,
+      "typeId": "node.circle_mask",
+      "handle": "white_field",
+      "nodeId": "white_field",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      },
+      "title": "White Field"
+    },
+    {
+      "id": 4,
+      "typeId": "node.exposure",
+      "handle": "brightness",
+      "nodeId": "brightness",
+      "params": {
+        "gain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Brightness"
+    },
+    {
+      "id": 5,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 200.0 },
+        "saturation": { "type": "Float", "value": 1.0 },
+        "focus": { "type": "Float", "value": 0.0 }
+      }
+    }
+  ],
+  "wires": [
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "gain" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

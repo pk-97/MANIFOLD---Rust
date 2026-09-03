@@ -1,0 +1,425 @@
+{
+  "version": 2,
+  "name": "LED Chase Sweep",
+  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): a smooth comet sweeps horizontally across all strips. beat_ramp at attack=1 is a tempo-locked sawtooth phase; the direction mux flips its sign for Reverse; uv_field projected through field_combine (u in every channel, so the comet IS the signal) is negated (scale_offset_image scale=-1) and shifted by the signed phase, node.wrap folds it back to [0,1), and the comet shape is 1 - smoothstep(1/8, 1/8 + Tail, fract(phase - u)): a flat one-cell head at the phase position (the whole head cell reads full brightness on the grid) with the tail decaying behind it over Tail. Tail is a true length — bigger = longer. colorize at amount=1/focus=0 turns luma into HSV(hue, sat, 1) * brightness. Section 2.5 audit: every atom exists (beat_ramp, switch_value, math, uv_field + field_combine, scale_offset_image, wrap, smoothstep, invert, colorize) — no new primitive.",
+  "presetMetadata": {
+    "id": "LED Chase Sweep",
+    "displayName": "LED Chase Sweep",
+    "category": "Pattern",
+    "oscPrefix": "ledChaseSweep",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "bars",
+        "name": "Bars",
+        "min": 1.0,
+        "max": 16.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "bars"
+      },
+      {
+        "id": "tail",
+        "name": "Tail",
+        "min": 0.05,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "tail"
+      },
+      {
+        "id": "direction",
+        "name": "Direction",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Forward",
+          "Reverse"
+        ],
+        "formatString": "F0",
+        "oscSuffix": "direction"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 200.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "bars",
+        "label": "Bars",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sweep_phase",
+          "param": "bars"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tail",
+        "label": "Tail",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "tail_end",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "direction",
+        "label": "Direction",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "direction_mux",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 200.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.beat_ramp",
+      "handle": "sweep_phase",
+      "nodeId": "sweep_phase",
+      "params": {
+        "rate": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "bars": {
+          "type": "Int",
+          "value": 2
+        },
+        "attack": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Sweep Phase"
+    },
+    {
+      "id": 3,
+      "typeId": "node.switch_value",
+      "handle": "direction_mux",
+      "nodeId": "direction_mux",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "in_0": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": -1.0
+        }
+      },
+      "title": "Direction"
+    },
+    {
+      "id": 4,
+      "typeId": "node.math",
+      "handle": "direction_scale",
+      "nodeId": "direction_scale",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Signed Phase"
+    },
+    {
+      "id": 5,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 6,
+      "typeId": "node.scale_offset_image",
+      "handle": "comet_offset",
+      "nodeId": "comet_offset",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": -1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Phase Offset"
+    },
+    {
+      "id": 7,
+      "typeId": "node.wrap",
+      "handle": "comet_wrap",
+      "nodeId": "comet_wrap",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Wrap"
+    },
+    {
+      "id": 9,
+      "typeId": "node.smoothstep",
+      "handle": "tail_shape",
+      "nodeId": "tail_shape",
+      "params": {
+        "low": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "high": {
+          "type": "Float",
+          "value": 0.475
+        }
+      },
+      "title": "Tail Shape"
+    },
+    {
+      "id": 10,
+      "typeId": "node.invert",
+      "handle": "comet",
+      "nodeId": "comet",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Comet (1-d)"
+    },
+    {
+      "id": 11,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "hue": {
+          "type": "Float",
+          "value": 200.0
+        },
+        "saturation": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "focus": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.field_combine",
+      "handle": "u_ramp",
+      "nodeId": "u_ramp",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "U Ramp"
+    },
+    {
+      "id": 13,
+      "typeId": "node.math",
+      "handle": "tail_end",
+      "nodeId": "tail_end",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "op": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Tail End"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "offset"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "high"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    }
+  ]
+}
