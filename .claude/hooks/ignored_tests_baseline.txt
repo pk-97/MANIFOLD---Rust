@@ -1,0 +1,22 @@
+# path<TAB>ignore-count — ratchet only shrinks; regenerate via --record
+# in the same commit that removes ignores. Spec: ignored-test-guard.py.
+crates/manifold-app/src/blender_import.rs	1
+crates/manifold-app/src/bug219_verify.rs	2
+crates/manifold-app/src/graph_dump.rs	2
+crates/manifold-audio/src/directory/coreaudio.rs	1
+crates/manifold-media/src/metal_encoder.rs	1
+crates/manifold-playback/src/audio_layer_playback.rs	2
+crates/manifold-renderer/src/node_graph/bundled_presets.rs	1
+crates/manifold-renderer/src/node_graph/freeze/proof.rs	7
+crates/manifold-renderer/src/node_graph/freeze/region.rs	3
+crates/manifold-renderer/src/node_graph/gltf_import/tests.rs	3
+crates/manifold-renderer/src/node_graph/primitives/mesh_snapshot.rs	5
+crates/manifold-renderer/src/preset_runtime/tests/generator_runtime.rs	1
+crates/manifold-renderer/src/preset_thumbnail.rs	2
+crates/manifold-renderer/src/ui_renderer.rs	2
+crates/manifold-renderer/tests/bug115_dynamic_arity_spike.rs	2
+crates/manifold-renderer/tests/fluid3d_bias.rs	1
+crates/manifold-renderer/tests/gpu_proofs/rt_r2_accumulation.rs	1
+crates/manifold-renderer/tests/gpu_proofs/rt_t1a_ghost_speckle.rs	2
+crates/manifold-renderer/tests/gpu_proofs/rt_t2b_temporal_wiring.rs	1
+crates/manifold-renderer/tests/scene_loop_e2e_import.rs	1
