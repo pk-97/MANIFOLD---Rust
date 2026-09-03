@@ -66,12 +66,12 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("home"),
             label: "Home",
-            // Phase-0 corridor entry along the travel axis (SCENE_LOOP_DESIGN
-            // D10 addendum): a recentered imported scene spans [-cell/2,+cell/2]
-            // along the axis, so the plan builder sets home = -cell/2 to put the
-            // camera at the near face looking down the corridor. Default 0 keeps
-            // the primitive's standalone behaviour unchanged (phase-0 at the
-            // origin, pre-addendum semantics).
+            // Phase-0 start along the travel axis (SCENE_LOOP_DESIGN D10 +
+            // the BUG-70wo gap rule): the plan builder's cell is two
+            // object-depths and home = -cell/2 puts the camera mid-gap, one
+            // half-depth of air in front of copy 0's near face — the phase-0
+            // frame is an approach shot, wrap-identical to phase 1.
+            // Default 0 keeps the primitive's standalone behaviour unchanged.
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-100000.0, 100000.0)),
@@ -125,9 +125,8 @@ impl Primitive for LoopCamera {
         };
         let lateral = ctx.scalar_or_param("lateral", 0.0);
         let height = ctx.scalar_or_param("height", 1.5);
-        // Phase-0 corridor entry (D10 addendum): plan builder sets
-        // home = -cell/2 so the camera starts at the scene's near face and
-        // flies exactly one cell per loop (D4).
+        // home comes from the plan builder (-cell/2 = mid-gap start under the
+        // D4 gap rule); standalone default 0 starts at the origin.
         let home = ctx.scalar_or_param("home", 0.0);
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
         let near = match ctx.params.get("near") {

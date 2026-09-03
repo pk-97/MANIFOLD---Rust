@@ -21,10 +21,11 @@ use crate::node_graph::scene_exposure::metadata_for_node_type;
 /// no object groups, or failed INV-1 multi-scene check — the command re-checks
 /// INV-1 at execute time too).
 ///
-/// Cell size (D4): extent along +Z of `PresetMetadata.scene_bounds`, or a 10.0
-/// fallback when the import stamped no bounds. Same value feeds scene_array and
-/// loop_camera — camera travel per loop equals instance spacing by
-/// construction.
+/// Cell size (D4): TWO× the extent along +Z of `PresetMetadata.scene_bounds`
+/// (one object-depth of solid + one of air — the BUG-70wo gap rule), or a
+/// 10.0 fallback when the import stamped no bounds. Same value feeds
+/// scene_array and loop_camera — camera travel per loop equals instance
+/// spacing by construction.
 pub fn assemble_scene_loop_plan(
     def: &EffectGraphDef,
     render_scene_node_id: u32,
@@ -33,9 +34,18 @@ pub fn assemble_scene_loop_plan(
     def.nodes.iter().find(|n| n.id == render_scene_node_id)?;
 
     // D4: cell_size from scene_bounds (Z extent), 10.0 fallback.
+    //
+    // Gap rule (BUG-70wo): the cell is TWO object-depths — one depth of solid,
+    // one depth of open air. cell == extent packs copies face-to-face, so the
+    // camera path never leaves the bounding box: for any solid asset (a tree,
+    // a rock — anything but a hollow set) every frame renders from inside the
+    // mesh and the loop is uniformly black. With a gap the loop reads as
+    // approach → through → emerge → next copy ahead, and phase 0 sits
+    // mid-gap looking at the next copy (still wrap-pure: travel per loop is
+    // one cell by construction).
     let bounds = def.preset_metadata.as_ref().and_then(|m| m.scene_bounds);
     let axis_extent = bounds.map(|(min, max)| (max[2] - min[2]).abs()).unwrap_or(0.0);
-    let cell_size = if axis_extent > 0.0 { axis_extent } else { 10.0 };
+    let cell_size = if axis_extent > 0.0 { axis_extent * 2.0 } else { 10.0 };
 
     // The lens (import spine: camera → lens → render + ao/dof/mb). The loop
     // camera re-points INTO lens.camera so every downstream consumer follows
@@ -133,13 +143,12 @@ pub fn assemble_scene_loop_plan(
         group: None,
     });
 
-    // loop_camera: flies one cell per loop from the corridor ENTRY (D10
-    // addendum: home = -cell/2 = the scene's near face along the travel axis —
-    // imports recenter the scene at the origin, so the near face is not 0).
-    // The phase-0 camera at the near face looks down copies 0/+1/+2 — the view
-    // is period-identical to a -cell/0/+cell framing, and behind-camera
-    // geometry never enters the frame (lead ruling). Phase 0 == phase 1 by
-    // construction (D4 wrap purity). fov_y (not fov) matches the manifest.
+    // loop_camera: flies one cell per loop. home = -cell/2 = mid-gap before
+    // copy 0 (with the D4 gap rule, -cell/2 is one half-depth of air in front
+    // of the copy's near face, not on it): the phase-0 frame is an approach
+    // shot of copy 0, period-identical to the phase-1 frame of copy 1.
+    // Phase 0 == phase 1 by construction (D4 wrap purity). fov_y (not fov)
+    // matches the manifest.
     new_nodes.push(EffectGraphNode {
         id: loop_camera_id,
         node_id: manifold_core::NodeId::new("loop_camera"),

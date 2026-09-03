@@ -110,9 +110,14 @@ don't redesign.
   was considered and rejected: a 4-node fan-out the user can silently break,
   and the panel's `trace_camera` needs a curated type either way
   (`scene_vm.rs` camera consts + `CameraVm` arm).
-- **D4 — Cell size auto-derives from `PresetMetadata.scene_bounds`** (extent
-  along the chosen axis) with a manual `trim` param (bbox lies when a stray
-  rock inflates it). The SAME resolved cell_size value feeds both
+- **D4 — Cell size auto-derives from `PresetMetadata.scene_bounds`**: TWO× the
+  extent along the chosen axis — one object-depth of solid plus one of open
+  air (the gap rule from BUG-70wo (camera-inside-solid-mesh black): cell ==
+  extent packs copies face-to-face and the camera never leaves the bounding
+  box, so any solid asset renders uniformly black; the gap makes each loop
+  read approach → through → emerge) — with a
+  manual `trim` param (bbox lies when a stray rock inflates it). The SAME
+  resolved cell_size value feeds both
   `node.scene_array` and `node.loop_camera` — the plan builder computes it
   once; camera travel per loop == instance spacing by construction, not by
   the user matching two sliders.
