@@ -98,6 +98,34 @@ change: `input/output_cost_per_token` (+ cache rates) in config.yaml, the
 plan-cost variables on the fleet-value Grafana dashboard, and the `RATES`
 table in `scripts/claude_usage_export.py` for the Anthropic path.
 
+### Change reasoning effort (lead vs lanes)
+
+The lead seat runs K3 via the `k3m` alias; lanes are native Agent subagents
+on `kimi-for-coding`. The two are pinned at different layers:
+
+- **Lead**: `cc-fleet edit kimi --effort high` (values low|medium|high|
+  xhigh|max) — writes `effort` in providers.toml, which cc-fleet regenerates
+  into the profile's `effortLevel`. cc-fleet OWNS effort: it scrubs
+  `CLAUDE_CODE_EFFORT_LEVEL` from the spawned process env, so an env-var
+  override in the alias or profile is dead on arrival (verified 2026-09-03 —
+  var present in the launch env, absent in the claude process).
+- **Lanes**: pinned at the PROXY, not the harness — the `kimi-for-coding`
+  litellm entry deliberately has no `supports_reasoning`, so the proxy
+  strips thinking/effort from every lane request before it reaches Kimi
+  (added 2026-08-25 for the 64-token classifier call). No harness setting
+  can raise lane effort through this entry; a lane agent definition
+  (`~/.claude/agents/lane.md`, `effort: low` frontmatter) is belt-and-
+  braces only. To give lanes real reasoning: add `supports_reasoning: true`
+  to the entry — but then the classifier's tiny calls reason too and burn
+  budget, so gate that decision on the classifier separately.
+- **K3 API accepts only low/high/max** (platform.kimi.ai reasoning-effort
+  guide); medium/xhigh from the harness need proxy mapping if ever used.
+
+Verify a change with the session header ("k3 with high effort") and, for
+lane isolation, `ps eww` on the lead process for `effortLevel` inheritance
+is NOT the oracle — the proxy strip is; confirm via a lane call's
+SpendLogs reasoning-token count.
+
 ## Always-running services — the observability stack
 
 Five background services keep the fleet observable. All run as user launchd
