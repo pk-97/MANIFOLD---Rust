@@ -542,3 +542,41 @@ mod legacy_clip_trigger_migration_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod layer_led_flag_round_trip_tests {
+    //! BUG-2ptv (LED revival P1): a layer's `blit_to_led` routing flag must
+    //! survive a save → reload cycle. If it silently drops, a project that
+    //! routed layers to the LED grid loads with everything unrouted and the
+    //! LED output dies with no error — the exact silent-death class the LED
+    //! revival is hunting. Same harness as the migration round-trip gate:
+    //! real serde save through the real loader pipeline.
+
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    #[test]
+    fn blit_to_led_survives_save_reload() {
+        let mut project = Project::default();
+        let mut layer = Layer::new("LED layer".to_string(), LayerType::Generator, 0);
+        layer.blit_to_led = true;
+        let layer_id = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+
+        let saved = serde_json::to_string(&project).unwrap();
+        let saved_value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            saved_value["timeline"]["layers"][0]["blitToLed"],
+            serde_json::Value::Bool(true),
+            "the flag must be written to the project JSON, not dropped at save"
+        );
+
+        let reloaded = load_project_from_json(&saved).expect("re-saved project reloads");
+        let (_, layer) = reloaded.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert!(
+            layer.blit_to_led,
+            "blit_to_led must survive save -> reload"
+        );
+    }
+}
