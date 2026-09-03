@@ -160,7 +160,14 @@ pub fn assemble_scene_loop_plan(
             p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z — must match scene_array
             p.insert("home".to_string(), SerializedParamValue::Float { value: -cell_size * 0.5 });
             p.insert("lateral".to_string(), SerializedParamValue::Float { value: 0.0 });
-            p.insert("height".to_string(), SerializedParamValue::Float { value: 1.5 });
+            // Scale-aware framing (BUG-j65u (camera defaults fly over
+            // sub-meter scenes)): height/near/far derive from the cell, never
+            // room-scale constants — the primitive's 1.5/0.05/200 defaults put
+            // the camera ten tree-heights above a sub-meter photoscan (black
+            // at every phase) and near-clip a third of the way into the cell.
+            p.insert("height".to_string(), SerializedParamValue::Float { value: 0.0 });
+            p.insert("near".to_string(), SerializedParamValue::Float { value: (cell_size * 0.002).max(1e-4) });
+            p.insert("far".to_string(), SerializedParamValue::Float { value: cell_size * 4.0 });
             p.insert("fov_y".to_string(), SerializedParamValue::Float { value: 0.9 });
             p
         },
