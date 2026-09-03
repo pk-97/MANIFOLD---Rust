@@ -3924,3 +3924,192 @@ mod muted_clip_output_tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod led_composite_pixel_tests {
+    //! BUG-2ptv (LED revival P1): value-level proof that the LED composite
+    //! path emits NON-BLACK pixels at the compositor level. The only
+    //! pre-existing coverage was `led_warmup_tests` asserting GPU resources
+    //! exist — nothing read a pixel. On the real rig the LED pipeline died
+    //! silently; this test is the oracle that localizes the fault: if the
+    //! screen composite is lit but the LED composite is black, the break is
+    //! inside `blend_layers_to_led`; if both are black, it is upstream.
+
+    use super::*;
+    use crate::compositor::CompositeLayerDescriptor;
+    use crate::headless_readback::readback_raw_halves;
+    use half::f16;
+
+    const LED_W: u32 = 8;
+    const LED_H: u32 = 120;
+    // Production shape: the compositor runs at output resolution, always
+    // larger than the native LED grid in both dims.
+    const COMP_W: u32 = 256;
+    const COMP_H: u32 = 256;
+    // Distinctive per-channel values — a channel swap or blend-mode mixup
+    // fails loudly instead of averaging out under a uniform fill.
+    const SRC: (f32, f32, f32) = (1.0, 0.5, 0.25);
+    const TOL: f32 = 0.02;
+
+    fn solid_clip_texture(device: &crate::TestDevice) -> GpuTexture {
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: COMP_W,
+            height: COMP_H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "led-composite-test-src",
+            mip_levels: 1,
+        });
+        let mut enc = device.create_encoder("led-test-src-clear");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            gpu.clear_texture(&tex, SRC.0 as f64, SRC.1 as f64, SRC.2 as f64, 1.0);
+        }
+        enc.commit_and_wait_completed();
+        tex
+    }
+
+    /// Drive the full production `render` path (generate_layers →
+    /// blend_layers_to_led → fold_groups → blend_layers → tonemap) with one
+    /// layer holding a solid-color clip, LED-routed when `blit_to_led`.
+    fn run_render(
+        comp: &mut LayerCompositor,
+        device: &crate::TestDevice,
+        blit_to_led: bool,
+        tex: &GpuTexture,
+    ) {
+        let layer_id = LayerId::from("L0");
+        let layers = [CompositeLayerDescriptor {
+            layer_index: 0,
+            layer_id: &layer_id,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            hidden: false,
+            blit_to_led,
+            effects: &[],
+            effect_groups: &[],
+            parent_layer_id: None,
+            is_group: false,
+            trigger_count: 0,
+        }];
+        let clips = [CompositeClipDescriptor {
+            clip_id: "c0",
+            texture: tex,
+            layer_index: 0,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            is_muted: false,
+            effects: &[],
+            effect_groups: &[],
+        }];
+        let frame = CompositorFrame {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            frame_count: 1,
+            compositor_dirty: true,
+            clips: &clips,
+            layers: &layers,
+            master_effects: &[],
+            master_effect_groups: &[],
+            master_trigger_count: 0,
+            tonemap: crate::tonemap::TonemapSettings::default(),
+            led_exit_index: -1,
+            led_composite_size: (LED_W, LED_H),
+            output_width: COMP_W,
+            output_height: COMP_H,
+            occluded_layers: &[],
+            render_skip: &[],
+        };
+        let mut enc = device.create_encoder("led-composite-test");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            comp.render(&mut gpu, &frame);
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    fn decode_halves(raw: &[u8]) -> Vec<(f32, f32, f32)> {
+        raw.chunks_exact(8)
+            .map(|px| {
+                (
+                    f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32(),
+                    f16::from_bits(u16::from_le_bytes([px[2], px[3]])).to_f32(),
+                    f16::from_bits(u16::from_le_bytes([px[4], px[5]])).to_f32(),
+                )
+            })
+            .collect()
+    }
+
+    fn assert_solid(pixels: &[(f32, f32, f32)], what: &str) {
+        let black = pixels
+            .iter()
+            .filter(|p| p.0 <= 0.01 && p.1 <= 0.01 && p.2 <= 0.01)
+            .count();
+        assert!(
+            black * 10 < pixels.len(),
+            "{what}: {black}/{} pixels are black — path emitted black",
+            pixels.len(),
+        );
+        let worst = pixels
+            .iter()
+            .map(|p| {
+                (p.0 - SRC.0)
+                    .abs()
+                    .max((p.1 - SRC.1).abs())
+                    .max((p.2 - SRC.2).abs())
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < TOL,
+            "{what}: channel deviates by {worst} from solid {:?}",
+            SRC,
+        );
+    }
+
+    #[test]
+    fn led_composite_matches_source_color_for_flagged_layer() {
+        let device = crate::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let tex = solid_clip_texture(&device);
+
+        run_render(&mut comp, &device, true, &tex);
+
+        // (a) the LED composite texture exists at the native LED grid size.
+        let led = comp
+            .led_composite_texture()
+            .expect("a blit_to_led layer must produce an LED composite texture");
+        assert_eq!((led.width, led.height), (LED_W, LED_H));
+
+        // Upstream localization: the screen composite must carry the same
+        // color. If this passes and the LED assert below fails, the break
+        // is inside blend_layers_to_led, not upstream of the compositor.
+        let screen = decode_halves(&readback_raw_halves(
+            &device,
+            comp.pre_tonemap_output(),
+            COMP_W,
+            COMP_H,
+        ));
+        assert_solid(&screen, "screen composite");
+
+        // (b) + (c) the LED composite is non-black and matches the source.
+        let led_px = decode_halves(&readback_raw_halves(&device, led, LED_W, LED_H));
+        assert_solid(&led_px, "LED composite");
+    }
+
+    #[test]
+    fn led_composite_absent_for_unflagged_layer() {
+        let device = crate::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let tex = solid_clip_texture(&device);
+
+        run_render(&mut comp, &device, false, &tex);
+
+        assert!(
+            comp.led_composite_texture().is_none(),
+            "no blit_to_led layer → no LED composite texture",
+        );
+    }
+}
