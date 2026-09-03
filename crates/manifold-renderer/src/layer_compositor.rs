@@ -356,6 +356,31 @@ pub(crate) fn unique_clip_chain_topologies(
     out
 }
 
+/// LED routing for a layer this frame (LED_STRIPS_DESIGN.md section 5b D11).
+/// Derived ONCE at `LayerOutput` construction from the descriptor's
+/// `layer_type` + `blit_to_led`; every downstream site reads this enum —
+/// no site re-derives the route from the raw fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LedRoute {
+    None,
+    /// Persisted mirror flag (`blit_to_led`): layer shows on screen and
+    /// mirrors into the LED composite.
+    Mirror,
+    /// LED-type layer: routes ONLY to the LED composite (screen-invisible).
+    Direct,
+}
+
+impl LedRoute {
+    /// The single route derivation point (D11).
+    fn from_layer(layer_type: manifold_core::LayerType, blit_to_led: bool) -> Self {
+        match layer_type {
+            manifold_core::LayerType::Led => Self::Direct,
+            _ if blit_to_led => Self::Mirror,
+            _ => Self::None,
+        }
+    }
+}
+
 /// Output descriptor for a single processed layer, ready for the blend pass.
 ///
 /// Uses a raw pointer for the texture reference to avoid borrow checker conflicts
@@ -373,8 +398,8 @@ pub(crate) struct LayerOutput {
     opacity: f32,
     /// Source layer index (for group folding — correlates with layer descriptors).
     layer_index: i32,
-    /// Whether this layer should also be composited into the LED output buffer.
-    blit_to_led: bool,
+    /// How this layer routes to the LED composite this frame.
+    led_route: LedRoute,
 }
 
 // Safety: LayerOutput is only used within the compositor on the content thread.
@@ -501,7 +526,7 @@ pub struct LayerCompositor {
     group_child_positions: Vec<usize>,
 
     // ── LED per-layer routing ──
-    /// Accumulation buffer for layers flagged `blit_to_led`. Lazily allocated on
+    /// Accumulation buffer for LED-routed layers. Lazily allocated on
     /// the first frame any LED layer is active; persistent across frames.
     /// The LED path runs raw HDR end-to-end — no dedicated tonemap stage. The
     /// screen tonemap is wrong for LEDs (its peak target is the TV's display
@@ -1242,7 +1267,7 @@ impl LayerCompositor {
             budget,
         );
 
-        let has_led_layers = project.timeline.layers.iter().any(|l| l.blit_to_led);
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
         if !has_led_layers {
             scratch.resize(device, width, height);
             return outcome;
@@ -1320,7 +1345,7 @@ impl LayerCompositor {
             return WarmupOutcome::Quiescent;
         }
 
-        let has_led_layers = project.timeline.layers.iter().any(|l| l.blit_to_led);
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
         let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
         let (width, height) = (self.main.width(), self.main.height());
         let (output_width, output_height) = output_dims;
@@ -1438,7 +1463,7 @@ impl LayerCompositor {
         led_grid_size: (u32, u32),
         project: &manifold_core::project::Project,
     ) -> WarmupOutcome {
-        let has_led_layers = project.timeline.layers.iter().any(|l| l.blit_to_led);
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
         if !has_led_layers {
             return WarmupOutcome::Quiescent;
         }
@@ -1848,7 +1873,9 @@ impl LayerCompositor {
                     blend_mode: layer_blend,
                     opacity: layer_opacity * clip.opacity,
                     layer_index: layer_idx,
-                    blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
+                    led_route: layer_desc.map_or(LedRoute::None, |ld| {
+                        LedRoute::from_layer(ld.layer_type, ld.blit_to_led)
+                    }),
                 });
             } else {
                 // Every clip in the group muted → the layer draws nothing,
@@ -1955,7 +1982,9 @@ impl LayerCompositor {
                     blend_mode: layer_blend,
                     opacity: layer_opacity,
                     layer_index: layer_idx,
-                    blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
+                    led_route: layer_desc.map_or(LedRoute::None, |ld| {
+                        LedRoute::from_layer(ld.layer_type, ld.blit_to_led)
+                    }),
                 });
                 // section 24 5c: for a SINGLE-clip layer, this post-effect output IS that
                 // clip's full look — expose it for a with-effects thumbnail. Clone
@@ -2017,17 +2046,24 @@ impl LayerCompositor {
     }
 
     /// Blend layers into the LED composite buffer with screen-equivalent
-    /// blocking semantics.
+    /// blocking semantics, partitioned by the D10 route switch.
     ///
-    /// **L (LED-flagged) layers** contribute their actual texture with Normal
+    /// **Route switch (D10):** when at least one Direct-route (LED-type)
+    /// layer has visible content this frame, the composite carries Direct
+    /// layers ONLY — mirror layers contribute nothing, and mirror children
+    /// inside mixed groups are skipped entirely (no content, no black-block,
+    /// recursively through nested groups). Otherwise the mirror route runs
+    /// as before.
+    ///
+    /// **L (active-route) layers** contribute their actual texture with Normal
     /// blend + opacity (so multiple L layers stack predictably).
     ///
-    /// **Non-L layers** are composited too — but with their texture replaced
-    /// by a 1×1 opaque-black stand-in. Their actual blend mode + opacity still
-    /// apply, so an opaque Normal-blend non-L layer above an L layer covers
-    /// the L on the LED frame the same way it covers it on screen. Without
-    /// this, a non-L layer that visually blocks an L layer on screen would
-    /// still leak through to the LEDs.
+    /// **Non-L layers** (mirror route only) are composited too — but with
+    /// their texture replaced by a 1×1 opaque-black stand-in. Their actual
+    /// blend mode + opacity still apply, so an opaque Normal-blend non-L
+    /// layer above an L layer covers the L on the LED frame the same way it
+    /// covers it on screen. Without this, a non-L layer that visually blocks
+    /// an L layer on screen would still leak through to the LEDs.
     ///
     /// **Groups with at least one L child** ("L groups") fold all their
     /// children (with the L/non-L substitution above) into one per-group LED
@@ -2045,7 +2081,7 @@ impl LayerCompositor {
     /// group, skipping the rest.
     ///
     /// Runs **before** `fold_groups` so child layers inside groups route via
-    /// their own `blit_to_led` flag, independent of the parent group's flag.
+    /// their own `LedRoute`, independent of the parent group's route.
     /// Composite resolution is `frame.led_composite_size` — the native LED
     /// grid (e.g. 8×120), so master FX and group FX cost are negligible.
     fn blend_layers_to_led(
@@ -2054,12 +2090,33 @@ impl LayerCompositor {
         layer_outputs: &[LayerOutput],
         frame: &CompositorFrame,
     ) {
-        let any_led = layer_outputs.iter().any(|o| o.blit_to_led);
+        let any_led = layer_outputs
+            .iter()
+            .any(|o| o.led_route != LedRoute::None);
         if !any_led {
             // No LED routing this frame — release resources.
             self.led_main = None;
             return;
         }
+
+        // D10 switch: an active Direct-route clip (an LED-type layer with
+        // visible content — LayerOutputs only exist for layers that rendered
+        // some this frame) makes the LED composite carry Direct layers ONLY.
+        // Mirror layers contribute nothing; in mixed groups mirror children
+        // are skipped entirely (no content, no black-block), recursively
+        // through nested groups. Without an active Direct clip the mirror
+        // route runs exactly as before.
+        let direct_mode = layer_outputs
+            .iter()
+            .any(|o| o.led_route == LedRoute::Direct);
+        // Whether an output carries LED content on the active route.
+        let route_is_led = |o: &LayerOutput| {
+            if direct_mode {
+                o.led_route == LedRoute::Direct
+            } else {
+                o.led_route == LedRoute::Mirror
+            }
+        };
 
         let (w, h) = (
             frame.led_composite_size.0.max(1),
@@ -2119,7 +2176,7 @@ impl LayerCompositor {
         // "blocker groups" handled inline as a single black blend.
         let mut l_group_ids: Vec<&LayerId> = Vec::new();
         for (idx, output) in layer_outputs.iter().enumerate() {
-            if output.blit_to_led
+            if route_is_led(output)
                 && let Some(pid) = parent_ids[idx]
                 && !l_group_ids.contains(&pid)
             {
@@ -2128,13 +2185,14 @@ impl LayerCompositor {
         }
         let is_l_group = |pid: &LayerId| l_group_ids.iter().any(|id| **id == *pid);
 
-        // Find the bottom-most LayerOutput that's L or part of an L group.
-        // Anything before this position can be skipped (would be overwritten).
+        // Find the bottom-most LayerOutput that's LED-routed on the active
+        // route or part of an L group. Anything before this position can be
+        // skipped (would be overwritten).
         let start_idx = layer_outputs
             .iter()
             .enumerate()
             .position(|(idx, output)| {
-                output.blit_to_led || parent_ids[idx].is_some_and(&is_l_group)
+                route_is_led(output) || parent_ids[idx].is_some_and(&is_l_group)
             })
             .unwrap_or(layer_outputs.len());
 
@@ -2186,8 +2244,14 @@ impl LayerCompositor {
                             if parent_ids[j] != Some(pid) {
                                 continue;
                             }
-                            let (blend_mode, src_tex) = if layer_outputs[j].blit_to_led {
+                            let (blend_mode, src_tex) = if route_is_led(&layer_outputs[j]) {
                                 (BlendMode::Normal, layer_outputs[j].texture())
+                            } else if direct_mode {
+                                // D10: under the direct route a mirror child
+                                // contributes nothing — no content and no
+                                // black-block.
+                                processed[j] = true;
+                                continue;
                             } else {
                                 (
                                     layer_outputs[j].blend_mode,
@@ -2271,13 +2335,16 @@ impl LayerCompositor {
                         led_main.swap();
                     }
                 } else {
-                    // Blocker group (no L children): a single BLACK blend
-                    // with the group's actual blend_mode + opacity. Skip the
-                    // dispatch entirely if the blend mode is identity-for-
-                    // black (Add / Screen / etc.) — the group can't change
-                    // led_main with a black source. Then mark all the
-                    // group's children processed regardless.
-                    if let Some(group) = group_desc
+                    // Blocker group (no LED children on the active route).
+                    // Under the direct route (D10) it contributes nothing at
+                    // all — no black-block. Under the mirror route, a single
+                    // BLACK blend with the group's actual blend mode +
+                    // opacity. Skip the dispatch entirely if the blend mode
+                    // is identity-for-black (Add / Screen / etc.) — the group
+                    // can't change led_main with a black source. Then mark
+                    // all the group's children processed regardless.
+                    if !direct_mode
+                        && let Some(group) = group_desc
                         && !is_identity_for_black(group.blend_mode)
                     {
                         let uniforms = BlendUniforms {
@@ -2304,7 +2371,13 @@ impl LayerCompositor {
                 }
             } else {
                 // Top-level layer.
-                let is_l = layer_outputs[i].blit_to_led;
+                let is_l = route_is_led(&layer_outputs[i]);
+                if !is_l && direct_mode {
+                    // D10: under the direct route a mirror layer contributes
+                    // nothing — skipped entirely, no black-block.
+                    processed[i] = true;
+                    continue;
+                }
                 // Skip non-L blends with identity-for-black blend modes —
                 // they can't change led_main with a black source.
                 if !is_l && is_identity_for_black(layer_outputs[i].blend_mode) {
@@ -2400,6 +2473,14 @@ impl LayerCompositor {
             // Blend children into group buffer (using each child's own blend/opacity)
             for &pos in &self.group_child_positions {
                 let output = &self.layer_outputs_scratch[pos];
+                // D14: a Direct-route (LED-type) child never contributes to
+                // the screen composite. The content pipeline also marks it
+                // occluded, but that blend-skip only applies to top-level
+                // blends — a grouped child's pixels would leak to the screen
+                // through the group fold without this skip.
+                if output.led_route == LedRoute::Direct {
+                    continue;
+                }
                 let uniforms = BlendUniforms {
                     blend_mode: output.blend_mode as u32,
                     opacity: output.opacity,
@@ -2472,7 +2553,11 @@ impl LayerCompositor {
                 blend_mode: group_desc.blend_mode,
                 opacity: group_desc.opacity,
                 layer_index: group_desc.layer_index,
-                blit_to_led: group_desc.blit_to_led,
+                // Screen-only: LED routing of the children was already
+                // resolved pre-fold by blend_layers_to_led, which runs
+                // before fold_groups. A group output never enters the
+                // LED fold.
+                led_route: LedRoute::None,
             };
 
             // Remove remaining child entries (iterate in reverse to preserve indices)
@@ -2512,8 +2597,8 @@ impl LayerCompositor {
         self.uniform_arena.reset();
         self.generate_layers(gpu, frame);
         gpu.checkpoint();
-        // Route LED-flagged layers BEFORE folding groups so child layers inside
-        // a group route via their own blit_to_led flag (the group's flag controls
+        // Route LED-routed layers BEFORE folding groups so child layers inside
+        // a group route via their own LedRoute (the group's route controls
         // only the screen-output blend, not LED routing).
         // Safety: same lifetime guarantees as the blend_layers call below.
         let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
@@ -3142,7 +3227,7 @@ impl Compositor for LayerCompositor {
     }
 
     fn led_composite_texture(&self) -> Option<&GpuTexture> {
-        // Present only when at least one layer was flagged `blit_to_led` this
+        // Present only when at least one layer was LED-routed this
         // frame. Returns the raw HDR LED composite (post-master-FX when
         // exit_index == -1 and master FX are enabled; otherwise pre-FX).
         // No tonemap stage — the slicer applies `led_gain` + chroma-preserving
@@ -3274,6 +3359,7 @@ mod chain_pool_tests {
             opacity: 1.0,
             hidden: false,
             blit_to_led: false,
+            layer_type: manifold_core::LayerType::Video,
             effects: &[],
             effect_groups: &[],
             parent_layer_id: None,
@@ -3596,6 +3682,7 @@ mod chain_pool_tests {
             opacity: 1.0,
             hidden: false,
             blit_to_led: false,
+            layer_type: manifold_core::LayerType::Video,
             effects: layer.effects(),
             effect_groups: layer.effect_groups(),
             parent_layer_id: None,
@@ -3810,6 +3897,7 @@ mod muted_clip_output_tests {
             opacity: 1.0,
             hidden: false,
             blit_to_led: false,
+            layer_type: manifold_core::LayerType::Video,
             effects,
             effect_groups: &[],
             parent_layer_id: None,
@@ -3949,9 +4037,12 @@ mod led_composite_pixel_tests {
     // Distinctive per-channel values — a channel swap or blend-mode mixup
     // fails loudly instead of averaging out under a uniform fill.
     const SRC: (f32, f32, f32) = (1.0, 0.5, 0.25);
+    // Mirror-route content in the switch/mixed-group tests — must be far
+    // enough from SRC that a leak shows.
+    const GREEN: (f32, f32, f32) = (0.15, 0.85, 0.3);
     const TOL: f32 = 0.02;
 
-    fn solid_clip_texture(device: &crate::TestDevice) -> GpuTexture {
+    fn solid_clip_texture(device: &crate::TestDevice, color: (f32, f32, f32)) -> GpuTexture {
         let tex = device.create_texture(&GpuTextureDesc {
             width: COMP_W,
             height: COMP_H,
@@ -3965,45 +4056,80 @@ mod led_composite_pixel_tests {
         let mut enc = device.create_encoder("led-test-src-clear");
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
-            gpu.clear_texture(&tex, SRC.0 as f64, SRC.1 as f64, SRC.2 as f64, 1.0);
+            gpu.clear_texture(&tex, color.0 as f64, color.1 as f64, color.2 as f64, 1.0);
         }
         enc.commit_and_wait_completed();
         tex
     }
 
+    /// One layer in a gate-test frame. `color: Some` = the layer holds one
+    /// solid clip of that color; `color: None` = group container (no clip).
+    struct LayerSpec {
+        layer_id: LayerId,
+        layer_index: i32,
+        layer_type: manifold_core::LayerType,
+        blit_to_led: bool,
+        is_group: bool,
+        parent: Option<LayerId>,
+        color: Option<(f32, f32, f32)>,
+    }
+
     /// Drive the full production `render` path (generate_layers →
-    /// blend_layers_to_led → fold_groups → blend_layers → tonemap) with one
-    /// layer holding a solid-color clip, LED-routed when `blit_to_led`.
-    fn run_render(
+    /// blend_layers_to_led → fold_groups → blend_layers → tonemap) with the
+    /// given layer stack. `occluded` is the frame's occluded-layer list —
+    /// the D14 marking the content pipeline adds for LED-type layers.
+    /// Returns (LED composite bytes at the native grid, screen pre-tonemap
+    /// bytes).
+    fn render_layers(
         comp: &mut LayerCompositor,
         device: &crate::TestDevice,
-        blit_to_led: bool,
-        tex: &GpuTexture,
-    ) {
-        let layer_id = LayerId::from("L0");
-        let layers = [CompositeLayerDescriptor {
-            layer_index: 0,
-            layer_id: &layer_id,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            hidden: false,
-            blit_to_led,
-            effects: &[],
-            effect_groups: &[],
-            parent_layer_id: None,
-            is_group: false,
-            trigger_count: 0,
-        }];
-        let clips = [CompositeClipDescriptor {
-            clip_id: "c0",
-            texture: tex,
-            layer_index: 0,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            is_muted: false,
-            effects: &[],
-            effect_groups: &[],
-        }];
+        specs: &[LayerSpec],
+        occluded: &[i32],
+    ) -> (Option<Vec<u8>>, Vec<u8>) {
+        let mut textures: Vec<GpuTexture> = Vec::new();
+        let mut layers: Vec<CompositeLayerDescriptor> = Vec::new();
+        let mut clips: Vec<CompositeClipDescriptor> = Vec::new();
+        // Textures first, then descriptors/clips borrowing them — keeps the
+        // borrows immutable from here on.
+        for spec in specs {
+            if let Some(color) = spec.color {
+                textures.push(solid_clip_texture(device, color));
+            }
+        }
+        let mut next_tex = 0;
+        for spec in specs {
+            layers.push(CompositeLayerDescriptor {
+                layer_index: spec.layer_index,
+                layer_id: &spec.layer_id,
+                blend_mode: BlendMode::Normal,
+                opacity: 1.0,
+                hidden: false,
+                blit_to_led: spec.blit_to_led,
+                layer_type: spec.layer_type,
+                effects: &[],
+                effect_groups: &[],
+                parent_layer_id: spec.parent.as_ref(),
+                is_group: spec.is_group,
+                trigger_count: 0,
+            });
+            if spec.color.is_some() {
+                let tex = &textures[next_tex];
+                next_tex += 1;
+                clips.push(CompositeClipDescriptor {
+                    clip_id: "c0",
+                    texture: tex,
+                    layer_index: spec.layer_index,
+                    blend_mode: BlendMode::Normal,
+                    opacity: 1.0,
+                    is_muted: false,
+                    effects: &[],
+                    effect_groups: &[],
+                });
+            }
+        }
+        // The content pipeline sorts clips descending by layer_index
+        // (higher index = bottom of timeline = blended first).
+        clips.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
         let frame = CompositorFrame {
             time: 0.0,
             beat: 0.0,
@@ -4020,7 +4146,7 @@ mod led_composite_pixel_tests {
             led_composite_size: (LED_W, LED_H),
             output_width: COMP_W,
             output_height: COMP_H,
-            occluded_layers: &[],
+            occluded_layers: occluded,
             render_skip: &[],
         };
         let mut enc = device.create_encoder("led-composite-test");
@@ -4029,6 +4155,11 @@ mod led_composite_pixel_tests {
             comp.render(&mut gpu, &frame);
         }
         enc.commit_and_wait_completed();
+        let led = comp
+            .led_composite_texture()
+            .map(|t| readback_raw_halves(device, t, LED_W, LED_H));
+        let screen = readback_raw_halves(device, comp.pre_tonemap_output(), COMP_W, COMP_H);
+        (led, screen)
     }
 
     fn decode_halves(raw: &[u8]) -> Vec<(f32, f32, f32)> {
@@ -4043,7 +4174,7 @@ mod led_composite_pixel_tests {
             .collect()
     }
 
-    fn assert_solid(pixels: &[(f32, f32, f32)], what: &str) {
+    fn assert_solid_color(pixels: &[(f32, f32, f32)], color: (f32, f32, f32), what: &str) {
         let black = pixels
             .iter()
             .filter(|p| p.0 <= 0.01 && p.1 <= 0.01 && p.2 <= 0.01)
@@ -4056,60 +4187,282 @@ mod led_composite_pixel_tests {
         let worst = pixels
             .iter()
             .map(|p| {
-                (p.0 - SRC.0)
+                (p.0 - color.0)
                     .abs()
-                    .max((p.1 - SRC.1).abs())
-                    .max((p.2 - SRC.2).abs())
+                    .max((p.1 - color.1).abs())
+                    .max((p.2 - color.2).abs())
             })
             .fold(0.0f32, f32::max);
         assert!(
             worst < TOL,
-            "{what}: channel deviates by {worst} from solid {:?}",
-            SRC,
+            "{what}: channel deviates by {worst} from solid {color:?}",
         );
+    }
+
+    fn assert_solid(pixels: &[(f32, f32, f32)], what: &str) {
+        assert_solid_color(pixels, SRC, what);
+    }
+
+    fn led_spec(layer_id: &str, layer_index: i32, parent: Option<LayerId>) -> LayerSpec {
+        LayerSpec {
+            layer_id: LayerId::from(layer_id),
+            layer_index,
+            layer_type: manifold_core::LayerType::Led,
+            blit_to_led: false,
+            is_group: false,
+            parent,
+            color: Some(SRC),
+        }
+    }
+
+    fn mirror_spec(
+        layer_id: &str,
+        layer_index: i32,
+        parent: Option<LayerId>,
+        color: (f32, f32, f32),
+    ) -> LayerSpec {
+        LayerSpec {
+            layer_id: LayerId::from(layer_id),
+            layer_index,
+            layer_type: manifold_core::LayerType::Video,
+            blit_to_led: true,
+            is_group: false,
+            parent,
+            color: Some(color),
+        }
+    }
+
+    fn group_spec(layer_id: &str, layer_index: i32) -> LayerSpec {
+        LayerSpec {
+            layer_id: LayerId::from(layer_id),
+            layer_index,
+            layer_type: manifold_core::LayerType::Group,
+            blit_to_led: false,
+            is_group: true,
+            parent: None,
+            color: None,
+        }
     }
 
     #[test]
     fn led_composite_matches_source_color_for_flagged_layer() {
         let device = crate::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
-        let tex = solid_clip_texture(&device);
 
-        run_render(&mut comp, &device, true, &tex);
+        let (led, screen) = render_layers(
+            &mut comp,
+            &device,
+            &[mirror_spec("L0", 0, None, SRC)],
+            &[],
+        );
 
-        // (a) the LED composite texture exists at the native LED grid size.
-        let led = comp
-            .led_composite_texture()
-            .expect("a blit_to_led layer must produce an LED composite texture");
-        assert_eq!((led.width, led.height), (LED_W, LED_H));
+        // (a) the LED composite exists at the native LED grid size.
+        let led = led.expect("an LED-routed layer must produce an LED composite texture");
+        assert_eq!(led.len() as u32, LED_W * LED_H * 8);
 
         // Upstream localization: the screen composite must carry the same
         // color. If this passes and the LED assert below fails, the break
         // is inside blend_layers_to_led, not upstream of the compositor.
-        let screen = decode_halves(&readback_raw_halves(
-            &device,
-            comp.pre_tonemap_output(),
-            COMP_W,
-            COMP_H,
-        ));
-        assert_solid(&screen, "screen composite");
+        assert_solid(&decode_halves(&screen), "screen composite");
 
         // (b) + (c) the LED composite is non-black and matches the source.
-        let led_px = decode_halves(&readback_raw_halves(&device, led, LED_W, LED_H));
-        assert_solid(&led_px, "LED composite");
+        assert_solid(&decode_halves(&led), "LED composite");
     }
 
     #[test]
     fn led_composite_absent_for_unflagged_layer() {
         let device = crate::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
-        let tex = solid_clip_texture(&device);
 
-        run_render(&mut comp, &device, false, &tex);
+        let (led, _) = render_layers(
+            &mut comp,
+            &device,
+            &[LayerSpec {
+                layer_id: LayerId::from("L0"),
+                layer_index: 0,
+                layer_type: manifold_core::LayerType::Video,
+                blit_to_led: false,
+                is_group: false,
+                parent: None,
+                color: Some(SRC),
+            }],
+            &[],
+        );
 
         assert!(
-            comp.led_composite_texture().is_none(),
-            "no blit_to_led layer → no LED composite texture",
+            led.is_none(),
+            "no LED-routed layer → no LED composite texture (controller blackouts)",
+        );
+    }
+
+    #[test]
+    fn led_type_layer_routes_direct_and_is_screen_invisible() {
+        let device = crate::test_device();
+
+        // Frame A: LED-type layer (red) over a plain video layer (green),
+        // with the LED layer carrying the occluded marking the content
+        // pipeline adds for LED-type layers (D14).
+        let mut comp_a = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (led, screen_a) = render_layers(
+            &mut comp_a,
+            &device,
+            &[
+                led_spec("led0", 0, None),
+                LayerSpec {
+                    layer_id: LayerId::from("vid1"),
+                    layer_index: 1,
+                    layer_type: manifold_core::LayerType::Video,
+                    blit_to_led: false,
+                    is_group: false,
+                    parent: None,
+                    color: Some(GREEN),
+                },
+            ],
+            &[0],
+        );
+
+        // The LED composite carries the LED layer's content (D9: rendered at
+        // main res, blended down to the native grid).
+        let led_px = decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
+        assert_solid(&led_px, "LED composite");
+
+        // D14: the screen composite is pixel-identical to a frame where the
+        // LED layer does not exist.
+        let mut comp_b = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (_, screen_b) = render_layers(
+            &mut comp_b,
+            &device,
+            &[LayerSpec {
+                layer_id: LayerId::from("vid1"),
+                layer_index: 1,
+                layer_type: manifold_core::LayerType::Video,
+                blit_to_led: false,
+                is_group: false,
+                parent: None,
+                color: Some(GREEN),
+            }],
+            &[],
+        );
+        assert_eq!(
+            screen_a, screen_b,
+            "screen composite must be pixel-identical to the LED layer not existing"
+        );
+    }
+
+    #[test]
+    fn direct_route_switches_mirror_layers_off() {
+        let device = crate::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+
+        // Mirror layer ABOVE the LED layer: on a blended-composite reading
+        // its green would cover the red; under the D10 switch it contributes
+        // nothing, so the LED composite must be pure LED content.
+        let (led, _) = render_layers(
+            &mut comp,
+            &device,
+            &[
+                mirror_spec("mir0", 0, None, GREEN),
+                led_spec("led1", 1, None),
+            ],
+            &[1],
+        );
+
+        let led_px = decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
+        assert_solid(&led_px, "LED composite under the direct route");
+        let worst_green = led_px
+            .iter()
+            .map(|p| {
+                (p.0 - GREEN.0)
+                    .abs()
+                    .max((p.1 - GREEN.1).abs())
+                    .max((p.2 - GREEN.2).abs())
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst_green > TOL,
+            "mirror layer leaked into the LED composite under the direct route"
+        );
+    }
+
+    #[test]
+    fn mixed_group_mirror_child_is_absent_under_direct_route() {
+        let device = crate::test_device();
+        let group_id = || LayerId::from("grp");
+
+        // Run A: mixed group — mirror child (green, above) + LED child
+        // (red, below). Run B: same group with only the LED child. Under
+        // the D10 switch the mirror child's contribution must be
+        // byte-identical to it being absent: no content, no black-block.
+        let mut comp_a = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (led_a, _) = render_layers(
+            &mut comp_a,
+            &device,
+            &[
+                mirror_spec("mir", 0, Some(group_id()), GREEN),
+                led_spec("led", 1, Some(group_id())),
+                group_spec("grp", 2),
+            ],
+            &[0, 1],
+        );
+
+        let mut comp_b = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (led_b, _) = render_layers(
+            &mut comp_b,
+            &device,
+            &[
+                led_spec("led", 1, Some(group_id())),
+                group_spec("grp", 2),
+            ],
+            &[1],
+        );
+
+        let led_a = led_a.expect("a direct route through a mixed group must produce an LED composite");
+        let led_b = led_b.expect("a direct route through a group must produce an LED composite");
+        assert_eq!(
+            led_a, led_b,
+            "the mirror child's contribution must be byte-identical to absence"
+        );
+        assert_solid(
+            &decode_halves(&led_b),
+            "LED composite through the group fold",
+        );
+    }
+
+    #[test]
+    fn direct_child_never_appears_in_group_screen_composite() {
+        let device = crate::test_device();
+        let group_id = || LayerId::from("grp");
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+
+        // Group with a video child (below) and an LED child (above). The
+        // LED child routes to the LED composite only (D11) and is
+        // screen-invisible (D14) — including through the group fold, where
+        // the occluded blend-skip cannot reach it. Without the fold skip
+        // the red would blend over the green on screen.
+        let (led, screen) = render_layers(
+            &mut comp,
+            &device,
+            &[
+                led_spec("led", 0, Some(group_id())),
+                LayerSpec {
+                    layer_id: LayerId::from("vid"),
+                    layer_index: 1,
+                    layer_type: manifold_core::LayerType::Video,
+                    blit_to_led: false,
+                    is_group: false,
+                    parent: Some(group_id()),
+                    color: Some(GREEN),
+                },
+                group_spec("grp", 2),
+            ],
+            &[0],
+        );
+
+        let _ = led.expect("the LED child drives the LED composite");
+        assert_solid_color(
+            &decode_halves(&screen),
+            GREEN,
+            "screen composite — the LED child must never leak through the group fold",
         );
     }
 }

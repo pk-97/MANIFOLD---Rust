@@ -47,6 +47,7 @@ pub fn layer_type_to_ui(v: LayerType) -> UiLayerType {
         LayerType::Generator => UiLayerType::Generator,
         LayerType::Group => UiLayerType::Group,
         LayerType::Audio => UiLayerType::Audio,
+        LayerType::Led => UiLayerType::Led,
     }
 }
 

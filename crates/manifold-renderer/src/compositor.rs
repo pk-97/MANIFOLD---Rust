@@ -3,6 +3,7 @@ use crate::layer_compositor::CompositeClipDescriptor;
 use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
+use manifold_core::LayerType;
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::{EffectId, NodeId, WarmupBudget, WarmupOutcome};
 use manifold_core::layer::Layer;
@@ -18,7 +19,14 @@ pub struct CompositeLayerDescriptor<'a> {
     /// Computed once per frame by the content pipeline; the compositor reads
     /// this flag directly and never re-derives solo logic.
     pub hidden: bool,
+    /// Persisted mirror flag (`Layer.blit_to_led`). Read ONLY at
+    /// `LayerOutput` construction in `layer_compositor`, together with
+    /// `layer_type`, to derive that output's `LedRoute` (D11) — no other
+    /// render-path site reads it.
     pub blit_to_led: bool,
+    /// The layer's type. Crosses the seam solely so `LayerOutput`
+    /// construction can derive `LedRoute::Direct` for LED-type layers (D11).
+    pub layer_type: LayerType,
     pub effects: &'a [PresetInstance],
     pub effect_groups: &'a [EffectGroup],
     /// Parent group layer ID (None for root layers).
@@ -246,8 +254,8 @@ pub trait Compositor: Send {
     fn led_tap_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 
     /// Per-layer LED composite texture: final post-tonemap + post-master-FX LED
-    /// output built from layers flagged with `blit_to_led`. Returns None when no
-    /// layers have blit_to_led enabled (fall back to led_tap_texture or output).
+    /// output built from LED-routed layers (Mirror or Direct route). Returns
+    /// None when no layer is LED-routed (fall back to led_tap_texture or output).
     fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 
     /// Read-back accessor: the layer scratch buffer's current source texture.

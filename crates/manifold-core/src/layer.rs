@@ -305,6 +305,25 @@ impl Layer {
         self.layer_type == LayerType::Audio
     }
 
+    #[inline]
+    pub fn is_led(&self) -> bool {
+        self.layer_type == LayerType::Led
+    }
+
+    /// Model-side LED routing predicate — the single model derivation point
+    /// for "feeds the LED composite" (LED_STRIPS_DESIGN.md section 5b D11):
+    /// the persisted mirror flag routes Mirror, the LED layer type routes
+    /// Direct. The render path carries `LedRoute` built at descriptor time;
+    /// this predicate is for model scans (warmup, render-skip filtering)
+    /// that run before descriptors exist.
+    #[inline]
+    pub fn routes_to_led(&self) -> bool {
+        match self.layer_type {
+            LayerType::Led => true,
+            _ => self.blit_to_led,
+        }
+    }
+
     /// Image clips may only be dropped here.
     #[inline]
     pub fn is_video(&self) -> bool {
@@ -1452,5 +1471,45 @@ mod tests {
         let mut results = Vec::new();
         layer.collect_active_clips_at_beat_epsilon(Beats(8.0), Beats(0.1), &mut results);
         assert_eq!(results, vec![1], "adjacent boundary should select the later-starting clip");
+    }
+
+    #[test]
+    fn led_layer_survives_project_save_load_round_trip() {
+        // MVP-P1 serialization gate: the LED layer keeps its type, its
+        // default generator preset, and its clip across a save/load cycle,
+        // and the reloaded layer still routes to the LED composite (the
+        // property the render path keys on).
+        let mut project = crate::project::Project::default();
+        let mut led = Layer::new("LED".into(), LayerType::Led, 0);
+        led.gen_params = Some(PresetInstance::new_generator(crate::PresetTypeId::new(
+            "LED Fill",
+        )));
+        led.add_clip(
+            TimelineClip {
+                start_beat: crate::units::Beats(0.0),
+                duration_beats: crate::units::Beats(4.0),
+                ..TimelineClip::default()
+            },
+            &HashSet::new(),
+            0.5,
+        );
+        project.timeline.layers.push(led);
+
+        let json = serde_json::to_string(&project).expect("serialize project");
+        let reloaded: crate::project::Project =
+            serde_json::from_str(&json).expect("deserialize project");
+
+        let led = &reloaded.timeline.layers[0];
+        assert_eq!(led.layer_type, LayerType::Led, "type survives the round trip");
+        assert!(
+            led.routes_to_led(),
+            "reloaded LED layer still routes to the LED composite"
+        );
+        assert_eq!(
+            led.gen_params.as_ref().map(|gp| gp.generator_type()),
+            Some(&crate::PresetTypeId::new("LED Fill")),
+            "default generator preset survives the round trip"
+        );
+        assert_eq!(led.clips.len(), 1, "clip survives the round trip");
     }
 }
