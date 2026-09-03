@@ -388,7 +388,7 @@ _Generated from the node registry. Do not hand-edit. 263 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (65)
+### Effect & generator presets (68)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -425,9 +425,12 @@ _Generated from the node registry. Do not hand-edit. 263 nodes registered, group
 | `LED Chase Sweep` | LED Chase Sweep | generator | Pattern | 5 |
 | `LED Cycle` | LED Cycle | generator | Pattern | 1 |
 | `LED Fill` | LED Fill | generator | Pattern | 2 |
+| `LED Pixel Walk` | LED Pixel Walk | generator | Pattern | 2 |
 | `LED Pulse` | LED Pulse | generator | Pattern | 3 |
 | `LED Step Chase` | LED Step Chase | generator | Pattern | 6 |
 | `LED Step Scan` | LED Step Scan | generator | Pattern | 4 |
+| `LED Strip ID` | LED Strip ID | generator | Pattern | 0 |
+| `LED Studio Light` | LED Studio Light | generator | Pattern | 3 |
 | `Lantern` | Lantern | generator | Geometry | 157 |
 | `LightOrbit` | Light Orbit | generator | Geometry | 77 |
 | `Lightning` | Lightning | generator | Pattern | 7 |

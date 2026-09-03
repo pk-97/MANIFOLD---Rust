@@ -1527,6 +1527,7 @@
         "FogBlast",
         "LED Burst",
         "LED Chase Sweep",
+        "LED Pixel Walk",
         "LED Step Chase",
         "LED Step Scan",
         "TimeScrub",
@@ -3022,7 +3023,8 @@
         "DepthOfField",
         "LED Burst",
         "LED Fill",
-        "LED Pulse"
+        "LED Pulse",
+        "LED Studio Light"
       ],
       "fusion": "source",
       "inputs": [
@@ -3413,7 +3415,8 @@
       ],
       "category": "Color & Tone",
       "examples": [
-        "Infrared"
+        "Infrared",
+        "LED Strip ID"
       ],
       "fusion": "multi_input_coincident",
       "inputs": [
@@ -3536,7 +3539,8 @@
         "LED Fill",
         "LED Pulse",
         "LED Step Chase",
-        "LED Step Scan"
+        "LED Step Scan",
+        "LED Studio Light"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -6414,6 +6418,7 @@
         "HighlightBoost",
         "LED Burst",
         "LED Pulse",
+        "LED Studio Light",
         "Lantern",
         "MetallicGlass",
         "OilyFluid",
@@ -6731,7 +6736,8 @@
       "examples": [
         "LED Chase Sweep",
         "LED Cycle",
-        "LED Step Chase"
+        "LED Step Chase",
+        "LED Strip ID"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -8841,7 +8847,8 @@
       ],
       "category": "Generate",
       "examples": [
-        "Infrared"
+        "Infrared",
+        "LED Strip ID"
       ],
       "fusion": "source",
       "inputs": [
@@ -11556,6 +11563,7 @@
         "HighlightBoost",
         "LED Burst",
         "LED Chase Sweep",
+        "LED Pixel Walk",
         "LED Step Chase",
         "LED Step Scan",
         "Lissajous",
@@ -15984,6 +15992,7 @@
       "category": "Mask",
       "examples": [
         "DepthOfField",
+        "LED Pixel Walk",
         "LED Step Scan"
       ],
       "fusion": "source",
@@ -22754,6 +22763,7 @@
         "LED Chase Sweep",
         "LED Cycle",
         "LED Step Chase",
+        "LED Strip ID",
         "TrivialPassthrough"
       ],
       "fusion": "source",
@@ -23687,9 +23697,12 @@
         "LED Chase Sweep",
         "LED Cycle",
         "LED Fill",
+        "LED Pixel Walk",
         "LED Pulse",
         "LED Step Chase",
         "LED Step Scan",
+        "LED Strip ID",
+        "LED Studio Light",
         "Lantern",
         "LightOrbit",
         "Lightning",
@@ -23764,9 +23777,12 @@
         "LED Chase Sweep",
         "LED Cycle",
         "LED Fill",
+        "LED Pixel Walk",
         "LED Pulse",
         "LED Step Chase",
         "LED Step Scan",
+        "LED Strip ID",
+        "LED Studio Light",
         "Lantern",
         "LightOrbit",
         "Lightning",
@@ -23933,7 +23949,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 65,
+  "preset_count": 68,
   "presets": [
     {
       "category": "Geometry",
@@ -27503,6 +27519,29 @@
     },
     {
       "category": "Pattern",
+      "id": "LED Pixel Walk",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Pixel Walk",
+      "params": [
+        {
+          "default": "240",
+          "id": "rate",
+          "max": "960",
+          "min": "1",
+          "name": "Rate"
+        },
+        {
+          "default": "960",
+          "id": "steps",
+          "max": "960",
+          "min": "8",
+          "name": "Steps"
+        }
+      ]
+    },
+    {
+      "category": "Pattern",
       "id": "LED Pulse",
       "is_line_based": false,
       "kind": "generator",
@@ -27612,6 +27651,44 @@
         },
         {
           "default": "1",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        }
+      ]
+    },
+    {
+      "category": "Pattern",
+      "id": "LED Strip ID",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Strip ID",
+      "params": []
+    },
+    {
+      "category": "Pattern",
+      "id": "LED Studio Light",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Studio Light",
+      "params": [
+        {
+          "default": "0.35",
+          "id": "brightness",
+          "max": "1",
+          "min": "0",
+          "name": "Brightness"
+        },
+        {
+          "default": "45",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "0.15",
           "id": "saturation",
           "max": "1",
           "min": "0",

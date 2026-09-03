@@ -1,0 +1,218 @@
+{
+  "version": 2,
+  "name": "LED Pixel Walk",
+  "description": "MVP-P2 utility family (LED_STRIPS_DESIGN.md section 5b.4): one white LED cell steps through the whole grid in linear order — the dead-LED finder and the reversed/top-down wiring revealer. beat_ramp at attack=1 gives the tempo phase; floor(phase * Steps) is the walk index k (Steps defaults to the full grid cell count); k decomposes into row = floor(k/8) and column = k mod 8 (8 = the LED grid's column step count, 120 = its row step count — step counts, not pixel dims); rectangle_mask centred on that cell at half-extents 1/16 x 1/240 (one cell as a UV fraction, so the rectangle edges align with the cell boundaries and the 256-to-8x120 LED downsample sees the whole cell at ~1.0 and its neighbours at 0); the mask IS the output — a single white cell, no tint. Order is x-major across each row, top row first: index = row * 8 + column, so a reversed or top-down-patched strip shows the walk jumping. Section 2.5 audit: every atom exists (beat_ramp, math, rectangle_mask — LED Step Scan precedent), no new primitive.",
+  "presetMetadata": {
+    "id": "LED Pixel Walk",
+    "displayName": "LED Pixel Walk",
+    "category": "Pattern",
+    "oscPrefix": "ledPixelWalk",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 1.0,
+        "max": 960.0,
+        "defaultValue": 240.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "rate"
+      },
+      {
+        "id": "steps",
+        "name": "Steps",
+        "min": 8.0,
+        "max": 960.0,
+        "defaultValue": 960.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "steps"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 240.0,
+        "target": { "kind": "node", "nodeId": "walk_phase", "param": "rate" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "steps",
+        "label": "Steps",
+        "defaultValue": 960.0,
+        "target": { "kind": "node", "nodeId": "step_scale", "param": "b" },
+        "convert": { "type": "Float" }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.beat_ramp",
+      "handle": "walk_phase",
+      "nodeId": "walk_phase",
+      "params": {
+        "rate": { "type": "Float", "value": 240.0 },
+        "bars": { "type": "Int", "value": 0 },
+        "attack": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Walk Phase"
+    },
+    {
+      "id": 3,
+      "typeId": "node.math",
+      "handle": "step_scale",
+      "nodeId": "step_scale",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 960.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Phase x Steps"
+    },
+    {
+      "id": 4,
+      "typeId": "node.math",
+      "handle": "step_floor",
+      "nodeId": "step_floor",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 10 }
+      },
+      "title": "Walk Index"
+    },
+    {
+      "id": 5,
+      "typeId": "node.math",
+      "handle": "col_mod",
+      "nodeId": "col_mod",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 8.0 },
+        "op": { "type": "Enum", "value": 12 }
+      },
+      "title": "Column k mod 8"
+    },
+    {
+      "id": 6,
+      "typeId": "node.math",
+      "handle": "col_center",
+      "nodeId": "col_center",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 8.0 },
+        "op": { "type": "Enum", "value": 3 }
+      },
+      "title": "Column / 8"
+    },
+    {
+      "id": 7,
+      "typeId": "node.math",
+      "handle": "col_offset",
+      "nodeId": "col_offset",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0625 },
+        "op": { "type": "Enum", "value": 0 }
+      },
+      "title": "Column Centre"
+    },
+    {
+      "id": 8,
+      "typeId": "node.math",
+      "handle": "row_div",
+      "nodeId": "row_div",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 8.0 },
+        "op": { "type": "Enum", "value": 3 }
+      },
+      "title": "k / 8"
+    },
+    {
+      "id": 9,
+      "typeId": "node.math",
+      "handle": "row_floor",
+      "nodeId": "row_floor",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 10 }
+      },
+      "title": "Row k div 8"
+    },
+    {
+      "id": 10,
+      "typeId": "node.math",
+      "handle": "row_center",
+      "nodeId": "row_center",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 120.0 },
+        "op": { "type": "Enum", "value": 3 }
+      },
+      "title": "Row / 120"
+    },
+    {
+      "id": 11,
+      "typeId": "node.math",
+      "handle": "row_offset",
+      "nodeId": "row_offset",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.004166666666666667 },
+        "op": { "type": "Enum", "value": 0 }
+      },
+      "title": "Row Centre"
+    },
+    {
+      "id": 12,
+      "typeId": "node.rectangle_mask",
+      "handle": "pixel",
+      "nodeId": "pixel",
+      "params": {
+        "cx": { "type": "Float", "value": 0.0625 },
+        "cy": { "type": "Float", "value": 0.004166666666666667 },
+        "half_width": { "type": "Float", "value": 0.0625 },
+        "half_height": { "type": "Float", "value": 0.004166666666666667 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.001 }
+      },
+      "title": "Walk Pixel"
+    }
+  ],
+  "wires": [
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 8, "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 12, "toPort": "cx" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "cy" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

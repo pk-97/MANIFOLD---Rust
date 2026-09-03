@@ -1,0 +1,97 @@
+{
+  "version": 2,
+  "name": "LED Strip ID",
+  "description": "MVP-P2 utility family (LED_STRIPS_DESIGN.md section 5b.4): lights every strip at once with a distinct hue per column so you can see which physical strip maps to which universe — the re-patching tool until the venue-patch UI exists. uv_field gives per-pixel UV; node.field_combine projects it to the scalar 2*u (so the color_lut luminance index lands on u: color_lut bakes a x0.5 luminance range, lum*0.5 = u); node.gradient is an 8-band hard-stepped rainbow — 16 stops, one plateau per LED grid column, hues 45 deg apart (8 bands = the LED grid's column count, authored as band stops, not pixel dims); node.color_lut gathers the strip at that index with amount=1. Every column reads its plateau midpoint, so the 256-to-8 LED downsample sees one flat hue per strip. Section 2.5 audit: every atom exists (uv_field, field_combine, gradient, color_lut — the Infrared palette wiring precedent), no new primitive.",
+  "presetMetadata": {
+    "id": "LED Strip ID",
+    "displayName": "LED Strip ID",
+    "category": "Pattern",
+    "oscPrefix": "ledStripId",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": []
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 3,
+      "typeId": "node.field_combine",
+      "handle": "luma_boost",
+      "nodeId": "luma_boost",
+      "params": {
+        "a": { "type": "Float", "value": 2.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "c": { "type": "Float", "value": 0.0 }
+      },
+      "title": "2x U"
+    },
+    {
+      "id": 4,
+      "typeId": "node.gradient",
+      "handle": "rainbow",
+      "nodeId": "rainbow",
+      "params": {
+        "stops": {
+          "type": "Table",
+          "rows": [
+            [0.0, 1.0, 0.0, 0.0],
+            [0.12451171875, 1.0, 0.0, 0.0],
+            [0.125, 1.0, 0.75, 0.0],
+            [0.24951171875, 1.0, 0.75, 0.0],
+            [0.25, 0.5, 1.0, 0.0],
+            [0.37451171875, 0.5, 1.0, 0.0],
+            [0.375, 0.0, 1.0, 0.25],
+            [0.49951171875, 0.0, 1.0, 0.25],
+            [0.5, 0.0, 1.0, 1.0],
+            [0.62451171875, 0.0, 1.0, 1.0],
+            [0.625, 0.0, 0.25, 1.0],
+            [0.74951171875, 0.0, 0.25, 1.0],
+            [0.75, 0.5, 0.0, 1.0],
+            [0.87451171875, 0.5, 0.0, 1.0],
+            [0.875, 1.0, 0.0, 0.75],
+            [1.0, 1.0, 0.0, 0.75]
+          ]
+        },
+        "domain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Column Bands"
+    },
+    {
+      "id": 5,
+      "typeId": "node.color_lut",
+      "handle": "map",
+      "nodeId": "map",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "contrast": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Band Map"
+    }
+  ],
+  "wires": [
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "lut" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "version": 2,
+  "name": "LED Studio Light",
+  "description": "MVP-P2 utility family (LED_STRIPS_DESIGN.md section 5b.4): a dimmable work light for photo/debug sessions — LED Fill's full-blast fill grown with a real Brightness param. circle_mask at radii 4 fills the UV frame with white; node.exposure multiplies the field by Brightness (0-1, default 0.35 — photo work wants 10-40%, not the strips' accent-level full blast); colorize at amount=1/focus=0 turns luma into HSV(hue, saturation, 1), so Temperature is hue at low saturation (default 45 deg at 0.15 = warm neutral). Section 2.5 audit: every atom exists (circle_mask, exposure, colorize — LED Fill + LED Pulse precedents), no new primitive.",
+  "presetMetadata": {
+    "id": "LED Studio Light",
+    "displayName": "LED Studio Light",
+    "category": "Pattern",
+    "oscPrefix": "ledStudioLight",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "brightness",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "brightness"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 45.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "brightness",
+        "label": "Brightness",
+        "defaultValue": 0.35,
+        "target": { "kind": "node", "nodeId": "gain", "param": "gain" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 45.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "hue" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 0.15,
+        "target": { "kind": "node", "nodeId": "tint", "param": "saturation" },
+        "convert": { "type": "Float" }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.circle_mask",
+      "handle": "fill_mask",
+      "nodeId": "fill_mask",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      },
+      "title": "White Field"
+    },
+    {
+      "id": 3,
+      "typeId": "node.exposure",
+      "handle": "gain",
+      "nodeId": "gain",
+      "params": {
+        "gain": { "type": "Float", "value": 0.35 }
+      },
+      "title": "Brightness"
+    },
+    {
+      "id": 4,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 45.0 },
+        "saturation": { "type": "Float", "value": 0.15 },
+        "focus": { "type": "Float", "value": 0.0 }
+      }
+    }
+  ],
+  "wires": [
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}
