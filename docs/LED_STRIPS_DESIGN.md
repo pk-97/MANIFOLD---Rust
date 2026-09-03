@@ -187,6 +187,14 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
 - **Send path is untouched by the MVP.** `led_source_texture()` (`content_pipeline.rs:3682`)
   → `content_thread.rs:879-913` → `LedOutputController::process_frame` → edge-extend
   (`crates/manifold-led/src/blit.rs:13`) → readback → DMX (`crates/manifold-led/src/dmx.rs`).
+  **Erratum (2026-09-03, found at execution time by the MVP-P1 pre-flight):** the
+  edge-extend pass is identity unconditionally at HEAD — `artnet.rs:78-81` documents that
+  `LedSettings` edge widths are intentionally ignored and `artnet.rs:183` hardcodes
+  `blit.blit(enc, source, 0.5, 0.5, BLUR, led_gain)` (widths 0.5 = identity in U per the
+  shader math at `led_edge_extend_compute.wgsl:38-47`). The settings edge-width fields are
+  dead config (no reader outside serde defaults). A vertical blur (radius 1.5) +
+  `led_gain` + chroma-preserving clip still apply. Consequence: direct-drive content is
+  NOT mangled by edge cropping — D13's requirement is already satisfied by existing code.
   BUG-6pmq (LED blend dispatch sized by compositor dims) stays open — masked in production
   because the fullscreen compositor ≥ the grid; the MVP does not change this.
 - **Layer creation with a default generator preset is a solved pattern.** Generator
@@ -249,18 +257,15 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   creation sets `gen_params` to the pack's neutral preset (LED Fill) so the standard clip
   workflow — draw a clip, it plays the generator, trigger from a pad — works with zero
   setup. Precedent: Generator → PLASMA default at `ui_bridge/editing.rs:245-256`.
-- **D13 — No new send-path machinery; the route picks the existing controller params.**
+- **D13 — The send path is untouched, and identity mapping is already unconditional.**
   LED-layer composites flow through the existing `led_main` → LED master FX →
-  edge-extend/gain → readback → ArtNet chain. The one coupling the review found: the
-  edge-extend shader crops its input to the source's left/right edge bands
-  (`led_edge_extend_compute.wgsl:38-47`, defaults 0.2/0.2 — the mirror look: strips show
-  the stage edges). That mapping mangles direct-drive content (a Chase across 8 columns
-  would reach the strips as a crop of the outer bands). Verified: `left=right=0.5` makes
-  `source_u == uv.x` exactly — identity, no shader or controller change. So the direct
-  route passes edge widths (0.5, 0.5) to the existing `process_frame`; the mirror route
-  keeps the settings values. The per-frame route decision surfaces once
-  (`content_thread.rs:879-913` picks widths beside the existing brightness/led_gain
-  plumbing). Blur and `led_gain` apply unchanged to both routes.
+  edge-extend/gain → readback → ArtNet chain. Erratum (2026-09-03, execution-time
+  pre-flight finding): the controller already forces edge-extend to identity for ALL
+  routes (`artnet.rs:183`, widths 0.5/0.5; settings widths deliberately dead) — so the
+  direct route needs NO width plumbing and no per-route numbers anywhere. The original
+  worry (edge-crop mangling direct-drive content) is moot at HEAD. No new code in
+  `manifold-led`; no width-selection call site in the app crate. Vertical blur +
+  `led_gain` apply to both routes unchanged.
 - **D14 — LED layers are screen-invisible (Peter's demo: "screen content unaffected").**
   A Direct-route layer never blends into the main screen composite. Mechanism: the
   existing occluded-layer blend-skip path (`frame.occluded_layers` consumed at
@@ -278,8 +283,8 @@ mirror + LED routes with a blend/crossfade — no: D10, switch only; a fader bet
 is exactly the "background stuff making it look weird" Peter rejected. (4) You will want
 to OR `blit_to_led` with `layer_type == Led` at each render site — no: D11, one route enum
 built once at descriptor time. (5) You will want to add an "identity mode" to the
-edge-extend shader or branch the controller — no: D13, identity is the existing width
-params at 0.5/0.5; the route picks numbers, the machinery is untouched. (6) You will want
+edge-extend shader or branch the controller — no: D13, identity is already forced
+  unconditionally at the controller (`artnet.rs:183`); there is nothing to pick. (6) You will want
 a new "screen hidden" flag for LED layers — no: D14, the occluded-layer blend-skip path
 already exists.
 
@@ -352,8 +357,9 @@ for LED-type layers per NIT below).
   the project-state scans — those three scans (`:1245,:1323,:1441`, allocation/warmup)
   switch to `route != None` so LED-type layers get warm buffers (BUG-037 (glp-first-render-stall) class if missed); (6) D14: descriptor build marks Direct-route
   layers occluded for the screen pass; render-skip filters (`content_pipeline.rs:168,179`)
-  treat Direct layers as render-needed when clip-active; (7) D13: `content_thread.rs:879-913`
-  picks edge widths (0.5, 0.5) for the direct route, settings values for mirror; (8) UI:
+  treat Direct layers as render-needed when clip-active; (7) VACATED by erratum — identity
+  edge-mapping is already unconditional at the controller (`artnet.rs:183`), no
+  width-selection work exists; (8) UI:
   hide the `blit_to_led` toggle for LED-type layers (`ui_bridge/layer.rs:135-147`);
   LED-type lanes reuse the existing `is_led` treatment (`ui_bridge/projection/timeline.rs:69`)
   — no new styling; (9) tests below.
@@ -365,17 +371,19 @@ for LED-type layers per NIT below).
   direct route ⇒ mirror child's contribution is byte-identical to it being absent; no
   active LED or mirror layer ⇒ blackout; LED layer inside a group ⇒ same through the
   group fold; screen-invisibility: with an active LED layer, the main screen composite is
-  pixel-identical to the LED layer not existing. Direct-route edge identity: with widths
-  (0.5, 0.5), the controller's edge-extend output equals its input at 8×120 (value test
-  on the packet path or the blit output texture). Round-trip: save → reload → LED layer
+  pixel-identical to the LED layer not existing. Edge-identity pinning: an app-crate test
+  drives `EdgeExtendBlit` (public API) at widths (0.5, 0.5) and asserts output == input at
+  8×120 (pins the identity behavior the controller already forces; `manifold-led` itself
+  stays untouched). Round-trip: save → reload → LED layer
   keeps type + preset, and a clip on it still drives the LED composite *after* reload.
   L3: a `scripts/ui-flows/` flow creates an LED layer via the real UI path and asserts it
   appears with the LED lane treatment.
 - *Gate (negative):* `rg -n "blit_to_led" crates/manifold-renderer/src/layer_compositor.rs`
   returns hits ONLY at the descriptor-construction lines (`:1851`,`:1958` field builds) —
   every other render-path site reads `LedRoute`; `rg -n "blit_to_led \\|\\||layer_type == LayerType::Led \\|\\|"`
-  returns zero hits anywhere (no OR-ed predicates); no new files/symbols in
-  `crates/manifold-led/src/` except the width-selection call site in the app crate (D13);
+  returns zero hits anywhere (no OR-ed predicates); `rg -n "blit_to_led\|LedRoute\|left_edge_width"
+  crates/manifold-led/src/artnet.rs crates/manifold-app/src/content_thread.rs` shows no
+  behavioral change (D13 — no width plumbing; identity already forced at the controller);
   no `#[ignore]`, no new `Arc<Mutex>`.
 - *Acceptance demo:* L3 flow artifact + headless PNG of the LED grid for Peter to look at;
   click-script for the rig (L4, Peter): (1) launch main, enable LED in settings, (2) create
@@ -386,8 +394,9 @@ for LED-type layers per NIT below).
   existing phantom-clip path.
 - *Forbidden moves:* per-LED-res render targets (D9); blending the two routes or
   black-blocking mirror children in mixed groups (D10); adding machinery to the
-  `manifold-led` send path (D13 — width selection is data plumbing at the existing call
-  site, not new machinery); OR-ing the route predicates at any site (D11); a new
+  `manifold-led` send path, including any width-selection call site — identity is already
+  forced at the controller, adding plumbing is scope creep (D13); OR-ing the route
+  predicates at any site (D11); a new
   screen-visibility flag instead of the occluded path (D14); changing `blit_to_led`
   mirror semantics; TODO-as-deferral on the switch partition.
 - *Test scope:* `cargo nextest run -p manifold-core -p manifold-renderer -p manifold-app`
@@ -456,8 +465,8 @@ for LED-type layers per NIT below).
    groups skipped entirely (D10); LED layer = new `LayerType::Led`, render path carries a
    `LedRoute` enum built once at descriptor time, model `blit_to_led` untouched (D11);
    new LED layers default to the bundled LED Fill preset (D12); send-path machinery
-   untouched, direct route passes identity edge widths (0.5/0.5) via existing params
-   (D13); LED layers are screen-invisible via the existing occluded-layer path (D14).
+   untouched — identity edge-mapping already forced at the controller for all routes,
+   no per-route plumbing (D13); LED layers are screen-invisible via the existing occluded-layer path (D14).
 8. (MVP, 2026-09-03) sACN, venue-profile patch, strip island, edge-extend demotion, and
    LED grid UI preview are deferred with named revival triggers (section 5b.5) — not
    forgotten, not in scope.
