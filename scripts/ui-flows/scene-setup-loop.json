@@ -151,7 +151,7 @@
         }
       },
       "check": {
-        "TextEquals": "64"
+        "TextEquals": "57"
       }
     }
   }
