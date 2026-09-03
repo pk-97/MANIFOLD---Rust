@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** IN PROGRESS — P1–P4 on main (P4 2026-09-03: D6 whitelist panel — Bars/Copies/Height/Lateral via the beat_ramp bars param, D7 fog cut, D11 round-trip gate green; BUG-twa6 wrap gate deleted not muted, INV-3 gated on the minimal graph). Awaiting Peter's sakura acceptance run (enable → play → save → reload; panel shows four rows). Owed: VD BUG-nkxg (pixel-level copies gate on a real lit import), BUG-twa6 (real-import wrap parity blocked on AO seed control), BUG-59j1 (legacy fog nodes on Remove). · k3 (lead)
+**Status:** IN PROGRESS — P1–P4 on main (P4 2026-09-03: D6 whitelist panel Bars/Copies/Height/Lateral, D7 fog cut, D11 round-trip gate green; BUG-twa6 wrap gate deleted not muted, INV-3 on minimal graph). Awaiting Peter's sakura acceptance run (enable → play → save → reload; four rows). Owed: VD BUG-nkxg (pixel-level copies gate), BUG-twa6 (real-import wrap parity blocked on AO seed control), BUG-59j1 (legacy fog on Remove). · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 Lifecycle: contract — scene-loop atoms and commands remain the cited contract for any future scene-loop work.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
