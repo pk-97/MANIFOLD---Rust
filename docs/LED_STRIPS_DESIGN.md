@@ -403,34 +403,69 @@ for LED-type layers per NIT below).
   (touched crates); gpu-proofs gate if compositor dispatch is touched (it is —
   `scripts/gpu_proofs_gate.py`); clippy `-p` same set.
 
-**MVP-P2 — LED preset pack (Fill, Chase, Scan, Pulse, Strobe).**
+**MVP-P2 — LED preset pack (two families, nine presets, split across two lanes).**
 
-- *Entry state:* MVP-P1 landed. Anchors: `ls crates/manifold-renderer/assets/generator-presets/`,
-  `rg -n "GENERATOR_CATALOG" crates/manifold-renderer/src/preset_loader.rs`.
-- *Read-back:* restate D3/D9/D12; read one bundled preset end-to-end (BasicShapes.json) and
-  the beat-gate/ramp primitives it can compose from.
-- *Deliverables:* five generator preset JSONs, `LED ` name-prefix, authored UV-space so
-  they work at any grid dims; params: colour, speed (beats), direction, tail/duty where
-  applicable; beat sync composed from existing beat-ramp/gate atoms. Pre-flight every
-  preset through `graph-tool validate --kind generator` and `graph-tool fusion`
-  (`docs/GRAPH_TOOLING_DESIGN.md`). Section 2.5 audit recorded per preset: exists / one
-  wire away / genuinely new (expect all "exists").
-- *Gate (positive):* LED composite at 8×120 (via `led_composite_texture()` — under D9
-  nothing renders natively at LED res, and the gate must not imply such a harness):
-  Chase position advances monotonically with
-  beat phase; Strobe flips between two states at the duty point; Fill/Scan/Pulse pixel
-  patterns match CPU-computed expected output (value tests, not looks). Default-preset
-  contract: creating an LED layer loads `LED Fill` with no missing-id fallback.
-- *Gate (negative):* `rg -n "create_compute_pipeline\\(include_str" crates/manifold-renderer/src/node_graph/primitives/`
-  unchanged (no bespoke kernels smuggled in as presets); zero new primitive files.
-- *Acceptance demo:* L2 headless PNG strip of the five patterns at 8×120 for Peter;
-  click-script (L4, Peter): pad-fire each preset on the real rig.
-- *Performer gesture:* fire Chase from a pad; it runs at the track BPM, one LED-width comet
-  sweeping all strips, and stops clean on clip end.
-- *Forbidden moves:* new primitives without the 2.5 audit; presets authored at fixed
-  pixel counts instead of UV space; shipping the pack without the fusion check.
-- *Test scope:* renderer crate tests + graph-tool pre-flight; gpu-proofs if fusion path
-  touched.
+Peter (2026-09-03): "the next task is useful presets to give performance parameters, discrete
+controls, edge triggered behaviors" + "Discrete controls for debugging or configure the lights
+for photos in my studio… General lighting, but also performance presets." Hue/saturation params
+for the whole pack (Vec4 color binding is deferred to its own pass — noted in the status header).
+
+*Performance family (6 presets — lane A):*
+- *LED Chase Sweep* (smooth) — one-comet-width comet sweeps horizontally across all strips;
+  speed in beats/bar, tail length, direction, hue/sat.
+- *LED Pulse* (smooth) — brightness breathes up all strips vertically; period in beats, hue/sat.
+- *LED Step Chase* (stepped) — comet jumps K LEDs per note division (16th default), hard edges,
+  constant between divisions; steps count, direction, hue/sat. Discrete control: the 8×120 grid
+  reads hard steps better than sweeps.
+- *LED Step Scan* (stepped) — a column lights one strip at a time, stepping per division.
+- *LED Burst* (trigger) — pad hit fires a strobe burst (N flashes over M beats, decaying duty);
+  retriggerable; flashes + rate params, hue/sat.
+- *LED Cycle* (trigger) — each pad hit advances a variant (comet color/position) via
+  `trigger_count`; BasicShapes.json is the composition precedent.
+
+*Utility family (3 presets — lane B):*
+- *LED Studio Light* — white/tinted fill with a real **brightness Float param (0–1)** through a
+  multiply atom (LED Fill pins value at 1 by design — this preset exists because photo work
+  needs 10–40%); temperature via hue at low saturation. Self-contained, OSC-able.
+- *LED Strip ID* — distinct band per column (or a stepping white column): identifies which
+  physical strip is which universe. Doubles as the re-patching tool while the venue-patch UI
+  is deferred.
+- *LED Pixel Walk* — a single white pixel steps through the whole grid in linear order: finds
+  dead LEDs and reveals reversed/top-down wiring.
+
+- *Entry state:* MVP-P1 shipped. Anchors: `ls crates/manifold-renderer/assets/generator-presets/`
+  (LED Fill.json is the shape + description-format precedent), `rg -n "beat_ramp|trigger_count"
+  crates/manifold-renderer/assets/generator-presets/` (beat/trigger wiring precedents),
+  BasicShapes.json end-to-end (trigger cycling precedent).
+- *Read-back:* restate D3/D9/D12 + the family spec above; read LED Fill.json + BasicShapes.json
+  whole.
+- *Deliverables:* the presets of your family as bundled JSON (`LED ` name prefix, UV-space,
+  `presetMetadata` params/bindings with Float/Enum/Bool/Int converts ONLY — no Vec4), each
+  pre-flighted through `graph-tool validate --kind generator` AND `graph-tool fusion`; the
+  section 2.5 audit recorded per preset (exists / one wire away / genuinely new — genuinely new
+  ESCALATES, never a quiet new primitive); a per-preset value test on the LED composite at
+  8×120 vs CPU-computed expected output (harness precedent: the led_composite_pixel_tests in
+  layer_compositor.rs — extend, don't rebuild); `docs/node_catalog.json` + `NODE_CATALOG.md`
+  regen + the fused-WGSL golden regen (freshness gate — diff must contain ONLY your presets'
+  blocks).
+- *Gate (positive):* family behaviors verified by value: Chase position monotonic in beat
+  phase; Strobe/Burst flips state at the duty point; Step Chase constant between divisions and
+  jumps exactly at division boundaries; Pixel Walk index advances one cell per step in linear
+  order; Strip ID columns pairwise-distinct. Default-preset contract from P1 still green (LED
+  Fill untouched or grown under the same id).
+- *Gate (negative):* zero new primitive files; `rg -n '"convert": \{\s*"type": "Vec4"'`
+  returns zero hits in your presets; no fixed-pixel-count authoring (all graphs UV-space —
+  a `rg` on literal 120/8 dims in node params is a smell to justify or remove).
+- *Acceptance demo:* L2 — headless PNG strip of each preset at 8×120 for Peter; click-script
+  (L4, Peter): pad-fire each on the real rig.
+- *Performer gesture:* fire Step Chase from a pad; it advances one hard step per 16th at the
+  track BPM and stops clean on clip end. Gate exercises the gesture via the existing
+  phantom-clip path.
+- *Forbidden moves:* new primitives without the 2.5 audit + escalation; Vec4 bindings
+  (deferred, its own pass); fixed-pixel authoring; shipping without validate + fusion;
+  touching the P1 gates or the send path.
+- *Test scope:* renderer crate tests + graph-tool pre-flight; gpu-proofs gate (fusion golden
+  touched — mandatory).
 
 ### 5b.5 Deferred (explicitly not MVP — each with its revival trigger)
 
