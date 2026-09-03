@@ -324,6 +324,13 @@ impl TimelineClip {
         !self.audio_file_path.is_empty()
     }
 
+    /// Whether this clip is backed by time-based source media (video or audio), i.e. its `in_point`
+    /// advances when the clip is trimmed or split. Still-image clips and generators have no
+    /// meaningful source-time offset.
+    pub fn is_source_media(&self) -> bool {
+        !self.video_clip_id.is_empty() || self.is_audio()
+    }
+
     /// Create a new image clip that displays a still image for its timeline
     /// duration. `image_path` is the absolute path to the source file; the
     /// owning layer must be `LayerType::Video`.
