@@ -101,6 +101,9 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
         LayerType::Generator => Icon::LayerGenerator,
         LayerType::Group => Icon::LayerGroup,
         LayerType::Audio => Icon::LayerAudio,
+        // Placeholder until the LED UI lane picks a badge: an LED layer is
+        // generator-driven, so it wears the generator glyph.
+        LayerType::Led => Icon::LayerGenerator,
     }
 }
 

@@ -20,6 +20,8 @@ pub enum LayerType {
     Group,
     /// An audio track: no visual output (the compositor skips it).
     Audio,
+    /// A direct-drive LED layer: LED-composite only, screen-invisible.
+    Led,
 }
 
 /// How a MIDI-triggered layer interprets incoming notes.

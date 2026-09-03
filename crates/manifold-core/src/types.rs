@@ -122,6 +122,10 @@ pub enum LayerType {
     /// can drive audio modulation. No visual output (the compositor skips it).
     /// See `docs/AUDIO_LAYER_DESIGN.md`.
     Audio = 3,
+    /// A direct-drive LED layer: renders its generator like any layer but
+    /// routes ONLY to the LED composite — screen-invisible by construction.
+    /// See `docs/LED_STRIPS_DESIGN.md` section 5b (D10/D11/D14).
+    Led = 4,
 }
 
 impl Serialize for LayerType {
@@ -139,6 +143,7 @@ impl<'de> Deserialize<'de> for LayerType {
                 1 => LayerType::Generator,
                 2 => LayerType::Group,
                 3 => LayerType::Audio,
+                4 => LayerType::Led,
                 _ => LayerType::Video,
             },
             serde_json::Value::String(s) => match s.as_str() {
@@ -146,6 +151,7 @@ impl<'de> Deserialize<'de> for LayerType {
                 "Generator" => LayerType::Generator,
                 "Group" => LayerType::Group,
                 "Audio" => LayerType::Audio,
+                "Led" => LayerType::Led,
                 _ => LayerType::Video,
             },
             _ => LayerType::Video,

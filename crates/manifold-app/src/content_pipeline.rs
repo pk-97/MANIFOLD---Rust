@@ -145,10 +145,11 @@ fn compute_occluded_layer_indices(
 /// Conservative on purpose — the set only ever SHRINKS the work, and a
 /// wrongly-kept layer just wastes perf while a wrongly-skipped one that feeds
 /// LED would blank the wall. So we skip only plain **top-level leaf** layers
-/// (no group, no parent) that are **not** LED-tapped, and we disable the whole
-/// optimization while any authoring preview is open (previews consume the
-/// hidden layer's output). Grouped layers and LED layers stay on the
-/// blend-skip-only path. `out` is cleared and refilled; empty = skip nothing.
+/// (no group, no parent) that don't route to LEDs on any route (mirror flag
+/// or LED layer type), and we disable the whole optimization while any
+/// authoring preview is open (previews consume the hidden layer's output).
+/// Grouped layers and LED-routed layers stay on the blend-skip-only path.
+/// `out` is cleared and refilled; empty = skip nothing.
 fn compute_render_skip_indices(
     layers: &[manifold_core::layer::Layer],
     occluded: &[i32],
@@ -165,7 +166,7 @@ fn compute_render_skip_indices(
         // Skip only a plain top-level leaf that isn't feeding LED. Any layer
         // we can't positively classify as safe stays on the render path.
         let safe = layers.iter().find(|l| l.index == idx).is_some_and(|l| {
-            !l.is_group() && l.parent_layer_id.is_none() && !l.blit_to_led
+            !l.is_group() && l.parent_layer_id.is_none() && !l.routes_to_led()
         });
         if safe {
             out.push(idx);
@@ -173,10 +174,10 @@ fn compute_render_skip_indices(
     }
     for &idx in hidden {
         // Hidden layers inherit the same safety filter as occluded layers:
-        // plain top-level leaf, not LED-tapped, no preview. Grouped/LED
+        // plain top-level leaf, not LED-routed, no preview. Grouped/LED
         // layers stay on the blend-skip-only path.
         let safe = layers.iter().find(|l| l.index == idx).is_some_and(|l| {
-            !l.is_group() && l.parent_layer_id.is_none() && !l.blit_to_led
+            !l.is_group() && l.parent_layer_id.is_none() && !l.routes_to_led()
         });
         if safe && !out.contains(&idx) {
             out.push(idx);
@@ -2113,6 +2114,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             preview_active,
             &mut self.render_skip_scratch,
         );
+        // LED layers are screen-invisible (D14): extend the occluded set with
+        // every LED-type layer so the compositor's blend_layers elides their
+        // screen blend. This runs AFTER the render-skip computation — an
+        // LED layer feeds the LED composite even when it never touches the
+        // screen, so it must keep rendering (the render-skip filter above
+        // already excludes LED-routed layers; the occluded blend-skip does
+        // not).
+        for layer in layers {
+            if layer.is_led() && !self.occluded_layers_scratch.contains(&layer.index) {
+                self.occluded_layers_scratch.push(layer.index);
+            }
+        }
 
         {
             let mut gen_enc = native_device.create_encoder("Generators");
@@ -2373,6 +2386,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 opacity: layer.opacity,
                 hidden: self.hidden_layers_scratch[layer.index as usize],
                 blit_to_led: layer.blit_to_led,
+                layer_type: layer.layer_type,
                 effects: layer.effects.as_deref().unwrap_or(empty_effects),
                 effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
                 parent_layer_id: layer.parent_layer_id.as_ref(),
@@ -3675,10 +3689,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.compositor.output_texture()
     }
 
-    /// LED source texture. Returns `Some` only when at least one layer is flagged
-    /// `blit_to_led` and has active clips this frame — the LED composite carries
-    /// just those layers, post-tonemap + post-master-FX. Returns `None` when no
-    /// layer is routed to LEDs; callers should blackout in that case.
+    /// LED source texture. Returns `Some` only when at least one layer is
+    /// LED-routed (mirror flag or LED layer type) and has active clips this
+    /// frame — the LED composite carries just those layers on the active
+    /// route, post-tonemap + post-master-FX. Returns `None` when no layer is
+    /// routed to LEDs; callers should blackout in that case.
     pub fn led_source_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
         self.compositor.led_composite_texture()
     }
@@ -4062,6 +4077,27 @@ mod render_skip_tests {
             skip,
             vec![2],
             "the LED-tapped layer keeps rendering; only the plain leaf skips"
+        );
+    }
+
+    #[test]
+    fn led_type_layer_is_not_render_skipped() {
+        // D14 corollary: an LED-type layer is screen-invisible (marked
+        // occluded for the blend) but its clips drive the LED composite —
+        // if it were render-skipped the strips would go black exactly
+        // whenever the layer is hidden below an opaque cutoff.
+        let mut layers = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+            layer(2, BlendMode::Normal, 1.0),
+        ];
+        layers[1].layer_type = LayerType::Led;
+        let clips = vec![clip(0), clip(1), clip(2)];
+        let skip = skip_for(&layers, &clips);
+        assert_eq!(
+            skip,
+            vec![2],
+            "the LED-type layer keeps rendering; only the plain leaf skips"
         );
     }
 
