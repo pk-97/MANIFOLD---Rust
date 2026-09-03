@@ -1,10 +1,11 @@
 # LED Strips — Play the Strips + Generalized Patch
 
-**Status: IN PROGRESS — MVP-P1 shipped 2026-09-03; MVP-P2 performance family shipped 2026-09-03 (Chase Sweep,
-Pulse, Step Chase, Step Scan, Burst, Cycle — value-gated on the production path at 8×120, all fused,
-zero new primitives). Owed: MVP-P2 utility family (Studio Light / Strip ID / Pixel Walk — lane B);
-Vec4 color binding (own pass — pack params are hue/sat until then). Original patch/sACN/island phases
-P1–P3 remain approved and unbuilt; deferred in section 5b.5.**
+**Status: IN PROGRESS — MVP-P1 + MVP-P2 SHIPPED 2026-09-03 (LED layer type, switch routing, creation UI,
+L3 flow; nine-pattern pack: Fill, Chase Sweep, Pulse, Step Chase, Step Scan, Burst, Cycle, Studio Light,
+Strip ID, Pixel Walk — all value-gated at 8×120, all fused, zero new primitives). Owed: Vec4 color
+binding (own pass — pack params are hue/sat until then); in-app LED grid preview (deferred, section 5b.5);
+Peter's L4 rig pass (pad-fire each preset). Original patch/sACN/island phases P1–P3 remain approved and
+unbuilt; deferred in section 5b.5.**
 **Prerequisites: none for the MVP (LED-resolution compositing machinery already exists — see MVP audit).
 Original P2 (strip island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 8 (Execution protocol)
