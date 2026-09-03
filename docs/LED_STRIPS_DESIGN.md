@@ -1,9 +1,9 @@
 # LED Strips — Play the Strips + Generalized Patch
 
-**Status: IN PROGRESS — MVP-P1a core routing (LayerType::Led + LedRoute switch partition, D9–D14) landed
-2026-09-03. Owed: MVP-P1b UI surface (LED creation entry, lane badge, inspector toggle, L3 ui-flow) and
-MVP-P2 LED preset pack. Original patch/sACN/island phases P1–P3 remain approved and unbuilt; deferred in
-section 5b.5.**
+**Status: IN PROGRESS — MVP-P1 SHIPPED 2026-09-03 (core routing + creation UI + LED Fill placeholder +
+L3 flow). Owed: MVP-P2 LED preset pack (Chase/Scan/Pulse/Strobe under the same LED Fill id contract; note —
+bundled bindings carry no Vec4 color, pack params are hue/sat until that lands). Original patch/sACN/island
+phases P1–P3 remain approved and unbuilt; deferred in section 5b.5.**
 **Prerequisites: none for the MVP (LED-resolution compositing machinery already exists — see MVP audit).
 Original P2 (strip island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 8 (Execution protocol)
