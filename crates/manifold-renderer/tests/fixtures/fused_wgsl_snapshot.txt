@@ -5537,6 +5537,303 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r1);
 }
 
+=== generator:LED Burst node:9 ===
+struct Params {
+    n0_cx: f32,
+    n0_cy: f32,
+    n0_radius_x: f32,
+    n0_radius_y: f32,
+    n0_rotation: f32,
+    n0_softness: f32,
+    n1_gain: f32,
+    n2_amount: f32,
+    n2_hue: f32,
+    n2_saturation: f32,
+    n2_focus: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, radius_x: f32, radius_y: f32, rotation: f32, softness: f32) -> vec4<f32> {
+    let p = uv - vec2<f32>(cx, cy);
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let p_rot = vec2<f32>(p.x * c + p.y * s, -p.x * s + p.y * c);
+    let rx = max(radius_x, 1e-6);
+    let ry = max(radius_y, 1e-6);
+    let n = p_rot / vec2<f32>(rx, ry);
+    let dist = length(n);
+    let soft = max(softness, 0.0);
+    let edge_lo = max(1.0 - soft, 0.0);
+    let edge_hi = 1.0 + soft;
+    let mask = 1.0 - smoothstep(edge_lo, edge_hi, dist);
+    return vec4<f32>(mask, mask, mask, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+    let colorize = clamp(amount, 0.0, 1.0);
+    let tint_h = fract(hue / 360.0);
+    let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);
+    let tint_rgb = hsv2rgb(tint_hsv);
+    let graded_luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let graded_sat = rgb2hsv(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+    let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+    let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+    let f = clamp(focus, 0.0, 1.0);
+    let element_mask = mix(1.0, highlight_mask * neutral_mask, f);
+    let tinted = tint_rgb * graded_luma;
+    return vec4<f32>(mix(c.rgb, tinted, colorize * element_mask), c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_radius_x, params.n0_radius_y, params.n0_rotation, params.n0_softness);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_gain);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_amount, params.n2_hue, params.n2_saturation, params.n2_focus);
+    textureStore(dst, coord, r2);
+}
+
+=== generator:LED Chase Sweep node:14 ===
+struct Params {
+    n1_a: f32,
+    n1_b: f32,
+    n1_c: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    n3_scale: f32,
+    n4_low: f32,
+    n4_high: f32,
+    n5_intensity: f32,
+    n6_amount: f32,
+    n6_hue: f32,
+    n6_saturation: f32,
+    n6_focus: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(uv.x, uv.y, 0.0, 1.0);
+}
+
+fn n1_body(s: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, a: f32, b: f32, c: f32) -> vec4<f32> {
+    let v = a * s.r + b * s.g + c;
+    return vec4<f32>(v, v, v, 1.0);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {
+    return vec4<f32>(fract(c.r * scale), fract(c.g * scale), fract(c.b * scale), c.a);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+    let colorize = clamp(amount, 0.0, 1.0);
+    let tint_h = fract(hue / 360.0);
+    let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);
+    let tint_rgb = hsv2rgb(tint_hsv);
+    let graded_luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let graded_sat = rgb2hsv(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+    let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+    let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+    let f = clamp(focus, 0.0, 1.0);
+    let element_mask = mix(1.0, highlight_mask * neutral_mask, f);
+    let tinted = tint_rgb * graded_luma;
+    return vec4<f32>(mix(c.rgb, tinted, colorize * element_mask), c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims));
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_a, params.n1_b, params.n1_c);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_scale);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_low, params.n4_high);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_intensity);
+    let r6 = n6_body(r5, uv, vec2<f32>(dims), params.n6_amount, params.n6_hue, params.n6_saturation, params.n6_focus);
+    textureStore(dst, coord, r6);
+}
+
+=== generator:LED Cycle node:12 ===
+struct Params {
+    n1_a: f32,
+    n1_b: f32,
+    n1_c: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    n3_scale: f32,
+    n4_low: f32,
+    n4_high: f32,
+    n5_intensity: f32,
+    n6_amount: f32,
+    n6_hue: f32,
+    n6_saturation: f32,
+    n6_focus: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(uv.x, uv.y, 0.0, 1.0);
+}
+
+fn n1_body(s: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, a: f32, b: f32, c: f32) -> vec4<f32> {
+    let v = a * s.r + b * s.g + c;
+    return vec4<f32>(v, v, v, 1.0);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {
+    return vec4<f32>(fract(c.r * scale), fract(c.g * scale), fract(c.b * scale), c.a);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+    let colorize = clamp(amount, 0.0, 1.0);
+    let tint_h = fract(hue / 360.0);
+    let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);
+    let tint_rgb = hsv2rgb(tint_hsv);
+    let graded_luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let graded_sat = rgb2hsv(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+    let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+    let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+    let f = clamp(focus, 0.0, 1.0);
+    let element_mask = mix(1.0, highlight_mask * neutral_mask, f);
+    let tinted = tint_rgb * graded_luma;
+    return vec4<f32>(mix(c.rgb, tinted, colorize * element_mask), c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims));
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_a, params.n1_b, params.n1_c);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_scale);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_low, params.n4_high);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_intensity);
+    let r6 = n6_body(r5, uv, vec2<f32>(dims), params.n6_amount, params.n6_hue, params.n6_saturation, params.n6_focus);
+    textureStore(dst, coord, r6);
+}
+
 === generator:LED Fill node:4 ===
 struct Params {
     n0_cx: f32,
@@ -5611,6 +5908,274 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
     let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_radius_x, params.n0_radius_y, params.n0_rotation, params.n0_softness);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_amount, params.n1_hue, params.n1_saturation, params.n1_focus);
+    textureStore(dst, coord, r1);
+}
+
+=== generator:LED Pulse node:6 ===
+struct Params {
+    n0_cx: f32,
+    n0_cy: f32,
+    n0_radius_x: f32,
+    n0_radius_y: f32,
+    n0_rotation: f32,
+    n0_softness: f32,
+    n1_gain: f32,
+    n2_amount: f32,
+    n2_hue: f32,
+    n2_saturation: f32,
+    n2_focus: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, radius_x: f32, radius_y: f32, rotation: f32, softness: f32) -> vec4<f32> {
+    let p = uv - vec2<f32>(cx, cy);
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let p_rot = vec2<f32>(p.x * c + p.y * s, -p.x * s + p.y * c);
+    let rx = max(radius_x, 1e-6);
+    let ry = max(radius_y, 1e-6);
+    let n = p_rot / vec2<f32>(rx, ry);
+    let dist = length(n);
+    let soft = max(softness, 0.0);
+    let edge_lo = max(1.0 - soft, 0.0);
+    let edge_hi = 1.0 + soft;
+    let mask = 1.0 - smoothstep(edge_lo, edge_hi, dist);
+    return vec4<f32>(mask, mask, mask, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+    let colorize = clamp(amount, 0.0, 1.0);
+    let tint_h = fract(hue / 360.0);
+    let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);
+    let tint_rgb = hsv2rgb(tint_hsv);
+    let graded_luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let graded_sat = rgb2hsv(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+    let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+    let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+    let f = clamp(focus, 0.0, 1.0);
+    let element_mask = mix(1.0, highlight_mask * neutral_mask, f);
+    let tinted = tint_rgb * graded_luma;
+    return vec4<f32>(mix(c.rgb, tinted, colorize * element_mask), c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_radius_x, params.n0_radius_y, params.n0_rotation, params.n0_softness);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_gain);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_amount, params.n2_hue, params.n2_saturation, params.n2_focus);
+    textureStore(dst, coord, r2);
+}
+
+=== generator:LED Step Chase node:19 ===
+struct Params {
+    n1_a: f32,
+    n1_b: f32,
+    n1_c: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    n3_scale: f32,
+    n4_low: f32,
+    n4_high: f32,
+    n5_intensity: f32,
+    n6_amount: f32,
+    n6_hue: f32,
+    n6_saturation: f32,
+    n6_focus: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(uv.x, uv.y, 0.0, 1.0);
+}
+
+fn n1_body(s: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, a: f32, b: f32, c: f32) -> vec4<f32> {
+    let v = a * s.r + b * s.g + c;
+    return vec4<f32>(v, v, v, 1.0);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {
+    return vec4<f32>(fract(c.r * scale), fract(c.g * scale), fract(c.b * scale), c.a);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+    let colorize = clamp(amount, 0.0, 1.0);
+    let tint_h = fract(hue / 360.0);
+    let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);
+    let tint_rgb = hsv2rgb(tint_hsv);
+    let graded_luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let graded_sat = rgb2hsv(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+    let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+    let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+    let f = clamp(focus, 0.0, 1.0);
+    let element_mask = mix(1.0, highlight_mask * neutral_mask, f);
+    let tinted = tint_rgb * graded_luma;
+    return vec4<f32>(mix(c.rgb, tinted, colorize * element_mask), c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims));
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_a, params.n1_b, params.n1_c);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_scale);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_low, params.n4_high);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_intensity);
+    let r6 = n6_body(r5, uv, vec2<f32>(dims), params.n6_amount, params.n6_hue, params.n6_saturation, params.n6_focus);
+    textureStore(dst, coord, r6);
+}
+
+=== generator:LED Step Scan node:10 ===
+struct Params {
+    n0_cx: f32,
+    n0_cy: f32,
+    n0_half_width: f32,
+    n0_half_height: f32,
+    n0_rotation: f32,
+    n0_softness: f32,
+    n1_amount: f32,
+    n1_hue: f32,
+    n1_saturation: f32,
+    n1_focus: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, half_width: f32, half_height: f32, rotation: f32, softness: f32) -> vec4<f32> {
+    let p = uv - vec2<f32>(cx, cy);
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let p_rot = vec2<f32>(p.x * c + p.y * s, -p.x * s + p.y * c);
+    let hw = max(half_width, 1e-6);
+    let hh = max(half_height, 1e-6);
+    let n_abs = abs(p_rot) / vec2<f32>(hw, hh);
+    let dist = max(n_abs.x, n_abs.y);
+    let soft = max(softness, 0.0);
+    let edge_lo = max(1.0 - soft, 0.0);
+    let edge_hi = 1.0 + soft;
+    let mask = 1.0 - smoothstep(edge_lo, edge_hi, dist);
+    return vec4<f32>(mask, mask, mask, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+    let colorize = clamp(amount, 0.0, 1.0);
+    let tint_h = fract(hue / 360.0);
+    let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);
+    let tint_rgb = hsv2rgb(tint_hsv);
+    let graded_luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let graded_sat = rgb2hsv(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+    let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+    let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+    let f = clamp(focus, 0.0, 1.0);
+    let element_mask = mix(1.0, highlight_mask * neutral_mask, f);
+    let tinted = tint_rgb * graded_luma;
+    return vec4<f32>(mix(c.rgb, tinted, colorize * element_mask), c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_half_width, params.n0_half_height, params.n0_rotation, params.n0_softness);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_amount, params.n1_hue, params.n1_saturation, params.n1_focus);
     textureStore(dst, coord, r1);
 }

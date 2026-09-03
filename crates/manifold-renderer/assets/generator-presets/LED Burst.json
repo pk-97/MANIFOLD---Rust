@@ -1,0 +1,219 @@
+{
+  "version": 2,
+  "name": "LED Burst",
+  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): a pad hit fires a decaying strobe burst, retriggerable. envelope_decay watches the clip trigger count — any integer change snaps the envelope to 1, then it decays exponentially — and beat_ramp at attack=Duty is the flash clock, inverted by scale_offset_value (-x + 1) so each cycle starts bright and snaps dark at the duty point. env * flash gates the burst: N flashes inside the envelope's life, each dimmer than the last. circle_mask at radii 4 fills the frame with white; node.exposure multiplies it by the gate; colorize at amount=1/focus=0 turns luma into HSV(hue, sat, 1). Section 2.5 audit: every atom exists (envelope_decay, beat_ramp, scale_offset_value, math, circle_mask, exposure, colorize) — no new primitive.",
+  "presetMetadata": {
+    "id": "LED Burst",
+    "displayName": "LED Burst",
+    "category": "Pattern",
+    "oscPrefix": "ledBurst",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.5,
+        "max": 32.0,
+        "defaultValue": 8.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "oscSuffix": "rate"
+      },
+      {
+        "id": "duty",
+        "name": "Duty",
+        "min": 0.05,
+        "max": 0.95,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "duty"
+      },
+      {
+        "id": "decay",
+        "name": "Decay",
+        "min": 0.5,
+        "max": 60.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "oscSuffix": "decay"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 200.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 8.0,
+        "target": { "kind": "node", "nodeId": "flash_clock", "param": "rate" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "duty",
+        "label": "Duty",
+        "defaultValue": 0.3,
+        "target": { "kind": "node", "nodeId": "flash_clock", "param": "attack" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "decay",
+        "label": "Decay",
+        "defaultValue": 6.0,
+        "target": { "kind": "node", "nodeId": "burst_env", "param": "decay_rate" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 200.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "hue" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": { "kind": "node", "nodeId": "tint", "param": "saturation" },
+        "convert": { "type": "Float" }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.envelope_decay",
+      "handle": "burst_env",
+      "nodeId": "burst_env",
+      "params": {
+        "decay_rate": { "type": "Float", "value": 6.0 }
+      },
+      "title": "Burst Envelope"
+    },
+    {
+      "id": 3,
+      "typeId": "node.beat_ramp",
+      "handle": "flash_clock",
+      "nodeId": "flash_clock",
+      "params": {
+        "rate": { "type": "Float", "value": 8.0 },
+        "bars": { "type": "Int", "value": 0 },
+        "attack": { "type": "Float", "value": 0.3 }
+      },
+      "title": "Flash Clock"
+    },
+    {
+      "id": 4,
+      "typeId": "node.scale_offset_value",
+      "handle": "flash_invert",
+      "nodeId": "flash_invert",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "scale": { "type": "Float", "value": -1.0 },
+        "offset": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Flash (inverted)"
+    },
+    {
+      "id": 5,
+      "typeId": "node.math",
+      "handle": "burst_gate",
+      "nodeId": "burst_gate",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Envelope x Flash"
+    },
+    {
+      "id": 6,
+      "typeId": "node.circle_mask",
+      "handle": "white_field",
+      "nodeId": "white_field",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      },
+      "title": "White Field"
+    },
+    {
+      "id": 7,
+      "typeId": "node.exposure",
+      "handle": "brightness",
+      "nodeId": "brightness",
+      "params": {
+        "gain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Brightness"
+    },
+    {
+      "id": 8,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 200.0 },
+        "saturation": { "type": "Float", "value": 1.0 },
+        "focus": { "type": "Float", "value": 0.0 }
+      }
+    }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 2, "toPort": "trigger" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "b" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "gain" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

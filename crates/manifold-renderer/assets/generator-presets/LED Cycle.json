@@ -1,0 +1,346 @@
+{
+  "version": 2,
+  "name": "LED Cycle",
+  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): each pad hit advances the comet — 8 variants of hue and position, BasicShapes' trigger-cycling precedent. clip_trigger_index wraps the clip trigger count modulo 8; two switch_value tables map the variant to a hue (0/45/90/.../315 deg) and a comet position ((variant + 1)/8, the column's right edge, so the one-cell head fills it). The comet is the Chase Sweep shape without the sweep: negated u-ramp shifted by the variant position, wrap, power tail, invert, then colorize takes the hue from the table so every trigger lands a differently coloured comet at a new spot. Section 2.5 audit: every atom exists (clip_trigger_index, switch_value, uv_field + field_combine, scale_offset_image, wrap, smoothstep, invert, colorize) — no new primitive.",
+  "presetMetadata": {
+    "id": "LED Cycle",
+    "displayName": "LED Cycle",
+    "category": "Pattern",
+    "oscPrefix": "ledCycle",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.clip_trigger_index",
+      "handle": "variant",
+      "nodeId": "variant",
+      "params": {
+        "modulus": {
+          "type": "Int",
+          "value": 8
+        }
+      },
+      "title": "Variant"
+    },
+    {
+      "id": 3,
+      "typeId": "node.switch_value",
+      "handle": "hue_table",
+      "nodeId": "hue_table",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "in_0": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 45.0
+        },
+        "in_2": {
+          "type": "Float",
+          "value": 90.0
+        },
+        "in_3": {
+          "type": "Float",
+          "value": 135.0
+        },
+        "in_4": {
+          "type": "Float",
+          "value": 180.0
+        },
+        "in_5": {
+          "type": "Float",
+          "value": 225.0
+        },
+        "in_6": {
+          "type": "Float",
+          "value": 270.0
+        },
+        "in_7": {
+          "type": "Float",
+          "value": 315.0
+        }
+      },
+      "title": "Hue Table"
+    },
+    {
+      "id": 4,
+      "typeId": "node.switch_value",
+      "handle": "position_table",
+      "nodeId": "position_table",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "in_0": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "in_2": {
+          "type": "Float",
+          "value": 0.375
+        },
+        "in_3": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "in_4": {
+          "type": "Float",
+          "value": 0.625
+        },
+        "in_5": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "in_6": {
+          "type": "Float",
+          "value": 0.875
+        },
+        "in_7": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Position Table"
+    },
+    {
+      "id": 5,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 6,
+      "typeId": "node.scale_offset_image",
+      "handle": "comet_offset",
+      "nodeId": "comet_offset",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": -1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Position Offset"
+    },
+    {
+      "id": 7,
+      "typeId": "node.wrap",
+      "handle": "comet_wrap",
+      "nodeId": "comet_wrap",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Wrap"
+    },
+    {
+      "id": 8,
+      "typeId": "node.smoothstep",
+      "handle": "tail_shape",
+      "nodeId": "tail_shape",
+      "params": {
+        "low": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "high": {
+          "type": "Float",
+          "value": 0.425
+        }
+      },
+      "title": "Tail Shape"
+    },
+    {
+      "id": 9,
+      "typeId": "node.invert",
+      "handle": "comet",
+      "nodeId": "comet",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Comet (1-d)"
+    },
+    {
+      "id": 10,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "hue": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "saturation": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "focus": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.field_combine",
+      "handle": "u_ramp",
+      "nodeId": "u_ramp",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "U Ramp"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 2,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "selector"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "selector"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "offset"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "hue"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    }
+  ]
+}
