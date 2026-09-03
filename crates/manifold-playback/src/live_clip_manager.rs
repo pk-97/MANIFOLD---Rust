@@ -144,6 +144,7 @@ impl LiveClipManager {
                 is_looping: clip.is_looping,
                 is_video: !clip.video_clip_id.is_empty(),
                 is_muted: false,
+                is_boundary_owned: false,
                 layer_id: clip.layer_id.clone(),
             });
         }

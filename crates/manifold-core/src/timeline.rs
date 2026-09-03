@@ -416,6 +416,24 @@ impl Timeline {
         results: &mut Vec<(usize, usize)>,
         active_indices: &mut Vec<usize>,
     ) {
+        self.get_active_clips_at_beat_ref_epsilon(
+            beat,
+            Beats::ZERO,
+            results,
+            active_indices,
+        );
+    }
+
+    /// Like `get_active_clips_at_beat_ref`, but clips within `boundary_epsilon`
+    /// of a start or end edge are also active. At an adjacent boundary the
+    /// later-starting clip wins.
+    pub fn get_active_clips_at_beat_ref_epsilon(
+        &self,
+        beat: Beats,
+        boundary_epsilon: Beats,
+        results: &mut Vec<(usize, usize)>,
+        active_indices: &mut Vec<usize>,
+    ) {
         results.clear();
         for li in 0..self.layers.len() {
             if self.layers[li].is_group() {
@@ -423,7 +441,8 @@ impl Timeline {
             }
 
             active_indices.clear();
-            self.layers[li].collect_active_clips_at_beat(beat, active_indices);
+            self.layers[li]
+                .collect_active_clips_at_beat_epsilon(beat, boundary_epsilon, active_indices);
             for ci in active_indices.iter().copied() {
                 results.push((li, ci));
             }

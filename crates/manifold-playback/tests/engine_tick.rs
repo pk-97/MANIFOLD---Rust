@@ -655,6 +655,119 @@ fn audio_solo_does_not_suppress_video() {
     );
 }
 
+/// Boundary-ownership regression: a clip ending exactly at the playhead still
+/// renders when stopped. Pre-fix the half-open activity test excluded it.
+#[test]
+fn stopped_engine_keeps_clip_active_at_end_boundary() {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer = manifold_core::layer::Layer::new(
+        "Test".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(8.0),
+    ));
+    project.timeline.layers.push(layer);
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0));
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    assert!(
+        result.ready_clips.iter().any(|c| c.layer_index == 0),
+        "clip ending exactly at playhead must still be ready"
+    );
+}
+
+/// Boundary-ownership regression: a clip starting exactly at the playhead
+/// renders when stopped.
+#[test]
+fn stopped_engine_keeps_clip_active_at_start_boundary() {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer = manifold_core::layer::Layer::new(
+        "Test".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats(8.0),
+        manifold_core::Beats(8.0),
+    ));
+    project.timeline.layers.push(layer);
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0));
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    assert!(
+        result.ready_clips.iter().any(|c| c.layer_index == 0),
+        "clip starting exactly at playhead must be ready"
+    );
+}
+
+/// Boundary-ownership regression: at an adjacent boundary, the later-starting
+/// clip wins.
+#[test]
+fn stopped_engine_prefers_later_clip_at_adjacent_boundary() {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer = manifold_core::layer::Layer::new(
+        "Test".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(8.0),
+    ));
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats(8.0),
+        manifold_core::Beats(8.0),
+    ));
+    project.timeline.layers.push(layer);
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0));
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    let ready = result
+        .ready_clips
+        .iter()
+        .find(|c| c.layer_index == 0)
+        .expect("one clip should be ready");
+    assert_eq!(
+        ready.clip_index, 1,
+        "at a shared boundary the later-starting clip should render"
+    );
+}
 /// D7a: a fully-muted paused rig idles — compositor_dirty becomes false after
 /// the dirty deadline expires.
 #[test]

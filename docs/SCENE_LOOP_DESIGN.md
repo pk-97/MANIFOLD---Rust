@@ -2,6 +2,7 @@
 
 **Status:** IN PROGRESS — P1–P3 on main but the feature failed adversarial contact (BUG-70wo (camera-inside-solid-mesh black): camera never left solid meshes; panel surface shipped the atoms' raw internals and desynced — duplicate Axis/Cell Size rows from double stamping). P4 (MVP rebuild: curated panel, single-sourced internals, fog cut, value-pipeline fix) pending. Owed: VD bead BUG-nkxg (pixel-level copies gate on a real lit import). · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
+Lifecycle: contract — scene-loop atoms and commands remain the cited contract for any future scene-loop work.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 A classic VJ loop is a fixed 10-second render. This design makes an imported GLB

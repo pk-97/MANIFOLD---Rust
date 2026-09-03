@@ -32,6 +32,11 @@ pub struct ActiveClipRef {
     /// Whether this clip is muted. Mute is presentational (P2): the clip stays
     /// active for scheduling/modulation but contributes no pixels.
     pub is_muted: bool,
+    /// Whether this clip is only active because the playhead is within the
+    /// visual boundary-epsilon of its start or end edge. Boundary-owned clips
+    /// bypass the min-remaining warm-up guard so the last/first frame still
+    /// renders when the playhead sits on the boundary.
+    pub is_boundary_owned: bool,
     /// The layer this clip belongs to. Part of the binding identity (P3):
     /// the reconcile restarts an active clip whose realized layer differs.
     pub layer_id: LayerId,
@@ -193,8 +198,16 @@ impl ClipScheduler {
         // Compute starts — clips that should be active but aren't.
         // Skip clips whose remaining lifetime in BEATS is too short to render.
         // Beat-domain checks stay stable when external tempo nudges BPM slightly.
+        // Boundary-ownership exception: clips that are only active because the
+        // playhead is within the visual boundary-epsilon of their start or end
+        // edge bypass the warm-up guard, so the first/last frame still renders.
+        // All other clips keep the gate.
         for entry in &merged {
             if !currently_active_ids.contains(&entry.clip_id) {
+                if entry.is_boundary_owned {
+                    to_start.push(entry.clone());
+                    continue;
+                }
                 let remaining = entry.end_beat() - current_beat;
                 if remaining < min_remaining_beats && !looping_clip_ids.contains(&entry.clip_id) {
                     continue;
@@ -239,6 +252,7 @@ mod tests {
             is_looping: false,
             is_video: false,
             is_muted: false,
+            is_boundary_owned: false,
             layer_id: LayerId::new(format!("layer-{layer_index}")),
         }
     }
@@ -258,6 +272,7 @@ mod tests {
             is_looping: false,
             is_video: false,
             is_muted: false,
+            is_boundary_owned: false,
             layer_id: LayerId::new(format!("layer-{layer_index}")),
         }
     }
