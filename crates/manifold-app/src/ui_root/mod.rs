@@ -1477,7 +1477,6 @@ impl UIRoot {
         // Same D17 enter, mirrored to the other three popups (P2 batch 2 —
         // `UI_CRAFT_AND_MOTION_PLAN.md` section 5 item 4: "universal popup enter").
         self.ableton_picker.update(&mut self.tree);
-        self.browser_popup.update(&mut self.tree);
         self.settings_popup.update(&mut self.tree);
         self.rt_quality_panel.update(&mut self.tree);
     }
