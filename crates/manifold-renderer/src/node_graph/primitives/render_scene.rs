@@ -1096,6 +1096,13 @@ pub struct RenderScene {
     rt_prev_toggle_ao: Option<bool>,
     rt_prev_toggle_gi: Option<bool>,
     rt_prev_toggle_refl: Option<bool>,
+    /// Consumer-active latches: an off→on resume of RT accumulation or
+    /// MetalFX upscale must force a history reset explicitly. That reset
+    /// used to fall out of the gated `detect_reset`'s time-jump; the
+    /// unconditional per-frame call (BUG-vn9b motion-blur-cut-smear) no
+    /// longer produces one.
+    rt_prev_accumulating: bool,
+    prev_temporal_upscale: bool,
     /// RT-T2-C (object motion): per-object world→prev-world delta
     /// matrices (`prev_model * inverse(model)`, both straight off the
     /// draw uniforms) for `accumulate_irradiance`'s object-aware
@@ -1610,6 +1617,8 @@ impl RenderScene {
             rt_prev_toggle_ao: None,
             rt_prev_toggle_gi: None,
             rt_prev_toggle_refl: None,
+            rt_prev_accumulating: false,
+            prev_temporal_upscale: false,
             rt_obj_motion: None,
             rt_obj_motion_capacity: 0,
             rt_normal_sources: None,
@@ -4333,28 +4342,32 @@ impl EffectNode for RenderScene {
         }
         let rt_ready = self.rt_accel_built;
         // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2, section 8.2 D22 (T2-B): the ONE
-        // call site deciding "discard temporal history this frame" for
-        // EITHER of this node's two temporal consumers — the RT irradiance
-        // accumulator (`will_rt_accumulate_this_frame`, mirroring the exact
-        // `rt_enabled && rt_ready` gate the accumulate call site below
-        // already used) and MetalFX Temporal's `reset` (`temporal_upscale`).
-        // Mutually-exclusive-by-construction: when RT will accumulate this
-        // frame, that's the one call and the temporal-upscale-only branch
-        // below is skipped; never both — the shared detector's own contract
-        // (`detect_reset` exactly once per frame a consumer advances) stays
-        // intact, and there is still only ONE call site in the whole node
-        // (negative-`rg` gate: no second reset path). BUG-17r3: casters no
-        // longer gate this — a zero-light emissive-only scene still needs
-        // GI/AO/reflections accumulated; casters only gate the SUN/SHADOW
-        // terms within the trace (kernel-side `n_casters` loop, zero-
-        // iteration when `caster_count == 0`, `ShadowRayParams::new` is
-        // well-formed with an empty caster slice).
+        // `detect_reset` call site for every temporal consumer in this node
+        // (negative-`rg` gate: no second reset path). Unconditional, once
+        // per frame — the detector's own contract — so the velocity-history
+        // reset below sees cuts/seeks even on non-RT, non-upscale scenes.
+        // BUG-vn9b (motion-blur-cut-smear): under the old
+        // `will_rt_accumulate || temporal_upscale` gate the detector never
+        // advanced on those scenes, so `prev_view_proj`/`prev_model`
+        // survived a clip cut and the first post-cut frame smeared at full
+        // max_blur_px. Consumer off→on resumes now force a reset explicitly
+        // via the `*_just_resumed` latches below — that used to fall out of
+        // the gated detector's time-jump.
         let will_rt_accumulate_this_frame = rt_enabled && rt_ready;
-        let reset_decision: Option<bool> = if will_rt_accumulate_this_frame || temporal_upscale {
-            Some(self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time))
-        } else {
-            None
-        };
+        let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time);
+        // A cut/seek means this node's velocity history is stale too: clear
+        // it so the first post-cut frame takes the "no history yet"
+        // zero-velocity seeding instead of ndc deltas measured across two
+        // different scenes.
+        if reset_decision {
+            self.prev_model.iter_mut().for_each(|m| *m = None);
+            self.prev_view_proj = None;
+            self.prev_cam_state = None;
+        }
+        let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
+        self.rt_prev_accumulating = will_rt_accumulate_this_frame;
+        let upscale_just_resumed = temporal_upscale && !self.prev_temporal_upscale;
+        self.prev_temporal_upscale = temporal_upscale;
         // D22: whether the scratch/upscaler are actually live this frame —
         // `temporal_upscale` folded with hardware availability, assigned
         // inside the "Ensure cached GPU resources" block below (the first
@@ -6226,13 +6239,11 @@ impl EffectNode for RenderScene {
                 // deciding "discard temporal history this frame" for this
                 // node's irradiance accumulator — ORs in a just-allocated
                 // history texture (dimension change) rather than adding a
-                // second reset path. `detect_reset` must run exactly once
-                // per frame this accumulator advances (its own contract);
-                // section 8.2 D22 (T2-B) hoisted the actual call to
-                // `reset_decision` above `will_rt_accumulate_this_frame`
-                // gates identically to this `if rt_ready` branch (nested in
-                // the same `rt_enabled` block), so it's `Some` here.
-                let reset = reset_decision.expect("will_rt_accumulate_this_frame implies Some")
+                // second reset path. `reset_decision` comes from the single
+                // unconditional `detect_reset` call near the top of this fn;
+                // `rt_just_resumed` covers an off→on accumulate resume.
+                let reset = reset_decision
+                    || rt_just_resumed
                     || std::mem::take(&mut self.rt_irr_needs_reset)
                     || toggle_flipped;
                 // RT-T1-C: `prev_view_proj` is the SAME local captured
@@ -7417,10 +7428,9 @@ impl EffectNode for RenderScene {
                 return;
             };
             // D22/RT-D2: the SAME shared reset decision computed once near
-            // the top of this fn (`reset_decision`) — `temporal_upscale`
-            // being true is one of the two conditions that guarantees it's
-            // `Some` there.
-            let reset = reset_decision.unwrap_or(false);
+            // the top of this fn (`reset_decision`), plus the explicit
+            // off→on resume latch.
+            let reset = reset_decision || upscale_just_resumed;
             let gpu = ctx.gpu_encoder();
             // MTL4 skip: on ring saturation `upscale` returns false and
             // leaves `output` holding last frame's upscale — the copy below
@@ -7503,13 +7513,15 @@ impl EffectNode for RenderScene {
             // path, extended not duplicated. Three signal sources drive
             // `reset` on the denoiser:
             //   1. TemporalResetDetector — cut/seek/rebuild → reset
+            //      (`reset_decision` + the off→on `rt_just_resumed` latch)
             //   2. cpu_lighting_changed — any lighting key change → reset
             //   3. gesture flags — gesture hold active → reset
             // Strobes do NOT reset (D3). `denoiser_lighting_changed` and
             // `denoiser_gesture_active` were captured from the RT block's
             // key computation above (when RT is on). When RT is off,
             // `denoise_active` is false and this block is unreachable.
-            let reset = reset_decision.unwrap_or(false)
+            let reset = reset_decision
+                || rt_just_resumed
                 || self.denoiser_lighting_changed
                 || self.denoiser_gesture_active;
             // D-64 motion-vector honesty check: the denoiser expects
