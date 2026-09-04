@@ -12,7 +12,9 @@
 //! The modifier list is never stored (D2): presence, order, and identity
 //! all derive from [`trace_modifier`] at VM-build time.
 
-use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_core::effect_graph_def::{
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+};
 use manifold_core::scene_modifier::{
     EnablePlan, GroupSplice, NodeExposure, PlanTraceNode, PortRepoint, SceneModifierPlan,
     ToggleDecl,
@@ -110,6 +112,10 @@ inventory::collect!(SceneModifierDescriptorEntry);
 
 ::inventory::submit! {
     SceneModifierDescriptorEntry { descriptor: || &SCENE_LOOP_DESCRIPTOR }
+}
+
+::inventory::submit! {
+    SceneModifierDescriptorEntry { descriptor: || &scene_modifier_fog::SCENE_FOG_DESCRIPTOR }
 }
 
 /// All registered kinds in canonical slot order (SLOT_GROUP_ORDER, then
@@ -276,9 +282,50 @@ pub fn plan_skeleton(
     PlanSkeleton { trace, repoints, exposures }
 }
 
+// ---------------------------------------------------------------------------
+// Plan-node helpers shared by the kind modules (minting + wiring)
+// ---------------------------------------------------------------------------
+
+fn f32_param(map: &mut std::collections::BTreeMap<String, SerializedParamValue>, name: &str, value: f32) {
+    map.insert(name.to_string(), SerializedParamValue::Float { value });
+}
+
+fn mint_node(
+    id: u32,
+    node_id: &str,
+    type_id: &str,
+    params: std::collections::BTreeMap<String, SerializedParamValue>,
+) -> EffectGraphNode {
+    EffectGraphNode {
+        id,
+        node_id: NodeId::new(node_id),
+        type_id: type_id.to_string(),
+        handle: Some(node_id.to_string()),
+        params,
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: Default::default(),
+        output_canvas_scales: Default::default(),
+        group: None,
+    }
+}
+
+fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+    EffectGraphWire {
+        from_node,
+        from_port: from_port.to_string(),
+        to_node,
+        to_port: to_port.to_string(),
+    }
+}
+
 /// Re-export the loop kind's builder so `gltf_import`'s historical public
 /// path keeps working for tests and tooling during the D6 migration.
 pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
+
+pub use scene_modifier_fog::{FOG_KIND_ID, SCENE_FOG_DESCRIPTOR};
 
 pub mod scene_modifier_loop {
     //! Kind `scene_loop` — the Scene Loop as modifier kind #1 (D6/D8).
@@ -295,7 +342,6 @@ pub mod scene_modifier_loop {
     //! ([`migrate_pre_switch_scene_loops`]).
 
     use super::*;
-    use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire};
 
     pub const LOOP_KIND_ID: &str = "scene_loop";
 
@@ -337,41 +383,6 @@ pub mod scene_modifier_loop {
         row_whitelist: Some(LOOP_ROW_WHITELIST),
         enable: EnableDecl::Switch { node_id: "loop_cam_switch" },
     };
-
-    fn f32_param(map: &mut std::collections::BTreeMap<String, SerializedParamValue>, name: &str, value: f32) {
-        map.insert(name.to_string(), SerializedParamValue::Float { value });
-    }
-
-    fn mint_node(
-        id: u32,
-        node_id: &str,
-        type_id: &str,
-        params: std::collections::BTreeMap<String, SerializedParamValue>,
-    ) -> EffectGraphNode {
-        EffectGraphNode {
-            id,
-            node_id: NodeId::new(node_id),
-            type_id: type_id.to_string(),
-            handle: Some(node_id.to_string()),
-            params,
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: Default::default(),
-            output_canvas_scales: Default::default(),
-            group: None,
-        }
-    }
-
-    fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
-        EffectGraphWire {
-            from_node,
-            from_port: from_port.to_string(),
-            to_node,
-            to_port: to_port.to_string(),
-        }
-    }
 
     /// Build the Scene Loop apply plan for `def`'s scene rooted at
     /// `render_scene_node_id`. Returns None when the graph isn't a
@@ -596,5 +607,414 @@ pub mod scene_modifier_loop {
         def.wires.push(wire(loop_camera_doc, "out", switch_id, "b"));
         def.wires.push(wire(switch_id, "out", target, "camera"));
         true
+    }
+}
+
+pub mod scene_modifier_fog {
+    //! Kind `scene_fog` — scene-wide fog as modifier kind #2 (section 3.6,
+    //! the generality proof: a VALUE kind through the same descriptor +
+    //! generic command pair as the loop, zero framework change).
+    //!
+    //! Mints `node.atmosphere` ("fog_atm") into render_scene's `atmosphere`
+    //! input, two `node.value` atoms (the Enabled toggle and the Density
+    //! amount), and a `node.math` Mul multiplying them into
+    //! `fog_atm.fog_density` — the D5 gate bypass: enable = 0 drives the
+    //! density to exactly 0 with no graph churn (INV-M7), applied enabled
+    //! with a light-haze default the performer dials from.
+
+    use super::*;
+    use crate::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
+
+    pub const FOG_KIND_ID: &str = "scene_fog";
+
+    /// The applied Density default — a light haze, well inside the
+    /// atmosphere's 0..1 density band.
+    const FOG_AMOUNT_DEFAULT: f32 = 0.1;
+
+    /// The card rows (the K3 P2 amendment): ONLY the two value atoms
+    /// surface. Everything on fog_atm (colors, falloff, shafts) is an
+    /// authored default the plan pins — a panel row for it would desync.
+    const FOG_ROW_WHITELIST: &[(&str, &str, &str)] = &[
+        ("fog_enabled", "value", "Enabled"),
+        ("fog_amount", "value", "Density"),
+    ];
+
+    pub static SCENE_FOG_DESCRIPTOR: SceneModifierDescriptor = SceneModifierDescriptor {
+        kind_id: FOG_KIND_ID,
+        display_name: "Scene Fog",
+        slot_group: SlotGroup::Atmosphere,
+        plan_builder: build_scene_fog_plan,
+        applicable: scene_fog_applicable,
+        // All FOUR minted nodes are required. The apply command refuses a
+        // re-apply only on the plan's trace (INV-M9) — a minted node left
+        // out of the trace would let a re-apply re-mint its stable nodeId
+        // onto surviving debris (the section 3.6 "three nodes" reading
+        // breaks here; the math Mul is minted, so it is traced).
+        trace: &[
+            TraceNode { type_id: "node.atmosphere", node_id: "fog_atm", required: true },
+            TraceNode { type_id: "node.value", node_id: "fog_enabled", required: true },
+            TraceNode { type_id: "node.value", node_id: "fog_amount", required: true },
+            TraceNode { type_id: "node.math", node_id: "fog_mul", required: true },
+        ],
+        row_whitelist: Some(FOG_ROW_WHITELIST),
+        enable: EnableDecl::Gate {
+            enabled_node: "fog_enabled",
+            amount_node: "fog_amount",
+            target_node: "fog_atm",
+            target_param: "fog_density",
+        },
+    };
+
+    /// Picker/dispatch gate (section 3.6 + the K3 amendments): exactly one
+    /// render_scene (INV-M6), the render_scene's `atmosphere` input free,
+    /// and no applied kind in the Atmosphere slot group (D2 exclusivity —
+    /// today that IS this kind, so the last check also covers
+    /// "already applied"). The applied-state is derived from the def via
+    /// the generic trace — the descriptor signature carries no map, and
+    /// none is needed.
+    fn scene_fog_applicable(def: &EffectGraphDef, render_scene_node_id: u32) -> bool {
+        if def.nodes.iter().filter(|n| n.type_id == RENDER_SCENE_TYPE_ID).count() != 1 {
+            return false;
+        }
+        if !def.nodes.iter().any(|n| n.id == render_scene_node_id) {
+            return false;
+        }
+        if def
+            .wires
+            .iter()
+            .any(|w| w.to_node == render_scene_node_id && w.to_port == "atmosphere")
+        {
+            return false;
+        }
+        descriptors()
+            .into_iter()
+            .filter(|d| d.slot_group == SlotGroup::Atmosphere)
+            .all(|d| !trace_modifier(d, &def.nodes).applied(d))
+    }
+
+    /// Build the Scene Fog apply plan. Succeeds on any graph carrying the
+    /// render_scene node so the remove arm can re-derive the plan it
+    /// inverts (the P1 contract) — all gating lives in
+    /// [`scene_fog_applicable`].
+    pub fn build_scene_fog_plan(
+        def: &EffectGraphDef,
+        render_scene_node_id: u32,
+    ) -> Option<SceneModifierPlan> {
+        def.nodes.iter().find(|n| n.id == render_scene_node_id)?;
+
+        let max_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0);
+        let fog_atm_id = max_id + 1;
+        let fog_enabled_id = max_id + 2;
+        let fog_amount_id = max_id + 3;
+        let fog_mul_id = max_id + 4;
+
+        // fog_atm: the full param set, explicit. ambient_tint is stamped at
+        // the neutral (1,1,1) even though that equals today's manifest
+        // default — pinned so a FUTURE atmosphere default change can't tint
+        // the bypass path (the K3 P2 amendment).
+        let mut atm_params = std::collections::BTreeMap::new();
+        f32_param(&mut atm_params, "fog_color_r", 0.5);
+        f32_param(&mut atm_params, "fog_color_g", 0.55);
+        f32_param(&mut atm_params, "fog_color_b", 0.65);
+        f32_param(&mut atm_params, "fog_density", 0.0);
+        f32_param(&mut atm_params, "height_falloff", 0.0);
+        f32_param(&mut atm_params, "ambient_tint_r", 1.0);
+        f32_param(&mut atm_params, "ambient_tint_g", 1.0);
+        f32_param(&mut atm_params, "ambient_tint_b", 1.0);
+        f32_param(&mut atm_params, "shaft_intensity", 0.0);
+        f32_param(&mut atm_params, "shaft_anisotropy", 0.6);
+        atm_params.insert("shaft_quality".to_string(), SerializedParamValue::Enum { value: 1 });
+        let fog_atm = mint_node(fog_atm_id, "fog_atm", "node.atmosphere", atm_params);
+
+        // The D5 gate atoms: the Enabled toggle (applied on) and the
+        // Density amount, multiplied into fog_atm.fog_density.
+        let fog_enabled =
+            mint_node(fog_enabled_id, "fog_enabled", "node.value", value_params(1.0));
+        let fog_amount = mint_node(
+            fog_amount_id,
+            "fog_amount",
+            "node.value",
+            value_params(FOG_AMOUNT_DEFAULT),
+        );
+
+        let mut mul_params = std::collections::BTreeMap::new();
+        f32_param(&mut mul_params, "a", 0.0);
+        f32_param(&mut mul_params, "b", 0.0);
+        mul_params.insert("op".to_string(), SerializedParamValue::Enum { value: 2 }); // Multiply
+        let fog_mul = mint_node(fog_mul_id, "fog_mul", "node.math", mul_params);
+
+        let new_nodes = vec![fog_atm, fog_enabled, fog_amount, fog_mul];
+        let new_wires = vec![
+            wire(fog_enabled_id, "out", fog_mul_id, "a"),
+            wire(fog_amount_id, "out", fog_mul_id, "b"),
+            wire(fog_mul_id, "out", fog_atm_id, "fog_density"),
+            wire(fog_atm_id, "atmosphere", render_scene_node_id, "atmosphere"),
+        ];
+
+        let mut skeleton = plan_skeleton(&SCENE_FOG_DESCRIPTOR, &new_nodes, Vec::new());
+
+        // The Enabled row must render as a toggle (D5), but node.value's
+        // `value` param is Float — the manifest-derived is_toggle is false.
+        // The kind's curation flips the stamped metadata: the scene write
+        // path is f32 end-to-end (a toggle row writes 0.0/1.0), so the
+        // flag is display curation, not a type change. (Escalated to the
+        // lead as the P2 fork; option (a) of the three on record.)
+        if let Some(exposure) = skeleton
+            .exposures
+            .iter_mut()
+            .find(|e| e.node_id.as_str() == "fog_enabled")
+        {
+            for m in &mut exposure.metadata {
+                if m.name == "value" {
+                    m.is_toggle = true;
+                }
+            }
+        }
+
+        Some(SceneModifierPlan {
+            kind_id: FOG_KIND_ID.to_string(),
+            display_name: "Scene Fog".to_string(),
+            trace: skeleton.trace,
+            new_nodes,
+            new_wires,
+            group_splices: Vec::new(),
+            repoints: skeleton.repoints,
+            exposures: skeleton.exposures,
+            // Gate kinds (D5): the toggle row writes the enabled value
+            // atom's `value` param; the multiply IS the bypass wiring, so
+            // there are no enable extras beyond the atoms themselves.
+            enable: EnablePlan {
+                toggle: ToggleDecl::ValueAtom { node_id: NodeId::new("fog_enabled") },
+                extra_nodes: Vec::new(),
+                extra_wires: Vec::new(),
+            },
+        })
+    }
+
+    fn value_params(value: f32) -> std::collections::BTreeMap<String, SerializedParamValue> {
+        let mut params = std::collections::BTreeMap::new();
+        f32_param(&mut params, "value", value);
+        params
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::node_graph::primitives::{Math, Value};
+        use crate::node_graph::{Executor, FrameTime, Graph, ParamValue, compile};
+        use manifold_core::{Beats, Seconds};
+
+        fn frame_time() -> FrameTime {
+            FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(0.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: 0,
+            }
+        }
+
+        /// A bare scene: just the render_scene node — fog splices nothing
+        /// and re-points nothing, so the plan's only graph touch is the
+        /// atmosphere wire.
+        fn minimal_scene_def() -> EffectGraphDef {
+            EffectGraphDef {
+                version: 1,
+                name: None,
+                description: None,
+                preset_metadata: None,
+                nodes: vec![mint_node(1, "render", RENDER_SCENE_TYPE_ID, Default::default())],
+                wires: vec![],
+            }
+        }
+
+        /// Records the scalar it sees on its `in` port (the value.rs test
+        /// sink pattern — a real wiring proof without a render).
+        struct ScalarSink {
+            type_id: crate::node_graph::effect_node::EffectNodeType,
+            seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
+        }
+        impl crate::node_graph::effect_node::EffectNode for ScalarSink {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                crate::node_graph::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &crate::node_graph::effect_node::EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[crate::node_graph::ports::NodeInput] {
+                static INPUTS: [crate::node_graph::ports::NodePort; 1] =
+                    [crate::node_graph::ports::NodePort {
+                        name: std::borrow::Cow::Borrowed("in"),
+                        ty: crate::node_graph::ports::PortType::Scalar(
+                            crate::node_graph::ports::ScalarType::F32,
+                        ),
+                        kind: crate::node_graph::ports::PortKind::Input,
+                        required: true,
+                    }];
+                &INPUTS
+            }
+            fn outputs(&self) -> &[crate::node_graph::ports::NodeOutput] {
+                &[]
+            }
+            fn parameters(&self) -> &[crate::node_graph::parameters::ParamDef] {
+                &[]
+            }
+            fn evaluate(
+                &mut self,
+                ctx: &mut crate::node_graph::effect_node::EffectNodeContext<'_, '_>,
+            ) {
+                *self.seen.lock().unwrap() = ctx.inputs.scalar("in");
+            }
+        }
+
+        /// The D5 gate, value-level: instantiate the minted control chain
+        /// (fog_enabled, fog_amount, fog_mul) on a runtime graph wired
+        /// EXACTLY as the plan wires it, seeded with the plan's own param
+        /// values, and read fog_mul's output through the sink. Applied
+        /// (enabled = 1) → the amount passes through; the INV-M7 toggle
+        /// write (enabled = 0) → exactly 0, the fog off.
+        #[test]
+        fn gate_bypass_multiplies_enabled_by_amount() {
+            let def = minimal_scene_def();
+            let plan = build_scene_fog_plan(&def, 1).expect("plan builds");
+
+            let mut g = Graph::new();
+            let mut handles: std::collections::BTreeMap<u32, _> = Default::default();
+            for n in &plan.new_nodes {
+                if n.type_id == "node.value" {
+                    handles.insert(n.id, g.add_node(Box::new(Value::new())));
+                } else if n.type_id == "node.math" {
+                    handles.insert(n.id, g.add_node(Box::new(Math::new())));
+                }
+            }
+            for n in &plan.new_nodes {
+                if let Some(&h) = handles.get(&n.id) {
+                    for (k, v) in &n.params {
+                        let pv = match v {
+                            SerializedParamValue::Float { value } => ParamValue::Float(*value),
+                            SerializedParamValue::Enum { value } => ParamValue::Enum(*value),
+                            other => panic!("unexpected seeded param {k}: {other:?}"),
+                        };
+                        g.set_param(h, k, pv).unwrap();
+                    }
+                }
+            }
+            for w in &plan.new_wires {
+                if let (Some(&f), Some(&t)) =
+                    (handles.get(&w.from_node), handles.get(&w.to_node))
+                {
+                    // Graph::connect stores the port names ('static) — the
+                    // plan's strings outlive the test via the leak.
+                    let from_port: &'static str = Box::leak(w.from_port.clone().into_boxed_str());
+                    let to_port: &'static str = Box::leak(w.to_port.clone().into_boxed_str());
+                    g.connect((f, from_port), (t, to_port)).unwrap();
+                }
+            }
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let sink = g.add_node(Box::new(ScalarSink {
+                type_id: crate::node_graph::effect_node::EffectNodeType::new("test.scalar_sink"),
+                seen: seen.clone(),
+            }));
+            let mul_doc = plan
+                .new_nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == "fog_mul")
+                .map(|n| n.id)
+                .unwrap();
+            g.connect((handles[&mul_doc], "out"), (sink, "in")).unwrap();
+
+            // Applied enabled: fog_mul.out == 1.0 × FOG_AMOUNT_DEFAULT.
+            {
+                let plan = compile(&g).unwrap();
+                let mut exec = Executor::with_mock();
+                exec.execute_frame(&mut g, &plan, frame_time());
+            }
+            let observed = seen.lock().unwrap().clone();
+            assert!(
+                matches!(observed, Some(ParamValue::Float(f)) if (f - FOG_AMOUNT_DEFAULT).abs() < 1e-6),
+                "an enabled gate must pass the amount through, got {observed:?}"
+            );
+
+            // Toggle OFF (the INV-M7 write): 0 × amount == 0 exactly.
+            let enabled_doc = plan
+                .new_nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == "fog_enabled")
+                .map(|n| n.id)
+                .unwrap();
+            g.set_param(handles[&enabled_doc], "value", ParamValue::Float(0.0))
+                .unwrap();
+            {
+                let plan = compile(&g).unwrap();
+                let mut exec = Executor::with_mock();
+                exec.execute_frame(&mut g, &plan, frame_time());
+            }
+            let observed = seen.lock().unwrap().clone();
+            assert!(
+                matches!(observed, Some(ParamValue::Float(f)) if f == 0.0),
+                "a disabled gate must drive fog_density to exactly 0, got {observed:?}"
+            );
+        }
+
+        /// Row curation: the Enabled row's stamped metadata carries
+        /// is_toggle (D5 — node.value's manifest param is Float, so the kind
+        /// flips it), the Density row stays a plain slider, and fog_atm
+        /// stamps no rows at all (INV-M3 whitelist-exactness).
+        #[test]
+        fn enabled_row_stamps_toggle_metadata() {
+            let def = minimal_scene_def();
+            let plan = build_scene_fog_plan(&def, 1).expect("plan builds");
+
+            let enabled = plan
+                .exposures
+                .iter()
+                .find(|e| e.node_id.as_str() == "fog_enabled")
+                .expect("fog_enabled exposure");
+            let enabled_meta = enabled
+                .metadata
+                .iter()
+                .find(|m| m.name == "value")
+                .expect("value metadata");
+            assert!(enabled_meta.is_toggle, "the Enabled row must render as a toggle");
+            assert_eq!(enabled_meta.label, "Enabled");
+
+            let amount = plan
+                .exposures
+                .iter()
+                .find(|e| e.node_id.as_str() == "fog_amount")
+                .expect("fog_amount exposure");
+            let amount_meta = amount
+                .metadata
+                .iter()
+                .find(|m| m.name == "value")
+                .expect("value metadata");
+            assert!(!amount_meta.is_toggle, "the Density row is a slider");
+            assert_eq!(amount_meta.label, "Density");
+
+            assert!(
+                !plan.exposures.iter().any(|e| e.node_id.as_str() == "fog_atm"),
+                "fog_atm is not in the whitelist — it stamps no rows"
+            );
+        }
+
+        /// The K3 P2 amendment: ambient_tint is stamped explicitly at the
+        /// neutral (1,1,1) so a future atmosphere default change can't tint
+        /// the bypass path.
+        #[test]
+        fn ambient_tint_pinned_to_neutral_default() {
+            let def = minimal_scene_def();
+            let plan = build_scene_fog_plan(&def, 1).expect("plan builds");
+            let fog_atm = plan
+                .new_nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == "fog_atm")
+                .expect("fog_atm minted");
+            for channel in ["ambient_tint_r", "ambient_tint_g", "ambient_tint_b"] {
+                assert_eq!(
+                    fog_atm.params.get(channel),
+                    Some(&SerializedParamValue::Float { value: 1.0 }),
+                    "{channel} must be pinned at the neutral default"
+                );
+            }
+        }
     }
 }

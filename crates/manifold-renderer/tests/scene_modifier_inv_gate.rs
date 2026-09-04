@@ -3,6 +3,8 @@
 //! across THREE layers), INV-M3 (whitelist exactness), INV-M7 (enable
 //! toggle = one param write), INV-M8 (pre-switch load migration), INV-M9
 //! (apply refuses a partial trace), and the layer-duplication round-trip.
+//! P2 adds the same gates for the fog kind (section 3.6 — the generality
+//! proof) plus its applicability refusals.
 //!
 //! All tests drive the REAL descriptor plan builder + REAL generic commands
 //! (renderer dev-deps editing, the e2e pattern `scene_loop_e2e_import.rs`
@@ -21,7 +23,8 @@ use manifold_editing::commands::graph::{
     ApplySceneModifierCommand, RemoveSceneModifierCommand, SetGraphNodeParamCommand,
 };
 use manifold_renderer::node_graph::scene_modifier::{
-    build_plan, descriptor_for, migrate_pre_switch_scene_loops, trace_modifier, LOOP_KIND_ID,
+    FOG_KIND_ID, LOOP_KIND_ID, build_plan, descriptor_for, migrate_pre_switch_scene_loops,
+    trace_modifier,
 };
 use manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
 
@@ -124,9 +127,9 @@ fn empty_def() -> EffectGraphDef {
     }
 }
 
-/// Apply the loop modifier to a fresh project carrying `def`; returns
-/// (project, layer index, render_scene doc id).
-fn applied_project(def: EffectGraphDef) -> (Project, usize) {
+/// Apply the given modifier kind to a fresh project carrying `def`;
+/// returns (project, layer index).
+fn applied_kind_project(def: EffectGraphDef, kind_id: &str) -> (Project, usize) {
     let mut project = Project::default();
     let idx = project.timeline.add_layer(
         "Inv Gate",
@@ -143,7 +146,7 @@ fn applied_project(def: EffectGraphDef) -> (Project, usize) {
         .expect("render_scene")
         .id;
     let layer_id = project.timeline.layers[idx].layer_id.clone();
-    let plan = build_plan(LOOP_KIND_ID, project.timeline.layers[idx].generator_graph().expect("graph"), render_scene_id)
+    let plan = build_plan(kind_id, project.timeline.layers[idx].generator_graph().expect("graph"), render_scene_id)
         .expect("plan builder succeeds");
     let mut cmd = ApplySceneModifierCommand::new(
         manifold_core::GraphTarget::Generator(layer_id),
@@ -155,8 +158,52 @@ fn applied_project(def: EffectGraphDef) -> (Project, usize) {
     (project, idx)
 }
 
+fn applied_project(def: EffectGraphDef) -> (Project, usize) {
+    applied_kind_project(def, LOOP_KIND_ID)
+}
+
 fn loop_descriptor() -> &'static manifold_renderer::node_graph::scene_modifier::SceneModifierDescriptor {
     descriptor_for(LOOP_KIND_ID).expect("scene_loop registered")
+}
+
+/// The import-like scene shape for fog tests: orbit camera → lens →
+/// render_scene, scene_bounds None. Fog splices no groups and re-points no
+/// ports — the plan's only graph touch is the atmosphere wire.
+fn fog_scene_def() -> EffectGraphDef {
+    EffectGraphDef {
+        version: 1,
+        name: None,
+        description: None,
+        preset_metadata: Some(PresetMetadata {
+            id: PresetTypeId::from_string("InvGateFogScene".to_string()),
+            display_name: "Inv Gate Fog Scene".to_string(),
+            category: "Geometry".to_string(),
+            osc_prefix: "scene".to_string(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+            scene_bounds: None,
+        }),
+        nodes: vec![
+            node(0, "camera", "node.orbit_camera", BTreeMap::new()),
+            node(1, "lens", "node.camera_lens", BTreeMap::new()),
+            node(2, "render", RENDER_SCENE_TYPE_ID, BTreeMap::new()),
+        ],
+        wires: vec![
+            wire(0, "out", 1, "camera"),
+            wire(1, "out", 2, "camera"),
+        ],
+    }
+}
+
+fn fog_descriptor() -> &'static manifold_renderer::node_graph::scene_modifier::SceneModifierDescriptor {
+    descriptor_for(FOG_KIND_ID).expect("scene_fog registered")
 }
 
 /// INV-M1: the trace is all-or-nothing per kind — full graph → applied;
@@ -650,5 +697,387 @@ fn layer_duplication_roundtrip_traces_independent() {
     assert!(
         graph_b.nodes.iter().all(|n| !matches!(n.node_id.as_str(), "loop_phase" | "scene_array" | "loop_camera" | "loop_cam_switch")),
         "layer B's minted nodes are gone"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P2 — the fog kind (section 3.6, the generality proof)
+// ---------------------------------------------------------------------------
+
+/// INV-M1 (fog): the trace is all-or-nothing — deleting ANY of the four
+/// minted nodes reads not-applied AND partial.
+#[test]
+fn inv_m1_fog_trace_is_all_or_nothing() {
+    let (project, idx) = applied_kind_project(fog_scene_def(), FOG_KIND_ID);
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+    let d = fog_descriptor();
+    let result = trace_modifier(d, &graph.nodes);
+    assert!(result.applied(d), "fresh apply must trace as applied");
+    for node_id in ["fog_atm", "fog_enabled", "fog_amount", "fog_mul"] {
+        assert!(
+            result.doc_ids.contains_key(node_id),
+            "{node_id} must resolve in the trace"
+        );
+    }
+
+    for (node_id, type_id) in [
+        ("fog_atm", "node.atmosphere"),
+        ("fog_enabled", "node.value"),
+        ("fog_amount", "node.value"),
+        ("fog_mul", "node.math"),
+    ] {
+        let mut broken = graph.clone();
+        broken.nodes.retain(|n| !(n.node_id.as_str() == node_id && n.type_id == type_id));
+        let r = trace_modifier(d, &broken.nodes);
+        assert!(!r.applied(d), "INV-M1: deleting {node_id} must read as not applied");
+        assert!(r.partial(d), "INV-M1: deleting {node_id} is the partial state");
+    }
+}
+
+/// INV-M3 (fog): the stamped rows are EXACTLY the kind whitelist — the two
+/// value atoms' `value` params, nothing from fog_atm's internals.
+#[test]
+fn inv_m3_fog_stamped_rows_match_whitelist_exactly() {
+    let (project, idx) = applied_kind_project(fog_scene_def(), FOG_KIND_ID);
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+    let meta = graph.preset_metadata.as_ref().expect("metadata stamped");
+    let section_ids: std::collections::BTreeSet<&str> = meta
+        .params
+        .iter()
+        .filter(|p| p.section.as_deref() == Some("Scene Fog"))
+        .map(|p| p.id.as_str())
+        .collect();
+    assert_eq!(section_ids.len(), 2, "exactly two Scene Fog rows stamped");
+    let targets: std::collections::BTreeSet<(String, String)> = meta
+        .bindings
+        .iter()
+        .filter(|b| section_ids.contains(b.id.as_str()))
+        .filter_map(|b| match &b.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => {
+                Some((node_id.as_str().to_string(), param.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("fog_enabled", "value"),
+        ("fog_amount", "value"),
+    ]
+    .iter()
+    .map(|(n, p)| (n.to_string(), p.to_string()))
+    .collect();
+    assert_eq!(
+        targets, expected,
+        "INV-M3: Scene Fog section rows must be exactly the whitelist"
+    );
+
+    // The Enabled row carries the toggle curation (D5); Density is a slider.
+    let enabled_spec = meta
+        .params
+        .iter()
+        .find(|p| section_ids.contains(p.id.as_str()) && p.name == "Enabled")
+        .expect("Enabled row stamped");
+    assert!(enabled_spec.is_toggle, "the Enabled row must render as a toggle");
+    let density_spec = meta
+        .params
+        .iter()
+        .find(|p| section_ids.contains(p.id.as_str()) && p.name == "Density")
+        .expect("Density row stamped");
+    assert!(!density_spec.is_toggle, "the Density row is a slider");
+}
+
+/// INV-M2 (fog): apply → remove are exact inverses across THREE layers —
+/// the flattened graph equals the original, no manifest params carry the
+/// "Scene Fog" section, and drivers/envelopes targeting the stripped
+/// binding ids are pruned (undo restores all of it).
+#[test]
+fn inv_m2_fog_apply_remove_exact_inverse_three_layers() {
+    let original = fog_scene_def();
+    let (mut project, idx) = applied_kind_project(original.clone(), FOG_KIND_ID);
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+
+    // Attach modulation to both stamped rows: a driver on Enabled, an
+    // envelope on Density.
+    let stamped_ids: Vec<String> = {
+        let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+        let meta = graph.preset_metadata.as_ref().unwrap();
+        meta.bindings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    &b.target,
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. }
+                        if matches!(node_id.as_str(), "fog_enabled" | "fog_amount")
+                )
+            })
+            .map(|b| b.id.clone())
+            .collect()
+    };
+    assert_eq!(stamped_ids.len(), 2, "two whitelist rows stamped");
+    project
+        .with_preset_graph_mut(&target, |inst| {
+            inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {
+                param_id: std::borrow::Cow::Owned(stamped_ids[0].clone()),
+                beat_division: manifold_core::types::BeatDivision::Quarter,
+                waveform: manifold_core::types::DriverWaveform::Sine,
+                enabled: true,
+                phase: 0.0,
+                base_value: 0.0,
+                trim_min: 0.0,
+                trim_max: 1.0,
+                reversed: false,
+                free_period_beats: None,
+                legacy_param_index: None,
+                is_paused_by_user: false,
+            }]);
+            inst.envelopes = Some(vec![manifold_core::effects::ParamEnvelope::new(
+                stamped_ids[1].clone(),
+            )]);
+        })
+        .expect("instance reachable");
+
+    // Remove: re-derive the plan from the current graph (the dispatch path).
+    let render_scene_id = original
+        .nodes
+        .iter()
+        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
+        .map(|n| n.id)
+        .unwrap();
+    let remove_plan = build_plan(
+        FOG_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("remove plan re-derives");
+    let mut remove = RemoveSceneModifierCommand::new(target.clone(), Vec::new(), remove_plan);
+    remove.execute(&mut project);
+
+    // Layer 1 + 2: the flattened graph equals the original, and no
+    // preset_metadata row carries the kind's section.
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    let flat_after = manifold_core::flatten::flatten_groups(after).expect("flatten after");
+    let flat_orig = manifold_core::flatten::flatten_groups(&original).expect("flatten original");
+    let wire_set = |g: &EffectGraphDef| -> std::collections::BTreeSet<(u32, String, u32, String)> {
+        g.wires
+            .iter()
+            .map(|w| (w.from_node, w.from_port.clone(), w.to_node, w.to_port.clone()))
+            .collect()
+    };
+    assert_eq!(
+        flat_after.nodes, flat_orig.nodes,
+        "INV-M2: apply → remove must restore the original node set"
+    );
+    assert_eq!(
+        wire_set(&flat_after),
+        wire_set(&flat_orig),
+        "INV-M2: apply → remove must restore the original wires"
+    );
+    let meta = after.preset_metadata.as_ref().expect("metadata survives");
+    assert!(
+        meta.params.iter().all(|p| p.section.as_deref() != Some("Scene Fog")),
+        "INV-M2: no preset_metadata params carry the kind's section after remove"
+    );
+    assert!(
+        meta.bindings.iter().all(|b| match &b.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
+                !matches!(node_id.as_str(), "fog_atm" | "fog_enabled" | "fog_amount" | "fog_mul")
+            }
+            _ => true,
+        }),
+        "INV-M2: no bindings target the minted node ids after remove"
+    );
+
+    // Layer 3: the instance carries no params or modulation targeting the
+    // stripped ids.
+    let layer = project.timeline.layers[idx].clone();
+    let gp = layer.gen_params().expect("gen params");
+    for id in &stamped_ids {
+        assert!(
+            gp.params.get(id).is_none(),
+            "INV-M2: orphan manifest param {id:?} must be pruned"
+        );
+    }
+    assert!(
+        gp.drivers.as_ref().map(|ds| ds.iter().all(|d| !stamped_ids.iter().any(|id| d.param_id == id.as_str()))).unwrap_or(true),
+        "INV-M2: drivers targeting stripped ids must be pruned"
+    );
+    assert!(
+        gp.envelopes.as_ref().map(|es| es.iter().all(|e| !stamped_ids.iter().any(|id| e.param_id == id.as_str()))).unwrap_or(true),
+        "INV-M2: envelopes targeting stripped ids must be pruned"
+    );
+
+    // Undo restores all three layers.
+    remove.undo(&mut project);
+    let restored = project.timeline.layers[idx].generator_graph().expect("graph");
+    assert!(
+        restored.nodes.iter().any(|n| n.node_id.as_str() == "fog_atm"),
+        "undo restores the minted nodes"
+    );
+    let layer = project.timeline.layers[idx].clone();
+    let gp = layer.gen_params().expect("gen params");
+    assert!(
+        stamped_ids.iter().all(|id| gp.params.get(id).is_some()),
+        "undo restores the pruned manifest params"
+    );
+    assert!(gp.drivers.is_some(), "undo restores the pruned drivers");
+    assert!(gp.envelopes.is_some(), "undo restores the pruned envelopes");
+}
+
+/// INV-M7 (fog): the enable toggle is exactly one param write on the
+/// enabled value atom's `value` — topology byte-identical before/after,
+/// undo restores the value. The def-level gate wiring is asserted here;
+/// the arithmetic (enabled = 0 → fog_density 0) is the value-level proof
+/// `scene_modifier_fog::tests::gate_bypass_multiplies_enabled_by_amount`.
+#[test]
+fn inv_m7_fog_enable_toggle_is_one_param_write() {
+    let (mut project, idx) = applied_kind_project(fog_scene_def(), FOG_KIND_ID);
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id);
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph").clone();
+
+    let doc = |g: &EffectGraphDef, node_id: &str| -> u32 {
+        g.nodes
+            .iter()
+            .find(|n| n.node_id.as_str() == node_id)
+            .map(|n| n.id)
+            .unwrap_or_else(|| panic!("{node_id} minted"))
+    };
+    let (atm, enabled, amount, mul) =
+        (doc(&graph, "fog_atm"), doc(&graph, "fog_enabled"), doc(&graph, "fog_amount"), doc(&graph, "fog_mul"));
+
+    // The D5 gate wiring: enabled × amount → fog_atm.fog_density, fog_atm
+    // → render_scene.atmosphere, and the math op is Multiply.
+    assert_eq!(
+        graph.nodes.iter().find(|n| n.id == mul).and_then(|n| n.params.get("op")),
+        Some(&SerializedParamValue::Enum { value: 2 }),
+        "the gate math is Multiply"
+    );
+    for (f, fport, t, tport) in [
+        (enabled, "out", mul, "a"),
+        (amount, "out", mul, "b"),
+        (mul, "out", atm, "fog_density"),
+        (atm, "atmosphere", 2, "atmosphere"),
+    ] {
+        assert!(
+            graph
+                .wires
+                .iter()
+                .any(|w| w.from_node == f && w.from_port == fport && w.to_node == t && w.to_port == tport),
+            "gate wire {fport} → {tport} must exist"
+        );
+    }
+    assert_eq!(
+        graph
+            .wires
+            .iter()
+            .filter(|w| w.to_node == atm && w.to_port == "fog_density")
+            .count(),
+        1,
+        "fog_atm.fog_density has exactly one producer — the gate is total, no param fallback"
+    );
+
+    // Toggle OFF: one param write through the same command a manifest row
+    // uses (apply_scene_param_write's unbound def-level fallback shape).
+    let mut toggle = SetGraphNodeParamCommand::new(
+        target,
+        enabled,
+        "value".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+        empty_def(),
+    );
+    toggle.execute(&mut project);
+
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    type Topo = (Vec<(u32, String, String)>, Vec<(u32, String, u32, String)>);
+    let topo = |g: &EffectGraphDef| -> Topo {
+        (
+            g.nodes
+                .iter()
+                .map(|n| (n.id, n.node_id.as_str().to_string(), n.type_id.clone()))
+                .collect(),
+            g.wires
+                .iter()
+                .map(|w| (w.from_node, w.from_port.clone(), w.to_node, w.to_port.clone()))
+                .collect(),
+        )
+    };
+    assert_eq!(topo(after), topo(&graph), "INV-M7: toggle changes no topology");
+    let changed: Vec<_> = after
+        .nodes
+        .iter()
+        .zip(graph.nodes.iter())
+        .filter(|(a, b)| a.params != b.params)
+        .map(|(a, _)| a.node_id.as_str())
+        .collect();
+    assert_eq!(changed, vec!["fog_enabled"], "INV-M7: one param write, on the enabled atom");
+    let value = after
+        .nodes
+        .iter()
+        .find(|n| n.id == enabled)
+        .and_then(|n| n.params.get("value"))
+        .cloned();
+    assert_eq!(value, Some(SerializedParamValue::Float { value: 0.0 }), "toggle wrote value = 0");
+
+    toggle.undo(&mut project);
+    let restored = project.timeline.layers[idx].generator_graph().expect("graph");
+    let value = restored
+        .nodes
+        .iter()
+        .find(|n| n.id == enabled)
+        .and_then(|n| n.params.get("value"))
+        .cloned();
+    assert_eq!(value, Some(SerializedParamValue::Float { value: 1.0 }), "undo restores value = 1");
+}
+
+/// Applicability (section 3.6 + the K3 amendments): a fresh single scene is
+/// applicable; a foreign atmosphere producer, a second render_scene, or an
+/// applied Atmosphere-group kind each grey the picker. The plan builder
+/// stays permissive in every case — the remove arm re-derives through it.
+#[test]
+fn fog_applicability_refusals() {
+    let d = fog_descriptor();
+
+    // Fresh scene → applicable.
+    let def = fog_scene_def();
+    assert!((d.applicable)(&def, 2), "a fresh single scene offers fog");
+
+    // Foreign atmosphere producer → greyed; the plan builder still succeeds
+    // (the P1 remove-re-derivation contract).
+    let mut foreign = fog_scene_def();
+    foreign.nodes.push(node(3, "haze", "node.atmosphere", BTreeMap::new()));
+    foreign.wires.push(wire(3, "atmosphere", 2, "atmosphere"));
+    assert!(!(d.applicable)(&foreign, 2), "an existing atmosphere producer greys the picker");
+    assert!(
+        (d.plan_builder)(&foreign, 2).is_some(),
+        "the plan builder stays permissive — remove re-derives through it"
+    );
+
+    // Two render_scenes (INV-M6) → greyed.
+    let mut multi = fog_scene_def();
+    multi.nodes.push(node(3, "render2", RENDER_SCENE_TYPE_ID, BTreeMap::new()));
+    assert!(!(d.applicable)(&multi, 2), "multi-scene greys the picker");
+
+    // Same-group applied (fog itself occupies the Atmosphere slot) →
+    // greyed, and a dispatched re-apply refuses at the command layer
+    // (the fully-applied trace check, the INV-M9-adjacent guard).
+    let (mut project, idx) = applied_kind_project(fog_scene_def(), FOG_KIND_ID);
+    let applied_graph = project.timeline.layers[idx].generator_graph().expect("graph").clone();
+    assert!(!(d.applicable)(&applied_graph, 2), "an applied Atmosphere kind occupies the slot");
+
+    let plan = build_plan(FOG_KIND_ID, &applied_graph, 2).expect("plan builds on the applied graph");
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let mut cmd = ApplySceneModifierCommand::new(
+        manifold_core::GraphTarget::Generator(layer_id),
+        Vec::new(),
+        plan,
+        empty_def(),
+    );
+    cmd.execute(&mut project);
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    assert_eq!(
+        after.nodes.len(),
+        applied_graph.nodes.len(),
+        "a fully-applied re-apply must add no nodes"
     );
 }
