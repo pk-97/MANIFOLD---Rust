@@ -11369,9 +11369,79 @@
             "10000"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Flow",
+          "name": "flow",
+          "range": [
+            "0",
+            "0.95"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Stride",
+          "name": "stride",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Sway",
+          "name": "sway_amp",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Sway Rate",
+          "name": "sway_cycles",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Look Sway",
+          "name": "look_sweep_amp",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Look Sweep Rate",
+          "name": "look_sweep_cycles",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Zoom Pulse",
+          "name": "zoom_pulse_amp",
+          "range": [
+            "0",
+            "0.5"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Position advances phase * cell_size along axis; look direction is travel-aligned (down the axis). The frame at phase 0 equals the frame at phase 1 by construction (INV-3 wrap purity). CPU-only, no GPU dispatch.",
+      "purpose": "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Travel = home + d(phase)·stride·cell_size along axis, where d(p) = p − flow·sin(2πp)/(2π) eases the flight (equal seam slope, INV-3 wrap purity); sway drifts the lateral/height offsets, the look sweep weaves the target laterally, and the zoom pulse breathes the fov — all phase-periodic. The frame at phase 0 equals the frame at phase 1 by construction. CPU-only, no GPU dispatch.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A camera that flies through a scene in a perfect loop, locked to the beat.",
@@ -18437,9 +18507,29 @@
             "1000"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Jitter Seed",
+          "name": "jitter_seed",
+          "range": [
+            "0",
+            "32767"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Jitter",
+          "name": "jitter_amount",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Identity TRS (no rotation, unit scale) for each instance. Source atom on the freeze codegen path.",
+      "purpose": "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Optional per-instance jitter (rotation ±jitter_amount rad per axis, scale 1 ± jitter_amount/2) from a deterministic hash of the instance index mixed with jitter_seed — no time dependence, trivially wrap-safe. Source atom on the freeze codegen path.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Lays out copies in a line along one axis, spacing them evenly for a looping flythrough.",

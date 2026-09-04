@@ -413,6 +413,11 @@ impl ProjectIOService {
                         // load, once, through the same generic shape the
                         // apply mints — never a manual migrate button.
                         manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
+                        // P4: applied loops stamped before the control
+                        // enrichment gain the new card rows (Flow/Stride/
+                        // Sway/…/Spacing/Jitter) at load, once — the stamper
+                        // is idempotent by (node_id, param).
+                        manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(graph);
                     }
                 }
 

@@ -239,6 +239,69 @@ fn build_red_graph() -> EffectGraphDef {
     }
 }
 
+/// P4 extension: the loop graph with EVERY movement control live — flow
+/// 0.8, sway amp 0.5 cycles 2, look sweep amp 0.5 cycles 1, zoom pulse 0.25,
+/// jitter amount 0.5 seed 7. Shaped like the plan builder builds it (home =
+/// −cell/2 = mid-gap, count 3 = the D10 default). All controls
+/// phase-periodic (or index-only) by construction; the exact-seam wrap gate
+/// proves it.
+fn build_loop_graph_with_controls() -> EffectGraphDef {
+    let mut def = build_loop_graph();
+    let camera = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "loop_camera")
+        .expect("loop_camera");
+    for (k, v) in [
+        ("home", -5.0f32),
+        ("flow", 0.8),
+        ("sway_amp", 0.5),
+        ("sway_cycles", 2.0),
+        ("look_sweep_amp", 0.5),
+        ("look_sweep_cycles", 1.0),
+        ("zoom_pulse_amp", 0.25),
+    ] {
+        camera.params.insert(k.to_string(), SerializedParamValue::Float { value: v });
+    }
+    let array = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .expect("scene_array");
+    array.params.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: 0.5 });
+    array.params.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
+    def
+}
+
+/// P4 near-seam shape: the PHASE controls only (no jitter), far plane
+/// clipped to 22 (~cell·2.2). The clip bounds the visible copy window to the
+/// two copies ahead of the camera, which makes the window EXACTLY periodic
+/// across the seam at the shipped count=3 — without the clip the finite
+/// array leaves a far-edge hole (one copy present at phase 0, absent at
+/// phase ~1) that would confound the measurement. Bisected 2026-09-05:
+/// every phase control contributes 0 to the near-seam diff at this shape.
+fn build_loop_graph_phase_controls_farclipped() -> EffectGraphDef {
+    let mut def = build_loop_graph();
+    let camera = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "loop_camera")
+        .expect("loop_camera");
+    for (k, v) in [
+        ("home", -5.0f32),
+        ("far", 22.0),
+        ("flow", 0.8),
+        ("sway_amp", 0.5),
+        ("sway_cycles", 2.0),
+        ("look_sweep_amp", 0.5),
+        ("look_sweep_cycles", 1.0),
+        ("zoom_pulse_amp", 0.25),
+    ] {
+        camera.params.insert(k.to_string(), SerializedParamValue::Float { value: v });
+    }
+    def
+}
+
 /// Render one frame at the given beat value.
 fn render_frame(def: &EffectGraphDef, beat: f64) -> Vec<u8> {
     let device = manifold_gpu::GpuDevice::new();
@@ -341,6 +404,131 @@ fn wrap_parity_with_fog_driver() {
     );
 }
 
+/// P4: wrap parity MUST hold with every movement control live (flow 0.8,
+/// sway amp>0 cycles=2, look sweep, zoom pulse, jitter). The exact seam:
+/// beat 0 vs beat 8 both fract() to phase 0.0, where every phase term is
+/// exactly zero (sin(0)=0, the jitter is index-only) — diff == 0 demanded.
+///
+/// RED-FIRST protocol (P1 brief + P4 brief): this gate was verified RED
+/// against a temporarily phase-APERIODIC sway driver (sway keyed on
+/// ctx.time.beats instead of the phase input — one frame of source change,
+/// run, reverted) before going green. A non-phased driver is the class
+/// this gate exists to catch (SCENE_LOOP_DESIGN D8).
+#[test]
+fn wrap_parity_with_movement_controls() {
+    let def = build_loop_graph_with_controls();
+
+    let frame_a = render_frame(&def, 0.0);
+    let frame_b = render_frame(&def, 8.0);
+
+    let diff = max_pixel_diff(&frame_a, &frame_b);
+    assert_eq!(
+        diff, 0,
+        "P4 INV-3: movement controls broke wrap purity — phase 0 vs phase 1 (beat=8) max pixel diff = {diff}"
+    );
+}
+
+/// P4 near-seam gate + measurement: phase 0 vs phase 0.99999 (beat 7.99992)
+/// with the phase controls live at the far-clipped shape. Asserts diff == 0
+/// — at this shape the measurement is a real purity signal (bisected: every
+/// phase control contributes exactly 0; a clock-keyed driver explodes it).
+/// The number is printed for the report.
+///
+/// JITTER is deliberately excluded here and lives only in the exact-seam
+/// gate: jitter is index-deterministic (the array is bit-identical every
+/// frame — asserted below), but the copies are visually DISTINCT, so at the
+/// seam the nearest visible copy swaps index (copy 1 replaces copy 0 in the
+/// same screen slot) and the orientation pops. Position-continuous,
+/// deterministic, and inherent to per-instance variation — measured here
+/// and reported, not hidden.
+#[test]
+fn wrap_parity_near_seam_measurement() {
+    let def = build_loop_graph_phase_controls_farclipped();
+
+    let frame_a = render_frame(&def, 0.0);
+    let frame_b = render_frame(&def, 8.0 * 0.99999);
+
+    let diff = max_pixel_diff(&frame_a, &frame_b);
+    println!("P4 near-seam (phase 0.99999, phase controls) max pixel diff = {diff}");
+    assert_eq!(
+        diff, 0,
+        "near-seam purity violated — a phase control is not phase-periodic (max diff = {diff})"
+    );
+
+    // Jitter near-seam artifact, measured and reported: the orientation
+    // swap of the nearest copy at the seam.
+    let jittered = build_loop_graph_with_controls();
+    let j_a = render_frame(&jittered, 0.0);
+    let j_b = render_frame(&jittered, 8.0 * 0.99999);
+    let j_diff = max_pixel_diff(&j_a, &j_b);
+    println!("P4 near-seam with jitter (orientation-swap artifact) max pixel diff = {j_diff}");
+    assert!(
+        j_diff > 0,
+        "jittered copies are visually distinct — the seam must swap the nearest copy's orientation"
+    );
+
+    // Jitter determinism: the SAME beat renders bit-identical frames (the
+    // hash is index-only — no time anywhere).
+    let j_again = render_frame(&jittered, 0.0);
+    assert_eq!(
+        max_pixel_diff(&j_a, &j_again),
+        0,
+        "jitter must be deterministic per index — same beat, same frame"
+    );
+}
+
+/// P4 performer gesture: bars 8→16 mid-playback stays position-continuous
+/// AT THE PHASE-COINCIDING BEAT. beat 16 with bars=8 gives phase
+/// fract(16/8)=0.0; with bars=16 gives fract(16/16)=0.0 — the SAME phase
+/// through a DIFFERENT beat clock. With all controls live the two frames
+/// must be pixel-identical: any control sneaking non-phase time dependence
+/// (the class the 8→16 gesture is meant to survive) shows up here.
+#[test]
+fn bars_rate_change_is_position_continuous_with_controls_live() {
+    let def_a = build_loop_graph_with_controls();
+    let mut def_b = build_loop_graph_with_controls();
+    def_b
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "loop_phase")
+        .expect("loop_phase")
+        .params
+        .insert("rate".to_string(), SerializedParamValue::Float { value: 0.0625 }); // 1/16
+
+    let frame_a = render_frame(&def_a, 16.0);
+    let frame_b = render_frame(&def_b, 16.0);
+
+    let diff = max_pixel_diff(&frame_a, &frame_b);
+    assert_eq!(
+        diff, 0,
+        "P4 gesture gate: bars 8 vs 16 at beat 16 (same phase) differ — a movement control is not phase-periodic (max diff = {diff})"
+    );
+}
+
+/// P4 positive control: the movement controls are actually LIVE in the
+/// render — mid-loop frames differ. A vacuous gate (controls ignored by the
+/// atom) would show diff == 0 here.
+#[test]
+fn movement_controls_affect_mid_loop_frames() {
+    let plain = build_loop_graph();
+    let with_controls = build_loop_graph_with_controls();
+
+    // phase 0.25 (beat 2) vs phase 0.75 (beat 6): sway/look/zoom are at
+    // different values, so the frames must differ from the plain loop too.
+    let plain_mid = render_frame(&plain, 2.0);
+    let controls_mid = render_frame(&with_controls, 2.0);
+    assert!(
+        max_pixel_diff(&plain_mid, &controls_mid) > 0,
+        "the movement controls must change the rendered frame (gate would be vacuous otherwise)"
+    );
+    let a = render_frame(&with_controls, 2.0);
+    let b = render_frame(&with_controls, 6.0);
+    assert!(
+        max_pixel_diff(&a, &b) > 0,
+        "mid-loop phases 0.25 vs 0.75 must differ with the controls live"
+    );
+}
+
 /// P3: numeric fog-swing assertion. The fog density driver maps loop phase
 /// through scale_offset_value(out = phase * scale + offset) where
 /// scale = 0.4 * base, offset = 0.8 * base. At phase 0.25 the driver
@@ -364,3 +552,4 @@ fn fog_density_swings_over_loop() {
          (max diff = 0) — fog density driver is not affecting the render"
     );
 }
+

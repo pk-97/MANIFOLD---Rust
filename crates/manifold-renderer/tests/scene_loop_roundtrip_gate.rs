@@ -173,15 +173,24 @@ fn scene_loop_targets(graph: &EffectGraphDef) -> Vec<(String, String)> {
         .collect()
 }
 
-/// D6 P4 whitelist — the ONLY binding targets the Scene Loop section may
-/// carry. (The Bars row targets the beat_ramp's bars param: with bars > 0
-/// the ramp runs at 1/bars cycles/beat, so the row reads and writes bars
-/// directly — rate = 1/bars by construction, no panel-side transform.)
+/// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment — the ONLY
+/// binding targets the Scene Loop section may carry. (The Bars row targets
+/// the beat_ramp's bars param: with bars > 0 the ramp runs at 1/bars
+/// cycles/beat, so the row reads and writes bars directly — rate = 1/bars
+/// by construction, no panel-side transform.)
 const WHITELIST: &[(&str, &str)] = &[
     ("loop_phase", "bars"),
     ("scene_array", "count"),
     ("loop_camera", "height"),
     ("loop_camera", "lateral"),
+    ("loop_camera", "flow"),
+    ("loop_camera", "stride"),
+    ("loop_camera", "sway_amp"),
+    ("loop_camera", "sway_cycles"),
+    ("loop_camera", "look_sweep_amp"),
+    ("loop_camera", "zoom_pulse_amp"),
+    ("loop_camera", "cell_size"),
+    ("scene_array", "jitter_amount"),
 ];
 
 fn assert_whitelist(graph: &EffectGraphDef, context: &str) {
@@ -253,8 +262,10 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
         .expect("Copies row stamped");
     assert_eq!(copies_spec.default_value, 3.0);
 
-    // cell_size stays internal: it feeds scene_array AND loop_camera from
-    // the one plan-builder value (INV-4) but is never a panel row.
+    // cell_size feeds scene_array AND loop_camera from the one plan-builder
+    // value (INV-4); P4 made it the Spacing row — both nodes still carry the
+    // plan value, and the row's stamped range is the curated auto×0.25..4.0
+    // band, not the manifest's generic 0.01..1000.
     for node_id in ["scene_array", "loop_camera"] {
         let n = graph.nodes.iter().find(|n| n.node_id.as_str() == node_id).unwrap();
         assert_eq!(
@@ -263,6 +274,17 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
             "INV-4: {node_id} cell_size = plan value"
         );
     }
+    let spacing_spec = meta
+        .params
+        .iter()
+        .find(|p| p.section.as_deref() == Some("Scene Loop") && p.name == "Spacing")
+        .expect("Spacing row stamped");
+    assert_eq!(
+        (spacing_spec.min, spacing_spec.max),
+        (expected_cell * 0.25, expected_cell * 4.0),
+        "Spacing range curated to auto×0.25..4.0"
+    );
+    assert_eq!(spacing_spec.default_value, expected_cell);
 
     // Simulate a performer edit: Copies 3 → 5 through the instance manifest
     // (the bound-row write path), as the panel's row would.
@@ -299,13 +321,17 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
     let mut reloaded = manifold_io::loader::load_project(&path).expect("load v1");
 
     // The project_io.rs load path: per-layer wire migration + exposure
-    // migration + the pre-switch loop migration (D8), then the manifest
-    // reconcile.
+    // migration + the pre-switch loop migration (D8) + the P4 row
+    // enrichment migration, then the manifest reconcile.
     for layer in &mut reloaded.timeline.layers {
         if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
             manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
             manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
+            assert!(
+                !manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(graph),
+                "rows stamped at apply must all be present at reload — migration is a no-op"
+            );
         }
     }
     reloaded.reconcile_param_manifests();
@@ -395,6 +421,7 @@ fn scene_loop_renumber_after_flatten_mints_no_second_exposure() {
     manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def);
     let _ = manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
     let _ = manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(&mut def);
+    let _ = manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(&mut def);
 
     assert_whitelist(&def, "after flatten renumber + migration");
 }

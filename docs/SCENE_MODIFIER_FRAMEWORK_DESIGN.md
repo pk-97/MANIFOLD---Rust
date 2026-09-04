@@ -1,6 +1,6 @@
 # Scene Modifier Framework — 3D scene behaviors as first-class cards
 
-**Status:** IN PROGRESS — P1–P3 LANDED 2026-09-04 (framework core + loop-as-kind + scene_fog generality proof + inspector modifier cards; the scene-setup-modifier flow is green) · P4 (loop controls enrichment) next · k3 (lead)
+**Status:** IN PROGRESS — P1–P4 LANDED 2026-09-05 (loop controls enrichment: Flow/Stride/Sway/Sway Rate/Look Sway/Zoom Pulse/Jitter/Spacing rows as atom params + whitelist + coupled Stride/Spacing writes, one undo unit; wrap-parity gates extended red-first; scene-setup-modifier flow green) · P5 (trigger surfacing + debt burn) next · k27 (lane), k3 (lead)
 **Prerequisites:** SCENE_LOOP P1–P4 (on main — the loop is this framework's first kind), WIDGET_TREE_DESIGN P1–P5 (the `ParamSurface` card layer), SCENE_PANEL_EXPOSURE_CONVERGENCE (scene rows are card rows). All on main; nothing unbuilt.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -557,3 +557,5 @@ exit-code; Peter 2026-09-02).
 - **Live-trigger wiring for v1 kinds** (`trigger_count` → e.g. loop retrigger row) — trigger: a concrete live use.
 - **RT compatibility** — trigger: RT path audit for `instances_n` (carried from SCENE_LOOP D9).
 - **Frustum culling** — trigger: P4 demo timing shows behind-camera vertex cost matters.
+- **First-class coupled-row concept in the descriptor contract** (P4 finding) — trigger: a third kind wants coupled rows. P4's `coupled_writes` decl + app-side resolution is the minimal patch, but a coupled control is the one place "a new control = ParamDef + whitelist line" stopped being literally true, and the modulation-write surfaces (OSC/Ableton/MIDI) bypass the coupling today (BUG-6dh6 (modifier-coupled-rows-bypassed-by-modulation-writes) — the fix likely moves the expansion into the command so every write path inherits). A plan-level "coupled row" in the descriptor, expanded at the command layer, removes both the per-app special-casing and the bypass class.
+- **Descriptor-level range-transform hook** (P4 finding) — trigger: a second kind curates a stamped range from scene data. Spacing's auto×0.25..4.0 curation is factored into one fn but called from two sites (plan builder + load migration); a descriptor hook would make it declarative.

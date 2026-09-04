@@ -294,7 +294,46 @@ pub(super) fn dispatch_project(
             if let Some(cmd) =
                 apply_scene_param_write(project, layer_id, scope_path.clone(), *node_doc_id, param_id, *value)
             {
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                // P4 coupled rows (Stride/Spacing): the secondaries land in
+                // the SAME undo unit — one CompositeCommand. Uncoupled rows
+                // take the single-command path unchanged.
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let coupled = coupled_write_targets(project, &target, *node_doc_id, param_id);
+                let Some(default) = generator_catalog_default(project, layer_id) else {
+                    // A layer with no generator catalog default (the
+                    // SetGraphNodeParamCommand requirement) takes the
+                    // single-command path.
+                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                    return DispatchResult::handled();
+                };
+                if coupled.is_empty() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                } else {
+                    let mut cmds: Vec<Box<dyn manifold_editing::command::Command + Send>> =
+                        vec![cmd];
+                    for t in &coupled {
+                        let new_value = (t.value_fn)(*value);
+                        if (new_value - t.baseline).abs() <= f32::EPSILON {
+                            continue;
+                        }
+                        apply_coupled_write_live(project, &target, t, new_value);
+                        cmds.push(coupled_write_command(&target, t, new_value, default.clone()));
+                    }
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        if cmds.len() == 1 {
+                            cmds.into_iter().next().expect("one command")
+                        } else {
+                            let batch: Vec<Box<dyn manifold_editing::command::Command>> = cmds
+                                .into_iter()
+                                .map(|c| c as Box<dyn manifold_editing::command::Command>)
+                                .collect();
+                            Box::new(manifold_editing::command::CompositeCommand::new(
+                                batch,
+                                "Scene Loop coupled row write".to_string(),
+                            ))
+                        };
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::handled()
         }
@@ -1100,6 +1139,212 @@ fn apply_scene_param_write(
     Some(cmd)
 }
 
+// ── SCENE_MODIFIER_FRAMEWORK P4: coupled row writes ─────────────────────
+//
+// A coupled modifier row (Stride, Spacing) writes its secondaries in the
+// SAME undo unit as the primary — declared renderer-side in the kind's
+// `coupled_writes`, resolved here at write time. The UI never learns about
+// coupling: rows stay pure data, the scrub/type-in wires are unchanged.
+
+/// One resolved secondary write of a coupled row. `binding` is `Some` when
+/// the secondary param is itself stamped (the Copies binding for
+/// scene_array.count) — that write lands on the instance manifest; `None`
+/// writes the def node param directly (cell_size, home — internal params).
+/// `value_fn` derives the secondary value from the primary's new value;
+/// `live` tracks the latest applied value across scrub Moves.
+#[derive(Debug, Clone)]
+pub(crate) struct CoupledWriteTarget {
+    pub binding: Option<manifold_core::effects::ParamId>,
+    pub node_doc_id: u32,
+    pub param: String,
+    pub value_fn: fn(f32) -> f32,
+    pub baseline: f32,
+    pub live: f32,
+}
+
+/// Resolve the coupled secondaries for a scene write addressed by
+/// `(node_doc_id, param)`. Returns an empty vec for uncoupled rows, non-
+/// modifier writes, and writes on graphs without the kind applied.
+pub(crate) fn coupled_write_targets(
+    project: &mut manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    node_doc_id: u32,
+    param: &str,
+) -> Vec<CoupledWriteTarget> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    use manifold_renderer::node_graph::scene_modifier::{coupled_writes_for, descriptor_for, trace_modifier};
+
+    let manifold_core::GraphTarget::Generator(layer_id) = target else {
+        return Vec::new();
+    };
+    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) else {
+        return Vec::new();
+    };
+    // Cloned: the binding lookups below need `&mut Project` (the instance
+    // manifest read rides `with_preset_graph_mut`), so the layer borrow
+    // can't stay live. Edit-time path — the clone is not hot.
+    let Some(def) = layer.generator_graph().cloned() else {
+        return Vec::new();
+    };
+    let Some(node) = def.nodes.iter().find(|n| n.id == node_doc_id) else {
+        return Vec::new();
+    };
+    let node_id = node.node_id.clone();
+    let mut out = Vec::new();
+    for (kind_id, sec_node_id, sec_param, value_fn) in
+        coupled_writes_for(&def, node_id.as_str(), param)
+    {
+        let Some(descriptor) = descriptor_for(kind_id) else { continue };
+        let trace = trace_modifier(descriptor, &def.nodes);
+        let Some(&sec_doc_id) = trace.doc_ids.get(sec_node_id) else { continue };
+        let Some(meta) = def.preset_metadata.as_ref() else { continue };
+        let sec_binding = meta.bindings.iter().find(|b| {
+            matches!(
+                &b.target,
+                BindingTarget::Node { node_id: n, param: p }
+                    if n.as_str() == sec_node_id && p == sec_param
+            )
+        });
+        let (binding, old_value) = if let Some(sb) = sec_binding {
+            let pid = manifold_core::effects::ParamId::from(sb.id.clone());
+            let old = project
+                .with_preset_graph_mut(target, |inst| {
+                    inst.params
+                        .contains(pid.as_ref())
+                        .then(|| inst.get_base_param(pid.as_ref()))
+                })
+                .flatten();
+            (Some(pid), old)
+        } else {
+            let old = def
+                .nodes
+                .iter()
+                .find(|n| n.id == sec_doc_id)
+                .and_then(|n| n.params.get(sec_param))
+                .and_then(|v| match v {
+                    manifold_core::effect_graph_def::SerializedParamValue::Float { value } => {
+                        Some(*value)
+                    }
+                    _ => None,
+                });
+            (None, old)
+        };
+        let Some(baseline) = old_value else { continue };
+        out.push(CoupledWriteTarget {
+            binding,
+            node_doc_id: sec_doc_id,
+            param: sec_param.to_string(),
+            value_fn,
+            baseline,
+            live: baseline,
+        });
+    }
+    out
+}
+
+/// The same resolution for a write addressed by BINDING id (the scrub wire
+/// carries `ValueRef::Param(target, binding_id)`).
+pub(crate) fn coupled_write_targets_for_binding(
+    project: &mut manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    binding_id: &str,
+) -> Vec<CoupledWriteTarget> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let manifold_core::GraphTarget::Generator(layer_id) = target else {
+        return Vec::new();
+    };
+    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) else {
+        return Vec::new();
+    };
+    let Some(def) = layer.generator_graph().cloned() else {
+        return Vec::new();
+    };
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return Vec::new();
+    };
+    let Some(binding) = meta.bindings.iter().find(|b| b.id == binding_id) else {
+        return Vec::new();
+    };
+    let BindingTarget::Node { node_id, param } = &binding.target else {
+        return Vec::new();
+    };
+    let Some(doc_id) = def
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == node_id.as_str())
+        .map(|n| n.id)
+    else {
+        return Vec::new();
+    };
+    coupled_write_targets(project, target, doc_id, param)
+}
+
+/// Apply one coupled secondary live (the same local write the scrub Move
+/// uses): the instance manifest when bound, the layer's graph def otherwise.
+pub(crate) fn apply_coupled_write_live(
+    project: &mut manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    t: &CoupledWriteTarget,
+    value: f32,
+) {
+    if let Some(pid) = &t.binding {
+        let pid = pid.clone();
+        project.with_preset_graph_mut(target, |inst| {
+            inst.set_base_param(pid.as_ref(), value);
+        });
+        return;
+    }
+    let manifold_core::GraphTarget::Generator(layer_id) = target else {
+        return;
+    };
+    let Some(layer) = project.timeline.layers.iter_mut().find(|l| l.layer_id == *layer_id) else {
+        return;
+    };
+    let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) else {
+        return;
+    };
+    if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == t.node_doc_id) {
+        node.params.insert(
+            t.param.clone(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+        );
+    }
+}
+
+/// Build the undo-tracked command for one coupled secondary at its final
+/// value. Bound → ChangeGraphParamCommand on the binding; unbound →
+/// SetGraphNodeParamCommand with the pre-gesture value seeded (drag-cadence
+/// commit — self-capture would record new == new, BUG-1l7f's shape).
+pub(crate) fn coupled_write_command(
+    target: &manifold_core::GraphTarget,
+    t: &CoupledWriteTarget,
+    value: f32,
+    catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
+) -> Box<dyn manifold_editing::command::Command + Send> {
+    if let Some(pid) = &t.binding {
+        return Box::new(
+            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                target.clone(),
+                pid.clone(),
+                t.baseline,
+                value,
+            ),
+        );
+    }
+    Box::new(
+        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+            target.clone(),
+            t.node_doc_id,
+            t.param.clone(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+            catalog_default,
+        )
+        .with_previous(Some(
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: t.baseline },
+        )),
+    )
+}
+
 pub(crate) fn generator_catalog_default(
     project: &Project,
     layer_id: &LayerId,
@@ -1886,6 +2131,192 @@ mod tests {
                 Some(SerializedParamValue::Enum { value: 1 })
             ),
             "toggle ON writes select = B (the loop camera)"
+        );
+    }
+
+    /// P4 coupled write (SCENE_MODIFIER_FRAMEWORK): the Stride row is a
+    /// DUAL write — one undoable command writing loop_camera.stride AND
+    /// scene_array.count (K+2) together. Through the SAME
+    /// SceneSetupParamChanged wire: the primary lands in the stride binding's
+    /// instance slot (bound row), the secondary count write lands in the
+    /// Copies binding's slot — and the def's stamped params stay at the
+    /// minted defaults (bound writes never touch the def).
+    #[test]
+    fn stride_row_write_couples_scene_array_count() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let apply = ProjectAction::SceneModifierApply(
+            layer_id.clone(),
+            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
+        );
+        dispatch_project(
+            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+            .expect("looped graph traces");
+        let loop_vm = vm
+            .modifiers
+            .iter()
+            .find(|m| {
+                m.kind_id
+                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
+                    && m.applied
+            })
+            .expect("the loop kind traces applied");
+        let stride_doc = loop_vm.doc_ids["loop_camera"];
+        let count_doc = loop_vm.doc_ids["scene_array"];
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+
+        let write = ProjectAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            stride_doc,
+            "stride".to_string(),
+            4.0,
+        );
+        let result = dispatch_project(
+            &write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        assert!(!result.structural_change, "a coupled row write is not structural");
+
+        // Primary: stride binding slot == 4.
+        let stride_binding = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(stride_doc, "stride")
+            })
+            .flatten()
+            .expect("the Stride row is stamped");
+        let stride_slot = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.get_base_param(manifold_core::effects::ParamId::from(stride_binding).as_ref())
+            })
+            .expect("stride slot exists");
+        assert_eq!(stride_slot, 4.0, "the Stride row write lands on its binding");
+
+        // Secondary: the Copies binding slot == K+2 = 6 — the travel/array
+        // coupling that keeps the loop covered.
+        let count_binding = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(count_doc, "count")
+            })
+            .flatten()
+            .expect("the Copies row is stamped");
+        let count_slot = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.get_base_param(manifold_core::effects::ParamId::from(count_binding).as_ref())
+            })
+            .expect("count slot exists");
+        assert_eq!(
+            count_slot, 6.0,
+            "the Stride write must couple scene_array.count = K+2 in the same undo unit"
+        );
+
+        // The def keeps its minted defaults — bound writes never touch it.
+        let after_def = effective_def(&project, &layer_id);
+        let stride_node = after_def
+            .nodes
+            .iter()
+            .find(|n| n.id == stride_doc)
+            .expect("loop_camera");
+        assert_eq!(
+            stride_node.params.get("stride"),
+            Some(&SerializedParamValue::Float { value: 1.0 }),
+            "the def keeps the minted stride default; the binding is the live value"
+        );
+    }
+
+    /// P4 coupled write, Spacing flavor: ONE write to loop_camera.cell_size
+    /// also writes scene_array.cell_size (INV-4, same value) AND
+    /// loop_camera.home (−cell/2 tracks). cell_size/home are NOT stamped
+    /// rows, so the secondaries are def-level writes — observed straight in
+    /// the def's node params.
+    #[test]
+    fn spacing_row_write_couples_both_cells_and_home() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let apply = ProjectAction::SceneModifierApply(
+            layer_id.clone(),
+            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
+        );
+        dispatch_project(
+            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+            .expect("looped graph traces");
+        let loop_vm = vm
+            .modifiers
+            .iter()
+            .find(|m| {
+                m.kind_id
+                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
+                    && m.applied
+            })
+            .expect("the loop kind traces applied");
+        let camera_doc = loop_vm.doc_ids["loop_camera"];
+        let array_doc = loop_vm.doc_ids["scene_array"];
+
+        let write = ProjectAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            camera_doc,
+            "cell_size".to_string(),
+            16.0,
+        );
+        dispatch_project(
+            &write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+
+        // Primary: cell_size is a STAMPED row (Spacing), so the write lives
+        // in the binding's instance slot — the def keeps the minted default.
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let spacing_binding = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(camera_doc, "cell_size")
+            })
+            .flatten()
+            .expect("the Spacing row is stamped");
+        let spacing_slot = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.get_base_param(manifold_core::effects::ParamId::from(spacing_binding).as_ref())
+            })
+            .expect("spacing slot exists");
+        assert_eq!(spacing_slot, 16.0, "the Spacing row write lands on its binding");
+
+        let after_def = effective_def(&project, &layer_id);
+        let stamped = |doc: u32, param: &str| {
+            after_def
+                .nodes
+                .iter()
+                .find(|n| n.id == doc)
+                .unwrap_or_else(|| panic!("node {doc}"))
+                .params
+                .get(param)
+                .cloned()
+        };
+        assert_eq!(
+            stamped(camera_doc, "cell_size"),
+            Some(SerializedParamValue::Float { value: 10.0 }),
+            "the def keeps the minted cell_size default; the binding is the live value"
+        );
+        assert_eq!(
+            stamped(array_doc, "cell_size"),
+            Some(SerializedParamValue::Float { value: 16.0 }),
+            "scene_array.cell_size coupled — INV-4 single source"
+        );
+        assert_eq!(
+            stamped(camera_doc, "home"),
+            Some(SerializedParamValue::Float { value: -8.0 }),
+            "home = −cell/2 tracks the Spacing write"
         );
     }
 }
