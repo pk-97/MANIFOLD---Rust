@@ -426,8 +426,10 @@ fn inv_m7_enable_toggle_is_one_param_write() {
     // INV-M7: topology is untouched — same node ids/types, same wires. The
     // toggle's ONLY effect is the select value write (asserted below), so
     // the node structs are compared with that value normalized out.
-    let topo =
-        |g: &EffectGraphDef| -> (Vec<(u32, String, String)>, Vec<(u32, String, u32, String)>) {
+    // Node (id, node_id, type_id) and wire (from, from_port, to, to_port)
+    // projections compared before/after the toggle.
+    type Topo = (Vec<(u32, String, String)>, Vec<(u32, String, u32, String)>);
+    let topo = |g: &EffectGraphDef| -> Topo {
             (
                 g.nodes
                     .iter()
