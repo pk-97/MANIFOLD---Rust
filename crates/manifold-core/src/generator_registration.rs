@@ -247,6 +247,7 @@ impl GeneratorMetadata {
             display_name: self.display_name,
             category: None,
             kind: crate::preset_def::PresetKind::Generator,
+            layer_types: None,
             available: self.available,
         }
     }

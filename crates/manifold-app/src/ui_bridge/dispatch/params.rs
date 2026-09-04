@@ -325,7 +325,11 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
 
         // ── Effect modulation ──────────────────────────────────────
         // ── Effect management ──────────────────────────────────────
-        ParamsAction::AddEffectClicked(_tab) => DispatchResult::handled(),
+        // The browser open is intercepted by `try_open_dropdown` before
+        // dispatch; reaching here means the popup couldn't open. The
+        // target rides the request/session atomically from the click
+        // (PRESET_BROWSER_AUDITION D2), so there is nothing to re-resolve.
+        ParamsAction::AddEffectClicked { .. } => DispatchResult::handled(),
         ParamsAction::BrowserSearchClicked => DispatchResult::handled(),
         ParamsAction::RemoveEffect(fx_idx) => {
             let tab = effective_tab;

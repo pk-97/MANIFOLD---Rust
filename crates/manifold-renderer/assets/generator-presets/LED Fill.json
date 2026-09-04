@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Fill",
-  "description": "MVP-P1b placeholder fill for LED layers (LED_STRIPS_DESIGN.md section 5b D12): a full-frame solid colour at full blast. Composed from existing atoms only (section 2.5 audit: exists + exists, no new primitive): node.circle_mask with radii 4 covers the whole UV frame with white (mask=1 everywhere), then node.colorize with amount=1 and focus=0 replaces it with tint_rgb * luma = HSV(hue, saturation, 1) — a flat, full-brightness colour that fills every strip cell at any grid resolution. Value is pinned at 1 by design (strips are an accent instrument, D1: mostly dark, hits at full blast); MVP-P2 grows this graph under the same preset id.",
   "presetMetadata": {
     "id": "LED Fill",
     "displayName": "LED Fill",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledFill",
     "available": true,
     "isLineBased": false,

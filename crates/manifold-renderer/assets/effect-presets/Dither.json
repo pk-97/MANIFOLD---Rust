@@ -1,11 +1,10 @@
 {
   "version": 2,
   "name": "Dither",
-  "description": "Dither applies a classic ordered-dither / halftone threshold pattern to the incoming image, preserving luminance while dropping bit depth and introducing pattern-biased quantization for a stylized, lo-fi aesthetic.\n\nThe pipeline is straightforward: the source image enters the dither node, which reads per-pixel thresholds from the pattern generator. The pattern selector (algorithm) chooses one of six ordered-dither families (Bayer, Halftone, Lines, X-Hatch, Noise, Diamond), and the Amount slider controls the mix from fully dithered back toward the original, enabling smooth blends between patterned and smooth. The patterned output feeds directly to the final output. Because the pattern generator is a reusable atom, it can be fed to other halftone consumers or replaced with a custom threshold texture.",
   "presetMetadata": {
     "id": "Dither",
     "displayName": "Dither",
-    "category": "Color",
+    "category": "Stylize",
     "oscPrefix": "dither",
     "legacyDiscriminant": 18,
     "available": true,

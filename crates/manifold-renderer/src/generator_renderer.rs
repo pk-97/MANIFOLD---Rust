@@ -1654,7 +1654,9 @@ mod tests {
 
         let layer_id = LayerId::new("layer-under-test");
         let other_layer = LayerId::new("other-layer");
-        let trivial = PresetTypeId::new("TrivialPassthrough");
+        // TrivialPassthrough moved to test fixtures (PRESET_BROWSER_AUDITION
+        // P1, D8) — these mechanics tests use Plasma, a bundled JSON preset.
+        let plasma = PresetTypeId::new("Plasma");
         let strange = PresetTypeId::new("StrangeAttractor");
 
         // Seed a `LayerGeneratorState` for the starting type via the
@@ -1664,7 +1666,7 @@ mod tests {
         assert!(
             renderer.install_layer_generator(
                 layer_id.clone(),
-                trivial.clone(),
+                plasma.clone(),
                 None,
                 None,
                 None,
@@ -1675,7 +1677,7 @@ mod tests {
                 false,
                 manifold_core::effects::RelightParams::default(),
             ),
-            "seed install of TrivialPassthrough must succeed",
+            "seed install of Plasma must succeed",
         );
 
         // Two active clips on the layer at non-default canvas dims.
@@ -1695,7 +1697,7 @@ mod tests {
                 ClipId::new(tag),
                 ActiveClip {
                     render_target: rt,
-                    generator_type: trivial.clone(),
+                    generator_type: plasma.clone(),
                     layer_id: layer_id.clone(),
                     layer_index: 0,
                     clip_index: 0,
@@ -1720,7 +1722,7 @@ mod tests {
             ClipId::new("clip-other"),
             ActiveClip {
                 render_target: other_rt,
-                generator_type: trivial.clone(),
+                generator_type: plasma.clone(),
                 layer_id: other_layer.clone(),
                 layer_index: 1,
                 clip_index: 0,
@@ -1793,7 +1795,9 @@ mod tests {
         let device = crate::test_device();
         let mut renderer = GeneratorRenderer::new(device.arc(), 256, 256, GpuTextureFormat::Rgba16Float, 0);
         let layer_id = LayerId::new("trigger-count-layer");
-        let gen_type = PresetTypeId::new("TrivialPassthrough");
+        // TrivialPassthrough moved to test fixtures (PRESET_BROWSER_AUDITION
+        // P1, D8) — Plasma is the bundled stand-in for mechanics tests.
+        let gen_type = PresetTypeId::new("Plasma");
 
         assert!(
             renderer.install_layer_generator(
@@ -2097,7 +2101,10 @@ mod warmup_tests {
             0,
         );
         let mut layer = Layer::new("Edit".to_string(), LayerType::Generator, 0);
-        layer.change_generator_type(PresetTypeId::new("TrivialPassthrough"));
+        // TrivialPassthrough moved to test fixtures (PRESET_BROWSER_AUDITION
+        // P1, D8) — prewarm resolves through the live registry, so this uses
+        // the bundled Plasma preset.
+        layer.change_generator_type(PresetTypeId::new("Plasma"));
         let layer_id = layer.layer_id.clone();
 
         // Simulate the command path: type change notification, then warm.
@@ -2105,7 +2112,7 @@ mod warmup_tests {
         let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
-            "edit-time warm of TrivialPassthrough must quiesce; got {:?}",
+            "edit-time warm of Plasma must quiesce; got {:?}",
             outcome
         );
         assert!(

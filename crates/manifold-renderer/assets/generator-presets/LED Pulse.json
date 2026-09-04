@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Pulse",
-  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): brightness breathes up all strips at once. A Musical-mode lfo (sine, min=0, max=1) is the breathing brightness; circle_mask at radii 4 fills the frame with white (LED Fill's field); node.exposure multiplies the field by the lfo; colorize at amount=1/focus=0 turns luma into HSV(hue, sat, 1) * brightness. Period picks the note rate (1/1 = one breath per whole note = 4 beats at 4/4). Section 2.5 audit: every atom exists (lfo, circle_mask, exposure, colorize) — no new primitive.",
   "presetMetadata": {
     "id": "LED Pulse",
     "displayName": "LED Pulse",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledPulse",
     "available": true,
     "isLineBased": false,

@@ -462,7 +462,14 @@ pub enum ParamsAction {
     MacroLabelRename(usize),     // macro_index — opens inline rename input
     ParamLabelRightClick(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu
-    AddEffectClicked(InspectorTab),
+    /// Open the Add-Effect browser. The payload is the editing-side
+    /// `EffectTarget` itself (PRESET_BROWSER_AUDITION D2/§3.3): the layer an
+    /// effect lands on must be the layer whose button was clicked, carried
+    /// atomically from the click — never re-resolved from the active layer
+    /// at pick time.
+    AddEffectClicked {
+        target: manifold_editing::commands::effect_target::EffectTarget,
+    },
     RemoveEffect(usize),
     BrowserSearchClicked,
     PasteEffects,

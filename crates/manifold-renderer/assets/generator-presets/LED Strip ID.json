@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Strip ID",
-  "description": "MVP-P2 utility family (LED_STRIPS_DESIGN.md section 5b.4): lights every strip at once with a distinct hue per column so you can see which physical strip maps to which universe — the re-patching tool until the venue-patch UI exists. uv_field gives per-pixel UV; node.field_combine projects it to the scalar 2*u (so the color_lut luminance index lands on u: color_lut bakes a x0.5 luminance range, lum*0.5 = u); node.gradient is an 8-band hard-stepped rainbow — 16 stops, one plateau per LED grid column, hues 45 deg apart (8 bands = the LED grid's column count, authored as band stops, not pixel dims); node.color_lut gathers the strip at that index with amount=1. Every column reads its plateau midpoint, so the 256-to-8 LED downsample sees one flat hue per strip. Section 2.5 audit: every atom exists (uv_field, field_combine, gradient, color_lut — the Infrared palette wiring precedent), no new primitive.",
   "presetMetadata": {
     "id": "LED Strip ID",
     "displayName": "LED Strip ID",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledStripId",
     "available": true,
     "isLineBased": false,

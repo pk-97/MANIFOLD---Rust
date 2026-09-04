@@ -6,6 +6,64 @@
 use manifold_ui::{AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use super::*;
 
+/// PRESET_BROWSER_AUDITION D8/§3.4 gate: may a preset whose metadata
+/// carries `layer_types` appear on `invoking`? `None` on the preset = every
+/// layer type; `Some(list)` = only the listed types. `None` as the invoking
+/// type (effect mode) disables the gate — the picker then lists everything,
+/// same as before the field existed.
+fn preset_allowed_on_layer_type(
+    layer_types: &Option<Vec<manifold_core::types::LayerType>>,
+    invoking: Option<manifold_core::types::LayerType>,
+) -> bool {
+    match layer_types {
+        None => true,
+        Some(list) => invoking.is_some_and(|t| list.contains(&t)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preset_allowed_on_layer_type;
+    use manifold_core::types::LayerType;
+
+    /// LED presets (`layer_types: [Dmx]`) must be unreachable from a video /
+    /// generator layer's picker and reachable from a DMX layer (§4
+    /// invariant: "LED presets unreachable from video-layer pickers").
+    #[test]
+    fn led_presets_gate_to_dmx_layers_only() {
+        let led = Some(vec![LayerType::Dmx]);
+        assert!(
+            preset_allowed_on_layer_type(&led, Some(LayerType::Dmx)),
+            "DMX layer must see LED presets"
+        );
+        assert!(
+            !preset_allowed_on_layer_type(&led, Some(LayerType::Generator)),
+            "generator layer must NOT see LED presets"
+        );
+        assert!(
+            !preset_allowed_on_layer_type(&led, Some(LayerType::Video)),
+            "video layer must NOT see LED presets"
+        );
+        assert!(
+            !preset_allowed_on_layer_type(&led, None),
+            "effect mode (no invoking layer type) must NOT surface gated presets"
+        );
+    }
+
+    /// A preset without `layer_types` is general: every layer type, both
+    /// picker modes — the gate must not change the legacy item set.
+    #[test]
+    fn unscoped_presets_stay_visible_everywhere() {
+        let general: Option<Vec<LayerType>> = None;
+        for invoking in [None, Some(LayerType::Video), Some(LayerType::Generator), Some(LayerType::Dmx)] {
+            assert!(
+                preset_allowed_on_layer_type(&general, invoking),
+                "unscoped preset must appear for invoking {invoking:?}"
+            );
+        }
+    }
+}
+
 /// Convert an AbletonSession into the picker's thin data struct.
 pub(crate) fn build_picker_session(
     session: &AbletonSession,
@@ -111,16 +169,43 @@ impl UIRoot {
     /// Generator mode passes `true` since LED_STRIPS_DESIGN MVP-P3c: generator
     /// items carry their registry category (e.g. the LED presets' `"LED"`)
     /// and the chip row renders in the generator browser too.
+    ///
+    /// Badges (PRESET_BROWSER_AUDITION D10): only exceptional states carry
+    /// one — a legacy stem-override (a user file shadowing a stock preset
+    /// id, "overrides Factory" per PRESET_LIBRARY_DESIGN D4) and a Snapshot
+    /// whose library file is gone ("missing from library"). Ordinary-source
+    /// cells are badge-free; the source row already says where an item
+    /// lives.
+    ///
+    /// `invoking_layer_type` gates by the preset's `layer_types` metadata
+    /// (D8/§3.4): `Some([Dmx])` presets (the LED-*) are offered only on DMX
+    /// layers; `None` on a preset means every layer type. Effect mode passes
+    /// `None` — this design adds no DMX effect gate.
     fn build_preset_picker_items(
         &self,
         kind: manifold_core::preset_def::PresetKind,
         tag_project_category: bool,
+        invoking_layer_type: Option<manifold_core::types::LayerType>,
     ) -> Vec<manifold_ui::panels::picker_core::PickerItem> {
         use manifold_core::preset_type_registry;
         use manifold_ui::panels::picker_core::{PickerItem, Source};
 
         let lib = crate::user_library::UserLibrary::new();
-        let available = preset_type_registry::available_of_kind(kind);
+        let available: Vec<preset_type_registry::PresetTypeRegistration> =
+            preset_type_registry::available_of_kind(kind)
+                .into_iter()
+                .filter(|reg| {
+                    preset_allowed_on_layer_type(&reg.layer_types, invoking_layer_type)
+                })
+                .collect();
+        // Factory stems = registered ids with no user file. A user entry
+        // colliding with one is a legacy stem-override: it keeps resolving
+        // but the browser flags it (PRESET_LIBRARY_DESIGN D4).
+        let factory_ids: std::collections::HashSet<String> = preset_type_registry::all_of_kind(kind)
+            .iter()
+            .filter(|r| !lib.is_user_entry(kind, &r.id))
+            .map(|r| r.id.as_str().to_string())
+            .collect();
         let mut seen_ids: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(available.len());
 
@@ -146,14 +231,20 @@ impl UIRoot {
                 };
                 PickerItem {
                     label: reg.display_name.to_string(),
-                    type_id: id,
+                    type_id: id.clone(),
                     category: if tag_project_category {
                         reg.category.map(|c| c.to_string())
                     } else {
                         None
                     },
                     search_text: None,
-                    badge: Some(if is_user { "My Library" } else { "Factory" }.to_string()),
+                    badge: if is_user {
+                        factory_ids
+                            .contains(&id)
+                            .then(|| "overrides Factory".to_string())
+                    } else {
+                        None
+                    },
                     source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
                     missing_from_library: false,
                     thumbnail,
@@ -180,9 +271,10 @@ impl UIRoot {
                 type_id: e.type_id.clone(),
                 category: if tag_project_category { Some("Project".to_string()) } else { None },
                 search_text: None,
-                badge: Some(
-                    if missing { "missing from library" } else { "Project" }.to_string(),
-                ),
+                // Saved project presets are an ordinary state, not an
+                // exceptional one (D10) — only the unresolvable Snapshot
+                // gets a badge.
+                badge: missing.then(|| "missing from library".to_string()),
                 source: Some(Source::Project),
                 missing_from_library: missing,
                 // This-Project entries never get a thumbnail (D7 only
@@ -350,16 +442,30 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::Params(ParamsAction::AddEffectClicked(tab)) => {
+            PanelAction::Params(ParamsAction::AddEffectClicked { target }) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
+                use manifold_editing::commands::effect_target::EffectTarget;
                 use manifold_ui::panels::browser_popup::*;
 
                 // Effect mode keeps its existing "Project" category chip
-                // grouping (`tag_project_category: true`).
-                let mut items = self.build_preset_picker_items(PresetKind::Effect, true);
+                // grouping (`tag_project_category: true`). No layer-type
+                // gate in effect mode (D8 scopes the gate to generators).
+                let mut items =
+                    self.build_preset_picker_items(PresetKind::Effect, true, None);
                 let has_project_items =
                     items.iter().any(|it| it.category.as_deref() == Some("Project"));
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+
+                // The atomic invocation context (D2): the request carries
+                // exactly the target the button named — Master stays
+                // Master; the clicked layer's id rides `layer_id` (the
+                // popup session echoes both back at pick time).
+                let (tab, layer_id) = match target {
+                    EffectTarget::Master => (InspectorTab::Master, None),
+                    EffectTarget::Layer { layer_id } => {
+                        (InspectorTab::Layer, Some(layer_id.clone()))
+                    }
+                };
 
                 // Unique category names (+ "Project" when embedded effects exist).
                 let mut cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
@@ -374,8 +480,8 @@ impl UIRoot {
                     .set_screen_size(self.screen_width, self.screen_height);
                 self.browser_popup.open(BrowserPopupRequest {
                     mode: BrowserPopupMode::Effect,
-                    tab: *tab,
-                    layer_id: None,
+                    tab,
+                    layer_id,
                     items,
                     category_names: cat_names,
                     spawn_graph_pos: None,
@@ -388,10 +494,27 @@ impl UIRoot {
                 use manifold_core::preset_def::PresetKind;
                 use manifold_ui::panels::browser_popup::*;
 
-                // LED_STRIPS_DESIGN MVP-P3c: generator items now carry their
+                // LED_STRIPS_DESIGN MVP-P3c: generator items carry their
                 // registry category and the browser renders the chip row —
                 // same machinery as Effect mode, no fork.
-                let mut items = self.build_preset_picker_items(PresetKind::Generator, true);
+                //
+                // D8/§3.4: the invoking layer's type gates `layer_types`
+                // presets — DMX lanes see the LED-* set, video/generator
+                // lanes never do.
+                let invoking_layer_type = self
+                    .layer_headers
+                    .layers()
+                    .iter()
+                    .find(|l| Some(l.layer_id.as_str()) == layer_id.as_ref().map(|id| id.as_str()))
+                    .map(|l| {
+                        if l.is_led_layer {
+                            manifold_core::types::LayerType::Dmx
+                        } else {
+                            manifold_core::types::LayerType::Generator
+                        }
+                    });
+                let mut items =
+                    self.build_preset_picker_items(PresetKind::Generator, true, invoking_layer_type);
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 // Category chips derived from the items themselves (first

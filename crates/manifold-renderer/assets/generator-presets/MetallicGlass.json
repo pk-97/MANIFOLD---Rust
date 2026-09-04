@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Metallic Glass",
-  "description": "A Y2K-aesthetic procedural surface shader with feedback-displaced geometry and temporal coherence. The pipeline flows from animated 3D simplex noise through a color-domain feedback loop that generates an evolving liquid-mercury height texture. Two parallel streams branch from that: the height path is levels-shaped, then temporally smoothed and displaced into mesh vertex positions; the edge path runs a mirror-axis rotation followed by Sobel gradient to produce edge/roughness maps, also temporally smoothed. A third control stream handles the camera orbit and field-of-view parameters, converting screen degrees to radians for the orbit node. At the terminal stage: the displaced triangulated mesh, camera view, and prepared surface textures (normals and roughness) flow into the bundled PBR rendering pipeline. The envmap provides image-based lighting; the pbr_material and key_light define the surface finish and key illumination. All groups flatten to byte-identical behavior: this is a presentation reorganization only.",
   "presetMetadata": {
     "id": "MetallicGlass",
     "displayName": "Metallic Glass",

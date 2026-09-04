@@ -89,6 +89,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: vec![ParamSpecDef {
                     id: "speed".to_string(),
                     name: "Speed".to_string(),

@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "QuadMirror",
-  "description": "Quad Mirror is a center-symmetric 4-way UV fold effect decomposed into a readable linear pipeline. The source feeds into a centered UV coordinate system, which is folded by absolute value to create mirror symmetry. A scale-offset transform then remaps the folded coordinates back into the 0-1 range, and a remap node resamples the source texture at the mirrored coordinates. Finally, a mix node crossfades between the original source and the remapped version, with the Amount parameter controlling the blend. At load, this flat structure compiles byte-identically to the legacy node.quad_mirror bundle.",
   "presetMetadata": {
     "id": "QuadMirror",
     "displayName": "Quad Mirror",

@@ -1,11 +1,10 @@
 {
   "version": 2,
   "name": "AutoGain",
-  "description": "Auto Gain is a visual dynamics compressor for automatic level-riding. The source feeds two parallel paths: the main path branches to luminance (extracting perceived brightness) which drives a compressor envelope running a log-domain program-dependent attack and release to emit a gain scalar; that gain multiplies the source. The second path preserves the original source as a reference. After compression, the hdr_retention_mix node pins the above-1.0 HDR ceiling (any brightened highlights) to the original source, so per-pixel chromaticity stays clean on display composite. Finally, a wet_dry crossfader blends the compressed result back over the dry source for parallel-compression amount control. This decomposition is a pure level-rider utility; the original AutoGain's colour and character work has moved to dedicated colour-treatment effects.",
   "presetMetadata": {
     "id": "AutoGain",
     "displayName": "Auto Gain",
-    "category": "Stylize",
+    "category": "Color",
     "oscPrefix": "autoGain",
     "legacyDiscriminant": 41,
     "available": true,

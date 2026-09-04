@@ -1085,6 +1085,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: vec![
                     ParamSpecDef {
                         id: "shape".into(),
@@ -1353,6 +1354,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: vec![
                     ParamSpecDef {
                         id: "shape".into(),
@@ -1807,6 +1809,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: vec![ParamSpecDef {
                     id: "pattern".into(),
                     name: "Pattern".into(),
