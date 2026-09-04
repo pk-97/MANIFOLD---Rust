@@ -2340,6 +2340,7 @@ mod scene_card_convergence_tests {
                 active_layer,
                 selection,
                 &[],
+                None,
             );
             ui.inspector.active_tab()
         }

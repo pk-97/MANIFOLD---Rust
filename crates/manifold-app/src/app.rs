@@ -2533,6 +2533,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_beat_offset: f64::NAN,
                 led_controller: None,
+                led_preview: crate::content_state::LedPreview::None,
+                led_preview_version: 0,
                 still_export: None,
                 cached_midi_device_names: Vec::new(),
                 last_midi_device_scan_time: manifold_core::Seconds(-10.0),
@@ -2606,6 +2608,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             active_idx,
             &self.selection,
             &self.content_state.automation_latched_params,
+            self.content_state.led_preview.as_ref(),
         );
 
         // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content

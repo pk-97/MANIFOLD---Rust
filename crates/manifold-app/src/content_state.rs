@@ -27,6 +27,28 @@ pub struct NodePreviewInfo {
     pub outputs: Vec<(String, f32)>,
 }
 
+/// LED composite preview payload (LED_STRIPS_DESIGN MVP-P4, D22-D24): the
+/// latest completed Art-Net readback rides the per-tick snapshot to the UI,
+/// which blits it as a transposed band on the DMX lane's generator card.
+/// The pixels are the send path's OWN readback — post-`led_gain`, pre-master-
+/// brightness — so the preview tracks pattern and gain, NOT the LED brightness
+/// slider. The buffer is the readback's own `Arc` allocation (D23), shared
+/// with `pack_and_send` — no clone, no new per-frame allocation.
+#[derive(Clone, Debug)]
+pub enum LedPreview {
+    /// A completed readback: tightly-packed RGBA8, 8×120 (row = LED position,
+    /// col = strip index — the LED sample texture's own layout). `version`
+    /// bumps per completed readback; the UI uploads on version change only.
+    Frame { pixels: Arc<[u8]>, version: u64 },
+    /// The send path is in blackout or disabled — the strips are dark. Clears
+    /// the cached frame: a stale chase must never animate while the rig is
+    /// dark (D24).
+    Black,
+    /// No LED controller or never enabled — no data exists; the UI renders
+    /// no band at all.
+    None,
+}
+
 /// Sent once when an export finishes. Consumed by `push_state`
 /// (`ui_bridge/state_sync.rs`) to fire the D17 export-complete toast
 /// (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — no longer dead code as of that wiring.
@@ -151,6 +173,12 @@ pub struct ContentState {
     // ── LED output ────────────────────────────────────────────────
     /// Whether LED output is enabled.
     pub led_enabled: bool,
+    /// Composite preview for the DMX lane inspector (LED_STRIPS_DESIGN
+    /// MVP-P4). `Some` from the content thread's per-tick build — the inner
+    /// `LedPreview::None` means "no LED controller"; the outer `None` is the
+    /// degraded/export snapshot default (never published there), which the UI
+    /// treats identically to `LedPreview::None` (no band).
+    pub led_preview: Option<LedPreview>,
 
     // ── Live Recording ─────────────────────────────────────────────
     /// Whether a live recording is currently in progress.
@@ -498,6 +526,7 @@ impl Default for ContentState {
             profiling_active: false,
             profiling_frame_count: 0,
             led_enabled: false,
+            led_preview: None,
             is_live_recording: false,
             recording_dropped_frames: 0,
             recording_dropped_audio_frames: 0,

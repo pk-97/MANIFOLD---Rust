@@ -19,6 +19,32 @@ use super::cards::{
 };
 use super::scene::sections_for_doc_ids;
 
+/// Map the content thread's `LedPreview` across the projection boundary for
+/// the card (LED_STRIPS_DESIGN MVP-P4, D24). The gate is the same on both
+/// call sites (structural sync + per-frame push): only a DMX lane's generator
+/// card carries the band (D22 — the whole composite, never a per-layer view),
+/// and the app-side `None`/`LedPreview::None` states render no band at all.
+pub(crate) fn map_led_preview(
+    led_preview: Option<&crate::content_state::LedPreview>,
+    is_dmx: bool,
+) -> Option<manifold_ui::panels::param_card::LedPreviewBand> {
+    if !is_dmx {
+        return None;
+    }
+    match led_preview {
+        Some(crate::content_state::LedPreview::Frame { pixels, version }) => {
+            Some(manifold_ui::panels::param_card::LedPreviewBand::Frame {
+                pixels: std::sync::Arc::clone(pixels),
+                version: *version,
+            })
+        }
+        Some(crate::content_state::LedPreview::Black) => {
+            Some(manifold_ui::panels::param_card::LedPreviewBand::Black)
+        }
+        _ => None,
+    }
+}
+
 /// Sync inspector content for the active selection.
 /// Called when the active layer changes or after structural mutations.
 pub fn sync_inspector_data(
@@ -27,6 +53,7 @@ pub fn sync_inspector_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    led_preview: Option<&crate::content_state::LedPreview>,
 ) {
     // Audio Setup modal — refresh its current device + send list while it's
     // open. Resolving the device through the directory once per sync (only while
@@ -1075,6 +1102,17 @@ pub fn sync_inspector_data(
     attach_audio_sends(&mut master_configs, &project.audio_setup);
     ui.inspector.configure_master_effects(&master_configs);
 
+    // LED composite preview (LED_STRIPS_DESIGN MVP-P4): the band lives only on
+    // a DMX lane's generator card (D22). Presence is structural — set before
+    // configure_gen_params below so the card build sees it this same sync.
+    {
+        let is_dmx = active_layer
+            .and_then(|i| project.timeline.layers.get(i))
+            .is_some_and(|l| l.layer_type == LayerType::Dmx);
+        ui.inspector
+            .set_led_preview(map_led_preview(led_preview, is_dmx));
+    }
+
     // Active layer effects + gen params → inspector
     if let Some(idx) = active_layer {
         if let Some(layer) = project.timeline.layers.get(idx) {
@@ -1974,7 +2012,7 @@ mod fire_meter_roundtrip_tests {
         let mut ui = UIRoot::new();
         let mut selection = SelectionState::default();
         selection.select_layer(layer_id.clone());
-        sync_inspector_data(&mut ui, &project, Some(0), &selection, &[]);
+        sync_inspector_data(&mut ui, &project, Some(0), &selection, &[], None);
 
         // Open every fixture drawer. (a)/(b)/(c) need no explicit "open": an
         // armed audio mod's drawer builds automatically — a toggle/trigger

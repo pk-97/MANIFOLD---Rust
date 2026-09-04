@@ -99,6 +99,8 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
         link_beat_offset: f64::NAN,
         led_controller: None,
+        led_preview: crate::content_state::LedPreview::None,
+        led_preview_version: 0,
         still_export: None,
         cached_midi_device_names: Vec::new(),
         last_midi_device_scan_time: Seconds(-10.0),

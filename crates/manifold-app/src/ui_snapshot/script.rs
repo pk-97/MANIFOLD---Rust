@@ -1317,6 +1317,10 @@ impl Runner {
             ui.viewport.automation_lane_screens(&data.content.automation_latched_params);
         let text_input = crate::text_input::TextInputState::new();
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+        // LED composite preview band (LED_STRIPS_DESIGN MVP-P4): a real
+        // panel-bitmap instance so the band's quad paints in flow snapshots
+        // too — same helper the base render path uses.
+        let mut bitmap_gpu = super::render::make_panel_bitmap_gpu(&render.device, ui);
         crate::ui_frame::render_main_ui_passes(
             &render.device,
             &mut render.ui_renderer,
@@ -1326,7 +1330,7 @@ impl Runner {
             tex_h,
             f64::from(super::SCALE),
             crate::ui_frame::MainUiPassInputs {
-                layer_bitmap_gpu: None,
+                layer_bitmap_gpu: Some(&mut bitmap_gpu),
                 clip_bodies: &clip_bodies,
                 clip_rects: &clip_rects,
                 clip_content_gpu: None,

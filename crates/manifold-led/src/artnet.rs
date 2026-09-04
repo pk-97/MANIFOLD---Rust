@@ -5,6 +5,7 @@
 //! Unity equivalent: ArtNetOutput.cs
 
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
 
 use manifold_gpu::{GpuDevice, GpuTexture};
 
@@ -201,9 +202,13 @@ impl ArtNetOutput {
     }
 
     /// Check if readback completed and send DMX data if so.
-    pub fn poll_readback(&mut self, event: &manifold_gpu::GpuEvent) {
+    /// Returns the completed pixel buffer (post-`led_gain`, pre-master-brightness)
+    /// so the caller can publish it as the UI's composite preview (D23) — the
+    /// same `Arc` allocation `pack_and_send` just consumed, handed out after the
+    /// packets are queued (send timing unchanged).
+    pub fn poll_readback(&mut self, event: &manifold_gpu::GpuEvent) -> Option<Arc<[u8]>> {
         if !self.initialized {
-            return;
+            return None;
         }
         if let Some(pixels) = self.readback.try_read(event) {
             self.readback_count += 1;
@@ -217,7 +222,9 @@ impl ArtNetOutput {
             }
             let brightness = self.pending_brightness;
             self.pack_and_send(&pixels, brightness);
+            return Some(pixels);
         }
+        None
     }
 
     /// Discard any in-flight readback so a stale completion can't sneak through

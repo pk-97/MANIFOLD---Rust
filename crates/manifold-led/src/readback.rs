@@ -77,7 +77,11 @@ impl ReadbackRequest {
 
     /// Try to read pixel data. Returns `Some(pixels)` if GPU finished, `None` otherwise.
     /// On success, returns tightly-packed RGBA8 rows (stride = width * 4).
-    pub fn try_read(&mut self, event: &manifold_gpu::GpuEvent) -> Option<Vec<u8>> {
+    ///
+    /// The buffer rides in an `Arc` so the SAME allocation serves `pack_and_send`
+    /// and the UI's composite preview snapshot (LED_STRIPS_DESIGN D23) — one
+    /// allocation per completed frame, shared, never cloned per consumer.
+    pub fn try_read(&mut self, event: &manifold_gpu::GpuEvent) -> Option<std::sync::Arc<[u8]>> {
         if !self.pending {
             return None;
         }
@@ -108,7 +112,7 @@ impl ReadbackRequest {
         }
 
         self.pending = false;
-        Some(out)
+        Some(out.into())
     }
 
     /// Discard any pending readback without consuming it. The GPU still writes

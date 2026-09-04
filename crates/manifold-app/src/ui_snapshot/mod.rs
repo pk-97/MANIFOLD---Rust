@@ -971,6 +971,7 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
         data.active,
         &data.selection,
         &data.content.automation_latched_params,
+        data.content.led_preview.as_ref(),
     );
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
@@ -1632,7 +1633,7 @@ mod editor_window_harness {
             manifold_core::GraphTarget::Effect(_) => None,
         };
         sync_project_data(&mut ui_root, &project, active_idx, &selection);
-        sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[]);
+        sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);
         ui_root.build_inspector_in_rect(UiRect::new(
             card_x,
             0.0,

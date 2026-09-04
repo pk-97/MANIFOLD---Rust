@@ -534,6 +534,13 @@ pub(crate) fn render_main_ui_passes(
         // Collapsed group bitmaps
         rects.extend(ui_root.viewport.collapsed_group_rects());
 
+        // LED composite preview band on the DMX lane's generator card
+        // (LED_STRIPS_DESIGN MVP-P4) — index 1003, uploaded when the card's
+        // dirty flag fires. Absent/hidden → no quad.
+        if let Some(rect) = ui_root.inspector.led_preview_rect(&ui_root.tree) {
+            rects.push((manifold_ui::panels::param_card::LED_BAND_BITMAP_INDEX, rect));
+        }
+
         if !rects.is_empty() {
             bitmap_gpu.render_layers(device, &mut encoder, offscreen, logical_w, logical_h, &rects);
         }

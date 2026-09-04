@@ -154,6 +154,38 @@ const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 const CHANGE_BTN_W: f32 = 60.0;
 const CHANGE_BTN_H: f32 = 16.0;
 
+// ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D22-D24) ──
+// The send path's own 8×120 readback (row = LED position, col = strip index)
+// displayed as a 120-wide × 8-tall transposed band at the top of the DMX
+// lane's generator card. The bitmap rides the viewport bitmap GPU path
+// (dirty CPU buffer → upload → layer-bitmap quad), never a second readback.
+pub const LED_BAND_STRIPS: usize = 8;
+pub const LED_BAND_LEDS: usize = 120;
+/// Band interior height — one 2px row per strip. The frame adds `BORDER_W`
+/// on each side, so the chrome's total height is `LED_BAND_H + 2 * BORDER_W`.
+pub(crate) const LED_BAND_H: f32 = 16.0;
+/// The band quad's layer-bitmap texture index (panels use 1000+; 1002 is the
+/// overview strip, 2000+ collapsed groups).
+pub const LED_BAND_BITMAP_INDEX: usize = 1003;
+/// The band chrome node's automation/debug name — the L3 flow asserts on this.
+pub const LED_BAND_NODE_NAME: &str = "dmx.led_preview_band";
+
+/// The LED composite preview payload for a DMX lane's generator card
+/// (LED_STRIPS_DESIGN MVP-P4, D24). The app-side `LedPreview` mapped across
+/// the projection boundary: `Frame` carries the send path's own readback
+/// buffer (shared via `Arc` — no clone), `Black` is the send path's blackout
+/// or disabled state. `None` (no payload) renders no band at all.
+#[derive(Clone, Debug)]
+pub enum LedPreviewBand {
+    /// A completed readback: tightly-packed RGBA8, 8×120 (row = LED position,
+    /// col = strip index). `version` bumps per completed readback; the band
+    /// bitmap re-transposes on version change only.
+    Frame { pixels: std::sync::Arc<[u8]>, version: u64 },
+    /// The strips are dark (blackout / disabled) — a black band, and the
+    /// cached frame is dropped so a stale chase can never animate (D24).
+    Black,
+}
+
 mod render;
 mod routing;
 mod state;
@@ -270,6 +302,31 @@ pub struct ParamCardPanel {
 
     // ── Node IDs — generator shell ──
     change_btn_id: Option<NodeId>,
+
+    // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4) ──
+    /// The preview payload last pushed by the app. Presence is structural:
+    /// `build_generator` only mints the band's chrome node when this is
+    /// `Some`, so a non-DMX lane's card (or no-controller `None`) renders
+    /// nothing. Black↔Frame content flips ride `sync_led_preview` per frame.
+    led_preview: Option<LedPreviewBand>,
+    led_band_id: Option<NodeId>,
+    /// Dirty-flagged CPU bitmap the band quad uploads (the viewport bitmap
+    /// path's shape), transposed 120×8 at native resolution — nearest
+    /// sampling turns one texel into a crisp 2×2 block on 2x displays, which
+    /// is exactly the LED-cell look.
+    led_band_bitmap: Vec<Color32>,
+    led_band_tex_w: usize,
+    led_band_tex_h: usize,
+    led_band_dirty: bool,
+    /// Interior logical size cached at build — the bake needs it to carve the
+    /// frame's rounded corners into the bitmap alpha (the quad draws over the
+    /// tree, so the bitmap must carry its own corners).
+    led_band_interior_w: f32,
+    led_band_interior_h: f32,
+    /// Content state already baked into `led_band_bitmap` — `0` = black/empty,
+    /// `Frame` versions start at 1, so "same version" is a one-integer compare
+    /// per frame and re-bakes happen only on real change.
+    led_band_version: u64,
 
     // ── SCENE_MODIFIER_FRAMEWORK section 3.7: modifier-card shell ──
     /// `Some` on a scene modifier card — kind identity, owning layer, and the
@@ -473,6 +530,15 @@ impl ParamCardPanel {
             aud_badge_bg_id: None,
             aud_badge_text_id: None,
             change_btn_id: None,
+            led_preview: None,
+            led_band_id: None,
+            led_band_bitmap: Vec::new(),
+            led_band_tex_w: 0,
+            led_band_tex_h: 0,
+            led_band_dirty: false,
+            led_band_interior_w: 0.0,
+            led_band_interior_h: 0.0,
+            led_band_version: 0,
             modifier: None,
             modifier_remove_btn_id: None,
             wrap_debug_btn_id: None,
@@ -784,6 +850,92 @@ impl ParamCardPanel {
     /// when the selection still points at the same layer's generator.
     pub(crate) fn owning_layer_id(&self) -> Option<&LayerId> {
         self.layer_id.as_ref()
+    }
+
+    // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24) ──
+
+    /// Structural configure: whether this card carries the band, and its
+    /// initial content. Called by the inspector on the (re)build sync; the
+    /// stored payload is what `build_generator` consults for slot presence,
+    /// so `None` removes the band entirely on the next build.
+    pub fn set_led_preview(&mut self, preview: Option<LedPreviewBand>) {
+        self.led_preview = preview;
+    }
+
+    /// Height the band occupies at the top of the card body — frame plus the
+    /// same `HEADER_BODY_GAP` breathing room the first param row would get.
+    /// Zero when absent (non-DMX card, no controller) or collapsed.
+    fn led_band_height(&self) -> f32 {
+        if self.led_preview.is_some() && !self.is_collapsed {
+            BORDER_W * 2.0 + LED_BAND_H + HEADER_BODY_GAP
+        } else {
+            0.0
+        }
+    }
+
+    /// Per-frame content sync (push_state — after build). Black↔Frame
+    /// transitions and new readback versions update the band in place; a
+    /// `None` payload hides the chrome without waiting for a rebuild (the
+    /// structural absence lands on the next sync). Version-unchanged frames
+    /// cost one integer compare — no per-frame re-bake, no upload.
+    pub fn sync_led_preview(&mut self, tree: &mut UITree, preview: Option<&LedPreviewBand>) {
+        let Some(node) = self.led_band_id else {
+            return;
+        };
+        match preview {
+            None => tree.set_visible(node, false),
+            Some(LedPreviewBand::Black) => {
+                tree.set_visible(node, true);
+                if self.led_band_version != 0 {
+                    self.bake_led_band_black();
+                }
+            }
+            Some(LedPreviewBand::Frame { pixels, version }) => {
+                tree.set_visible(node, true);
+                if *version != self.led_band_version {
+                    self.bake_led_band(pixels);
+                    self.led_band_version = *version;
+                }
+            }
+        }
+    }
+
+    /// Band bitmap for the layer-bitmap GPU upload — `(pixels, w, h)` once
+    /// per dirty flag, exactly the viewport overview strip's contract.
+    pub fn led_band_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
+        if self.led_band_dirty && self.led_band_tex_w > 0 && self.led_band_tex_h > 0 {
+            self.led_band_dirty = false;
+            Some((&self.led_band_bitmap, self.led_band_tex_w, self.led_band_tex_h))
+        } else {
+            None
+        }
+    }
+
+    /// Non-consuming read of the band bitmap — the headless harness rebuilds
+    /// its throwaway `LayerBitmapGpu` every render, so it re-uploads from the
+    /// current buffer regardless of the dirty flag (the live app's persistent
+    /// instance consumes `led_band_bitmap` instead).
+    pub fn led_band_bitmap_peek(&self) -> Option<(&[Color32], usize, usize)> {
+        if self.led_band_tex_w > 0 && self.led_band_tex_h > 0 {
+            Some((&self.led_band_bitmap, self.led_band_tex_w, self.led_band_tex_h))
+        } else {
+            None
+        }
+    }
+
+    /// Screen-space interior rect the band quad blits into (inside the 1px
+    /// frame), or `None` when the band is absent or hidden this frame. Read
+    /// by the frame assembly's panel-bitmap pass.
+    pub fn led_band_rect(&self, tree: &UITree) -> Option<Rect> {
+        let id = self.led_band_id?;
+        let node = tree.get_node(id)?;
+        if !node.flags.contains(crate::node::UIFlags::VISIBLE) {
+            return None;
+        }
+        let b = node.bounds;
+        let w = (b.width - BORDER_W * 2.0).max(0.0);
+        let h = (b.height - BORDER_W * 2.0).max(0.0);
+        Some(Rect::new(b.x + BORDER_W, b.y + BORDER_W, w, h))
     }
 
     /// Set the chrome context (Perform vs Author). Author suppresses the cog /

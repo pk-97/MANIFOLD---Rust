@@ -3000,6 +3000,7 @@ impl Application {
                 active_idx,
                 &self.selection,
                 &self.content_state.automation_latched_params,
+                self.content_state.led_preview.as_ref(),
             );
             needs_structural_sync = true;
         }
@@ -3021,6 +3022,7 @@ impl Application {
                 active_idx,
                 &self.selection,
                 &self.content_state.automation_latched_params,
+                self.content_state.led_preview.as_ref(),
             );
         } else if self.active_layer_id != prev_active_layer {
             let active_idx = self
@@ -3039,6 +3041,7 @@ impl Application {
                 active_idx,
                 &self.selection,
                 &self.content_state.automation_latched_params,
+                self.content_state.led_preview.as_ref(),
             );
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
@@ -3060,6 +3063,7 @@ impl Application {
                     active_idx,
                     &self.selection,
                     &self.content_state.automation_latched_params,
+                    self.content_state.led_preview.as_ref(),
                 );
             }
         }
@@ -3407,6 +3411,20 @@ impl Application {
                     pixels,
                     tw as u32,
                     th as u32,
+                );
+            }
+
+            // 6h. LED composite preview band (LED_STRIPS_DESIGN MVP-P4): the
+            // DMX lane's gen card holds the send path's latest readback as a
+            // dirty-flagged CPU bitmap — upload on version change only; the
+            // quad rides pass 4c (index 1003).
+            if let Some((pixels, w, h)) = self.ws.ui_root.inspector.led_preview_bitmap() {
+                bitmap_gpu.upload_layer(
+                    &gpu.device,
+                    manifold_ui::panels::param_card::LED_BAND_BITMAP_INDEX,
+                    pixels,
+                    w as u32,
+                    h as u32,
                 );
             }
         }

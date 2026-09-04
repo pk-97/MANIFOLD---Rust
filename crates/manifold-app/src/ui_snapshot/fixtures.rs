@@ -1170,7 +1170,35 @@ fn dmxcard_scene() -> SceneData {
     let mut project = Project::default();
     project.timeline.layers = layers;
 
-    let content = ContentState { current_beat: Beats(4.0), is_playing: false, ..Default::default() };
+    // MVP-P4 demo payload: the fixture has no LED controller/content thread,
+    // so the preview state is injected as a synthetic completed readback — a
+    // soft per-strip gradient — and reaches the card through the SAME
+    // ContentState → projection path as the live one (no card special-casing).
+    // Readback layout: 8×120 RGBA, row = LED position, col = strip index.
+    let mut pixels = vec![0u8; 8 * 120 * 4];
+    for strip in 0..8usize {
+        // Alternate bright/dim rows so the eight strips read as distinct
+        // bands, warm-shifted per row — unmistakable proof of the transpose
+        // in the PNG.
+        let row_gain = if strip % 2 == 0 { 1.0f32 } else { 0.35 };
+        for led in 0..120usize {
+            let o = (led * 8 + strip) * 4;
+            let sweep = led as f32 / 119.0; // 0..1 left→right
+            pixels[o] = ((40.0 + strip as f32 * 24.0) * row_gain) as u8; // r: rises per strip row
+            pixels[o + 1] = (sweep * 200.0 * row_gain) as u8; // g: sweeps left→right
+            pixels[o + 2] = ((1.0 - sweep) * 235.0 * row_gain + 20.0) as u8; // b: falls along the strip
+            pixels[o + 3] = 255;
+        }
+    }
+    let content = ContentState {
+        current_beat: Beats(4.0),
+        is_playing: false,
+        led_preview: Some(crate::content_state::LedPreview::Frame {
+            pixels: pixels.into(),
+            version: 1,
+        }),
+        ..Default::default()
+    };
 
     // Ships selected: the flow starts on the LED Fill card, no creation step.
     let mut selection = UIState::default();

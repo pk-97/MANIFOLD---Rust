@@ -218,8 +218,60 @@ impl InspectorCompositePanel {
             panel.set_context(self.card_context);
             panel.set_layer_id(layer_id);
             panel.configure(cfg);
+            // The LED composite preview (LED_STRIPS_DESIGN MVP-P4) rides the
+            // same card lifecycle as `card_context` — applied to the reused
+            // or freshly-built card either way.
+            panel.set_led_preview(self.led_preview.clone());
             panel
         });
+    }
+
+    // ── LED composite preview (LED_STRIPS_DESIGN MVP-P4, D24) ──
+
+    /// Structural configure from the projection: whether the DMX lane's card
+    /// carries the composite band, and its initial content. Stored on the
+    /// inspector (like `card_context`) so a freshly-built card picks it up;
+    /// pushed to the live card immediately when one exists.
+    pub fn set_led_preview(&mut self, preview: Option<super::super::param_card::LedPreviewBand>) {
+        self.led_preview = preview.clone();
+        if let Some(card) = self.gen_params.as_mut() {
+            card.set_led_preview(preview);
+        }
+    }
+
+    /// Per-frame content sync (push_state, after build): Black↔Frame
+    /// transitions and new readback versions update the band in place, without
+    /// a rebuild. A `None` payload hides the chrome — the structural absence
+    /// lands on the next sync.
+    pub fn sync_led_preview(
+        &mut self,
+        tree: &mut UITree,
+        preview: Option<&super::super::param_card::LedPreviewBand>,
+    ) {
+        if let Some(card) = self.gen_params.as_mut() {
+            card.sync_led_preview(tree, preview);
+        }
+    }
+
+    /// Band bitmap for the frame assembly's layer-bitmap upload — `(pixels,
+    /// w, h)` once per dirty flag, the viewport overview strip's contract.
+    pub fn led_preview_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
+        self.gen_params
+            .as_mut()
+            .and_then(|card| card.led_band_bitmap())
+    }
+
+    /// Non-consuming read of the band bitmap — the headless harness re-uploads
+    /// into its per-render `LayerBitmapGpu` (see `ParamCardPanel::
+    /// led_band_bitmap_peek`).
+    pub fn led_preview_bitmap_peek(&self) -> Option<(&[Color32], usize, usize)> {
+        self.gen_params.as_ref().and_then(|card| card.led_band_bitmap_peek())
+    }
+
+    /// Screen-space interior rect the band quad blits into this frame, or
+    /// `None` when the band is absent or hidden.
+    pub fn led_preview_rect(&self, tree: &UITree) -> Option<Rect> {
+        self.gen_params.as_ref().and_then(|card| card.led_band_rect(tree))
     }
 
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: configure the layer scope's
