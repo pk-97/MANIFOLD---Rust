@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Cycle",
-  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): each pad hit advances the comet — 8 variants of hue and position, BasicShapes' trigger-cycling precedent. clip_trigger_index wraps the clip trigger count modulo 8; two switch_value tables map the variant to a hue (0/45/90/.../315 deg) and a comet position ((variant + 1)/8, the column's right edge, so the one-cell head fills it). The comet is the Chase Sweep shape without the sweep: negated u-ramp shifted by the variant position, wrap, power tail, invert, then colorize takes the hue from the table so every trigger lands a differently coloured comet at a new spot. Section 2.5 audit: every atom exists (clip_trigger_index, switch_value, uv_field + field_combine, scale_offset_image, wrap, smoothstep, invert, colorize) — no new primitive.",
   "presetMetadata": {
     "id": "LED Cycle",
     "displayName": "LED Cycle",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledCycle",
     "available": true,
     "isLineBased": false,

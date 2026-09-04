@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "ColorCompass",
-  "description": "Image slides toward its own brightest direction. Four ColorSamples read luma at cardinal compass points (north, south, east, west). Subtracting north from south yields the vertical component of motion; subtracting west from east yields horizontal. Both direction components are scaled by the Intensity slider to set the per-frame translation magnitude. A pair of Smoothing nodes with Reactivity as the time constant tame per-frame jitter in the computed direction, letting the movement feel purposeful rather than noisy. Finally, AffineTransform applies the smoothed components as translate_x and translate_y, sliding the image proportionally to the brightness gradient. Translation magnitude is zero when the image is rotationally symmetric (no brighter direction) and grows linearly with asymmetry, avoiding any atan2 singularities. Feedback-free; the loop closes through the one-frame texture-to-scalar bridge.",
   "presetMetadata": {
     "id": "ColorCompass",
     "displayName": "Color Compass",

@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Bloom",
-  "description": "Glow effect, decomposed: brightness thresholding with soft knee extracts the bright pass (the bloom prefilter curve), downsampling drops to quarter resolution, separable horizontal and vertical Gaussian blur in Linear mode soften the glow with a fixed radius (the exact algorithm of the legacy blur pass), and additive blending layers the glow back over the source image. The amount slider controls glow intensity only, not blur radius like the legacy monolithic bloom kernel. Visual delta vs the old approach: a single downsample-and-blur instead of the legacy multi-level pyramid, yielding a simpler, wider fixed-radius glow. Verified by eye.",
   "presetMetadata": {
     "id": "Bloom",
     "displayName": "Bloom",

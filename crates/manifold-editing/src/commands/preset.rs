@@ -467,6 +467,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: vec![ParamSpecDef {
                     id: param.to_string(),
                     name: param.to_string(),

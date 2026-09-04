@@ -76,12 +76,15 @@ inventory::submit! {
 mod tests {
     use super::*;
 
-    /// The TrivialPassthrough + Plasma presets that ship today must be
-    /// discoverable through this table. The `Plasma` entry binds to
-    /// `PresetTypeId::PLASMA` (the legacy id) so it supersedes the
-    /// Rust factory of the same id — renaming or removing it would
-    /// silently revert every existing Plasma layer to the Rust path
+    /// The Plasma preset must be discoverable through this table: the
+    /// `Plasma` entry binds to `PresetTypeId::PLASMA` (the legacy id) so it
+    /// supersedes the Rust factory of the same id — renaming or removing it
+    /// would silently revert every existing Plasma layer to the Rust path
     /// and break the editor's cog button on those layers.
+    ///
+    /// (TrivialPassthrough used to be asserted here too; it moved to the
+    /// test fixtures in PRESET_BROWSER_AUDITION P1, D8 — it is no longer a
+    /// shipping preset.)
     #[test]
     fn bundled_presets_include_shipping_generators() {
         let ids: Vec<String> = crate::node_graph::bundled_preset_type_ids(
@@ -89,10 +92,6 @@ mod tests {
         )
         .map(|t| t.as_str().to_string())
         .collect();
-        assert!(
-            ids.contains(&"TrivialPassthrough".to_string()),
-            "TrivialPassthrough preset must ship — got {ids:?}",
-        );
         assert!(
             ids.contains(&"Plasma".to_string()),
             "Plasma preset must ship under id `Plasma` to supersede the legacy Rust factory — got {ids:?}",

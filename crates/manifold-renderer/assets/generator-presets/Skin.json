@@ -1,13 +1,12 @@
 {
   "version": 2,
   "name": "Skin",
-  "description": "SCENE_FX P3 scene-mod preset: a procedural texture atom wired into a scene_object's emissive_map input. Uses the proven P0 emissive-wired shape — node.checkerboard drives node.scene_object.emissive_map on a GLB model — so a performer can swap the source texture and the model independently.",
   "presetMetadata": {
     "id": "Skin",
     "displayName": "Skin",
     "category": "Geometry",
     "oscPrefix": "skin",
-    "available": true,
+    "available": false,
     "isLineBased": false,
     "params": [],
     "bindings": [],

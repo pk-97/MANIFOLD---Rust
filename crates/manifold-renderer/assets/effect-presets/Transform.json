@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Transform",
-  "description": "A canonical spatial effect that applies affine transformation to the input: translation (X, Y), scale (Zoom), and rotation. The transformation matrix is computed from four independent card bindings, applied to the source material, and passed to output. This is the default transform effect in the patch library.",
   "presetMetadata": {
     "id": "Transform",
     "displayName": "Transform",

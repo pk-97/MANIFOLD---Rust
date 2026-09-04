@@ -349,7 +349,7 @@ impl Application {
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
-        // (read-only viewer of the running NodeGraphTestFX). Translate the
+        // (read-only viewer of the watched effect's graph). Translate the
         // renderer snapshot into the UI view-model once (cached by Arc identity).
         // Per-node preview screens take the project aspect ratio, so a portrait
         // or wide show reads correctly on every node face. Set before

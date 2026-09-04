@@ -389,15 +389,15 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (68)
+### Effect & generator presets (67)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
 | `ApricotWeather` | Apricot Weather | generator | Geometry | 174 |
-| `AutoGain` | Auto Gain | effect | Stylize | 4 |
+| `AutoGain` | Auto Gain | effect | Color | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
-| `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
+| `BlobTracking` | Blob Track | effect | Stylize | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
 | `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
@@ -407,19 +407,19 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 8 |
-| `DigitalDrift` | Digital Drift | effect | Filmic | 7 |
+| `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
 | `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
-| `Dither` | Dither | effect | Color | 2 |
+| `Dither` | Dither | effect | Stylize | 2 |
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
-| `EdgeDetect` | Edge Detect | effect | Diagnostic | 2 |
+| `EdgeDetect` | Edge Detect | effect | Stylize | 2 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
-| `FilmGrain` | Film Grain | effect | Stylize | 2 |
+| `FilmGrain` | Film Grain | effect | Filmic | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
 | `FogBlast` | Fog Blast | generator | Geometry | 88 |
-| `Glitch` | Glitch | effect | Filmic | 5 |
+| `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
-| `Infrared` | Infrared | effect | Color | 3 |
+| `Infrared` | Infrared | effect | Filmic | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
 | `LED Burst` | LED Burst | generator | LED | 5 |
@@ -440,15 +440,14 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
-| `NodeGraphTest` | Node Graph Test | effect | Diagnostic | 1 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `SceneStarter` | Scene Starter | generator | Geometry | 133 |
-| `SceneStrobe` | Strobe | generator | Geometry | 77 |
+| `SceneStrobe` | Scene Strobe | generator | Geometry | 77 |
 | `Skin` | Skin | generator | Geometry | 60 |
-| `SoftFocus` | Soft Focus | effect | Stylize | 2 |
+| `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
@@ -457,10 +456,10 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `TimeScrub` | Time Scrub | generator | Geometry | 77 |
 | `Transform` | Transform | effect | Spatial | 4 |
-| `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
+| `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 12 |
-| `WireframeDepth` | Wireframe Depth | effect | Diagnostic | 8 |
+| `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
 
 <!-- END GENERATED: registered-node-index -->
 

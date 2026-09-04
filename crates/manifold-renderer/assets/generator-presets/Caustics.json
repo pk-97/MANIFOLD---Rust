@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Caustics",
-  "description": "Light through water, computed in closed form \u2014 no particles, no finite differences. Four directional plane waves play the water surface; a plane-wave sum has an analytic Hessian, so the ray-bundle focusing intensity I = shine/|det(I + depth\u00b7H)| is evaluated exactly per pixel in one JSON-editable kernel (edit the wave table to reshape the water). Fold lines and cusps go HDR-bright where the Jacobian genuinely collapses \u2014 the same physics as photon caustics, perfectly smooth and anti-aliased, one dispatch. Depth is the performance card: bind the sub-bass send and calm shimmer sharpens into violent folded ribbons. Extended Reinhard display with canvas-area-compensated intensity on pure black.",
   "presetMetadata": {
     "id": "Caustics",
     "displayName": "Caustics",

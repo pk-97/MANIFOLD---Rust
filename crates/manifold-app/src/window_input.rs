@@ -2269,7 +2269,15 @@ impl Application {
         {
             let panel_action = match mode {
                 BrowserPopupMode::Effect => {
-                    PanelAction::Params(ParamsAction::AddEffect(tab, manifold_ui::types::PresetTypeId::from_string(type_id)))
+                    PanelAction::Params(ParamsAction::AddEffect {
+                        tab,
+                        // The session's layer_id — captured at open from the
+                        // invoking button — rides the pick atomically
+                        // (PRESET_BROWSER_AUDITION D2); dispatch builds
+                        // EffectTarget from it.
+                        layer_id,
+                        preset: manifold_ui::types::PresetTypeId::from_string(type_id),
+                    })
                 }
                 BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
                     layer_id,

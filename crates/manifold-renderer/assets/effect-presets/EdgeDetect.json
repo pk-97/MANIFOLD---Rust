@@ -1,11 +1,10 @@
 {
   "version": 2,
   "name": "EdgeDetect",
-  "description": "Edge detection effect that finds and highlights boundaries in the input image. The source feeds through a Sobel 3x3 edge detector with selectable sensitivity and blend amount, then outputs the result. Threshold sets the sensitivity to noise, and Amount controls the final glow intensity.",
   "presetMetadata": {
     "id": "EdgeDetect",
     "displayName": "Edge Detect",
-    "category": "Diagnostic",
+    "category": "Stylize",
     "oscPrefix": "edgeDetect",
     "legacyDiscriminant": 25,
     "available": true,

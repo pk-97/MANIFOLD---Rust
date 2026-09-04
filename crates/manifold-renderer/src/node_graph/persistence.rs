@@ -1407,6 +1407,7 @@ mod tests {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
+                layer_types: None,
             params: vec![],
             bindings: vec![BindingDef {
                 id: "bad".into(),

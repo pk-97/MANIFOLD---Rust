@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "ChromaticAberration",
-  "description": "Chromatic aberration via RGB channel separation. The source image flows through three stages. First, a radial or linear direction field is built from the canvas center or a specified angle, with falloff control. That field is scaled by the offset parameter (negated to pixel coordinates) to set the per-channel displacement. The chromatic_displace kernel reads the source at three sample points along the field (red outward, green center, blue inward) and recombines them. Finally, a mix node crossfades the separated result back against the source by the amount slider, skipping the effect when amount is zero. The direction field (radial vs. linear) and angle are card-controlled; falloff and offset drive the visual intensity.",
   "presetMetadata": {
     "id": "ChromaticAberration",
     "displayName": "Chromatic Aberration",

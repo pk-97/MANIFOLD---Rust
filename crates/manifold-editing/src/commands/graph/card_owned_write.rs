@@ -103,6 +103,7 @@ fn card_owned_def(mirror: bool) -> EffectGraphDef {
             scene_bounds: None,
             available: true,
             is_line_based: false,
+                layer_types: None,
             params: vec![spec],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -341,6 +342,7 @@ fn pruned_card_slot_refuses_redirect() {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: Vec::new(),
                 bindings: vec![
                     binding("authored", "n_a", "amount", false),

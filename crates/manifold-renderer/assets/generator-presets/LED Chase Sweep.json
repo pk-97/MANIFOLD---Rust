@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Chase Sweep",
-  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): a smooth comet sweeps horizontally across all strips. beat_ramp at attack=1 is a tempo-locked sawtooth phase; the direction mux flips its sign for Reverse; uv_field projected through field_combine (u in every channel, so the comet IS the signal) is negated (scale_offset_image scale=-1) and shifted by the signed phase, node.wrap folds it back to [0,1), and the comet shape is 1 - smoothstep(1/8, 1/8 + Tail, fract(phase - u)): a flat one-cell head at the phase position (the whole head cell reads full brightness on the grid) with the tail decaying behind it over Tail. Tail is a true length — bigger = longer. colorize at amount=1/focus=0 turns luma into HSV(hue, sat, 1) * brightness. Section 2.5 audit: every atom exists (beat_ramp, switch_value, math, uv_field + field_combine, scale_offset_image, wrap, smoothstep, invert, colorize) — no new primitive.",
   "presetMetadata": {
     "id": "LED Chase Sweep",
     "displayName": "LED Chase Sweep",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledChaseSweep",
     "available": true,
     "isLineBased": false,

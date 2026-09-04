@@ -325,8 +325,12 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
 
         // ── Effect modulation ──────────────────────────────────────
         // ── Effect management ──────────────────────────────────────
-        ParamsAction::AddEffectClicked(_tab) => DispatchResult::handled(),
-        // SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier picker opens an
+        // The browser open is intercepted by `try_open_dropdown` before
+        // dispatch; reaching here means the popup couldn't open. The
+        // target rides the request/session atomically from the click
+        // (PRESET_BROWSER_AUDITION D2), so there is nothing to re-resolve.
+        ParamsAction::AddEffectClicked { .. } => DispatchResult::handled(),
+        // SCENE_MODIFIER_FRAMEWORK section 3.7 (Inspector card region + picker): the modifier picker opens an
         // app-side overlay (UIRoot::try_open_dropdown); the dispatch layer
         // has nothing to mutate.
         ParamsAction::AddModifierClicked(_layer_id) => DispatchResult::handled(),
@@ -774,7 +778,11 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::structural()
         }
 
-        ParamsAction::AddEffect(tab, effect_type) => {
+        ParamsAction::AddEffect {
+            tab,
+            layer_id,
+            preset: effect_type,
+        } => {
             use manifold_core::effects::PresetInstance;
             // The action carries the chosen preset id directly (registry
             // entries AND project-embedded presets), so no index lookup.
@@ -782,20 +790,20 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let defaults = manifold_core::preset_definition_registry::get_defaults(&effect_type);
             let mut effect = PresetInstance::new(effect_type.clone());
             effect.params = manifold_core::params::ParamManifest::from_params(defaults);
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
+            // PRESET_BROWSER_AUDITION D2 — context-atomic add: the target is
+            // the invocation context captured at the open click and carried
+            // through the popup session (routing → request → Selected →
+            // here), NOT the active layer re-resolved at pick time. The
+            // `layer_id` is `Some` exactly when the browser was opened from
+            // a layer's "+ Add Effect" (master opens carry `None`).
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,
                 InspectorTab::Layer | InspectorTab::Group => {
-                    if let Some(idx) = layer_idx {
-                        let layer_id = ctx.project
-                            .timeline
-                            .layers
-                            .get(idx)
-                            .map(|l| l.layer_id.clone())
-                            .unwrap_or_default();
-                        EffectTarget::Layer { layer_id }
-                    } else {
+                    let Some(layer_id) = layer_id else {
                         return DispatchResult::handled();
+                    };
+                    EffectTarget::Layer {
+                        layer_id: layer_id.clone(),
                     }
                 }
                 InspectorTab::Clip => {

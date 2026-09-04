@@ -1,11 +1,10 @@
 {
   "version": 2,
   "name": "Infrared",
-  "description": "Thermal-vision palette remap engine, organized by data flow. The preset selects one of ten thermal palettes (White Hot, Black Hot, Green NV, Iron Bow, Rainbow, Lava, Arctic, Magenta, Electric, Toxic) and maps the input image by BT.601 luminance with adjustable contrast.\n\nThe top level shows the spine: source input feeds a color LUT node (which samples the selected palette by luma), and the result goes to final output. The Palette Bank group contains all ten palette definitions as gradient ramps and the mux that selects which palette feeds the LUT. Nine palettes are recreated as piecewise-linear gradients over luma [0,2]; Rainbow is a single-cycle hue ramp (domain=1) for a clean color progression. The palette selector dial addresses the active one.\n\nThe groups flatten at load to a byte-identical flat graph, preserving all bindings and slot connections.",
   "presetMetadata": {
     "id": "Infrared",
     "displayName": "Infrared",
-    "category": "Color",
+    "category": "Filmic",
     "oscPrefix": "infrared",
     "legacyDiscriminant": 37,
     "available": true,

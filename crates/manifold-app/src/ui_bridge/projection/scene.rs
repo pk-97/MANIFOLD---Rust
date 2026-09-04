@@ -136,6 +136,7 @@ mod sections_for_doc_ids_tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
+                layer_types: None,
             params: vec![
                 ParamSpecDef {
                     id: "1_intensity".to_string(),

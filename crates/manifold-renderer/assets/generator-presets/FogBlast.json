@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Fog Blast",
-  "description": "SCENE_FX P3 scene-mod preset: a beat-synced fog-density swell. Atmosphere density is port-shadowed by node.beat_ramp so each beat pushes a haze front through the scene, then snaps back. No new atoms — just shipped primitives wired together.",
   "presetMetadata": {
     "id": "FogBlast",
     "displayName": "Fog Blast",

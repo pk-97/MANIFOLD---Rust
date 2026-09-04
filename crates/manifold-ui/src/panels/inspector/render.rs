@@ -199,6 +199,10 @@ impl InspectorCompositePanel {
         config: Option<&ParamSurface>,
         layer_id: Option<LayerId>,
     ) {
+        // The layer scope's identity, whether or not this layer has a
+        // generator card — the Add-Effect routing reads it to target the
+        // clicked layer's effect list (PRESET_BROWSER_AUDITION D2).
+        self.inspecting_layer_id = layer_id.clone();
         // The generator card is a single optional, distinct from the effect
         // lists (it carries no EffectId and is outside the selection +
         // drag-reorder model). Reuse the existing panel when the selection still

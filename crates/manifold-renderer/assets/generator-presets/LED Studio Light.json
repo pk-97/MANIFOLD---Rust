@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Studio Light",
-  "description": "MVP-P2 utility family (LED_STRIPS_DESIGN.md section 5b.4): a dimmable work light for photo/debug sessions — LED Fill's full-blast fill grown with a real Brightness param. circle_mask at radii 4 fills the UV frame with white; node.exposure multiplies the field by Brightness (0-1, default 0.35 — photo work wants 10-40%, not the strips' accent-level full blast); colorize at amount=1/focus=0 turns luma into HSV(hue, saturation, 1), so Temperature is hue at low saturation (default 45 deg at 0.15 = warm neutral). Section 2.5 audit: every atom exists (circle_mask, exposure, colorize — LED Fill + LED Pulse precedents), no new primitive.",
   "presetMetadata": {
     "id": "LED Studio Light",
     "displayName": "LED Studio Light",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledStudioLight",
     "available": true,
     "isLineBased": false,
