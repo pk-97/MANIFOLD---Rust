@@ -1,13 +1,10 @@
 # LED Strips — Play the Strips + Generalized Patch
 
-**Status: IN PROGRESS — MVP-P1 + MVP-P2 SHIPPED 2026-09-03 (LED layer type, switch routing, creation UI,
-L3 flow; nine-pattern pack: Fill, Chase Sweep, Pulse, Step Chase, Step Scan, Burst, Cycle, Studio Light,
-Strip ID, Pixel Walk — all value-gated at 8×120, all fused, zero new primitives). MVP-P3 designed
-2026-09-04 (DMX first-class: rename to `LayerType::Dmx`, gen-carrying predicate fixes picker no-op +
-envelope ratchet, LED browser category + lane-scoped open — section 5b.4, not yet built). Owed: MVP-P3
-execution; Vec4 color binding (own pass — pack params are hue/sat until then); in-app LED grid preview
-(deferred, section 5b.5); Peter's L4 rig pass (pad-fire each preset). Original patch/sACN/island phases
-P1–P3 remain approved and unbuilt; deferred in section 5b.5.**
+**Status: IN PROGRESS — MVP-P1 + MVP-P2 SHIPPED 2026-09-03 (LED layer type, nine-pattern
+pack, value-gated, fused); MVP-P3a SHIPPED 2026-09-04 (hosts_generator guard fixes);
+MVP-P3b SHIPPED 2026-09-04 (`LayerType::Dmx` rename, legacy load alias, led_tap deleted).
+Owed: MVP-P3c (LED browser category); Vec4 color binding; LED grid preview + patch/sACN/
+island phases (deferred, section 5b.5).**
 **Prerequisites: none for the MVP (LED-resolution compositing machinery already exists — see MVP audit).
 Original P2 (strip island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 8 (Execution protocol)

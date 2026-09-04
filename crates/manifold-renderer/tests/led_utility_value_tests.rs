@@ -1,7 +1,7 @@
 //! MVP-P2 utility-family value gates (LED_STRIPS_DESIGN.md section 5b.4):
 //! per-preset value tests driving the production render path — bundled preset
 //! JSON → PresetRuntime (the compositor's own def→MetalBackend constructor) →
-//! clip texture on a LayerType::Led layer → LayerCompositor LED composite at
+//! clip texture on a LayerType::Dmx layer → LayerCompositor LED composite at
 //! the native 8×120 grid — asserted against a CPU-computed model of each
 //! pattern. Sibling of `led_preset_value_tests` (performance family), whose
 //! LedPresetFixture approach this reuses; that file is untouched.
@@ -121,7 +121,7 @@ impl LedUtilityFixture {
 
     /// Render one frame of the preset at `beats` (120 bpm → time = beats/2)
     /// with every card param at its JSON default except the `overrides`
-    /// entries, push it through the compositor as a LayerType::Led layer, and
+    /// entries, push it through the compositor as a LayerType::Dmx layer, and
     /// return the decoded LED composite at 8×120 (row-major, RGB triples).
     fn render_led(&mut self, beats: f64, overrides: &[(&str, f32)]) -> Vec<(f32, f32, f32)> {
         self.frame_count += 1;
@@ -169,7 +169,7 @@ impl LedUtilityFixture {
             opacity: 1.0,
             hidden: false,
             blit_to_led: false,
-            layer_type: LayerType::Led,
+            layer_type: LayerType::Dmx,
             effects: &[],
             effect_groups: &[],
             parent_layer_id: None,

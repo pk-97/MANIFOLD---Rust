@@ -306,8 +306,8 @@ impl Layer {
     }
 
     #[inline]
-    pub fn is_led(&self) -> bool {
-        self.layer_type == LayerType::Led
+    pub fn is_dmx(&self) -> bool {
+        self.layer_type == LayerType::Dmx
     }
 
     /// Model-side LED routing predicate — the single model derivation point
@@ -319,9 +319,20 @@ impl Layer {
     #[inline]
     pub fn routes_to_led(&self) -> bool {
         match self.layer_type {
-            LayerType::Led => true,
+            LayerType::Dmx => true,
             _ => self.blit_to_led,
         }
+    }
+
+    /// Gen-carrying predicate — the single "this layer hosts a generator"
+    /// test every generator-mutation guard reads (LED_STRIPS_DESIGN.md
+    /// section 5b D16). Type membership, NOT `gen_params` presence:
+    /// `change_generator_type`/`restore_generator_state` create gen_params
+    /// on demand to serve Generator layers that have no generator yet, so a
+    /// presence-based guard would turn that path into a silent no-op.
+    #[inline]
+    pub fn hosts_generator(&self) -> bool {
+        matches!(self.layer_type, LayerType::Generator | LayerType::Dmx)
     }
 
     /// Image clips may only be dropped here.
@@ -881,7 +892,7 @@ impl Layer {
     /// to undo a type change snapshot the old graph alongside the old
     /// params and restore both together.
     pub fn change_generator_type(&mut self, new_type: PresetTypeId) {
-        if self.layer_type != LayerType::Generator {
+        if !self.hosts_generator() {
             return;
         }
         let gp = self
@@ -910,7 +921,7 @@ impl Layer {
     ///
     /// Run on load to repair files saved while the identity was desynced.
     pub fn reconcile_generator_identity(&mut self) -> bool {
-        if self.layer_type != LayerType::Generator {
+        if !self.hosts_generator() {
             return false;
         }
         let Some(gp) = self.gen_params.as_mut() else {
@@ -942,7 +953,7 @@ impl Layer {
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
-        if self.layer_type != LayerType::Generator {
+        if !self.hosts_generator() {
             return;
         }
         let gp = self
@@ -1480,7 +1491,7 @@ mod tests {
         // and the reloaded layer still routes to the LED composite (the
         // property the render path keys on).
         let mut project = crate::project::Project::default();
-        let mut led = Layer::new("LED".into(), LayerType::Led, 0);
+        let mut led = Layer::new("LED".into(), LayerType::Dmx, 0);
         led.gen_params = Some(PresetInstance::new_generator(crate::PresetTypeId::new(
             "LED Fill",
         )));
@@ -1500,7 +1511,7 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize project");
 
         let led = &reloaded.timeline.layers[0];
-        assert_eq!(led.layer_type, LayerType::Led, "type survives the round trip");
+        assert_eq!(led.layer_type, LayerType::Dmx, "type survives the round trip");
         assert!(
             led.routes_to_led(),
             "reloaded LED layer still routes to the LED composite"

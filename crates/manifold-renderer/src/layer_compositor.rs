@@ -374,7 +374,7 @@ impl LedRoute {
     /// The single route derivation point (D11).
     fn from_layer(layer_type: manifold_core::LayerType, blit_to_led: bool) -> Self {
         match layer_type {
-            manifold_core::LayerType::Led => Self::Direct,
+            manifold_core::LayerType::Dmx => Self::Direct,
             _ if blit_to_led => Self::Mirror,
             _ => Self::None,
         }
@@ -492,10 +492,6 @@ pub struct LayerCompositor {
     /// ACES tonemapping pipeline. Matches Unity's CompositorStack.tonemapMaterial +
     /// tonemappedOutput. Applied as the final step after master effects.
     tonemap: TonemapPipeline,
-    /// LED tap: dedicated copy of the pre-tonemap composite, populated when
-    /// led_exit_index == 0. Avoids the main buffer being overwritten by tonemap
-    /// and master effects before the LED pipeline reads it.
-    led_tap: Option<RenderTarget>,
     /// Pre-allocated scratch buffer for per-layer output descriptors.
     /// Cleared and populated each frame by generate_layers
     /// to avoid per-frame heap allocation.
@@ -686,7 +682,6 @@ impl LayerCompositor {
             master_effect_chain: None,
             plugin_warmups: crate::plugin_prewarm::prewarm_all(device),
             tonemap: TonemapPipeline::new(device, width, height),
-            led_tap: None,
             layer_outputs_scratch: Vec::new(),
             clip_post_fx_scratch: Vec::new(),
             group_bufs: AHashMap::default(),
@@ -1466,17 +1461,6 @@ impl LayerCompositor {
         let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
         if !has_led_layers {
             return WarmupOutcome::Quiescent;
-        }
-
-        let (main_w, main_h) = (self.main.width(), self.main.height());
-        if self.led_tap.is_none() {
-            self.led_tap = Some(RenderTarget::new(
-                device,
-                main_w,
-                main_h,
-                GpuTextureFormat::Rgba16Float,
-                "LED_Tap",
-            ));
         }
 
         let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
@@ -2954,24 +2938,6 @@ impl Compositor for LayerCompositor {
         // master effects overwrite `main.source`.
         self.publish_layer_skins(gpu, frame);
 
-        // LED tap: capture pre-tonemap composite when exit index is 0.
-        // main.source holds the all-layers composite at this point, before
-        // tonemap and master effects overwrite it.
-        if frame.led_exit_index == 0 {
-            let (w, h) = (self.main.width(), self.main.height());
-            let tap = self.led_tap.get_or_insert_with(|| {
-                RenderTarget::new(gpu.device, w, h, GpuTextureFormat::Rgba16Float, "LED_Tap")
-            });
-            if tap.width != w || tap.height != h {
-                *tap =
-                    RenderTarget::new(gpu.device, w, h, GpuTextureFormat::Rgba16Float, "LED_Tap");
-            }
-            gpu.copy_texture_to_texture(self.main.source_texture(), &tap.texture, w, h);
-        } else {
-            // Free the tap buffer when not needed
-            self.led_tap = None;
-        }
-
         // Tonemap the composited scene (before master glow effects).
         self.tonemap
             .apply(gpu, self.main.source_texture(), &frame.tonemap);
@@ -3166,12 +3132,10 @@ impl Compositor for LayerCompositor {
         for ec in self.group_effect_chains.values_mut() {
             *ec = None;
         }
-        // LED tap will be recreated at new size on next frame if needed.
         // The per-layer LED composite size comes from `frame.led_composite_size`
         // (the native LED grid), independent of compositor resolution — its
         // buffers reallocate lazily in blend_layers_to_led / render() if the
         // frame's LED size differs.
-        self.led_tap = None;
     }
 
     fn dimensions(&self) -> (u32, u32) {
@@ -3220,10 +3184,6 @@ impl Compositor for LayerCompositor {
         for processor in self.plugin_warmups.iter_mut() {
             processor.flush_background_work();
         }
-    }
-
-    fn led_tap_texture(&self) -> Option<&GpuTexture> {
-        self.led_tap.as_ref().map(|t| &t.texture)
     }
 
     fn led_composite_texture(&self) -> Option<&GpuTexture> {
@@ -3760,7 +3720,7 @@ mod led_warmup_tests {
     }
 
     #[test]
-    fn led_tap_resident_after_prewarm() {
+    fn led_composite_resident_after_prewarm() {
         let device = crate::test_device();
         let mut comp = LayerCompositor::new(&device, 64, 64);
         let project = led_project();
@@ -3770,10 +3730,6 @@ mod led_warmup_tests {
             outcome,
             manifold_core::WarmupOutcome::Quiescent,
             "LED resource warmup should be synchronous"
-        );
-        assert!(
-            comp.led_tap.is_some(),
-            "LED tap render target should be pre-created for LED projects"
         );
         assert!(
             comp.led_main.is_some(),
@@ -4207,7 +4163,7 @@ mod led_composite_pixel_tests {
         LayerSpec {
             layer_id: LayerId::from(layer_id),
             layer_index,
-            layer_type: manifold_core::LayerType::Led,
+            layer_type: manifold_core::LayerType::Dmx,
             blit_to_led: false,
             is_group: false,
             parent,

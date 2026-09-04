@@ -75,10 +75,16 @@ instead of trusting anyone to clean up.
 only wipes the ONE slot it hands out, so a finished wave leaves every
 other slot's warm target on disk until some future acquire happens to
 pick it (2026-07-29: ten idle landed slots, 201 GB, SessionStart alarm).
-Scrub touches idle slots only (leased, dirty, unlanded, or live-session
-slots are skipped): wipe any target/ over TARGET_CAP_GB, then, while the
-pool exceeds SCRUB_TO_GB, wipe the least-recently-built idle targets so
-the warmest caches survive. A SessionEnd hook runs it automatically
+Only a live lease or a live session shields a slot; anything else loses
+its target/, including pinned slots — dirty trees and sole holders of
+unlanded commits (2026-09-04: those two categories held 140 of 177 GB,
+because killed sessions never fire SessionEnd and nothing else ever
+touched them). The pin lives in the checkout and the git object store;
+target/ is cargo's cache alone, so wiping it reclaims the disk without
+touching the work — a resumed lane pays one cold build, nothing more.
+For idle slots: wipe any target/ over TARGET_CAP_GB, then, while the
+pool exceeds SCRUB_TO_GB, wipe the least-recently-built targets so the
+warmest caches survive. A SessionEnd hook runs it automatically
 (.claude/hooks/session-end-worktree-scrub.py); by hand it is always safe.
 
 Acquire also drops a `.metadata_never_index` marker at the pool root so
@@ -494,15 +500,32 @@ def build_recency(wt):
 def cmd_scrub(_args):
     slots = pool_slots()
     holders = branch_holders()
-    idle = []
+    idle, pinned = [], []
     for wt in slots:
         cat, reason, _ = slot_state(wt, holders)
-        if cat not in (IDLE, RECLAIMABLE):
+        if cat == IN_USE:
             print(f"KEEP {wt.name}: {reason}")
         elif slot_has_live_session(wt):
             print(f"KEEP {wt.name}: live session inside it")
-        else:
+        elif cat in (IDLE, RECLAIMABLE):
             idle.append(wt)
+        else:
+            blocked, why = lease_blocks(wt)
+            if blocked:
+                # A live lease is a contract — even a dirty tree doesn't make
+                # its cache fair game until the lease expires.
+                print(f"KEEP {wt.name}: {why}")
+            else:
+                pinned.append((wt, reason))
+    # Pinned slots (dirty tree, sole holder of unlanded commits) keep their
+    # checkout and branch; only the cargo cache leaves disk. Wiping target/
+    # cannot lose work — it is rebuilt from source on the next build.
+    for wt, reason in pinned:
+        size = target_bytes(wt)
+        if size:
+            shutil.rmtree(wt / "target", ignore_errors=True)
+            print(f"CACHE-ONLY {wt.name}: {size / 2**30:.1f}G target wiped, "
+                  f"work untouched (pinned: {reason})")
     for wt in idle:
         enforce_target_cap(wt)
 

@@ -706,3 +706,27 @@ mod enforce_tree_order_tests {
         assert!(t.layers.is_empty());
     }
 }
+
+#[cfg(test)]
+mod add_layer_tests {
+    use super::*;
+    use crate::preset_type_id::PresetTypeId;
+
+    /// MVP-P3a pin (LED_STRIPS_DESIGN.md section 5b D16): `add_layer` seeds
+    /// the generator through `change_generator_type`, so widening the guard
+    /// to `hosts_generator()` is what makes an LED layer arrive with its
+    /// default preset. Pre-fix the `!= Generator` guard no-opped and the
+    /// layer rendered black until a generator was assigned by hand.
+    #[test]
+    fn add_led_layer_seeds_gen_params_via_change_generator_type() {
+        let mut t = Timeline::default();
+        t.add_layer("LED 1", crate::types::LayerType::Dmx, PresetTypeId::new("LED Fill"));
+
+        let layer = &t.layers[0];
+        assert_eq!(layer.layer_type, crate::types::LayerType::Dmx);
+        let genp = layer
+            .gen_params()
+            .expect("add_layer must seed gen_params on an LED layer (D12)");
+        assert_eq!(genp.generator_type(), &PresetTypeId::new("LED Fill"));
+    }
+}

@@ -21,7 +21,6 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::file_loader::{file_loader_kind, AssetFamily, NodeFileLoad};
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
-use manifold_core::types::LayerType;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -139,11 +138,12 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
         }
     }
 
-    // String params on every generator layer. Only `LayerType::Generator`
-    // layers carry a `gen_params` instance today; effects gain string params as
-    // the capability gap closes — the same walk extends to them unchanged.
+    // String params on every gen-carrying layer (D16 predicate — Generator
+    // and Dmx lanes both host generators; BUG-bbg5). Effects gain string
+    // params as the capability gap closes — the same walk extends to them
+    // unchanged.
     for layer in &project.timeline.layers {
-        if layer.layer_type != LayerType::Generator {
+        if !layer.hosts_generator() {
             continue;
         }
         let Some(inst) = layer.gen_params() else {
@@ -677,6 +677,7 @@ mod tests {
     use manifold_core::id::NodeId;
     use manifold_core::layer::Layer;
     use manifold_core::preset_type_id::PresetTypeId;
+    use manifold_core::types::LayerType;
     use manifold_core::video::VideoClip;
 
     fn sp(id: &str, default: &str, file_path: bool) -> StringParamSpecDef {
@@ -995,6 +996,47 @@ mod tests {
         assert!(!refs.iter().any(|r| {
             matches!(&r.target, AssetTarget::StringParam { key, .. } if key == "mesh_path")
         }));
+    }
+
+    /// BUG-bbg5 pin (LED_STRIPS_DESIGN.md section 5b D16): the string-param
+    /// walk gates on `hosts_generator()` (Generator + Dmx), not
+    /// `== Generator`. A Dmx lane hosts a generator and its file-path string
+    /// params must collect — pre-widening the walk silently skipped them and
+    /// the export dropped the referenced assets.
+    #[test]
+    fn dmx_layer_string_params_collect() {
+        let mut project = Project::default();
+        let embedded = path_preset(
+            "dmx_mesh",
+            vec![sp("mesh_path", "/mnt/models/led_mesh.glb", true)],
+            vec![StringBindingDef {
+                id: "mesh_path".to_string(),
+                label: "Model File".to_string(),
+                default_value: "/mnt/models/led_mesh.glb".to_string(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("mesh"),
+                    param: "path".to_string(),
+                },
+            }],
+            vec![node("mesh", "node.gltf_mesh_source")],
+        );
+        project.upsert_embedded_preset(embedded);
+        // Same construction as AddLayerCommand's Dmx arm: build as a
+        // generator layer (seeds gen_params), then flip the type — gen_params
+        // has no public setter.
+        let mut layer = Layer::new_generator("DMX 1".into(), PresetTypeId::new("dmx_mesh"), 0);
+        layer.layer_type = LayerType::Dmx;
+        project.timeline.layers.push(layer);
+
+        let refs = collect_asset_paths(&project);
+        assert!(
+            refs.iter().any(|r| {
+                r.kind == AssetKind::Mesh
+                    && r.path == std::path::Path::new("/mnt/models/led_mesh.glb")
+                    && matches!(&r.target, AssetTarget::StringParam { key, .. } if key == "mesh_path")
+            }),
+            "DMX lane string params must collect (hosts_generator gate)"
+        );
     }
 
     /// D5 chain: the JSON `"file_path": true` marker lands on
