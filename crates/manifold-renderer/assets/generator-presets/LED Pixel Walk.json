@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Pixel Walk",
     "displayName": "LED Pixel Walk",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledPixelWalk",
     "available": true,
     "isLineBased": false,

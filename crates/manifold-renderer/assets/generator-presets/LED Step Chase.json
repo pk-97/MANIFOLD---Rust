@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Step Chase",
     "displayName": "LED Step Chase",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledStepChase",
     "available": true,
     "isLineBased": false,

@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Fill",
     "displayName": "LED Fill",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledFill",
     "available": true,
     "isLineBased": false,

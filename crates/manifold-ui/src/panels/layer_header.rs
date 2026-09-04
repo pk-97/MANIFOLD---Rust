@@ -907,6 +907,14 @@ impl LayerHeaderPanel {
         self.layers = layers;
     }
 
+    /// The last-synced layer snapshot (state_sync → `set_layers`), id-keyed
+    /// lookups included. This is the UiRoot-side reach a layer's type
+    /// (`is_led_layer` = `LayerType::Dmx`) without a project reference —
+    /// e.g. the DMX-lane scoped browser open (LED_STRIPS_DESIGN MVP-P3c).
+    pub fn layers(&self) -> &[LayerInfo] {
+        &self.layers
+    }
+
     /// Number of layers in the current build.
     pub fn layer_count(&self) -> usize {
         self.rows.len()

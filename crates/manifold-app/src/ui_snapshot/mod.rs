@@ -278,7 +278,7 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, selectionclips, audiosends, gltfscene, empty, graph, editor, transform, all, project:<path>)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, dmxcard, scrollshrink, hairlineclips, automation, selectionclips, audiosends, gltfscene, empty, graph, editor, transform, all, project:<path>)"
         );
         std::process::exit(2);
     };
@@ -304,6 +304,7 @@ fn render_ui_scene(
         || scene == "gltfscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
+        || scene == "dmxcard"
     {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
@@ -314,7 +315,9 @@ fn render_ui_scene(
         // the imported generator's sectioned card is the subject. `bug047` is the
         // AUDIO_SETUP_DOCK D1 gate: the inspector must stay visible on the right
         // so the docked column (built LEFT of it) reads as pushing content, not
-        // replacing the inspector.
+        // replacing the inspector. `dmxcard` (LED_STRIPS_DESIGN MVP-P3c L3) is
+        // the same shape: the selected DMX layer's LED Fill card is the subject —
+        // without the inspector the card's Change button never renders.
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
