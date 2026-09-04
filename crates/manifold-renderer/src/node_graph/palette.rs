@@ -209,6 +209,7 @@ mod tests {
                 "Atmosphere",
                 "Beat Gate",
                 "Beat Ramp",
+                "Camera Switch",
                 "Canvas Area Scale",
                 "Clip Trigger Cycle",
                 "Color Sample",

@@ -1,11 +1,12 @@
-//! SCENE_LOOP_DESIGN P4 round-trip gate (D6 whitelist + D11 stamping
-//! idempotence):
-//! apply (REAL plan builder + REAL command) → save V1 → reload → run the
-//! load-time migration the app runs (scene-object wires + scene exposures)
-//! → reconcile param manifests → assert the "Scene Loop" section rows are
-//! EXACTLY the performer whitelist (Bars, Copies, Height, Lateral), values
-//! intact, zero duplicate binding targets, every binding resolves to a live
-//! node, and a performer-edited row value survives the round trip.
+//! SCENE_LOOP_DESIGN P4 round-trip gate (D6-migrated to the generic
+//! scene-modifier pair; D6 whitelist + D11 stamping idempotence):
+//! apply (REAL descriptor plan builder + REAL generic command) → save V1 →
+//! reload → run the load-time migration the app runs (scene-object wires +
+//! scene exposures + the pre-switch loop migration) → reconcile param
+//! manifests → assert the "Scene Loop" section rows are EXACTLY the
+//! performer whitelist (Bars, Copies, Height, Lateral), values intact, zero
+//! duplicate binding targets, every binding resolves to a live node, and a
+//! performer-edited row value survives the round trip.
 //!
 //! Fails on the pre-P4 code: the apply stamped EVERY param of EVERY loop
 //! node, so the section carried duplicate Axis / Cell Size rows (one set
@@ -21,8 +22,8 @@ use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_editing::command::Command;
-use manifold_editing::commands::graph::ApplySceneLoopCommand;
-use manifold_renderer::node_graph::gltf_import::assemble_scene_loop_plan;
+use manifold_editing::commands::graph::ApplySceneModifierCommand;
+use manifold_renderer::node_graph::scene_modifier::{build_plan, LOOP_KIND_ID};
 
 fn node(id: u32, node_id: &str, type_id: &str, params: BTreeMap<String, SerializedParamValue>) -> EffectGraphNode {
     EffectGraphNode {
@@ -127,7 +128,10 @@ fn apply_loop(project: &mut Project, def: EffectGraphDef) -> (manifold_foundatio
         .find(|n| n.type_id == "node.render_scene")
         .expect("render_scene")
         .id;
-    let plan = assemble_scene_loop_plan(
+    // The REAL descriptor plan builder (D1) — the same registry dispatch the
+    // panel's "Enable Scene Loop" uses.
+    let plan = build_plan(
+        LOOP_KIND_ID,
         project.timeline.layers[idx].generator_graph().expect("graph"),
         render_scene_id,
     )
@@ -141,7 +145,7 @@ fn apply_loop(project: &mut Project, def: EffectGraphDef) -> (manifold_foundatio
         nodes: Vec::new(),
         wires: Vec::new(),
     };
-    let mut cmd = ApplySceneLoopCommand::new(target, Vec::new(), plan, catalog);
+    let mut cmd = ApplySceneModifierCommand::new(target, Vec::new(), plan, catalog);
     cmd.execute(project);
     (layer_id, idx)
 }
@@ -293,12 +297,14 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
     manifold_io::saver::save_project_v1(&project, &path).expect("save v1");
     let mut reloaded = manifold_io::loader::load_project(&path).expect("load v1");
 
-    // The project_io.rs:410 load path: per-layer wire migration + exposure
-    // migration, then the manifest reconcile.
+    // The project_io.rs load path: per-layer wire migration + exposure
+    // migration + the pre-switch loop migration (D8), then the manifest
+    // reconcile.
     for layer in &mut reloaded.timeline.layers {
         if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
             manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
+            manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
         }
     }
     reloaded.reconcile_param_manifests();
@@ -382,10 +388,12 @@ fn scene_loop_renumber_after_flatten_mints_no_second_exposure() {
     project.timeline.layers[idx].gen_params_or_init().graph = Some(flat.clone());
 
     // Load migration on the renumbered def — must not mint a second
-    // exposure set for the renumbered doc ids.
+    // exposure set for the renumbered doc ids (D11: idempotence by binding
+    // target, not by stamped id).
     let mut def = flat;
     manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def);
     let _ = manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
+    let _ = manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(&mut def);
 
     assert_whitelist(&def, "after flatten renumber + migration");
 }

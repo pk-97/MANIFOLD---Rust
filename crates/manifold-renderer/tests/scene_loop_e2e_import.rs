@@ -1,12 +1,14 @@
-//! SCENE_LOOP_DESIGN P2 end-to-end gate: drive the REAL renderer-side plan
-//! builder (`assemble_scene_loop_plan`) through the REAL editing command
-//! (`ApplySceneLoopCommand`) against a REAL imported GLB graph
-//! (`assemble_import_graph` on `tests/fixtures/gltf/apricot_tl05.glb`) and
-//! assert the applied graph's structural facts.
+//! SCENE_LOOP_DESIGN P2 end-to-end gate (D6-migrated): drive the REAL
+//! renderer-side plan builder (the `scene_loop` modifier descriptor's
+//! `plan_builder`, SCENE_MODIFIER_FRAMEWORK D1) through the REAL generic
+//! editing command (`ApplySceneModifierCommand`) against a REAL imported
+//! GLB graph (`assemble_import_graph` on
+//! `tests/fixtures/gltf/apricot_tl05.glb`) and assert the applied graph's
+//! structural facts.
 //!
-//! This is the seam that let P1 ship: a hand-built `SceneLoopPlan` in a unit
-//! test never exercised production plan construction. Here the plan comes
-//! from the SAME builder the panel's "Enable Scene Loop" dispatches.
+//! This is the seam that let P1 ship: a hand-built plan in a unit test never
+//! exercised production plan construction. Here the plan comes from the
+//! SAME builder the panel's "Enable Scene Loop" dispatches.
 //!
 //! Wrap parity (INV-3) on this real-import path was attempted and DELETED
 //! (P4): two frames of ONE session through ONE shared GpuDevice still differ
@@ -22,10 +24,9 @@ use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_editing::command::Command;
-use manifold_editing::commands::graph::ApplySceneLoopCommand;
-use manifold_renderer::node_graph::gltf_import::{
-    assemble_import_graph, assemble_scene_loop_plan,
-};
+use manifold_editing::commands::graph::ApplySceneModifierCommand;
+use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_renderer::node_graph::scene_modifier::{build_plan, LOOP_KIND_ID};
 use manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
 
 const FIXTURE: &str = concat!(
@@ -53,11 +54,11 @@ fn scene_loop_apply_import_renders_copies() {
         .expect("import has a render_scene node")
         .id;
 
-    // The REAL plan builder (D5) — the same one the panel dispatches.
-    let plan = assemble_scene_loop_plan(&def, render_scene_id)
+    // The REAL plan builder (D1) — the same one the panel dispatches.
+    let plan = build_plan(LOOP_KIND_ID, &def, render_scene_id)
         .expect("plan builder must succeed on the imported scene");
     assert!(
-        !plan.instance_wirings.is_empty(),
+        !plan.group_splices.is_empty(),
         "plan must splice every object group's instances port"
     );
 
@@ -89,7 +90,7 @@ fn scene_loop_apply_import_renders_copies() {
         nodes: Vec::new(),
         wires: Vec::new(),
     };
-    let mut cmd = ApplySceneLoopCommand::new(target, Vec::new(), plan, catalog);
+    let mut cmd = ApplySceneModifierCommand::new(target, Vec::new(), plan, catalog);
     cmd.execute(&mut project);
 
     let applied = project.timeline.layers[idx]
@@ -121,14 +122,45 @@ fn scene_loop_apply_import_renders_copies() {
         "loop_camera home must be -cell_size/2 (corridor entry), got home={home} cell={cell_size}"
     );
 
-    // 2. Camera re-point: loop_camera.out → lens.camera, and the old
-    //    orbit→lens wire dropped.
+    // 2. Camera re-point through the D5 Switch enable path: loop_camera →
+    //    loop_cam_switch.b, switch.out → lens.camera, and the old
+    //    orbit→lens wire dropped. The minted switch is applied ENABLED
+    //    (select = B).
+    let switch = applied
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "loop_cam_switch")
+        .expect("loop_cam_switch minted (D5 Switch enable wiring)");
+    assert_eq!(
+        switch.params.get("select"),
+        Some(&SerializedParamValue::Enum { value: 1 }),
+        "applied enabled: select = B (the loop camera)"
+    );
     assert!(
         applied
             .wires
             .iter()
-            .any(|w| w.from_node == loop_camera.id && w.to_port == "camera"),
-        "loop_camera must feed a camera port"
+            .any(|w| w.from_node == loop_camera.id && w.to_node == switch.id && w.to_port == "b"),
+        "loop_camera must feed the switch's b input"
+    );
+    assert!(
+        applied
+            .wires
+            .iter()
+            .any(|w| w.from_node == switch.id && w.to_port == "camera"),
+        "switch.out must feed the lens/render camera port"
+    );
+    let camera_target = applied
+        .wires
+        .iter()
+        .find(|w| w.from_node == switch.id && w.to_port == "camera")
+        .map(|w| w.to_node)
+        .expect("switch camera wire");
+    assert!(
+        !applied.wires.iter().any(|w| {
+            w.to_node == camera_target && w.to_port == "camera" && w.from_node != switch.id
+        }),
+        "the displaced camera producer's wire must be dropped (no double-feed)"
     );
 
     // 3. Every object group gained the interface `instances` input + inner

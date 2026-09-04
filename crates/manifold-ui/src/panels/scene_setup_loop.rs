@@ -8,8 +8,9 @@
 //! - **Not applied** → "Enable Scene Loop" button dispatching the apply-command.
 //! - **Applied** → manifest-backed rows (the D6 P4 whitelist: Bars, Copies,
 //!   Height, Lateral) plus a remove button and wrap-debug toggle.
-//! - **Hand-edited graph** → the structural trace (`SceneLoopInfo`) is
-//!   all-or-nothing on the three core nodes; a hand-edit that removes one
+//! - **Hand-edited graph** → the structural trace (SCENE_MODIFIER_FRAMEWORK
+//!   D3, all-or-nothing on the three core nodes) is broken; a hand-edit that
+//!   removes one
 //!   shows "Not applied" (re-apply is then a fresh splice, never a silent
 //!   partial fix). A future partial-trace refinement could split this state.
 

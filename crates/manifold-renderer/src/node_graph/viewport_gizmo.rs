@@ -466,7 +466,7 @@ mod tests {
             camera: crate::node_graph::scene_vm::CameraVm::None,
             environment: crate::node_graph::scene_vm::EnvironmentVm::None,
             atmosphere: crate::node_graph::scene_vm::AtmosphereVm::None,
-            scene_loop: None,
+            modifiers: Vec::new(),
             scene_bounds: None,
         }
     }

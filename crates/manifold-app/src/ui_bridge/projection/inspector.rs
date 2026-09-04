@@ -993,11 +993,41 @@ pub fn sync_inspector_data(
                                 camera,
                                 camera_sections,
                                 world_sections,
-                                scene_loop: vm.scene_loop.as_ref().map(|loop_info| SceneLoopRow {
-                                    section: "Scene Loop".to_string(),
-                                    beat_ramp_doc_id: loop_info.beat_ramp_doc_id,
-                                    bars: loop_info.beat_ramp_bars.unwrap_or(8.0),
-                                }),
+                                // SCENE_MODIFIER_FRAMEWORK D6: the panel's
+                                // Scene Loop section derives from the generic
+                                // modifier trace (`scene_loop` kind applied)
+                                // — same rows, same wrap-debug address, zero
+                                // UX change. `bars` reads the beat_ramp's
+                                // REAL param (pre-P4 rate-only nodes fall
+                                // back to the 8-bar default, as the old
+                                // trace did).
+                                scene_loop: vm
+                                    .modifiers
+                                    .iter()
+                                    .find(|m| {
+                                        m.kind_id
+                                            == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
+                                            && m.applied
+                                    })
+                                    .map(|m| {
+                                        let beat_ramp_doc_id = m.doc_ids["loop_phase"];
+                                        let bars = def
+                                            .as_ref()
+                                            .and_then(|d| {
+                                                d.nodes.iter().find(|n| n.id == beat_ramp_doc_id)
+                                            })
+                                            .and_then(|n| n.params.get("bars"))
+                                            .and_then(|v| match v {
+                                                manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
+                                                _ => None,
+                                            })
+                                            .unwrap_or(8.0);
+                                        SceneLoopRow {
+                                            section: "Scene Loop".to_string(),
+                                            beat_ramp_doc_id,
+                                            bars,
+                                        }
+                                    }),
                                 scene_bounds: vm.scene_bounds,
                             }))
                         }

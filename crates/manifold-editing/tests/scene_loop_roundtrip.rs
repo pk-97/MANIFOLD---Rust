@@ -1,9 +1,12 @@
-//! SCENE_LOOP_DESIGN.md INV-2/INV-4 round-trip gate:
+//! SCENE_MODIFIER_FRAMEWORK P1 command-level gate (the INV-2/INV-4
+//! round-trip pattern SCENE_LOOP used, now against the GENERIC
+//! ApplySceneModifierCommand/RemoveSceneModifierCommand — D1/D6):
 //! apply → save → load → structural trace re-finds all loop nodes.
 //!
-//! Builds a minimal scene graph (one render_scene), applies the scene loop,
-//! saves as V1, reloads, and asserts all loop nodes are present with stable
-//! nodeIds (INV-2) and matching cell_size (INV-4).
+//! The plan here is HAND-BUILT (manifold-editing has no renderer
+//! dependency) — the renderer-side descriptor builder that production
+//! dispatches is gated end to end in manifold-renderer's
+//! `scene_loop_roundtrip_gate.rs` / `scene_loop_e2e_import.rs`.
 
 use std::collections::BTreeMap;
 
@@ -12,15 +15,19 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
+use manifold_core::scene_modifier::{
+    EnablePlan, GroupSplice, PlanTraceNode, PortRepoint, SceneModifierPlan, ToggleDecl,
+};
 use manifold_core::types::LayerType;
 use manifold_editing::command::Command;
+use manifold_editing::commands::graph::ApplySceneModifierCommand;
 
-fn node(id: u32, type_id: &str, params: BTreeMap<String, SerializedParamValue>) -> EffectGraphNode {
+fn node(id: u32, node_id: &str, type_id: &str, params: BTreeMap<String, SerializedParamValue>) -> EffectGraphNode {
     EffectGraphNode {
         id,
-        node_id: manifold_core::NodeId::new(format!("n{id}")),
+        node_id: manifold_core::NodeId::new(node_id),
         type_id: type_id.to_string(),
-        handle: Some(format!("n{id}")),
+        handle: Some(node_id.to_string()),
         params,
         exposed_params: Default::default(),
         editor_pos: None,
@@ -38,6 +45,74 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
         from_port: from_port.to_string(),
         to_node,
         to_port: to_port.to_string(),
+    }
+}
+
+/// The loop kind's trace signature, hand-mirrored from the renderer-side
+/// descriptor (the descriptor itself is renderer-crate; the command only
+/// needs the data).
+fn loop_trace() -> Vec<PlanTraceNode> {
+    vec![
+        PlanTraceNode { type_id: "node.beat_ramp".into(), node_id: "loop_phase".into(), required: true },
+        PlanTraceNode { type_id: "node.scene_array".into(), node_id: "scene_array".into(), required: true },
+        PlanTraceNode { type_id: "node.loop_camera".into(), node_id: "loop_camera".into(), required: true },
+        PlanTraceNode { type_id: "node.camera_switch".into(), node_id: "loop_cam_switch".into(), required: false },
+    ]
+}
+
+/// Hand-built loop plan on the minimal scene (no lens): the camera path
+/// re-points INTO render_scene.camera through the loop_cam_switch (D5
+/// Switch). Minted ids start at 10.
+fn minimal_loop_plan(render_scene_doc: u32) -> SceneModifierPlan {
+    let switch_id = 13;
+    let mut switch_params = BTreeMap::new();
+    switch_params.insert("select".to_string(), SerializedParamValue::Enum { value: 1 }); // B
+    let switch = node(switch_id, "loop_cam_switch", "node.camera_switch", switch_params);
+
+    let mut phase_params = BTreeMap::new();
+    phase_params.insert("rate".to_string(), SerializedParamValue::Float { value: 0.125 });
+    phase_params.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
+
+    let mut array_params = BTreeMap::new();
+    array_params.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
+    array_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
+    array_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+
+    let mut camera_params = BTreeMap::new();
+    camera_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+    camera_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
+
+    SceneModifierPlan {
+        kind_id: "scene_loop".to_string(),
+        display_name: "Scene Loop".to_string(),
+        trace: loop_trace(),
+        new_nodes: vec![
+            node(10, "loop_phase", "node.beat_ramp", phase_params),
+            node(11, "scene_array", "node.scene_array", array_params),
+            node(12, "loop_camera", "node.loop_camera", camera_params),
+        ],
+        new_wires: vec![wire(10, "out", 12, "phase")],
+        group_splices: vec![],
+        repoints: vec![PortRepoint {
+            target_node_id: render_scene_doc,
+            target_port: "camera".to_string(),
+            new_producer_doc_id: switch_id,
+            restore_types: &["node.orbit_camera", "node.free_camera", "node.look_at_camera"],
+        }],
+        exposures: vec![],
+        enable: EnablePlan {
+            toggle: ToggleDecl::NodeParam {
+                node_doc_hint: manifold_core::NodeId::new("loop_cam_switch"),
+                param: "select".to_string(),
+                on: 1.0,
+                off: 0.0,
+            },
+            extra_nodes: vec![switch],
+            extra_wires: vec![
+                wire(12, "out", switch_id, "b"),
+                wire(switch_id, "out", render_scene_doc, "camera"),
+            ],
+        },
     }
 }
 
@@ -62,7 +137,7 @@ fn minimal_scene_def() -> EffectGraphDef {
             string_bindings: Vec::new(),
             scene_bounds: None,
         }),
-        nodes: vec![node(0, "node.render_scene", BTreeMap::new())],
+        nodes: vec![node(0, "render", "node.render_scene", BTreeMap::new())],
         wires: vec![],
     }
 }
@@ -91,86 +166,11 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
         layer.gen_params_or_init().graph = Some(minimal_scene_def());
     }
 
-    let plan = manifold_editing::commands::graph::SceneLoopPlan {
-        new_nodes: vec![
-            EffectGraphNode {
-                id: 10,
-                node_id: manifold_core::NodeId::new("loop_phase"),
-                type_id: "node.beat_ramp".to_string(),
-                handle: Some("loop_phase".to_string()),
-                params: {
-                    let mut p = BTreeMap::new();
-                    p.insert("rate".to_string(), SerializedParamValue::Float { value: 0.125 });
-                    p.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
-                    p
-                },
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
-            EffectGraphNode {
-                id: 11,
-                node_id: manifold_core::NodeId::new("scene_array"),
-                type_id: "node.scene_array".to_string(),
-                handle: Some("scene_array".to_string()),
-                params: {
-                    let mut p = BTreeMap::new();
-                    p.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
-                    p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-                    p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
-                    p
-                },
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
-            EffectGraphNode {
-                id: 12,
-                node_id: manifold_core::NodeId::new("loop_camera"),
-                type_id: "node.loop_camera".to_string(),
-                handle: Some("loop_camera".to_string()),
-                params: {
-                    let mut p = BTreeMap::new();
-                    p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
-                    p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-                    p
-                },
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
-        ],
-        new_wires: vec![
-            wire(10, "out", 12, "phase"),
-            wire(12, "out", 0, "camera"),
-        ],
-        instance_wirings: vec![],
-        render_scene_node_id: 0,
-        node_metadata: vec![],
-        loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
-        scene_array_node_id: manifold_core::NodeId::new("scene_array"),
-    };
+    let plan = minimal_loop_plan(0);
 
     let layer_id = project.timeline.layers[idx].layer_id.clone();
     let target = manifold_core::GraphTarget::Generator(layer_id);
-    let mut cmd = manifold_editing::commands::graph::ApplySceneLoopCommand::new(
-        target.clone(),
-        vec![],
-        plan,
-        empty_def(),
-    );
+    let mut cmd = ApplySceneModifierCommand::new(target.clone(), Vec::new(), plan, empty_def());
     cmd.execute(&mut project);
 
     // Save and reload.
@@ -196,23 +196,19 @@ fn scene_loop_roundtrip_preserves_loop_nodes() {
         .generator_graph()
         .expect("graph override survived reload");
 
-    // INV-2: all loop nodes present with stable nodeIds.
-    let has_loop_phase = graph
-        .nodes
-        .iter()
-        .any(|n| n.node_id.as_str() == "loop_phase" && n.type_id == "node.beat_ramp");
-    let has_scene_array = graph
-        .nodes
-        .iter()
-        .any(|n| n.node_id.as_str() == "scene_array" && n.type_id == "node.scene_array");
-    let has_loop_camera = graph
-        .nodes
-        .iter()
-        .any(|n| n.node_id.as_str() == "loop_camera" && n.type_id == "node.loop_camera");
-
-    assert!(has_loop_phase, "INV-2: loop_phase not found after round-trip");
-    assert!(has_scene_array, "INV-2: scene_array not found after round-trip");
-    assert!(has_loop_camera, "INV-2: loop_camera not found after round-trip");
+    // INV-2: all loop nodes present with stable nodeIds (incl. the D5
+    // camera switch).
+    for (node_id, type_id) in [
+        ("loop_phase", "node.beat_ramp"),
+        ("scene_array", "node.scene_array"),
+        ("loop_camera", "node.loop_camera"),
+        ("loop_cam_switch", "node.camera_switch"),
+    ] {
+        assert!(
+            graph.nodes.iter().any(|n| n.node_id.as_str() == node_id && n.type_id == type_id),
+            "INV-2: {node_id} not found after round-trip"
+        );
+    }
 
     // INV-4: cell_size matches between scene_array and loop_camera.
     let array_cell = graph
@@ -253,88 +249,49 @@ fn scene_loop_apply_rejects_multi_scene() {
             description: None,
             preset_metadata: None,
             nodes: vec![
-                node(0, "node.render_scene", BTreeMap::new()),
-                node(1, "node.render_scene", BTreeMap::new()),
+                node(0, "render_a", "node.render_scene", BTreeMap::new()),
+                node(1, "render_b", "node.render_scene", BTreeMap::new()),
             ],
             wires: vec![],
         });
     }
 
-    let plan = manifold_editing::commands::graph::SceneLoopPlan {
-        new_nodes: vec![],
-        new_wires: vec![],
-        instance_wirings: vec![],
-        render_scene_node_id: 0,
-        node_metadata: vec![],
-        loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
-        scene_array_node_id: manifold_core::NodeId::new("scene_array"),
-    };
+    let plan = minimal_loop_plan(0);
 
     let layer_id = project.timeline.layers[idx].layer_id.clone();
     let target = manifold_core::GraphTarget::Generator(layer_id);
-    let mut cmd = manifold_editing::commands::graph::ApplySceneLoopCommand::new(
-        target,
-        vec![],
-        plan,
-        empty_def(),
-    );
+    let mut cmd = ApplySceneModifierCommand::new(target, Vec::new(), plan, empty_def());
     cmd.execute(&mut project);
 
     let graph = project.timeline.layers[idx]
         .generator_graph()
         .expect("graph present");
-    // INV-1: exactly 2 render_scene nodes, no loop nodes added.
-    assert_eq!(graph.nodes.len(), 2, "INV-1: loop nodes should not be added to multi-scene graph");
+    // INV-M6: exactly 2 render_scene nodes, no loop nodes added.
+    assert_eq!(graph.nodes.len(), 2, "INV-M6: modifier nodes must not be added to a multi-scene graph");
 }
 
-/// INV-1/INV-2/INV-4 net against the REAL import shape: two object groups
+/// INV-M6/INV-2/INV-4 net against the REAL import shape: two object groups
 /// wired into render_scene.object_0/object_1, lens between the orbit camera
-/// and render/ao/dof/mb. Applies the loop and verifies:
+/// and render. Applies the loop (hand-built plan with splices + the switch
+/// repoint) and verifies:
 ///  - each group gained an `instances` interface input + group_input node +
 ///    inner wire to its scene_object,
 ///  - top-level `scene_array.out → group.instances` wires exist,
-///  - `loop_camera.out → lens.camera` (the lens re-point, NOT render.camera),
-///  - the old `orbit_camera.out → lens.camera` wire was dropped,
-///  - loop nodes carry stable nodeIds.
+///  - the camera path runs orbit → loop_cam_switch.a / loop_camera → b /
+///    switch.out → lens.camera (the D5 Switch shape), and the old
+///    `orbit_camera.out → lens.camera` wire was dropped,
+///  - loop nodes carry stable nodeIds (INV-2).
 #[test]
 fn scene_loop_apply_splices_groups_and_repoints_lens() {
     use manifold_core::effect_graph_def::{
-        EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
-        GroupInterface, InterfacePortDef,
+        GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
     };
-    use manifold_editing::commands::graph::InstanceWiring;
 
     fn scene_object(id: u32, handle: &str) -> EffectGraphNode {
-        EffectGraphNode {
-            id,
-            node_id: manifold_core::NodeId::new(handle),
-            type_id: "node.scene_object".to_string(),
-            handle: Some(handle.to_string()),
-            params: BTreeMap::new(),
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        }
+        node(id, handle, "node.scene_object", BTreeMap::new())
     }
     fn group(id: u32, handle: &str, object_bind_id: u32) -> EffectGraphNode {
-        let mut g = EffectGraphNode {
-            id,
-            node_id: manifold_core::NodeId::new(handle),
-            type_id: GROUP_TYPE_ID.to_string(),
-            handle: Some(handle.to_string()),
-            params: BTreeMap::new(),
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        };
+        let mut g = node(id, handle, GROUP_TYPE_ID, BTreeMap::new());
         let out_id = object_bind_id + 1000;
         g.group = Some(Box::new(GroupDef {
             interface: GroupInterface {
@@ -344,27 +301,9 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             },
             nodes: vec![
                 scene_object(object_bind_id, &format!("{handle}_bind")),
-                EffectGraphNode {
-                    id: out_id,
-                    node_id: manifold_core::NodeId::new(format!("{handle}_out")),
-                    type_id: "system.group_output".to_string(),
-                    handle: None,
-                    params: BTreeMap::new(),
-                    exposed_params: Default::default(),
-                    editor_pos: None,
-                    wgsl_source: None,
-                    title: None,
-                    output_formats: BTreeMap::new(),
-                    output_canvas_scales: BTreeMap::new(),
-                    group: None,
-                },
+                node(out_id, &format!("{handle}_out"), "system.group_output", BTreeMap::new()),
             ],
-            wires: vec![EffectGraphWire {
-                from_node: object_bind_id,
-                from_port: "object".to_string(),
-                to_node: out_id,
-                to_port: "object".to_string(),
-            }],
+            wires: vec![wire(object_bind_id, "object", out_id, "object")],
             tint: None,
         }));
         g
@@ -392,48 +331,9 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             scene_bounds: Some(([0.0, 0.0, 0.0], [1.0, 1.0, 10.0])),
         }),
         nodes: vec![
-            EffectGraphNode {
-                id: 0,
-                node_id: manifold_core::NodeId::new("camera"),
-                type_id: "node.orbit_camera".to_string(),
-                handle: Some("camera".to_string()),
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
-            EffectGraphNode {
-                id: 1,
-                node_id: manifold_core::NodeId::new("lens"),
-                type_id: "node.camera_lens".to_string(),
-                handle: Some("lens".to_string()),
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
-            EffectGraphNode {
-                id: 2,
-                node_id: manifold_core::NodeId::new("render"),
-                type_id: "node.render_scene".to_string(),
-                handle: Some("render".to_string()),
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
+            node(0, "camera", "node.orbit_camera", BTreeMap::new()),
+            node(1, "lens", "node.camera_lens", BTreeMap::new()),
+            node(2, "render", "node.render_scene", BTreeMap::new()),
             group(10, "Object A", 11),
             group(20, "Object B", 21),
         ],
@@ -444,83 +344,70 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             wire(20, "object", 2, "object_1"),
         ],
     };
-    // The panel's plan builder computes minted ids from max existing + 1..4.
-    let max_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0);
-    let (beat_id, array_id, cam_id, _fog_id) =
-        (max_id + 1, max_id + 2, max_id + 3, max_id + 4);
-    let plan = manifold_editing::commands::graph::SceneLoopPlan {
+
+    // Hand-built plan on the grouped scene: minted ids 30..33, camera
+    // target = the lens (1), previous camera producer = the orbit (0).
+    let switch_id = 33;
+    let mut switch_params = BTreeMap::new();
+    switch_params.insert("select".to_string(), SerializedParamValue::Enum { value: 1 });
+    let mut phase_params = BTreeMap::new();
+    phase_params.insert("rate".to_string(), SerializedParamValue::Float { value: 0.125 });
+    phase_params.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
+    let mut array_params = BTreeMap::new();
+    array_params.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
+    array_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
+    array_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+    let mut camera_params = BTreeMap::new();
+    camera_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+    camera_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
+
+    let plan = SceneModifierPlan {
+        kind_id: "scene_loop".to_string(),
+        display_name: "Scene Loop".to_string(),
+        trace: loop_trace(),
         new_nodes: vec![
-            EffectGraphNode {
-                id: beat_id,
-                node_id: manifold_core::NodeId::new("loop_phase"),
-                type_id: "node.beat_ramp".to_string(),
-                handle: Some("loop_phase".to_string()),
-                params: {
-                    let mut p = BTreeMap::new();
-                    p.insert("rate".to_string(), SerializedParamValue::Float { value: 0.125 });
-                    p.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
-                    p
-                },
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
+            node(30, "loop_phase", "node.beat_ramp", phase_params),
+            node(31, "scene_array", "node.scene_array", array_params),
+            node(32, "loop_camera", "node.loop_camera", camera_params),
+        ],
+        new_wires: vec![wire(30, "out", 32, "phase")],
+        group_splices: vec![
+            GroupSplice {
+                group_node_id: 10,
+                inner_node_type: "node.scene_object",
+                inner_port: "instances",
+                source_doc_id: 31,
+                source_port: "out".to_string(),
             },
-            EffectGraphNode {
-                id: array_id,
-                node_id: manifold_core::NodeId::new("scene_array"),
-                type_id: "node.scene_array".to_string(),
-                handle: Some("scene_array".to_string()),
-                params: {
-                    let mut p = BTreeMap::new();
-                    p.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
-                    p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-                    p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
-                    p
-                },
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            },
-            EffectGraphNode {
-                id: cam_id,
-                node_id: manifold_core::NodeId::new("loop_camera"),
-                type_id: "node.loop_camera".to_string(),
-                handle: Some("loop_camera".to_string()),
-                params: {
-                    let mut p = BTreeMap::new();
-                    p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
-                    p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-                    p
-                },
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
+            GroupSplice {
+                group_node_id: 20,
+                inner_node_type: "node.scene_object",
+                inner_port: "instances",
+                source_doc_id: 31,
+                source_port: "out".to_string(),
             },
         ],
-        new_wires: vec![
-            wire(beat_id, "out", cam_id, "phase"),
-            wire(cam_id, "out", 1, "camera"), // → lens (D5 re-point)
-        ],
-        instance_wirings: vec![
-            InstanceWiring { group_node_id: 10, scene_object_node_id: 11 },
-            InstanceWiring { group_node_id: 20, scene_object_node_id: 21 },
-        ],
-        render_scene_node_id: 2,
-        node_metadata: vec![],
-        loop_camera_node_id: manifold_core::NodeId::new("loop_camera"),
-        scene_array_node_id: manifold_core::NodeId::new("scene_array"),
+        repoints: vec![PortRepoint {
+            target_node_id: 1,
+            target_port: "camera".to_string(),
+            new_producer_doc_id: switch_id,
+            restore_types: &["node.orbit_camera", "node.free_camera", "node.look_at_camera"],
+        }],
+        exposures: vec![],
+        enable: EnablePlan {
+            toggle: ToggleDecl::NodeParam {
+                node_doc_hint: manifold_core::NodeId::new("loop_cam_switch"),
+                param: "select".to_string(),
+                on: 1.0,
+                off: 0.0,
+            },
+            extra_nodes: vec![node(switch_id, "loop_cam_switch", "node.camera_switch", switch_params)],
+            extra_wires: vec![
+                wire(0, "out", switch_id, "a"),
+                wire(32, "out", switch_id, "b"),
+                wire(switch_id, "out", 1, "camera"),
+            ],
+        },
     };
 
     let mut project = Project::default();
@@ -535,25 +422,28 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
     }
     let layer_id = project.timeline.layers[idx].layer_id.clone();
     let target = manifold_core::GraphTarget::Generator(layer_id);
-    let mut cmd = manifold_editing::commands::graph::ApplySceneLoopCommand::new(
-        target.clone(),
-        vec![],
-        plan,
-        empty_def(),
-    );
+    let mut cmd = ApplySceneModifierCommand::new(target.clone(), Vec::new(), plan, empty_def());
     cmd.execute(&mut project);
 
     let graph = project.timeline.layers[idx]
         .generator_graph()
         .expect("graph present");
 
-    // INV-1-camera: loop_camera drives lens.camera, and the old orbit wire is gone.
+    // INV-1-camera (D5 Switch): loop_camera → switch.b, switch.out →
+    // lens.camera, and the old orbit_camera → lens.camera wire dropped.
     assert!(
         graph
             .wires
             .iter()
-            .any(|w| w.from_node == cam_id && w.to_node == 1 && w.to_port == "camera"),
-        "loop_camera must re-point into lens.camera"
+            .any(|w| w.from_node == 32 && w.to_node == switch_id && w.to_port == "b"),
+        "loop_camera must feed the switch's b input"
+    );
+    assert!(
+        graph
+            .wires
+            .iter()
+            .any(|w| w.from_node == switch_id && w.to_node == 1 && w.to_port == "camera"),
+        "switch.out must re-point into lens.camera"
     );
     assert!(
         !graph
@@ -563,8 +453,11 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
         "old orbit_camera → lens.camera wire must be dropped"
     );
     assert!(
-        !graph.wires.iter().any(|w| w.from_node == cam_id && w.to_node == 2),
-        "loop_camera must NOT wire straight into render_scene when a lens exists"
+        graph
+            .wires
+            .iter()
+            .any(|w| w.from_node == 0 && w.to_node == switch_id && w.to_port == "a"),
+        "the previous camera producer must feed the switch's a input"
     );
 
     // INV-2-splice: each object group gained an `instances` interface input,
@@ -604,19 +497,19 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             graph
                 .wires
                 .iter()
-                .any(|w| w.to_node == gid && w.to_port == "instances" && w.from_node == array_id),
+                .any(|w| w.to_node == gid && w.to_port == "instances" && w.from_node == 31),
             "group {gid}: top-level scene_array.out → group.instances wire missing"
         );
     }
 
-    // All three loop nodes present with stable nodeIds (INV-2).
-    for expected in ["loop_phase", "scene_array", "loop_camera"] {
+    // All four minted nodes present with stable nodeIds (INV-2).
+    for expected in ["loop_phase", "scene_array", "loop_camera", "loop_cam_switch"] {
         assert!(
             graph
                 .nodes
                 .iter()
                 .any(|n| n.node_id.as_str() == expected),
-            "loop node {expected} missing after apply"
+            "modifier node {expected} missing after apply"
         );
     }
 }
