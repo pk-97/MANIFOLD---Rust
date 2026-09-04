@@ -28,7 +28,6 @@ const ITEM_HEIGHT: f32 = 28.0;
 const PADDING_H: f32 = 12.0;
 const PADDING_V: f32 = 4.0;
 const MIN_WIDTH: f32 = 120.0;
-const MAX_DROPDOWN_HEIGHT: f32 = 400.0;
 const SCROLL_SPEED: f32 = 3.0;
 const SEPARATOR_HEIGHT: f32 = 9.0; // pad + 1px line + pad
 const CHAR_WIDTH: f32 = 7.0; // approximate glyph width for width estimation
@@ -299,8 +298,11 @@ impl DropdownPanel {
             h += PADDING_V;
         }
 
-        // Cap height at MAX_DROPDOWN_HEIGHT, then clamp to screen.
-        let h = h.min(MAX_DROPDOWN_HEIGHT).min(self.screen_height);
+        // A menu sizes to its content — the screen is the only height cap.
+        // Internal scrolling exists solely for content that genuinely exceeds
+        // the screen (e.g. the 128-item MIDI picker); a fixed cap here turned
+        // ordinary menus into clipped, scrolling ones.
+        let h = h.min(self.screen_height);
         self.viewport_height = h - PADDING_V * 2.0;
 
         // Edge clamping — clamp both position AND size to screen. Right/
@@ -662,7 +664,13 @@ impl DropdownPanel {
                 if self.content_height > self.viewport_height {
                     self.scroll_offset = (self.scroll_offset - delta.y * SCROLL_SPEED)
                         .clamp(0.0, self.content_height - self.viewport_height);
-                    self.build_nodes(tree);
+                    // NO in-place rebuild here: build_nodes mints root-parented
+                    // nodes, which outside a begin_region bracket trips the D4
+                    // assertion (and was the last bare-mint path in the
+                    // dropdown). The Consumed response marks the overlay dirty
+                    // and the driver re-runs build_at inside its own region on
+                    // the same frame — the same mechanism as the Ableton
+                    // picker's scroll arm.
                 }
                 // Always consume scroll while open so it doesn't propagate
                 // to the viewport underneath.
@@ -927,9 +935,8 @@ mod tests {
         // a long menu (the
         // MIDI note picker opens 128 items via this same `open()` path)
         // triggered near a screen edge ran off both the top/bottom AND the
-        // left/right edges. A 40-item menu is plenty to blow past
-        // MAX_DROPDOWN_HEIGHT and exercise the same edge-clamp + internal
-        // scroll path.
+        // left/right edges. A 40-item menu (1120px) exceeds even a 1080px
+        // screen, exercising the edge-clamp + internal scroll path.
         let mut tree = UITree::new();
         let mut dd = DropdownPanel::new();
         let (screen_w, screen_h) = (1920.0, 1080.0);
@@ -1232,14 +1239,68 @@ mod tests {
     }
 
     #[test]
-    fn color_grid_is_scrollable_content_and_never_leaves_the_container() {
-        // Regression: the color grid was bolted on after the items — excluded
-        // from `content_height` and from viewport culling — so a menu whose
-        // items+grid exceed MAX_DROPDOWN_HEIGHT laid the lower swatch rows
-        // out below the capped container, where they painted and took clicks.
+    fn menu_with_color_grid_fits_without_scrolling() {
+        // A six-to-nine-item menu with the color grid is not "huge" — on a
+        // normal screen it must size to its content and show every swatch,
+        // no scrolling, no clipped bottom row. (The 400px cap that used to
+        // force this menu to scroll was the bug.)
         let mut tree = UITree::new();
         let mut dd = DropdownPanel::new();
         dd.set_screen_size(1920.0, 1080.0);
+
+        let items: Vec<DropdownItem> =
+            (0..6).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        dd.open_context_with_colors(
+            items,
+            crate::color::COLOR_GRID.to_vec(),
+            crate::color::COLOR_GRID_COLS,
+            Vec2::new(100.0, 100.0),
+            &mut tree,
+        );
+
+        let container = dd.container_bounds();
+        assert!(
+            dd.content_height <= dd.viewport_height + 0.01,
+            "content fits the container — no scrolling: content {} vs viewport {}",
+            dd.content_height,
+            dd.viewport_height
+        );
+        // Container height is exactly content + padding: nothing clipped away.
+        let grid_h = dd.grid_section_height();
+        let expected_h =
+            dd.content_height + PADDING_V * 2.0 + if grid_h > 0.0 { PADDING_V } else { 0.0 };
+        assert!(
+            (container.height - expected_h).abs() < 0.01,
+            "menu sizes to its content: got {}, expected {expected_h}",
+            container.height
+        );
+        // Every swatch is visible and interactive — none culled.
+        for &id in &dd.color_swatch_ids {
+            let node = tree.get_node(id).unwrap();
+            assert!(
+                node.flags.contains(UIFlags::VISIBLE | UIFlags::INTERACTIVE),
+                "all swatches shown when the menu fits"
+            );
+        }
+        // And a wheel does nothing — there is nothing to scroll.
+        let scroll = UIEvent::Scroll {
+            pos: Vec2::new(container.x + 10.0, container.y + 10.0),
+            delta: Vec2::new(0.0, -1000.0),
+            modifiers: crate::input::Modifiers::default(),
+        };
+        dd.handle_event(&scroll, &mut tree);
+        assert_eq!(dd.scroll_offset, 0.0, "a fitting menu does not scroll");
+    }
+
+    #[test]
+    fn color_grid_scrolls_only_when_content_exceeds_the_screen() {
+        // Overflow machinery is for content taller than the SCREEN (the
+        // 128-item MIDI picker class), not a fixed cap. On a 420px-tall
+        // screen the same menu genuinely overflows: it caps at the screen,
+        // culls off-viewport swatches, and scroll reaches the last row.
+        let mut tree = UITree::new();
+        let mut dd = DropdownPanel::new();
+        dd.set_screen_size(1920.0, 420.0);
 
         let items: Vec<DropdownItem> =
             (0..9).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
@@ -1252,11 +1313,14 @@ mod tests {
         );
 
         let container = dd.container_bounds();
-        assert!(container.height <= MAX_DROPDOWN_HEIGHT + 0.01);
+        assert!(
+            container.height <= 420.0 + 0.01,
+            "container capped at the screen, got {}",
+            container.height
+        );
         assert!(
             dd.content_height > dd.viewport_height,
-            "9 items + the 10-row color grid must overflow the capped container, \
-             making the grid scrollable content"
+            "content taller than the screen scrolls internally"
         );
         // Containment is structural: the shell container clips children, so a
         // partially-visible swatch at the viewport edge is scissor-cut at the
@@ -1279,8 +1343,7 @@ mod tests {
         }
         assert!(hidden > 0, "lower swatch rows start culled");
 
-        // A point below the container (where swatches used to paint) hits the
-        // dismiss scrim, never a swatch.
+        // A point below the container hits the dismiss scrim, never a swatch.
         let below = Vec2::new(container.x + 30.0, container.y_max() + 8.0);
         let hit = tree.hit_test(below);
         assert!(
@@ -1299,6 +1362,9 @@ mod tests {
             (dd.scroll_offset - (dd.content_height - dd.viewport_height)).abs() < 0.01,
             "scroll reaches the bottom of the grid"
         );
+        // The scroll arm no longer rebuilds in place (that was a bare-mint
+        // D4 violation) — the overlay driver does. Mirror it here.
+        dd.rebuild_nodes(&mut tree);
         let last = *dd.color_swatch_ids.last().unwrap();
         let last_node = tree.get_node(last).unwrap();
         assert!(
