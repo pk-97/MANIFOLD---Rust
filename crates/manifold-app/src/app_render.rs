@@ -586,6 +586,27 @@ impl Application {
                 }
                 Pump::Nothing => {}
             }
+            // Search auto-focus at open (PRESET_BROWSER_AUDITION F5): the
+            // popup raised the request when it opened; take the owned search
+            // session exactly like the graph-editor Node picker does at
+            // open. The `MainOverlay(BrowserPopup)` owner tag is what the
+            // closed-overlay pump cancels by on every close path (backdrop,
+            // Escape, pick, perform-mode entry) — no orphaned SearchFilter
+            // session. The anchor rect is cosmetic: the popup tree isn't
+            // built yet this frame, and keystrokes route by the active
+            // SearchFilter field, not by hit position. The dirty flag makes
+            // this once per open, not per frame.
+            if let Some(anchor) = self.ws.ui_root.browser_popup.take_search_focus() {
+                self.text_input.begin_owned(
+                    crate::text_input::TextSessionOwner::MainOverlay(
+                        crate::ui_root::OverlayId::BrowserPopup,
+                    ),
+                    crate::text_input::TextInputField::SearchFilter,
+                    "",
+                    crate::text_input::AnchorRect::new(anchor.x, anchor.y, 200.0, 24.0),
+                    11.0,
+                );
+            }
             // Per-frame cell source: the shared audition-atlas surface import
             // (once per generation) + the per-item UV map. Runs while open so
             // a rebuild frame always sees the current handle; the tree keeps

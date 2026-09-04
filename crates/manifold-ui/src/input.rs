@@ -81,6 +81,8 @@ pub enum Key {
     Down,
     Home,
     End,
+    PageUp,
+    PageDown,
     // Letters
     A,
     B,

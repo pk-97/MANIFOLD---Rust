@@ -1891,6 +1891,8 @@ impl Application {
                 NamedKey::ArrowDown => Some(manifold_ui::input::Key::Down),
                 NamedKey::Home => Some(manifold_ui::input::Key::Home),
                 NamedKey::End => Some(manifold_ui::input::Key::End),
+                NamedKey::PageUp => Some(manifold_ui::input::Key::PageUp),
+                NamedKey::PageDown => Some(manifold_ui::input::Key::PageDown),
                 NamedKey::F1 => Some(manifold_ui::input::Key::F1),
                 NamedKey::F2 => Some(manifold_ui::input::Key::F2),
                 NamedKey::F3 => Some(manifold_ui::input::Key::F3),

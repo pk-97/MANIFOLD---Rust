@@ -1869,3 +1869,195 @@ fn browser_popup_real_registry_p1_demo() {
         eprintln!("browser popup P1 demo → {png}");
     }
 }
+
+/// PRESET_BROWSER_AUDITION P3 demo artifact (L2): the real-registry browsers
+/// on the P3 layout — content-sized width (8 columns of 16:9 cells at this
+/// 1080p-class canvas), caption strip with the label row inside it, measured
+/// and wrapped chips, the new accent table, and the "No presets match" empty
+/// state (third PNG, a search that filters everything out). Renders at
+/// 1920×1080 because the P3 popup is wider than the standard swatches canvas.
+#[test]
+fn browser_popup_real_registry_p3_demo() {
+    use manifold_core::preset_def::PresetKind;
+    use manifold_core::preset_type_registry;
+    use manifold_ui::node::Vec2;
+    use manifold_ui::panels::browser_popup::{
+        BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
+    };
+    use manifold_ui::panels::picker_core::{PickerItem, Source};
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
+
+    const PW: u32 = 1920;
+    const PH: u32 = 1080;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT").unwrap_or_else(|_| "/tmp".to_string());
+
+    fn items_for(kind: PresetKind) -> Vec<PickerItem> {
+        let mut items: Vec<PickerItem> = preset_type_registry::available_of_kind(kind)
+            .iter()
+            .map(|reg| PickerItem {
+                label: reg.display_name.to_string(),
+                type_id: reg.id.as_str().to_string(),
+                category: reg.category.map(|c| c.to_string()),
+                search_text: None,
+                badge: None,
+                source: Some(Source::Factory),
+                missing_from_library: false,
+                thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+                    kind,
+                    reg.id.as_str(),
+                )
+                .filter(|p| p.is_file())
+                .map(|p| p.to_string_lossy().into_owned()),
+            })
+            .collect();
+        items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+        items
+    }
+
+    let effect_items = items_for(PresetKind::Effect);
+    let mut generator_items: Vec<PickerItem> = preset_type_registry::available_of_kind(
+        PresetKind::Generator,
+    )
+    .iter()
+    .filter(|reg| reg.layer_types.is_none())
+    .map(|reg| PickerItem {
+        label: reg.display_name.to_string(),
+        type_id: reg.id.as_str().to_string(),
+        category: reg.category.map(|c| c.to_string()),
+        search_text: None,
+        badge: None,
+        source: Some(Source::Factory),
+        missing_from_library: false,
+        thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+            PresetKind::Generator,
+            reg.id.as_str(),
+        )
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned()),
+    })
+    .collect();
+    generator_items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+
+    // Decode + register every distinct thumbnail up front, exactly as the
+    // app's per-frame thumbnail pass does — without registration the image
+    // cells fall back to flat cells and the P3 caption-strip layout (the
+    // thing this demo exists to show) never renders.
+    let mut registered: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for path in effect_items
+        .iter()
+        .chain(generator_items.iter())
+        .filter_map(|it| it.thumbnail.as_deref())
+    {
+        let handle = manifold_ui::node::texture_handle_for_key(path);
+        if !registered.insert(handle) {
+            continue;
+        }
+        let (tw, th, rgba) =
+            manifold_renderer::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path))
+                .expect("decode committed factory thumbnail");
+        assert!(
+            ui.register_image(&device, handle, tw, th, &rgba),
+            "thumbnail must register into the UIRenderer image cache"
+        );
+    }
+
+    // Category chips the way the app builds them after P3: only buckets
+    // that hold items (D9 — Diagnostic leaves the filter row), generators
+    // derived from the items.
+    let effect_chips: Vec<String> = preset_type_registry::ALL_CATEGORIES
+        .iter()
+        .filter(|c| effect_items.iter().any(|it| it.category.as_deref() == Some(c)))
+        .map(|&c| c.to_string())
+        .collect();
+    let mut gen_chips: Vec<String> = Vec::new();
+    for it in &generator_items {
+        if let Some(c) = it.category.as_deref()
+            && !gen_chips.iter().any(|n| n == c)
+        {
+            gen_chips.push(c.to_string());
+        }
+    }
+
+    struct Case {
+        filename: &'static str,
+        mode: BrowserPopupMode,
+        items: Vec<PickerItem>,
+        chips: Vec<String>,
+        filter: &'static str,
+    }
+    let cases = [
+        Case {
+            filename: "p3_effects_browser.png",
+            mode: BrowserPopupMode::Effect,
+            items: effect_items,
+            chips: effect_chips.clone(),
+            filter: "",
+        },
+        Case {
+            filename: "p3_generators_browser.png",
+            mode: BrowserPopupMode::Generator,
+            items: generator_items,
+            chips: gen_chips,
+            filter: "",
+        },
+        Case {
+            filename: "p3_empty_state.png",
+            mode: BrowserPopupMode::Effect,
+            items: items_for(PresetKind::Effect),
+            chips: effect_chips,
+            filter: "qqq-no-such-preset",
+        },
+    ];
+
+    for case in cases {
+        let png = format!("{out_dir}/{}", case.filename);
+        let mut popup = BrowserPopupPanel::new();
+        popup.set_screen_size(PW as f32, PH as f32);
+        popup.open(BrowserPopupRequest {
+            mode: case.mode,
+            tab: manifold_ui::panels::InspectorTab::Master,
+            layer_id: None,
+            items: case.items,
+            category_names: case.chips,
+            spawn_graph_pos: None,
+            paste_count: 0,
+            screen_anchor: Vec2::new(60.0, 70.0),
+        });
+        if !case.filter.is_empty() {
+            popup.set_filter(case.filter.to_string());
+        }
+
+        let mut tree = UITree::new();
+        // A CoreText-accurate measurer is what the app installs; the
+        // heuristic default the bare tree carries is close enough for a
+        // demo, so no measurer is wired here (same as the P1/P2 demos).
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, PW as f32, PH as f32),
+            ZTier::Overlay,
+            "browser_popup",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
+        popup.build(&mut tree);
+        tree.end_region(region, start);
+
+        ui.begin_frame();
+        ui.draw_rect(0.0, 0.0, PW as f32, PH as f32, color::BG_3);
+        ui.render_tree(&tree, None);
+        let drew = ui.prepare(&device, PW, PH, 1.0);
+        assert!(drew, "browser popup produced no draw commands");
+        let target = RenderTarget::new(&device, PW, PH, FORMAT, "browser-popup-p3-demo");
+        {
+            let mut enc = device.create_encoder("browser-popup-p3-render");
+            ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+            enc.commit_and_wait_completed();
+        }
+        let bytes = readback_w(&device, &target.texture, PW, PH);
+        image::save_buffer(&png, &bytes, PW, PH, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {png}: {e}"));
+        eprintln!("browser popup P3 demo → {png}");
+    }
+}

@@ -196,37 +196,76 @@ impl PickerCore {
         self.items.iter()
     }
 
-    /// Handle Up/Down/Enter/Escape. Up/Down move the cursor within the
-    /// filtered list with wraparound. Enter picks the cursor's item; with no
-    /// cursor and a non-empty filter it picks `filtered[0]` — the
-    /// type-and-enter fast path (click Add, type three letters, Enter — an
-    /// item lands without the mouse ever finding a cell). Any other key is
-    /// `Ignored`.
-    pub fn key_nav(&mut self, key: Key) -> PickerNav {
+    /// Handle keyboard nav in grid geometry (PRESET_BROWSER_AUDITION_DESIGN
+    /// D14): Left/Right move within the cursor's row (clamped at the row
+    /// edges — they never cross rows), Up/Down move a full row with
+    /// wraparound, Home/End jump to the first/last item, PageUp/PageDown
+    /// move one screenful (`page` rows × `columns`, clamped, no wrap).
+    /// Enter picks the cursor's item; with no cursor and a non-empty filter
+    /// it picks `filtered[0]` — the type-and-enter fast path. Escape
+    /// dismisses. `columns`/`page` describe the rendered grid (`columns`
+    /// ≥ 1; `page` ≥ 1 row). Any other key is `Ignored`.
+    pub fn key_nav(&mut self, key: Key, columns: usize, page: usize) -> PickerNav {
+        let columns = columns.max(1);
         if key == Key::Escape {
             return PickerNav::Dismissed;
         }
         if self.filtered.is_empty() {
             return PickerNav::Ignored;
         }
+        let len = self.filtered.len();
+        let len_i = len as i64;
         match key {
+            Key::Left => {
+                let c = self.cursor.unwrap_or(0);
+                let row_start = c / columns * columns;
+                self.cursor = Some(c.saturating_sub(1).max(row_start));
+                PickerNav::Moved
+            }
+            Key::Right => {
+                let c = self.cursor.unwrap_or(0);
+                let row_end = ((c / columns + 1) * columns).min(len) - 1;
+                self.cursor = Some((c + 1).min(row_end));
+                PickerNav::Moved
+            }
             Key::Up => {
+                // From no cursor, enter at the last item (list semantics);
+                // otherwise move a full row up, wrapping into the last row.
                 self.cursor = Some(match self.cursor {
-                    None => self.filtered.len() - 1,
-                    Some(0) => self.filtered.len() - 1,
-                    Some(c) => c - 1,
+                    None => len - 1,
+                    Some(c) => (c as i64 - columns as i64).rem_euclid(len_i) as usize,
                 });
                 PickerNav::Moved
             }
             Key::Down => {
+                // From no cursor, enter at the first item; otherwise a full
+                // row down, wrapping into the first row.
                 self.cursor = Some(match self.cursor {
-                    Some(c) if c + 1 < self.filtered.len() => c + 1,
-                    _ => 0,
+                    None => 0,
+                    Some(c) => (c as i64 + columns as i64).rem_euclid(len_i) as usize,
                 });
                 PickerNav::Moved
             }
+            Key::Home => {
+                self.cursor = Some(0);
+                PickerNav::Moved
+            }
+            Key::End => {
+                self.cursor = Some(len - 1);
+                PickerNav::Moved
+            }
+            Key::PageUp => {
+                let c = self.cursor.unwrap_or(0);
+                self.cursor = Some(c.saturating_sub(page.max(1) * columns));
+                PickerNav::Moved
+            }
+            Key::PageDown => {
+                let c = self.cursor.unwrap_or(0);
+                self.cursor = Some((c + page.max(1) * columns).min(len - 1));
+                PickerNav::Moved
+            }
             Key::Enter => match self.cursor {
-                Some(pos) if pos < self.filtered.len() => PickerNav::Picked(self.filtered[pos]),
+                Some(pos) if pos < len => PickerNav::Picked(self.filtered[pos]),
                 None if !self.filter.is_empty() => PickerNav::Picked(self.filtered[0]),
                 _ => PickerNav::Ignored,
             },
@@ -420,10 +459,11 @@ mod tests {
     #[test]
     fn nav_up_from_first_wraps_to_last() {
         let mut p = sample();
-        // 4 items, no filter/category → all four in filtered order.
-        assert_eq!(p.key_nav(Key::Down), PickerNav::Moved);
+        // 4 items, no filter/category → all four in filtered order. A single
+        // column reduces grid nav to list nav.
+        assert_eq!(p.key_nav(Key::Down, 1, 1), PickerNav::Moved);
         assert_eq!(p.cursor(), Some(0));
-        assert_eq!(p.key_nav(Key::Up), PickerNav::Moved);
+        assert_eq!(p.key_nav(Key::Up, 1, 1), PickerNav::Moved);
         assert_eq!(p.cursor(), Some(3));
     }
 
@@ -431,10 +471,92 @@ mod tests {
     fn nav_down_from_last_wraps_to_first() {
         let mut p = sample();
         for _ in 0..4 {
-            p.key_nav(Key::Down);
+            p.key_nav(Key::Down, 1, 1);
         }
         assert_eq!(p.cursor(), Some(3));
-        assert_eq!(p.key_nav(Key::Down), PickerNav::Moved);
+        assert_eq!(p.key_nav(Key::Down, 1, 1), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(0));
+    }
+
+    // ── Grid geometry (PRESET_BROWSER_AUDITION_DESIGN D14) ─────────────
+
+    /// A 3-column grid over 10 items: Down moves a full row (0→3→6→9); the
+    /// wraparound lands a full row ahead, modulo the item count (9 → 2, the
+    /// last row's raggedness shifts the column), and Up returns the same
+    /// way (2 → 9).
+    #[test]
+    fn grid_nav_down_moves_a_full_row_and_wraps() {
+        let mut p = PickerCore::new(
+            (0..10).map(|i| item(&format!("Item {i}"), None, None)).collect(),
+            vec![],
+        );
+        assert_eq!(p.key_nav(Key::Down, 3, 2), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(0));
+        p.key_nav(Key::Down, 3, 2);
+        p.key_nav(Key::Down, 3, 2);
+        assert_eq!(p.cursor(), Some(6));
+        p.key_nav(Key::Down, 3, 2);
+        assert_eq!(p.cursor(), Some(9));
+        // Down from 9 wraps a full row ahead, mod 10 → 2.
+        assert_eq!(p.key_nav(Key::Down, 3, 2), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(2));
+        // Up from 2 wraps back to 9.
+        assert_eq!(p.key_nav(Key::Up, 3, 2), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(9));
+    }
+
+    /// Left/Right move within the cursor's row and clamp at its edges — a
+    /// 3-column grid: item 0 sits at the start of row 0, item 2 at its end.
+    #[test]
+    fn grid_nav_left_right_clamp_within_row() {
+        let mut p = PickerCore::new(
+            (0..10).map(|i| item(&format!("Item {i}"), None, None)).collect(),
+            vec![],
+        );
+        // Enter the grid on the first row.
+        p.key_nav(Key::Down, 3, 2);
+        assert_eq!(p.cursor(), Some(0));
+        // Left at the row start is a no-op (still Moved — it was a nav key).
+        assert_eq!(p.key_nav(Key::Left, 3, 2), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(0));
+        p.key_nav(Key::Right, 3, 2);
+        p.key_nav(Key::Right, 3, 2);
+        assert_eq!(p.cursor(), Some(2));
+        // Right clamps at the row end (item 2, last of row 0).
+        assert_eq!(p.key_nav(Key::Right, 3, 2), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(2));
+        // Down to row 1 (items 3-5), Left/Right stay inside it.
+        p.key_nav(Key::Down, 3, 2);
+        assert_eq!(p.cursor(), Some(5));
+        p.key_nav(Key::Left, 3, 2);
+        assert_eq!(p.cursor(), Some(4));
+        p.key_nav(Key::Left, 3, 2);
+        assert_eq!(p.cursor(), Some(3));
+        // Left clamps at row 1's start.
+        assert_eq!(p.key_nav(Key::Left, 3, 2), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(3));
+    }
+
+    #[test]
+    fn grid_nav_home_end_and_page() {
+        let mut p = PickerCore::new(
+            (0..20).map(|i| item(&format!("Item {i}"), None, None)).collect(),
+            vec![],
+        );
+        p.key_nav(Key::Down, 4, 3);
+        assert_eq!(p.key_nav(Key::End, 4, 3), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(19));
+        assert_eq!(p.key_nav(Key::Home, 4, 3), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(0));
+        // PageDown: 3 rows × 4 columns = 12 items; clamps at the last item.
+        assert_eq!(p.key_nav(Key::PageDown, 4, 3), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(12));
+        assert_eq!(p.key_nav(Key::PageDown, 4, 3), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(19));
+        // PageUp back to the top, no wrap.
+        assert_eq!(p.key_nav(Key::PageUp, 4, 3), PickerNav::Moved);
+        assert_eq!(p.cursor(), Some(7));
+        assert_eq!(p.key_nav(Key::PageUp, 4, 3), PickerNav::Moved);
         assert_eq!(p.cursor(), Some(0));
     }
 
@@ -445,7 +567,7 @@ mod tests {
         assert_eq!(p.cursor(), None);
         // "Gaussian Blur" (label match) and "Blur TOP" (alias match) both
         // pass; Enter with no cursor picks the first in filtered order.
-        match p.key_nav(Key::Enter) {
+        match p.key_nav(Key::Enter, 3, 2) {
             PickerNav::Picked(idx) => assert_eq!(p.filtered().next().unwrap().0, idx),
             other => panic!("expected Picked, got {other:?}"),
         }
@@ -454,7 +576,7 @@ mod tests {
     #[test]
     fn enter_with_no_cursor_and_empty_filter_is_ignored() {
         let mut p = sample();
-        assert_eq!(p.key_nav(Key::Enter), PickerNav::Ignored);
+        assert_eq!(p.key_nav(Key::Enter, 3, 2), PickerNav::Ignored);
     }
 
     #[test]
@@ -462,6 +584,6 @@ mod tests {
         let mut p = sample();
         p.set_filter("nonexistent-xyz".to_string());
         assert!(p.filtered().next().is_none());
-        assert_eq!(p.key_nav(Key::Escape), PickerNav::Dismissed);
+        assert_eq!(p.key_nav(Key::Escape, 3, 2), PickerNav::Dismissed);
     }
 }

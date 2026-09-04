@@ -1,6 +1,6 @@
 # Preset Browser — live audition grid, crud removal, and layout polish
 
-**Status:** IN PROGRESS — P1 SHIPPED 2026-09-05 (crud removal, recuration, layer-type gating, atomic EffectTarget adds; L2) · P2 SHIPPED 2026-09-05 (live audition engine, CPU-computed value tests, trace drive clean; L2) · owed: P3 browser polish + nav · k3 (lead)
+**Status:** SHIPPED P1–P3 · 2026-09-05 · k3 (lead) — live audition grid, crud removal, atomic context adds, layout polish all on main; Deferred section carries the follow-ups (audio-modulated audition, clip-slot entry, aliases authoring, triple-bridge upgrade on tearing)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
