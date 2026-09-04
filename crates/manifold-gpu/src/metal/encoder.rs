@@ -2147,8 +2147,10 @@ impl GpuEncoder {
 
     /// Signal a shared event on the GPU timeline.
     pub fn signal_event(&mut self, event: &GpuEvent) {
-        let value = event.counter.get() + 1;
-        event.counter.set(value);
+        let value = event.counter.load(std::sync::atomic::Ordering::Relaxed) + 1;
+        event
+            .counter
+            .store(value, std::sync::atomic::Ordering::Relaxed);
         self.end_current();
         unsafe {
             self.cmd_buf

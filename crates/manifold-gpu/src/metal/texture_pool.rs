@@ -1,19 +1,32 @@
-//! Frame-stamped texture recycling pool.
+//! Fence-aware texture recycling pool.
 //!
 //! Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
 //!
 //! SAFETY CONTRACT (BUG-0ou6, TexturePool encode-pacing coupling): recycling
-//! is a frame-COUNTER argument, not a GPU fence — a texture released at frame
-//! F is re-handed-out at frame F + frames_in_flight on the assumption that
-//! the GPU has by then retired every pass from frame F. That assumption holds
-//! ONLY because the content thread's surface-readiness wait
-//! (`ContentPipeline::is_surface_ready`, crates/manifold-app/src/
-//! content_pipeline.rs, BUG-xaw4 (presentation-transport audit)) paces encode
-//! to <= frames_in_flight ahead of GPU completion. If encode pacing is ever
-//! decoupled from GPU completion, this pool can recycle a texture an
-//! in-flight pass still samples (silent tear) — recycling must then become
-//! fence-aware (stamp with the frame's signal value, recycle only when
-//! `is_done`).
+//! must never hand a texture to a new pass while an in-flight pass can still
+//! sample it. Two retirement rules, by priority:
+//!
+//! 1. FENCE-AWARE (primary, when a completion event is attached via
+//!    `set_completion_event`): `release()` stamps the entry with the signal
+//!    value the releasing frame's commit WILL reach on the GPU timeline
+//!    (`event.current_value() + 1` — signal_event increments once per
+//!    commit). `acquire()` recycles an entry only when
+//!    `event.signaled_value() >= release_signal`, i.e. the GPU has actually
+//!    retired the frame that last used it. This is correct on ANY encode
+//!    pacing — paced (live surface wait) or unpaced (export, headless).
+//!    It assumes the releasing frame's commit signals the event (the
+//!    content pipeline does so unconditionally); a frame that never commits
+//!    leaves its entries unrecycled until a later commit passes the stamp —
+//!    conservative-safe.
+//! 2. FRAME-COUNTER (fallback, event-less pools — tests, one-off hosts):
+//!    a texture released at frame F recycles at F + frames_in_flight, valid
+//!    ONLY because a paced host encodes <= frames_in_flight ahead of GPU
+//!    completion. An unpaced host with no event attached is UNSAFE — attach
+//!    an event. The fallback un-suppresses removal when every host attaches
+//!    an event (none of the live paths rely on the counter rule).
+//!
+//! Entries released BEFORE an event is attached keep `release_signal: None`
+//! and stay on the frame-counter rule — the setter is safe to call any time.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -35,6 +48,11 @@ type PoolKey = (u32, u32, GpuTextureFormat);
 struct PoolEntry {
     texture: GpuTexture,
     release_frame: u64,
+    /// Fence-aware retirement stamp: the signal value the releasing frame's
+    /// commit will reach when the GPU retires it. `None` = released before
+    /// a completion event was attached (or event-less pool) — that entry
+    /// stays on the frame-counter rule.
+    release_signal: Option<u64>,
 }
 
 struct TexturePoolInner {
@@ -45,6 +63,10 @@ struct TexturePoolInner {
     current_frame: u64,
     /// Number of frames that can execute concurrently on the GPU.
     frames_in_flight: u64,
+    /// Optional frame-completion event (a second handle to the content
+    /// pipeline's native event). When set, recycling is fence-aware; when
+    /// None, the frame-counter fallback applies.
+    completion_event: Option<GpuEvent>,
     /// New allocations via device.create_texture().
     stats_allocated: u64,
     /// Textures recycled from pool (avoided allocation).
@@ -70,10 +92,21 @@ impl TexturePool {
                 device: mtl_device,
                 current_frame: 0,
                 frames_in_flight,
+                completion_event: None,
                 stats_allocated: 0,
                 stats_recycled: 0,
             }),
         }
+    }
+
+    /// Attach a frame-completion event, turning recycling fence-aware:
+    /// entries released after this call retire by actual GPU signal value
+    /// instead of the frame-counter pacing assumption. Safe to call any
+    /// time — entries already in the pool keep the frame-counter rule.
+    pub fn set_completion_event(&self, event: &GpuEvent) {
+        let inner = unsafe { &mut *self.inner.get() };
+        inner.completion_event = Some(event.second_handle());
+        log::info!("TexturePool: fence-aware recycling attached");
     }
 
     /// Mark the start of a new frame.
@@ -94,14 +127,31 @@ impl TexturePool {
         let inner = unsafe { &mut *self.inner.get() };
         let key = (width, height, format);
 
-        // Try to recycle a texture that's old enough to be safe.
-        if let Some(vec) = inner.available.get_mut(&key)
-            && let Some(idx) = vec.iter().position(|entry| {
-                inner.current_frame.saturating_sub(entry.release_frame) >= inner.frames_in_flight
+        // Try to recycle a texture the GPU has actually retired. One
+        // `signaled_value()` per acquire — a host-side counter load on the
+        // shared event, no GPU round trip.
+        let idx = if let Some(event) = inner.completion_event.as_ref() {
+            let signaled = event.signaled_value();
+            let current_frame = inner.current_frame;
+            let fif = inner.frames_in_flight;
+            inner.available.get(&key).and_then(|vec| {
+                vec.iter().position(|entry| match entry.release_signal {
+                    Some(sig) => signaled >= sig,
+                    // Pre-attach entry: no stamp, frame-counter rule.
+                    None => current_frame.saturating_sub(entry.release_frame) >= fif,
+                })
             })
-        {
+        } else {
+            inner.available.get(&key).and_then(|vec| {
+                vec.iter().position(|entry| {
+                    inner.current_frame.saturating_sub(entry.release_frame)
+                        >= inner.frames_in_flight
+                })
+            })
+        };
+        if let Some(idx) = idx {
             inner.stats_recycled += 1;
-            return vec.swap_remove(idx).texture;
+            return inner.available.get_mut(&key).unwrap().swap_remove(idx).texture;
         }
 
         // No safe recycled texture — allocate fresh via device.
@@ -138,9 +188,18 @@ impl TexturePool {
             return;
         }
         let key = (texture.width, texture.height, texture.format);
+        // Fence-aware stamp: the releasing frame's commit will signal
+        // current_value + 1 (signal_event increments once per commit). If
+        // that commit never happens, no later signal passes the stamp and
+        // the entry simply never recycles — safe direction.
+        let release_signal = inner
+            .completion_event
+            .as_ref()
+            .map(|e| e.current_value().saturating_add(1));
         inner.available.entry(key).or_default().push(PoolEntry {
             texture,
             release_frame: inner.current_frame,
+            release_signal,
         });
     }
 
@@ -301,5 +360,97 @@ impl TexturePool {
                 stale_frames,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
+    const USAGE: GpuTextureUsage = GpuTextureUsage::RENDER_TARGET_FULL;
+
+    /// Drive one real commit that signals the event, then wait for GPU
+    /// completion so `signaled_value()` is authoritative.
+    fn commit_one_signal(device: &GpuDevice, event: &GpuEvent) {
+        let mut enc = device.create_encoder("pool fence test");
+        enc.signal_event(event);
+        enc.commit_and_wait_completed();
+    }
+
+    #[test]
+    fn fence_gates_recycle_until_signal() {
+        let device = GpuDevice::new();
+        let event = device.create_event();
+        let pool = TexturePool::new(&device, 3);
+        pool.set_completion_event(&event);
+
+        // Release stamps current_value()+1 = 1; nothing committed yet.
+        let t = pool.acquire(64, 64, FORMAT, USAGE, "a");
+        pool.release(t);
+        let t2 = pool.acquire(64, 64, FORMAT, USAGE, "b");
+        assert_eq!(
+            pool.stats(),
+            (2, 0),
+            "entry must NOT recycle while signaled_value < stamp"
+        );
+        pool.release(t2);
+
+        commit_one_signal(&device, &event);
+        assert_eq!(event.signaled_value(), 1);
+
+        let t3 = pool.acquire(64, 64, FORMAT, USAGE, "c");
+        assert_eq!(
+            pool.stats(),
+            (2, 1),
+            "entry must recycle once signaled_value >= stamp"
+        );
+        pool.release(t3);
+    }
+
+    #[test]
+    fn frame_counter_fallback_without_event() {
+        let device = GpuDevice::new();
+        let pool = TexturePool::new(&device, 3);
+
+        let t = pool.acquire(64, 64, FORMAT, USAGE, "a");
+        pool.release(t);
+        let t2 = pool.acquire(64, 64, FORMAT, USAGE, "b");
+        assert_eq!(pool.stats(), (2, 0), "fallback blocks recycle for 3 frames");
+        pool.release(t2);
+
+        for _ in 0..3 {
+            pool.begin_frame();
+        }
+        let t3 = pool.acquire(64, 64, FORMAT, USAGE, "c");
+        assert_eq!(pool.stats(), (2, 1), "fallback recycles after frames_in_flight");
+        pool.release(t3);
+    }
+
+    #[test]
+    fn pre_attach_entries_keep_frame_rule() {
+        let device = GpuDevice::new();
+        let event = device.create_event();
+        let pool = TexturePool::new(&device, 3);
+
+        // Released BEFORE the event is attached: no signal stamp.
+        let t = pool.acquire(64, 64, FORMAT, USAGE, "a");
+        pool.release(t);
+        pool.set_completion_event(&event);
+
+        let t2 = pool.acquire(64, 64, FORMAT, USAGE, "b");
+        assert_eq!(
+            pool.stats(),
+            (2, 0),
+            "pre-attach entry stays on the frame rule, not instant recycle"
+        );
+        pool.release(t2);
+
+        for _ in 0..3 {
+            pool.begin_frame();
+        }
+        let t3 = pool.acquire(64, 64, FORMAT, USAGE, "c");
+        assert_eq!(pool.stats(), (2, 1), "pre-attach entry retires by frame age");
+        pool.release(t3);
     }
 }

@@ -1300,6 +1300,11 @@ impl ContentPipeline {
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
         let pool = device.create_texture_pool(3);
+        // Fence-aware recycling (BUG-l7t4): the pool retires entries by the
+        // event's GPU signal value instead of the frame-counter pacing
+        // assumption, so unpaced encodes (export, headless) can't recycle a
+        // texture an in-flight pass still samples.
+        pool.set_completion_event(&event);
         let preview_shader = r#"
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
@@ -1564,12 +1569,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// timeout cycle). They use the ephemeral check: a full rotation with no
     /// publish lifts the front-pin, in-flight reads still gate.
     ///
-    /// Load-bearing beyond presentation (BUG-0ou6, TexturePool encode-pacing
-    /// coupling): this wait is what paces encode to <= frames_in_flight
-    /// ahead of GPU completion, and TexturePool's frame-stamp recycling
-    /// (crates/manifold-gpu/src/metal/texture_pool.rs) is correct only
-    /// under that pacing. Weakening this wait silently breaks the pool's
-    /// recycle safety.
+    /// Still load-bearing for the ring slots themselves; the texture pool
+    /// no longer depends on it — recycling is fence-aware off the native
+    /// event (texture_pool.rs SAFETY CONTRACT), correct at any encode depth.
     #[cfg(target_os = "macos")]
     pub fn is_surface_ready(&self, frame: u64) -> bool {
         let pending = self.surface_signal_values[self.write_surface_index];
