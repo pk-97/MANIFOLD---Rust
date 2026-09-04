@@ -369,13 +369,31 @@ Accepted — same hazard class as when `Audio = 3` was added.
   readback for the UI (doubles GPU staging for bytes that already exist); `Arc<Mutex>`
   handoff (banned — snapshots are the house pattern); UI-side re-render of the generator
   (drift — the preview must be the send path's own pixels, not a parallel render).
+  **Ordering, stated honestly (adversarial review 2026-09-04): the readback is
+  post-`led_gain` (GPU, `blit.rs:27`) but pre-master-brightness (CPU, `dmx.rs:105` in
+  `pack_and_send`) — the preview tracks pattern and gain, NOT the LED brightness slider.**
+  **Payload shape: `try_read` returns `Arc<[u8]>`** (`readback.rs:97` already allocates
+  this buffer per completed frame; the same allocation serves `pack_and_send` and the
+  snapshot — no clone, no new per-frame alloc).
 - **D24 — Presentation: transposed band (120 wide × 8 tall) at the top of the DMX lane's
-  generator card, drawn with existing card-media chrome; black when the strips are black.**
+  generator card, drawn through the viewport bitmap path; black when the strips are black.**
   The texture is 8×120 (strips × LEDs); displayed faithfully it is a 3px sliver at card
   width — useless as a debug view. Transposed, each row is one strip, read left-to-right
-  like the rig. No label, no placeholder text: a black band IS the truthful idle state
-  (LED output off / no active DMX clip / blackout). Rejected: faithful-orientation sliver
-  (illegible); placeholder copy in idle (a debug tool must show state, not reassure).
+  like the rig. No label, no placeholder text; idle states are drawn truthfully (below).
+  **Machinery: the viewport bitmap path (`panels/viewport/render.rs`:34,197,316 —
+  dirty-flagged per-frame CPU bitmap → GPU upload → blit via the layer-bitmap path,
+  `viewport.rs:1474`) — browser thumbnails are static atlas registrations, NOT the
+  precedent.** **Payload is a state enum, not `Option<Vec<u8>>`: `Frame(pixels)` /
+  `Black` / `None`** (adversarial review 2026-09-04): `None` (no LED controller or never
+  enabled — no data exists) renders NO band; `Black` (the send path's blackout or disabled
+  state, `controller.rs:94-100/:88/:120`) renders a black band AND clears the cached
+  frame — a stale chase must never animate in the preview while the rig is dark; `Frame`
+  with black pixels renders a black band naturally. **Orientation is pinned empirically
+  against the `led_composite_pixel_tests` known strip/LED mappings** (texture x = strip
+  index, y = LED position; `blit.rs:32,52-53`) — transpose plus both flips (LED-0
+  left/right, strip-0 top/bottom) written into the test; guessing ships a preview that
+  mirrors the rig. Rejected: faithful-orientation sliver (illegible); placeholder copy in
+  idle (a debug tool must show state, not reassure).
 
 **MVP-P3 plausible-wrong architectures, forbidden by name:** (1) You will want a bespoke
 DMX card or DMX browser — no: D17. (2) You will want to rename the `LED *.json` preset ids
@@ -688,21 +706,27 @@ tool and preview screen"; must meet the standard UI/UX quality bar).**
 - *Entry state:* MVP-P3 on main; `dmxcard` ui-snap scene exists (P3c demo).
 - *Read-back:* D22, D23, D24. Re-verify anchors: `rg -n 'try_read' crates/manifold-led/src/readback.rs`,
   `rg -n 'struct ContentState' crates/manifold-app/src` — stop and re-list if moved.
-- *Deliverables:* (1) content thread caches the latest completed strip readback
-  (`Vec<u8>` 8×120 RGBA) and publishes it on ContentState (new field, e.g.
-  `led_preview: Option<LedPreviewFrame>` with dims; owned by the existing snapshot
-  channel). (2) Inspector projection passes it to the UI when the active layer is a DMX
-  lane. (3) UI: at the top of the DMX lane's generator card, a transposed 120×8 band
-  rendered through the existing image/blit machinery the browser thumbnails use — card
-  chrome (radius, 1px border, dark bg), no label; black band = truthful idle. Only on
-  `LayerType::Dmx` lanes — no preview on generator/video cards. (4) L3 flow:
-  `led-inspector-preview` on `dmxcard` — assert the preview node exists on the DMX card,
-  assert a non-DMX layer's card has none (select FLOWERS, assert absence).
+- *Deliverables:* (1) `try_read` returns `Arc<[u8]>` (readback.rs:97 already allocates
+  this buffer per completed frame; the same allocation serves `pack_and_send` and the
+  snapshot — no clone, no new per-frame alloc); the content thread publishes
+  `led_preview: Option<LedPreview>` — an enum `Frame { pixels: Arc<[u8]>, version: u64 }`
+  / `Black` / `None` — on ContentState (content_state.rs:66, built per tick), version
+  bumped per completed readback; `Black`/`None` per D24's state table (blackout and
+  disabled CLEAR the cached frame). (2) Inspector projection passes it to the UI when the
+  active layer is a DMX lane. (3) UI: at the top of the DMX lane's generator card, a
+  transposed 120×8 band rendered through the viewport bitmap path (viewport/render.rs:34,
+  197,316 — dirty-flagged bitmap → GPU upload → layer-bitmap blit, viewport.rs:1474) —
+  card chrome (radius, 1px border, dark bg), no label; upload on version change, not per
+  frame. Only on `LayerType::Dmx` lanes. Orientation (transpose + both flips) pinned
+  against `led_composite_pixel_tests`' known strip/LED mappings, written into the test.
+  (4) L3 flow: `led-inspector-preview` on `dmxcard` — assert the preview node exists on
+  the DMX card, assert a non-DMX layer's card has none (select FLOWERS, assert absence).
 - *Gate (positive):* the L3 flow green; a ui-snap PNG of the DMX card with the band
-  present (Peter looks — L2); clippy clean.
+  present (Peter looks — L2); an orientation unit test pinning transpose+flips against
+  the known composite mappings; clippy clean.
 - *Gate (negative):* `rg -n 'Arc<Mutex.*led_preview|Arc<RwLock.*led_preview' crates/` zero
-  hits (D23); no new content-thread per-frame allocation beyond the cached frame's clone
-  into the snapshot (state the one clone; the Vec is reused/cached on the content side).
+  hits (D23); **no new content-thread per-frame allocation at all** (the Arc shares the
+  existing readback allocation — state what, if anything, allocates and why).
 - *Demo:* L3 flow + PNG for Peter's look.
 - *Performer gesture:* kill the LED output mid-show — the band goes black in step with
   the strips; a chase reads as moving bands across the preview.
