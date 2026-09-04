@@ -104,7 +104,7 @@ struct StepResult {
 pub fn run(scene: &str, script_path: &str) {
     let Some(mut data) = super::fixtures::build(scene) else {
         eprintln!(
-            "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, \
+            "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, dmxcard, \
              paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \
              gltfanimscene, envmod, rtquality)"
         );
@@ -143,6 +143,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"
+        || scene == "dmxcard"
     {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
@@ -1147,15 +1148,29 @@ impl Runner {
         // mid-flight, so a script with nothing armed keeps the same
         // cache-hit behavior it had before this fix.
         let settled = ui.inspector.skip_to_settled(&mut ui.tree);
+        // Mirror app_render.rs's per-frame overlay translation: opening an
+        // overlay (browser popup, dropdown) via `try_open_dropdown` consumes
+        // the action and only sets `overlay_dirty` — no dispatched action
+        // marks structural, so without this fold the overlay region is never
+        // re-minted and a flow's click that opens the browser popup asserts
+        // against a tree with no popup nodes.
+        let overlay_changed = ui.overlay_dirty;
+        ui.overlay_dirty = false;
         let mut signals = UiFrameSignals {
             needs_structural_sync: self.needs_structural_sync || settled,
             scroll_dirty: self.scroll_dirty,
             scrolled_in_place,
             ..Default::default()
         };
+        if overlay_changed {
+            signals.scroll_dirty.visual = true;
+        }
         apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
         self.needs_structural_sync = signals.needs_structural_sync;
         self.scroll_dirty = signals.scroll_dirty;
+        // The visual bit is one-shot (consumed by the rebuild decision above),
+        // same as the live driver's per-frame `scroll_dirty.clear()`.
+        self.scroll_dirty.visual = false;
         super::reconcile_state(ui, data);
         composite_frame(
             &render.device,

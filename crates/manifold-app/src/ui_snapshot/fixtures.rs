@@ -51,6 +51,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "heldoutmerge" => Some(heldout_merge_scene()),
         "empty" => Some(empty_scene()),
         "envmod" => Some(envelope_modulation_scene()),
+        "dmxcard" => Some(dmxcard_scene()),
         _ => None,
     }
 }
@@ -1138,6 +1139,44 @@ fn envelope_modulation_scene() -> SceneData {
     selection.select_layer(lid("glow"));
 
     SceneData { project, content, active: Some(0), selection }
+}
+
+/// LED_STRIPS_DESIGN MVP-P3c L3 evidence scene (`scripts/ui-flows/led-
+/// browser-scoped-open.json`): one plain video lane so the timeline split
+/// reads as a real session, plus one SELECTED DMX layer as the subject —
+/// built exactly like `AddLayerCommand`'s Dmx arm (`manifold-editing`'s
+/// layer.rs) so the LED Fill card renders with its Change button in a scene
+/// whose inspector stays visible (`timeline` zeroes the inspector, which is
+/// why this flow can't run there).
+fn dmxcard_scene() -> SceneData {
+    let mut layers: Vec<Layer> = Vec::new();
+
+    // 0: FLOWERS — plain video lane. Clips stay at 20 beats (480px at
+    // 24px/beat) so they clear the 600px inspector column (BUG-068's
+    // constraint, same as `inspector_scene`).
+    let mut flowers = Layer::new("FLOWERS".into(), LayerType::Video, 0);
+    flowers.layer_id = lid("flowers");
+    flowers.clips.push(TimelineClip::new_video("flowers_loop_A.mov".into(), Beats(0.0), Beats(20.0), Seconds::ZERO));
+    layers.push(flowers);
+
+    // 1: LED 1 — the SUBJECT. `new_generator` then the type flip, matching
+    // AddLayerCommand's Dmx arm (`gen_params` has no public setter).
+    let mut led = Layer::new_generator("LED 1".into(), PresetTypeId::new("LED Fill"), 1);
+    led.layer_id = lid("led-1");
+    led.layer_type = LayerType::Dmx;
+    led.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
+    layers.push(led);
+
+    let mut project = Project::default();
+    project.timeline.layers = layers;
+
+    let content = ContentState { current_beat: Beats(4.0), is_playing: false, ..Default::default() };
+
+    // Ships selected: the flow starts on the LED Fill card, no creation step.
+    let mut selection = UIState::default();
+    selection.select_layer(lid("led-1"));
+
+    SceneData { project, content, active: Some(1), selection }
 }
 
 /// One layer per state, so a single real render shows the whole state matrix in

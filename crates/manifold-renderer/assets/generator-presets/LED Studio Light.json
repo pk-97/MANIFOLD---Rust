@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Studio Light",
     "displayName": "LED Studio Light",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledStudioLight",
     "available": true,
     "isLineBased": false,

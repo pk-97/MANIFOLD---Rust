@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Cycle",
     "displayName": "LED Cycle",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledCycle",
     "available": true,
     "isLineBased": false,

@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Chase Sweep",
     "displayName": "LED Chase Sweep",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledChaseSweep",
     "available": true,
     "isLineBased": false,

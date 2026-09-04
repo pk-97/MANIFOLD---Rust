@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Step Scan",
     "displayName": "LED Step Scan",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledStepScan",
     "available": true,
     "isLineBased": false,

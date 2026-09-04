@@ -422,16 +422,16 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `Infrared` | Infrared | effect | Color | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
-| `LED Burst` | LED Burst | generator | Pattern | 5 |
-| `LED Chase Sweep` | LED Chase Sweep | generator | Pattern | 5 |
-| `LED Cycle` | LED Cycle | generator | Pattern | 1 |
-| `LED Fill` | LED Fill | generator | Pattern | 2 |
-| `LED Pixel Walk` | LED Pixel Walk | generator | Pattern | 2 |
-| `LED Pulse` | LED Pulse | generator | Pattern | 3 |
-| `LED Step Chase` | LED Step Chase | generator | Pattern | 6 |
-| `LED Step Scan` | LED Step Scan | generator | Pattern | 4 |
-| `LED Strip ID` | LED Strip ID | generator | Pattern | 0 |
-| `LED Studio Light` | LED Studio Light | generator | Pattern | 3 |
+| `LED Burst` | LED Burst | generator | LED | 5 |
+| `LED Chase Sweep` | LED Chase Sweep | generator | LED | 5 |
+| `LED Cycle` | LED Cycle | generator | LED | 1 |
+| `LED Fill` | LED Fill | generator | LED | 2 |
+| `LED Pixel Walk` | LED Pixel Walk | generator | LED | 2 |
+| `LED Pulse` | LED Pulse | generator | LED | 3 |
+| `LED Step Chase` | LED Step Chase | generator | LED | 6 |
+| `LED Step Scan` | LED Step Scan | generator | LED | 4 |
+| `LED Strip ID` | LED Strip ID | generator | LED | 0 |
+| `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `Lantern` | Lantern | generator | Geometry | 157 |
 | `LightOrbit` | Light Orbit | generator | Geometry | 77 |
 | `Lightning` | Lightning | generator | Pattern | 7 |

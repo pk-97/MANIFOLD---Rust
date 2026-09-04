@@ -1,10 +1,10 @@
 # LED Strips — Play the Strips + Generalized Patch
 
 **Status: IN PROGRESS — MVP-P1 + MVP-P2 SHIPPED 2026-09-03 (LED layer type, nine-pattern
-pack, value-gated, fused); MVP-P3a SHIPPED 2026-09-04 (hosts_generator guard fixes);
-MVP-P3b SHIPPED 2026-09-04 (`LayerType::Dmx` rename, legacy load alias, led_tap deleted).
-Owed: MVP-P3c (LED browser category); Vec4 color binding; LED grid preview + patch/sACN/
-island phases (deferred, section 5b.5).**
+pack, value-gated, fused); MVP-P3 SHIPPED 2026-09-04 (P3a guard fixes; P3b Dmx rename;
+P3c LED browser category + scoped open, L3 flow green). Owed: MVP-P4 execution (LED
+composite preview blit, designed); Peter calls (scene-panel, drag-convert, MIDI import —
+beads); Vec4 color binding; patch/sACN/island phases (deferred, section 5b.5).**
 **Prerequisites: none for the MVP (LED-resolution compositing machinery already exists — see MVP audit).
 Original P2 (strip island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 8 (Execution protocol)
@@ -352,6 +352,48 @@ Accepted — same hazard class as when `Audio = 3` was added.
   BUG-n6dm (skip generator GPU work for muted/invisible LED lanes). Overlaps the 5b.5
   native LED-res rendering revival trigger — do not build the skip and then rebuild it
   natively.
+- **D22 — The inspector preview shows the whole LED composite, not the selected layer's
+  output (Peter's ask, 2026-09-04: "a small preview blit to the LED layer inspector …
+  useful as a debug tool and preview screen").** The composite is the truth of what the
+  strips display: under D10's switch, a per-layer view would show content the strips are
+  not playing — the exact confusion a debug preview exists to prevent. Rejected: per-layer
+  sampling (extra compositor plumbing, misleading during the switch). This is the 5b.5
+  "in-app LED grid preview" revival, scoped to the DMX lane inspector; a standalone panel
+  stays deferred (5b.5 trigger unchanged for multi-surface needs).
+- **D23 — Data path: the latest completed Art-Net readback rides ContentState to the UI;
+  no new channel, no shared state.** The send path already readbacks the 8×120 strip
+  texture every frame (`manifold-led/src/readback.rs` `try_read` → `Vec<u8>`); the content
+  thread caches the most recent completed readback and publishes it on the existing
+  content→UI snapshot (a few KB per frame, drained to latest — the channel already
+  coalesces). The UI uploads it to a small texture once per new frame. Rejected: a second
+  readback for the UI (doubles GPU staging for bytes that already exist); `Arc<Mutex>`
+  handoff (banned — snapshots are the house pattern); UI-side re-render of the generator
+  (drift — the preview must be the send path's own pixels, not a parallel render).
+  **Ordering, stated honestly (adversarial review 2026-09-04): the readback is
+  post-`led_gain` (GPU, `blit.rs:27`) but pre-master-brightness (CPU, `dmx.rs:105` in
+  `pack_and_send`) — the preview tracks pattern and gain, NOT the LED brightness slider.**
+  **Payload shape: `try_read` returns `Arc<[u8]>`** (`readback.rs:97` already allocates
+  this buffer per completed frame; the same allocation serves `pack_and_send` and the
+  snapshot — no clone, no new per-frame alloc).
+- **D24 — Presentation: transposed band (120 wide × 8 tall) at the top of the DMX lane's
+  generator card, drawn through the viewport bitmap path; black when the strips are black.**
+  The texture is 8×120 (strips × LEDs); displayed faithfully it is a 3px sliver at card
+  width — useless as a debug view. Transposed, each row is one strip, read left-to-right
+  like the rig. No label, no placeholder text; idle states are drawn truthfully (below).
+  **Machinery: the viewport bitmap path (`panels/viewport/render.rs`:34,197,316 —
+  dirty-flagged per-frame CPU bitmap → GPU upload → blit via the layer-bitmap path,
+  `viewport.rs:1474`) — browser thumbnails are static atlas registrations, NOT the
+  precedent.** **Payload is a state enum, not `Option<Vec<u8>>`: `Frame(pixels)` /
+  `Black` / `None`** (adversarial review 2026-09-04): `None` (no LED controller or never
+  enabled — no data exists) renders NO band; `Black` (the send path's blackout or disabled
+  state, `controller.rs:94-100/:88/:120`) renders a black band AND clears the cached
+  frame — a stale chase must never animate in the preview while the rig is dark; `Frame`
+  with black pixels renders a black band naturally. **Orientation is pinned empirically
+  against the `led_composite_pixel_tests` known strip/LED mappings** (texture x = strip
+  index, y = LED position; `blit.rs:32,52-53`) — transpose plus both flips (LED-0
+  left/right, strip-0 top/bottom) written into the test; guessing ships a preview that
+  mirrors the rig. Rejected: faithful-orientation sliver (illegible); placeholder copy in
+  idle (a debug tool must show state, not reassure).
 
 **MVP-P3 plausible-wrong architectures, forbidden by name:** (1) You will want a bespoke
 DMX card or DMX browser — no: D17. (2) You will want to rename the `LED *.json` preset ids
@@ -657,6 +699,43 @@ MIDI import meaning (BUG-xlrx (MIDI import treats LED lane as video lane)), perc
 import (BUG-d0gb (percussion import scans Generator lanes only)), muted-lane GPU skip
 (D21, BUG-n6dm (skip generator GPU work for muted/invisible LED lanes)) — each is a Peter
 call or its own trigger, tracked as beads.
+
+**MVP-P4 — LED composite preview blit at the top of the DMX lane inspector (2026-09-04,
+Peter: "add a small preview blit to the LED layer inspector at the top … useful as a debug
+tool and preview screen"; must meet the standard UI/UX quality bar).**
+- *Entry state:* MVP-P3 on main; `dmxcard` ui-snap scene exists (P3c demo).
+- *Read-back:* D22, D23, D24. Re-verify anchors: `rg -n 'try_read' crates/manifold-led/src/readback.rs`,
+  `rg -n 'struct ContentState' crates/manifold-app/src` — stop and re-list if moved.
+- *Deliverables:* (1) `try_read` returns `Arc<[u8]>` (readback.rs:97 already allocates
+  this buffer per completed frame; the same allocation serves `pack_and_send` and the
+  snapshot — no clone, no new per-frame alloc); the content thread publishes
+  `led_preview: Option<LedPreview>` — an enum `Frame { pixels: Arc<[u8]>, version: u64 }`
+  / `Black` / `None` — on ContentState (content_state.rs:66, built per tick), version
+  bumped per completed readback; `Black`/`None` per D24's state table (blackout and
+  disabled CLEAR the cached frame). (2) Inspector projection passes it to the UI when the
+  active layer is a DMX lane. (3) UI: at the top of the DMX lane's generator card, a
+  transposed 120×8 band rendered through the viewport bitmap path (viewport/render.rs:34,
+  197,316 — dirty-flagged bitmap → GPU upload → layer-bitmap blit, viewport.rs:1474) —
+  card chrome (radius, 1px border, dark bg), no label; upload on version change, not per
+  frame. Only on `LayerType::Dmx` lanes. Orientation (transpose + both flips) pinned
+  against `led_composite_pixel_tests`' known strip/LED mappings, written into the test.
+  (4) L3 flow: `led-inspector-preview` on `dmxcard` — assert the preview node exists on
+  the DMX card, assert a non-DMX layer's card has none (select FLOWERS, assert absence).
+- *Gate (positive):* the L3 flow green; a ui-snap PNG of the DMX card with the band
+  present (Peter looks — L2); an orientation unit test pinning transpose+flips against
+  the known composite mappings; clippy clean.
+- *Gate (negative):* `rg -n 'Arc<Mutex.*led_preview|Arc<RwLock.*led_preview' crates/` zero
+  hits (D23); **no new content-thread per-frame allocation at all** (the Arc shares the
+  existing readback allocation — state what, if anything, allocates and why).
+- *Demo:* L3 flow + PNG for Peter's look.
+- *Performer gesture:* kill the LED output mid-show — the band goes black in step with
+  the strips; a chase reads as moving bands across the preview.
+- *Forbidden moves:* a second GPU readback for the UI (D23); per-layer sampling (D22);
+  shared-state handoff (D23); bespoke widget infrastructure beyond the blit (WIDGET_TREE
+  discipline); placeholder/idle copy (D24); showing the preview on non-DMX cards.
+- *Test scope:* `cargo nextest run -p manifold-app -p manifold-ui -p manifold-led
+  -p manifold-core` (whichever the diff actually touches); clippy same; gpu-proofs not
+  touched (no kernel change — the preview consumes the existing readback).
 
 ### 5b.5 Deferred (explicitly not MVP — each with its revival trigger)
 

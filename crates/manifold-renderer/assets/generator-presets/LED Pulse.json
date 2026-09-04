@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Pulse",
     "displayName": "LED Pulse",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledPulse",
     "available": true,
     "isLineBased": false,

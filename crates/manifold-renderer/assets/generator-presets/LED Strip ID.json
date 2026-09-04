@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Strip ID",
     "displayName": "LED Strip ID",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledStripId",
     "available": true,
     "isLineBased": false,
