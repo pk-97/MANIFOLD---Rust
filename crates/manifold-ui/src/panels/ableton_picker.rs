@@ -261,7 +261,9 @@ impl AbletonPickerPopup {
         let ph = self.popup_h;
 
         // Scrim + modal container via the shared shell (section 17 lifts it with a
-        // soft shadow; the header + columns are added on top as siblings).
+        // soft shadow). All content is parented to the container, which clips
+        // children by construction — a list taller than the popup can neither
+        // paint nor take clicks outside it.
         let shell = popup_shell::build(
             tree,
             (self.screen_w, self.screen_h),
@@ -269,6 +271,7 @@ impl AbletonPickerPopup {
             &popup_shell::PopupStyle::MODAL,
         );
         self.backdrop_id = Some(shell.backdrop);
+        let content_parent = Some(shell.container);
 
         let content_x = px + BORDER + PADDING;
         let content_y = py + BORDER + PADDING;
@@ -277,7 +280,7 @@ impl AbletonPickerPopup {
         // ── Header row ────────────────────────────────────────────
 
         tree.add_panel(
-            None,
+            content_parent,
             px + BORDER,
             py + BORDER,
             pw - BORDER * 2.0,
@@ -291,7 +294,7 @@ impl AbletonPickerPopup {
 
         // "Ableton Tracks" label
         tree.add_label(
-            None,
+            content_parent,
             content_x,
             content_y,
             LEFT_COL_W,
@@ -308,7 +311,7 @@ impl AbletonPickerPopup {
         // "Macros" label
         let right_x = content_x + LEFT_COL_W + DIVIDER_W + 4.0;
         tree.add_label(
-            None,
+            content_parent,
             right_x,
             content_y,
             RIGHT_COL_W,
@@ -325,7 +328,7 @@ impl AbletonPickerPopup {
         // Header separator line
         let sep_y = content_y + HEADER_H + 1.0;
         tree.add_panel(
-            None,
+            content_parent,
             px + BORDER,
             sep_y,
             pw - BORDER * 2.0,
@@ -344,7 +347,7 @@ impl AbletonPickerPopup {
         let div_x = content_x + LEFT_COL_W;
         let divider_h = ph - BORDER * 2.0 - PADDING - (HEADER_H + 3.0) - PADDING;
         tree.add_panel(
-            None,
+            content_parent,
             div_x,
             body_y,
             DIVIDER_W,
@@ -359,7 +362,7 @@ impl AbletonPickerPopup {
 
         if self.rack_tracks.is_empty() {
             tree.add_label(
-                None,
+                content_parent,
                 content_x,
                 body_y + 8.0,
                 LEFT_COL_W,
@@ -384,7 +387,7 @@ impl AbletonPickerPopup {
                 };
 
                 let id = tree.add_button(
-                    None,
+                    content_parent,
                     content_x,
                     row_y,
                     LEFT_COL_W - 2.0,
@@ -406,7 +409,7 @@ impl AbletonPickerPopup {
                 // Selection arrow
                 if is_selected {
                     tree.add_label(
-                        None,
+                        content_parent,
                         content_x + LEFT_COL_W - 14.0,
                         row_y,
                         12.0,
@@ -441,7 +444,7 @@ impl AbletonPickerPopup {
                     }
                     // Device name section header (non-interactive)
                     tree.add_label(
-                        None,
+                        content_parent,
                         right_content_x,
                         ry + 2.0,
                         RIGHT_COL_W,
@@ -482,7 +485,7 @@ impl AbletonPickerPopup {
                             macro_name: mac.name.clone(),
                         };
                         let id = tree.add_button(
-                            None,
+                            content_parent,
                             right_content_x,
                             ry,
                             RIGHT_COL_W,
@@ -506,7 +509,7 @@ impl AbletonPickerPopup {
                     // Separator between devices (not after last)
                     if di + 1 < track.devices.len() {
                         tree.add_panel(
-                            None,
+                            content_parent,
                             right_content_x,
                             ry + 3.0,
                             RIGHT_COL_W,
@@ -527,7 +530,7 @@ impl AbletonPickerPopup {
                 "Select a track"
             };
             tree.add_label(
-                None,
+                content_parent,
                 right_content_x,
                 body_y + 8.0,
                 RIGHT_COL_W,

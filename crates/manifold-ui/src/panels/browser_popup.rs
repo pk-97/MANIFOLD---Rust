@@ -432,7 +432,8 @@ impl BrowserPopupPanel {
         let ph = session.layout.total_height;
 
         // Scrim + modal container via the shared shell (section 17 lifts it with a
-        // soft shadow; search bar / chips / grid are added on top as siblings).
+        // soft shadow). All content is parented to the container, which clips
+        // children by construction — nothing can paint or take clicks outside it.
         let shell = popup_shell::build(
             tree,
             (screen_w, screen_h),
@@ -440,6 +441,7 @@ impl BrowserPopupPanel {
             &popup_shell::PopupStyle::MODAL,
         );
         session.layout.backdrop_id = Some(shell.backdrop);
+        let content_parent = Some(shell.container);
 
         let cx = px + BORDER + PADDING;
         let content_w = pw - BORDER * 2.0 - PADDING * 2.0;
@@ -448,7 +450,7 @@ impl BrowserPopupPanel {
         // Search bar
         let filter_text = session.picker.filter().to_string();
         session.layout.search_bar_id = Some(tree.add_button(
-            None,
+            content_parent,
             cx,
             cy,
             content_w,
@@ -483,7 +485,7 @@ impl BrowserPopupPanel {
             let all_active = active_source.is_none();
             let all_w = estimate_chip_width("All");
             session.layout.source_all_id = Some(tree.add_button(
-                None,
+                content_parent,
                 chip_x,
                 cy,
                 all_w,
@@ -537,7 +539,7 @@ impl BrowserPopupPanel {
             let all_active = active_category.is_none();
             let all_w = estimate_chip_width("All");
             session.layout.chip_all_id = Some(tree.add_button(
-                None,
+                content_parent,
                 chip_x,
                 cy,
                 all_w,
@@ -602,12 +604,15 @@ impl BrowserPopupPanel {
         let vp_top = cy;
         let vp_h = session.layout.grid_viewport_height;
 
-        let clip_parent = Some(
-            session
-                .picker
-                .scroll
-                .begin(tree, Rect::new(cx, vp_top, content_w, vp_h)),
-        );
+        let clip_id = session
+            .picker
+            .scroll
+            .begin(tree, Rect::new(cx, vp_top, content_w, vp_h));
+        // The grid's own clip handles cell overflow against the viewport;
+        // rooting it under the container also ties the grid to the popup's
+        // structural containment, same as every other content node.
+        tree.reparent_root_nodes(clip_id.index(), 1, shell.container);
+        let clip_parent = Some(clip_id);
 
         let columns = session.layout.columns;
         let scroll_offset = session.picker.scroll.scroll_offset();
@@ -748,7 +753,7 @@ impl BrowserPopupPanel {
                 format!("Paste {} Effects", session.paste_count)
             };
             session.layout.paste_id = Some(tree.add_button(
-                None,
+                content_parent,
                 cx,
                 cy,
                 content_w,

@@ -21,8 +21,9 @@ use crate::node::*;
 use crate::tree::UITree;
 
 /// The two node ids the shell mints. The caller stores [`backdrop`](Self::backdrop)
-/// for click-outside dismissal and adds its content as later siblings (drawn on
-/// top of [`container`](Self::container), since z-order follows build order).
+/// for click-outside dismissal and parents its content to
+/// [`container`](Self::container) — the container clips children (see [`build`]),
+/// so content is structurally contained by the popup surface.
 pub struct PopupShell {
     pub backdrop: NodeId,
     pub container: NodeId,
@@ -57,6 +58,14 @@ impl PopupStyle {
 /// covers it to catch outside clicks); `rect` is the container's bounds. Both
 /// nodes are parentless top-level overlay nodes, matching the popups' existing
 /// build pattern.
+///
+/// The container carries `CLIPS_CHILDREN` by construction — the same invariant
+/// `UITree::begin_region` enforces for top-level regions, applied to the popup
+/// surface itself. Content **must be parented to [`PopupShell::container`]**:
+/// children can then never paint (GPU scissor) or hit-test
+/// (`UITree::is_inside_clip_ancestors`) outside the container, on every
+/// build/rebuild path, no matter which region wraps the popup. Content minted
+/// as a sibling escapes the clip.
 pub fn build(tree: &mut UITree, screen: (f32, f32), rect: Rect, style: &PopupStyle) -> PopupShell {
     // Full-screen dismiss scrim — interactive so clicks outside the container
     // land here (and dismiss) instead of passing through to the panels behind.
@@ -89,6 +98,7 @@ pub fn build(tree: &mut UITree, screen: (f32, f32), rect: Rect, style: &PopupSty
             ..UIStyle::default()
         },
     );
+    tree.set_flag(container, UIFlags::CLIPS_CHILDREN);
 
     PopupShell { backdrop, container }
 }
@@ -118,5 +128,38 @@ mod tests {
         assert_eq!(c.style.corner_radius, crate::color::POPUP_RADIUS);
         // Built scrim-first so the section 17 shadow skips it and lifts the container.
         assert!(shell.backdrop.index() < shell.container.index());
+    }
+
+    #[test]
+    fn container_clips_children_by_construction() {
+        // The containment invariant: anything parented to the container is
+        // scissor-clipped on paint and rejected by hit_test outside it.
+        let mut tree = UITree::new();
+        let shell = build(
+            &mut tree,
+            (1920.0, 1080.0),
+            Rect::new(100.0, 80.0, 300.0, 200.0),
+            &PopupStyle::MODAL,
+        );
+        assert!(tree.has_flag(shell.container, UIFlags::CLIPS_CHILDREN));
+
+        // A child minted partially outside the container paints clipped and
+        // is not hittable at the outside point — the backdrop (full-screen,
+        // minted earlier) is what a click there lands on.
+        let child = tree.add_button(
+            Some(shell.container),
+            100.0,
+            260.0,
+            300.0,
+            40.0,
+            UIStyle::default(),
+            "x",
+        );
+        assert_eq!(tree.hit_test(Vec2::new(150.0, 270.0)), Some(child));
+        assert_eq!(
+            tree.hit_test(Vec2::new(150.0, 290.0)),
+            Some(shell.backdrop),
+            "below the container the child is clipped away; the scrim takes the click"
+        );
     }
 }
