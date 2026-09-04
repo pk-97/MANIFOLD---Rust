@@ -1002,6 +1002,94 @@ mod tests {
         );
     }
 
+    // ── MVP-P3a: gen-carrying predicate (LED_STRIPS_DESIGN.md section 5b D16) ──
+
+    const TEST_LED_GEN_A: PresetTypeId = PresetTypeId::new("TestLedGenA");
+    const TEST_LED_GEN_B: PresetTypeId = PresetTypeId::new("TestLedGenB");
+
+    inventory::submit! {
+        manifold_core::generator_registration::GeneratorMetadata {
+            id: PresetTypeId::new("TestLedGenA"),
+            display_name: "Test Led Gen A",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "testLedGenA",
+            legacy_discriminant: None,
+            params: &[manifold_core::generator_registration::ParamSpec::continuous("speed", "Speed", 0.0, 10.0, 0.0, "F2", "")],
+        }
+    }
+    inventory::submit! {
+        manifold_core::generator_registration::GeneratorMetadata {
+            id: PresetTypeId::new("TestLedGenB"),
+            display_name: "Test Led Gen B",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "testLedGenB",
+            legacy_discriminant: None,
+            params: &[manifold_core::generator_registration::ParamSpec::continuous("speed", "Speed", 0.0, 10.0, 0.0, "F2", "")],
+        }
+    }
+
+    /// BUG-ev8u characterization (LED_STRIPS_DESIGN.md section 5b D16): the
+    /// generator picker's Change button was a silent no-op on LED lanes
+    /// because `change_generator_type` gated on `!= LayerType::Generator`.
+    /// Post-fix the change lands on the LED lane; undo restores the previous
+    /// type. Registered test types (not "LED Fill") because undo re-seeds
+    /// through the registry.
+    #[test]
+    fn change_generator_type_on_led_layer_assigns_and_undo_restores() {
+        use crate::commands::settings::ChangeGeneratorTypeCommand;
+
+        let mut project = Project::default();
+        let mut add = AddLayerCommand::new(
+            "LED 1".to_string(),
+            LayerType::Led,
+            TEST_LED_GEN_A.clone(),
+            0,
+            None,
+        );
+        add.execute(&mut project);
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+
+        let (old_type, old_params, old_drivers, old_envelopes) = {
+            let gp = project.timeline.layers[0].gen_params().unwrap();
+            (
+                gp.generator_type().clone(),
+                gp.snapshot_params(),
+                gp.snapshot_drivers(),
+                gp.snapshot_envelopes(),
+            )
+        };
+
+        let mut cmd = ChangeGeneratorTypeCommand::new(
+            layer_id,
+            old_type,
+            TEST_LED_GEN_B.clone(),
+            old_params,
+            old_drivers,
+            old_envelopes,
+        );
+        cmd.execute(&mut project);
+        assert_eq!(
+            project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .generator_type(),
+            &TEST_LED_GEN_B,
+            "the picker assignment must land on an LED lane"
+        );
+
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .generator_type(),
+            &TEST_LED_GEN_A,
+            "undo restores the pre-change generator type on an LED lane"
+        );
+    }
+
     /// Grouping a non-contiguous selection then undoing must restore the exact
     /// original layer order and clear every reparent — `undo` restores the
     /// pre-group snapshot verbatim rather than re-deriving order.
