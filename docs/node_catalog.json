@@ -27391,7 +27391,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Burst",
       "is_line_based": false,
       "kind": "generator",
@@ -27435,7 +27435,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Chase Sweep",
       "is_line_based": false,
       "kind": "generator",
@@ -27479,7 +27479,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Cycle",
       "is_line_based": false,
       "kind": "generator",
@@ -27495,7 +27495,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Fill",
       "is_line_based": false,
       "kind": "generator",
@@ -27518,7 +27518,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Pixel Walk",
       "is_line_based": false,
       "kind": "generator",
@@ -27541,7 +27541,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Pulse",
       "is_line_based": false,
       "kind": "generator",
@@ -27571,7 +27571,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Step Chase",
       "is_line_based": false,
       "kind": "generator",
@@ -27622,7 +27622,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Step Scan",
       "is_line_based": false,
       "kind": "generator",
@@ -27659,7 +27659,7 @@
       ]
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Strip ID",
       "is_line_based": false,
       "kind": "generator",
@@ -27667,7 +27667,7 @@
       "params": []
     },
     {
-      "category": "Pattern",
+      "category": "LED",
       "id": "LED Studio Light",
       "is_line_based": false,
       "kind": "generator",

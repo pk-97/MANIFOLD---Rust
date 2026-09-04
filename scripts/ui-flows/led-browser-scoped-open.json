@@ -1,0 +1,54 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "LED Fill", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Change", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "LED", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "LED Pulse", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Black Hole", "type": "Button" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "LED Pulse", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "LED Pulse", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "LED Fill", "type": "Label" } },
+      "check": { "Count": 0 }
+    }
+  }
+]
