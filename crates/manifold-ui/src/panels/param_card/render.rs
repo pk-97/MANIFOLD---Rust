@@ -341,6 +341,9 @@ impl ParamCardPanel {
             // Always true now — the relight block below always draws when
             // expanded (P5b), so the body is never truly empty.
             h += HEADER_BODY_GAP;
+            // The LED composite preview band takes the body's first slot
+            // (frame + trailing gap), ahead of the first row.
+            h += self.led_band_height();
             for (start, len, section) in self.section_runs() {
                 if let Some(name) = &section {
                     h += ROW_HEIGHT + ROW_SPACING;
@@ -1503,6 +1506,94 @@ impl ParamCardPanel {
         }
     }
 
+    // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24) ──
+
+    /// Transpose the 8×120 readback into the 120×8 band bitmap.
+    ///
+    /// Orientation — pinned against the send path's known mappings, not
+    /// guessed (`led_composite_pixel_tests`' ground truth): the LED sample
+    /// texture is `strip_count` wide × `leds_per_strip` tall (`manifold-led`
+    /// blit.rs), and `dmx.rs::sample_strip_to_universes` walks `led` 0..119 in
+    /// DMX address order reading column `strip_index` — so the readback bytes
+    /// are `[led * 8 + strip]` in RGBA. The band mapping is a direct
+    /// transpose with NO flips:
+    ///   band(row = strip s, col = LED l) = readback[(l * 8 + s) * 4 .. +4]
+    /// LED 0 (the strip's first DMX channel — which the edge-extend shader's
+    /// v-flip maps to the composite BOTTOM) reads left-to-right; strip 0 sits
+    /// at the top. The readback/byte truth is authoritative, not the shader
+    /// comment.
+    fn transpose_led_band(src: &[u8], dst: &mut [Color32], leds: usize, strips: usize) {
+        for strip in 0..strips {
+            for led in 0..leds {
+                let o = (led * strips + strip) * 4;
+                dst[strip * leds + led] = if o + 2 < src.len() {
+                    Color32::new(src[o], src[o + 1], src[o + 2], 255) // design-token-exempt: readback RGBA bytes → bitmap pixel, data conversion not UI chrome
+                } else {
+                    Color32::TRANSPARENT
+                };
+            }
+        }
+    }
+
+    /// Carve the frame's rounded corners into the bitmap alpha. The band quad
+    /// draws OVER the tree (the layer-bitmap pass loads the offscreen), so
+    /// without this its square corners would poke past the rounded chrome.
+    /// The radius is measured in logical pixels from the cached interior
+    /// size, evaluated per texel center.
+    fn round_led_band_corners(bitmap: &mut [Color32], tex_w: usize, tex_h: usize, interior_w: f32, interior_h: f32) {
+        if interior_w <= 0.0 || interior_h <= 0.0 {
+            return;
+        }
+        let radius = (CORNER_RADIUS - BORDER_W).min(interior_w * 0.5).min(interior_h * 0.5);
+        for ty in 0..tex_h {
+            for tx in 0..tex_w {
+                let lx = ((tx as f32 + 0.5) / tex_w as f32) * interior_w;
+                let ly = ((ty as f32 + 0.5) / tex_h as f32) * interior_h;
+                let cx = lx.clamp(radius, interior_w - radius);
+                let cy = ly.clamp(radius, interior_h - radius);
+                let dx = lx - cx;
+                let dy = ly - cy;
+                if dx * dx + dy * dy > radius * radius {
+                    bitmap[ty * tex_w + tx].a = 0;
+                }
+            }
+        }
+    }
+
+    fn ensure_led_band_buffer(&mut self) {
+        let w = LED_BAND_LEDS;
+        let h = LED_BAND_STRIPS;
+        if self.led_band_bitmap.len() != w * h {
+            self.led_band_bitmap.clear();
+            self.led_band_bitmap.resize(w * h, Color32::TRANSPARENT);
+            self.led_band_tex_w = w;
+            self.led_band_tex_h = h;
+        }
+    }
+
+    /// Re-bake the band from a completed readback (new version only).
+    pub(crate) fn bake_led_band(&mut self, pixels: &[u8]) {
+        self.ensure_led_band_buffer();
+        let (w, h) = (self.led_band_tex_w, self.led_band_tex_h);
+        let (iw, ih) = (self.led_band_interior_w, self.led_band_interior_h);
+        Self::transpose_led_band(pixels, &mut self.led_band_bitmap, w, h);
+        Self::round_led_band_corners(&mut self.led_band_bitmap, w, h, iw, ih);
+        self.led_band_dirty = true;
+    }
+
+    /// Blackout bake: an opaque black band (D24 — black when the strips are
+    /// black), same corner carving so the frame reads identically.
+    pub(crate) fn bake_led_band_black(&mut self) {
+        self.ensure_led_band_buffer();
+        let (w, h) = (self.led_band_tex_w, self.led_band_tex_h);
+        let (iw, ih) = (self.led_band_interior_w, self.led_band_interior_h);
+        for p in self.led_band_bitmap.iter_mut() {
+            *p = Color32::new(0, 0, 0, 255); // design-token-exempt: LED pixel data (a black frame), not UI chrome
+        }
+        Self::round_led_band_corners(&mut self.led_band_bitmap, w, h, iw, ih);
+        self.led_band_dirty = true;
+    }
+
     fn build_generator(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
@@ -1537,6 +1628,39 @@ impl ParamCardPanel {
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
 
+        // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24): the
+        // framed transposed readback at the top of the card body. Absent on
+        // non-DMX cards (the app never pushes a payload for them) and on
+        // collapsed cards — no chrome, no gap. The 1px frame uses the card's
+        // own border colour + radius tokens so the band reads as card chrome. ──
+        self.led_band_id = None;
+        let band_h = self.led_band_height();
+        if band_h > 0.0 {
+            let band_frame_h = band_h - HEADER_BODY_GAP;
+            let band_w = (inner_w - PADDING * 2.0).max(0.0);
+            let id = tree.add_node(
+                None,
+                Rect::new(
+                    inner_x + PADDING,
+                    inner_y + HEADER_HEIGHT + HEADER_BODY_GAP,
+                    band_w,
+                    band_frame_h,
+                ),
+                UINodeType::Panel,
+                UIStyle {
+                    bg_color: border_color,
+                    corner_radius: CORNER_RADIUS - BORDER_W,
+                    ..UIStyle::default()
+                },
+                None,
+                UIFlags::VISIBLE,
+            );
+            tree.set_name(id, LED_BAND_NODE_NAME);
+            self.led_band_id = Some(id);
+            self.led_band_interior_w = (band_w - BORDER_W * 2.0).max(0.0);
+            self.led_band_interior_h = (band_frame_h - BORDER_W * 2.0).max(0.0);
+        }
+
         // ── Params (if not collapsed) — the relight rows below always draw
         // when expanded, regardless of whether this card has any regular
         // params (`docs/DEPTH_RELIGHT_DESIGN.md` P5b: "3D Shading" is a
@@ -1544,7 +1668,9 @@ impl ParamCardPanel {
         if !self.is_collapsed {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
-            let mut cy = inner_y + HEADER_HEIGHT + HEADER_BODY_GAP;
+            // The band owns the body's first slot; rows follow it with the
+            // same breathing room the header gives the body.
+            let mut cy = inner_y + HEADER_HEIGHT + HEADER_BODY_GAP + band_h;
             // Same `row_geometry` helper the effect card uses (D2), so
             // generator slider rows can't drift from the effect card's lane
             // math. `author` gates both the chevron lane reservation and the
@@ -2123,5 +2249,135 @@ impl ParamCardPanel {
                 tree.set_text(btn_id, &display);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod led_band_tests {
+    //! LED_STRIPS_DESIGN MVP-P4 (D24): orientation proof for the transposed
+    //! band. The renderer's `led_composite_pixel_tests` +
+    //! `led_preset_value_tests` pin the readback's ground truth — texture x =
+    //! strip index, y = LED position (blit.rs), and `dmx.rs::
+    //! sample_strip_to_universes` walks `led` 0..119 in DMX address order
+    //! reading column `strip_index`. These tests pin the BAND's mapping
+    //! against that same truth: a direct transpose, no flips.
+    //!
+    //! Chosen mapping (documented where it lands in the UI):
+    //!   band(row = strip s top→bottom 0..7, col = LED l left→right 0..119)
+    //!     = readback[(l * 8 + s) * 4 .. +4]
+    //! LED 0 — the strip's first DMX channel, which the edge-extend shader's
+    //! v-flip maps to the composite BOTTOM — reads left-to-right; strip 0 is
+    //! the top row. If the renderer's mappings and the blit shader's comment
+    //! ever disagree about which readback row is composite top, the
+    //! readback/byte truth wins (the brief's rule) — the band shows what the
+    //! strips are sent, not what the shader comment claims.
+
+    use super::*;
+
+    const STRIPS: usize = super::LED_BAND_STRIPS;
+    const LEDS: usize = super::LED_BAND_LEDS;
+
+    /// Opaque test-sentinel pixel — readback data, not UI chrome.
+    fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+        Color32::new(r, g, b, 255) // design-token-exempt: test pixel data, not UI chrome
+    }
+
+    /// Write one RGBA pixel into an 8×120 readback buffer at (strip, led).
+    fn set_px(buf: &mut [u8], strip: usize, led: usize, rgb: [u8; 3]) {
+        let o = (led * STRIPS + strip) * 4;
+        buf[o] = rgb[0];
+        buf[o + 1] = rgb[1];
+        buf[o + 2] = rgb[2];
+        buf[o + 3] = 255;
+    }
+
+    fn band_px(band: &[Color32], strip: usize, led: usize) -> Color32 {
+        band[strip * LEDS + led]
+    }
+
+    /// The brief's worked example: strip 3 fully lit (red) at LED 10, plus
+    /// sentinels at all four corners, transposed — each must land at the
+    /// band row/col the chosen mapping dictates, and nothing else may light.
+    #[test]
+    fn transpose_maps_known_strip_led_pattern_with_no_flips() {
+        let mut readback = vec![0u8; STRIPS * LEDS * 4];
+        set_px(&mut readback, 3, 10, [255, 0, 0]); // strip 3, LED 10 → band (3, 10)
+        set_px(&mut readback, 0, 0, [0, 255, 0]); // strip 0, LED 0 → band (0, 0)
+        set_px(&mut readback, 7, 119, [0, 0, 255]); // strip 7, LED 119 → band (7, 119)
+        set_px(&mut readback, 0, 119, [255, 255, 0]); // strip 0, LED 119 → band (0, 119)
+        set_px(&mut readback, 7, 0, [0, 255, 255]); // strip 7, LED 0 → band (7, 0)
+
+        let mut band = vec![Color32::TRANSPARENT; STRIPS * LEDS];
+        ParamCardPanel::transpose_led_band(&readback, &mut band, LEDS, STRIPS);
+
+        assert_eq!(band_px(&band, 3, 10), rgb(255, 0, 0));
+        assert_eq!(band_px(&band, 0, 0), rgb(0, 255, 0));
+        assert_eq!(band_px(&band, 7, 119), rgb(0, 0, 255));
+        assert_eq!(band_px(&band, 0, 119), rgb(255, 255, 0));
+        assert_eq!(band_px(&band, 7, 0), rgb(0, 255, 255));
+
+        // An unlit readback pixel bakes as OPAQUE BLACK (a live-black Frame
+        // renders a black band naturally, D24) — never transparent.
+        assert_eq!(band_px(&band, 1, 1), rgb(0, 0, 0));
+        assert_eq!(band_px(&band, 4, 60), rgb(0, 0, 0));
+        // No pixel may carry a sentinel color away from its mapped cell — a
+        // mirrored or rotated transpose would light the wrong corners above.
+        let stray = band
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| {
+                p.a == 255
+                    && (p.r != 0 || p.g != 0 || p.b != 0)
+                    && !matches!(*i, i if {
+                        let (s, l) = (i / LEDS, i % LEDS);
+                        (s == 3 && l == 10) || (s == 0 && l == 0) || (s == 7 && l == 119)
+                            || (s == 0 && l == 119) || (s == 7 && l == 0)
+                    })
+            })
+            .count();
+        assert_eq!(stray, 0, "no sentinel color leaked to an unmapped cell");
+    }
+
+    /// The band reads like the rig: LED 0 (the strip's DMX start, bottom of
+    /// the composited picture through the edge-extend v-flip) at the LEFT,
+    /// strip 0 at the TOP. A walk down LED positions must move left→right.
+    #[test]
+    fn led_walk_runs_left_to_right_strip_rows_top_to_bottom() {
+        let mut readback = vec![0u8; STRIPS * LEDS * 4];
+        // One lit pixel per strip, at LED index == strip index, distinct color.
+        for s in 0..STRIPS {
+            set_px(&mut readback, s, s, [(s as u8) * 30 + 10, 0, 0]);
+        }
+        let mut band = vec![Color32::TRANSPARENT; STRIPS * LEDS];
+        ParamCardPanel::transpose_led_band(&readback, &mut band, LEDS, STRIPS);
+
+        for s in 0..STRIPS {
+            // Row s must carry its pixel at column s (LED position == column),
+            // and each row's distinct red value lands on its OWN row — a
+            // strip-order flip (strip 0 at bottom) would put row s's pixel at
+            // row 7-s, failing the value check.
+            let px = band_px(&band, s, s);
+            assert_eq!(px.r, (s as u8) * 30 + 10, "strip {s}'s pixel on row {s}");
+            assert_eq!(px.g, 0);
+            assert_eq!(px.b, 0);
+        }
+    }
+
+    /// The bitmap must carry the frame's rounded corners in alpha — the quad
+    /// draws over the tree, so square corners would poke past the chrome.
+    /// Interior 8×8 logical makes the 4px radius bite a whole texel: the
+    /// corner centers land outside the arc, interior texels inside.
+    #[test]
+    fn corner_mask_carves_alpha_outside_the_frame_radius() {
+        let mut bitmap = vec![rgb(9, 9, 9); 4 * 4];
+        // 4×4 texel grid, row-major: corners at 0 / 3 / 12 / 15, interior at
+        // 5 (1,1) and 10 (2,2).
+        ParamCardPanel::round_led_band_corners(&mut bitmap, 4, 4, 8.0, 8.0);
+        assert_eq!(bitmap[0].a, 0, "top-left corner texel carved");
+        assert_eq!(bitmap[3].a, 0, "top-right corner texel carved");
+        assert_eq!(bitmap[12].a, 0, "bottom-left corner texel carved");
+        assert_eq!(bitmap[15].a, 0, "bottom-right corner texel carved");
+        assert_eq!(bitmap[5].a, 255, "interior texel untouched");
+        assert_eq!(bitmap[10].a, 255, "interior texel untouched");
     }
 }

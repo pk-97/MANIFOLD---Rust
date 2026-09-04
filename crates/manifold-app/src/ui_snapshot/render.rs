@@ -50,6 +50,34 @@ const ATLAS_FORMAT: GpuTextureFormat = GpuTextureFormat::Bgra8Unorm;
 /// `ui_root.tree.clear_dirty_range` — see `ui_frame.rs`'s module doc deviation
 /// #2. Harmless to callers: every caller already held `ui` behind a `mut`
 /// binding (it was built via `sync_build(&mut ui, ...)` moments earlier).
+/// Construct the headless panel-bitmap instance and upload the LED composite
+/// preview band if the current build carries one (LED_STRIPS_DESIGN MVP-P4).
+/// Shared by `render_ui_to_png` and the script `Runner`'s `write_png` — both
+/// assemble their own `MainUiPassInputs`, and the seam only draws quads whose
+/// texture was uploaded. The upload re-reads the band buffer regardless of
+/// the dirty flag because every headless render constructs a FRESH gpu
+/// instance (the live app's persistent instance consumes the flag via
+/// `InspectorCompositePanel::led_preview_bitmap` instead). No frame fence —
+/// the headless harness never constructs one, same as the seam's other None
+/// inputs. The overview/collapsed indices stay unuploaded headless, so this
+/// changes nothing about those.
+pub(crate) fn make_panel_bitmap_gpu(
+    device: &GpuDevice,
+    ui: &UIRoot,
+) -> manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu {
+    let mut gpu = manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(device, ATLAS_FORMAT);
+    if let Some((pixels, w, h)) = ui.inspector.led_preview_bitmap_peek() {
+        gpu.upload_layer(
+            device,
+            manifold_ui::panels::param_card::LED_BAND_BITMAP_INDEX,
+            pixels,
+            w as u32,
+            h as u32,
+        );
+    }
+    gpu
+}
+
 pub fn render_ui_to_png(
     ui: &mut UIRoot,
     selection: &manifold_ui::UIState,
@@ -124,6 +152,10 @@ pub fn render_ui_to_png(
     let blit_pipeline = &res.blit_pipeline;
     let blit_sampler = &res.blit_sampler;
 
+    // 6h-equivalent: the LED composite preview band — a real instance so the
+    // band's quad actually paints in headless PNGs (see the helper).
+    let mut bitmap_gpu = make_panel_bitmap_gpu(&device, ui);
+
     crate::ui_frame::render_main_ui_passes(
         &device,
         &mut renderer,
@@ -133,7 +165,7 @@ pub fn render_ui_to_png(
         tex_h,
         dpi,
         crate::ui_frame::MainUiPassInputs {
-            layer_bitmap_gpu: None,
+            layer_bitmap_gpu: Some(&mut bitmap_gpu),
             clip_bodies: &clip_bodies,
             clip_rects: &clip_rects,
             clip_content_gpu: None,
@@ -364,8 +396,9 @@ pub fn render_graph_editor_to_png(
     // No `ContentState` exists on this path (a bare fixture `Project`, no
     // playback engine) — the graph-editor lane render never has latch data,
     // so it can only ever show the red "automated" dot, never the gray
-    // overridden state. Honest empty slice, not a stopgap.
-    crate::ui_bridge::sync_inspector_data(&mut ui_root, project, active_idx, selection, &[]);
+    // overridden state. Honest empty slice, not a stopgap. No LED preview
+    // either — the editor window never uploads the band bitmap.
+    crate::ui_bridge::sync_inspector_data(&mut ui_root, project, active_idx, selection, &[], None);
     ui_root.build_inspector_in_rect(UiRect::new(
         card_x,
         0.0,

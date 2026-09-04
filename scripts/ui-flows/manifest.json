@@ -88,6 +88,7 @@
     "drag-clip": "timeline",
     "led-layer-create": "timeline",
     "led-browser-scoped-open": "dmxcard",
+    "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",

@@ -1472,6 +1472,7 @@ impl Application {
                 active_idx,
                 &self.selection,
                 &self.content_state.automation_latched_params,
+                self.content_state.led_preview.as_ref(),
             );
         }
 

@@ -571,6 +571,20 @@ pub fn push_state(
                 .master_chrome_mut()
                 .sync_led_enabled(tree, content_state.led_enabled);
 
+            // LED composite preview (LED_STRIPS_DESIGN MVP-P4): per-frame
+            // content — Black↔Frame transitions + version bumps land without a
+            // rebuild; the structural presence rides sync_inspector_data.
+            {
+                let is_dmx = active_layer
+                    .and_then(|i| project.timeline.layers.get(i))
+                    .is_some_and(|l| l.layer_type == manifold_core::types::LayerType::Dmx);
+                let band = super::projection::inspector::map_led_preview(
+                    content_state.led_preview.as_ref(),
+                    is_dmx,
+                );
+                ui.inspector.sync_led_preview(tree, band.as_ref());
+            }
+
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(
                 project.settings.led_exit_index,

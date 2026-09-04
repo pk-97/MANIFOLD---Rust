@@ -216,6 +216,13 @@ pub struct InspectorCompositePanel {
     /// `configure_gen_params` apply it to every card they build.
     card_context: CardContext,
 
+    /// LED composite preview for the DMX lane's generator card
+    /// (LED_STRIPS_DESIGN MVP-P4, D24). Same storage pattern as
+    /// `card_context`: stored here so a freshly-built card picks it up, and
+    /// pushed to the live card when one exists. `None` = no band (non-DMX
+    /// lane, or no LED controller).
+    led_preview: Option<super::param_card::LedPreviewBand>,
+
     // ── Tabs ──
     /// The single scope currently shown. Drives the section-visibility bools
     /// below (only the active scope renders). Mirrors the timeline selection;
@@ -365,6 +372,7 @@ impl InspectorCompositePanel {
             modifier_dying: Vec::new(),
             layer_scope_id: None,
             card_context: CardContext::Perform,
+            led_preview: None,
             active_tab: InspectorTab::Master,
             available_tabs: vec![InspectorTab::Master],
             tab_node_ids: Vec::new(),

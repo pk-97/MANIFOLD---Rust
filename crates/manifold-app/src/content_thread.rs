@@ -120,6 +120,13 @@ pub struct ContentThread {
     // ── LED output ──
     /// LED/ArtNet output controller. None when not initialized.
     pub led_controller: Option<manifold_led::LedOutputController>,
+    /// Cached LED composite preview state (LED_STRIPS_DESIGN D24 state table),
+    /// published on every tick's `ContentState`. `None` = no controller or
+    /// never enabled; `Black` = blackout/disabled (cached frame cleared);
+    /// `Frame` = latest completed readback. Updated in the LED send block.
+    pub led_preview: crate::content_state::LedPreview,
+    /// Version counter for completed readbacks (bumps into `Frame`).
+    pub led_preview_version: u64,
 
     /// Pending single-frame export, if any. Set by `ContentCommand::ExportFrame`
     /// and cleared once the frame has been read back and dispatched to the
@@ -890,18 +897,37 @@ impl ContentThread {
         // 7c. LED output — native Metal: dispatch edge-extend compute on
         // compositor output, readback tiny pixel grid, send DMX/ArtNet.
         // Uses a dedicated encoder (separate from the content frame).
+        // The completed readback also feeds `self.led_preview` (D24's state
+        // table): a new Frame per completed readback, Black on blackout or
+        // disabled (which drops the cached frame), None with no controller.
         if let Some(ref mut led) = self.led_controller {
             let native_device = self.content_pipeline.native_device().unwrap();
             let (brightness, led_gain) = self
                 .engine
                 .project()
                 .map_or((1.0, 1.0), |p| (p.settings.led_brightness, p.settings.led_gain));
-            if let Some(source) = self.content_pipeline.led_source_texture() {
+            if !led.is_enabled() {
+                // Disabled: the strips were blacked out when the toggle went
+                // off; the preview shows a black band and the cached frame is
+                // dropped so a stale chase can never animate it (D24).
+                self.led_preview = crate::content_state::LedPreview::Black;
+            } else if let Some(source) = self.content_pipeline.led_source_texture() {
                 // Poll previous frame's readback (send DMX if ready).
                 // Only when we still have an LED source — when transitioning
                 // to blackout we deliberately skip the poll so a stale
                 // completion can't briefly flash the prior frame on the LEDs.
-                led.poll_readback();
+                // A completed readback becomes the new preview Frame; the Arc
+                // is the readback's own buffer handed up through the poll
+                // (no clone, no extra allocation).
+                if let Some(pixels) = led.poll_readback() {
+                    self.led_preview_version += 1;
+                    self.led_preview = crate::content_state::LedPreview::Frame {
+                        pixels,
+                        version: self.led_preview_version,
+                    };
+                }
+                // No completed readback this tick (GPU still in flight) —
+                // keep the last Frame; the channel coalesces to latest.
                 // Submit new frame: edge-extend compute + readback copy.
                 led.process_frame(
                     native_device,
@@ -921,7 +947,10 @@ impl ContentThread {
                     brightness,
                     led_gain,
                 );
+                self.led_preview = crate::content_state::LedPreview::Black;
             }
+        } else {
+            self.led_preview = crate::content_state::LedPreview::None;
         }
 
         #[cfg(feature = "profiling")]
@@ -1382,6 +1411,7 @@ impl ContentThread {
                 }
             },
             led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
+            led_preview: Some(self.led_preview.clone()),
             #[cfg(target_os = "macos")]
             is_live_recording: self.content_pipeline.recording_session.is_some(),
             #[cfg(not(target_os = "macos"))]

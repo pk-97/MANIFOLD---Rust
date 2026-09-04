@@ -794,7 +794,7 @@ mod sync_card_values_tests {
         // pre-change value (0.5 → "0.50" via `format_param_value`'s `{:.2}`).
         let mut ui = UIRoot::new();
         let selection = SelectionState::default();
-        sync_inspector_data(&mut ui, &project, None, &selection, &[]);
+        sync_inspector_data(&mut ui, &project, None, &selection, &[], None);
         ui.build_inspector_in_rect(manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0));
         assert!(
             tree_has_text(&ui, "0.50"),
@@ -832,7 +832,7 @@ mod sync_card_values_tests {
         // Configure + build at the initial range (0.0–1.0).
         let mut ui = UIRoot::new();
         let selection = SelectionState::default();
-        sync_inspector_data(&mut ui, &project, None, &selection, &[]);
+        sync_inspector_data(&mut ui, &project, None, &selection, &[], None);
         ui.build_inspector_in_rect(manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0));
 
         // A calibration edit: change the param's min/max in the manifest.

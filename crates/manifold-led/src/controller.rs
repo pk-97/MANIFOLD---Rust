@@ -115,14 +115,17 @@ impl LedOutputController {
         );
     }
 
-    /// Poll GPU readback and send DMX data if ready.
-    pub fn poll_readback(&mut self) {
+    /// Poll GPU readback and send DMX data if ready. Returns the completed
+    /// pixel buffer when a frame landed (see `ArtNetOutput::poll_readback` —
+    /// the D23 preview payload).
+    pub fn poll_readback(&mut self) -> Option<std::sync::Arc<[u8]>> {
         if !self.initialized || !self.enabled {
-            return;
+            return None;
         }
         if let Some(ref event) = self.event {
-            self.output.poll_readback(event);
+            return self.output.poll_readback(event);
         }
+        None
     }
 
     /// Shut down LED output: blackout + release resources.
