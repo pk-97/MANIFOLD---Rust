@@ -42,13 +42,13 @@
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 722.2, "y": 768.0 } },
+      "target": { "Point": { "x": 722.2, "y": 744.0 } },
       "gesture": {
         "Drag": {
           "to": {
             "Point": {
               "x": 750.0,
-              "y": 768.0
+              "y": 744.0
             }
           },
           "steps": 8
@@ -70,7 +70,7 @@
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 892.0, "y": 768.0 } },
+      "target": { "Point": { "x": 892.0, "y": 744.0 } },
       "gesture": {
         "Click": {
           "modifiers": {}
