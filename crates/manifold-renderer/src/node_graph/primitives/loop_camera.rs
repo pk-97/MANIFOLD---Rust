@@ -1,10 +1,15 @@
 //! `node.loop_camera` — beat-locked flythrough camera for scene looping
-//! (SCENE_LOOP_DESIGN.md D3).
+//! (SCENE_LOOP_DESIGN.md D3, SCENE_MODIFIER_FRAMEWORK P4 controls).
 //!
-//! Emits a single [`Camera`] on `out`. Position advances `phase * cell_size`
-//! along the chosen axis; look direction is travel-aligned. `phase` (0..1)
-//! comes from a `beat_ramp` at attack=1, rate=1/bars — the frame at phase 0
-//! is identical to the frame at phase 1 (INV-3 wrap purity).
+//! Emits a single [`Camera`] on `out`. Position advances along the chosen
+//! axis over the loop phase: travel = home + d(phase)·stride·cell_size,
+//! where d(p) = p − flow·sin(2πp)/(2π) eases the flight with equal slope at
+//! both seams. Sway drifts the lateral/height offsets, the look sweep
+//! weaves the target laterally, and the zoom pulse breathes the fov — every
+//! one a function of the loop phase alone, so the frame at phase 0 is
+//! identical to the frame at phase 1 (INV-3 wrap purity).
+//!
+//! `phase` (0..1) comes from a `beat_ramp` at attack=1, rate=1/bars.
 //!
 //! CPU-only — no GPU dispatch. Same convention as `node.orbit_camera`.
 
@@ -20,7 +25,7 @@ pub const LOOP_CAMERA_AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z
 crate::primitive! {
     name: LoopCamera,
     type_id: "node.loop_camera",
-    purpose: "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Position advances phase * cell_size along axis; look direction is travel-aligned (down the axis). The frame at phase 0 equals the frame at phase 1 by construction (INV-3 wrap purity). CPU-only, no GPU dispatch.",
+    purpose: "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Travel = home + d(phase)·stride·cell_size along axis, where d(p) = p − flow·sin(2πp)/(2π) eases the flight (equal seam slope, INV-3 wrap purity); sway drifts the lateral/height offsets, the look sweep weaves the target laterally, and the zoom pulse breathes the fov — all phase-periodic. The frame at phase 0 equals the frame at phase 1 by construction. CPU-only, no GPU dispatch.",
     inputs: {
         phase: ScalarF32 optional,
     },
@@ -101,6 +106,90 @@ crate::primitive! {
             range: Some((1.0, 10000.0)),
             enum_values: &[],
         },
+        // ── SCENE_MODIFIER_FRAMEWORK P4 loop controls. Every time-varying
+        // term below is a function of the loop PHASE alone (INV-3): the
+        // frame at phase 0 equals the frame at phase 1 by construction.
+        // Nothing here may read the frame clock — a non-phased driver is
+        // the one-frame wrap jump (SCENE_LOOP_DESIGN D8).
+        //
+        // Flow: travel = d(phase) where d(p) = p − A·sin(2πp)/(2π).
+        // d(0)=0, d(1)=1 and d'(0)=d'(1)=1−A — equal slope at both seams
+        // by construction, so the flight eases through the wrap instead of
+        // kinking. A ≥ 1 reverses seam velocity (position purity survives,
+        // the motion kinks) — the 0.95 ceiling pins below that.
+        ParamDef {
+            name: Cow::Borrowed("flow"),
+            label: "Flow",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 0.95)),
+            enum_values: &[],
+        },
+        // Stride: whole cells travelled per loop (travel = K·cell). The
+        // instance array must scale with it — the Stride card row is a
+        // coupled write that also sets scene_array.count = K+2 (behind +
+        // current + ahead) in one undo unit. scene_array.count clamps at
+        // its own ceiling of 8, so K ≥ 7 outruns the array by one cell
+        // (the clamp, not a wrap concern).
+        ParamDef {
+            name: Cow::Borrowed("stride"),
+            label: "Stride",
+            ty: ParamType::Int,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 8.0)),
+            enum_values: &[],
+        },
+        // Sway: lateral AND height offsets += amp·sin(2π·cycles·phase) —
+        // a diagonal drift through the cross-section. cycles is whole
+        // (1..8) so phase 0 and phase 1 land on the same sine value; a
+        // non-integer cycle count would break the wrap.
+        ParamDef {
+            name: Cow::Borrowed("sway_amp"),
+            label: "Sway",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sway_cycles"),
+            label: "Sway Rate",
+            ty: ParamType::Int,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 8.0)),
+            enum_values: &[],
+        },
+        // Look sweep: the look target drifts laterally
+        // (amp·sin(2π·cycles·phase)) while the position holds its path —
+        // the camera weaves without leaving the corridor. Integer cycles
+        // for the same wrap reason as sway.
+        ParamDef {
+            name: Cow::Borrowed("look_sweep_amp"),
+            label: "Look Sway",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("look_sweep_cycles"),
+            label: "Look Sweep Rate",
+            ty: ParamType::Int,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 8.0)),
+            enum_values: &[],
+        },
+        // Zoom pulse: fov_y += amp·sin(π·phase) — the window is zero at
+        // BOTH seams, so the pulse breathes once per loop and lands back
+        // on the exact base fov at the wrap.
+        ParamDef {
+            name: Cow::Borrowed("zoom_pulse_amp"),
+            label: "Zoom Pulse",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 0.5)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "phase is port-shadowed: wire from beat_ramp (attack=1, rate=1/bars) for beat-locked looping. Unwired, reads FrameTime.beats mod 1. The SAME cell_size feeds both this node and node.scene_array — the plan builder computes it once from scene_bounds (D4). lateral/height offset the camera within the cross-section perpendicular to travel. axis enum matches scene_array's axis enum. Camera looks down the travel axis (fwd = axis direction); lateral offsets the camera perpendicular to travel. pos_x/pos_y/pos_z outputs for PBR material atoms.",
@@ -138,6 +227,18 @@ impl Primitive for LoopCamera {
             _ => 200.0,
         };
 
+        // P4 loop controls — all phase-periodic (see the ParamDef block
+        // above). Unset/absent reads as "off": flow 0 = linear travel,
+        // stride 1 = one cell, sway/look/zoom 0 = no effect.
+        let flow = ctx.scalar_or_param("flow", 0.0).clamp(0.0, 0.95);
+        let stride = ctx.scalar_or_param("stride", 1.0).round().clamp(1.0, 8.0);
+        let sway_amp = ctx.scalar_or_param("sway_amp", 0.0);
+        let sway_cycles = ctx.scalar_or_param("sway_cycles", 1.0).round().clamp(1.0, 8.0);
+        let look_sweep_amp = ctx.scalar_or_param("look_sweep_amp", 0.0);
+        let look_sweep_cycles =
+            ctx.scalar_or_param("look_sweep_cycles", 1.0).round().clamp(1.0, 8.0);
+        let zoom_pulse_amp = ctx.scalar_or_param("zoom_pulse_amp", 0.0).clamp(0.0, 0.5);
+
         // Phase: wired beat_ramp or fallback to fract(beats).
         let phase = match ctx.inputs.scalar("phase") {
             Some(ParamValue::Float(f)) => f.fract().clamp(0.0, 1.0),
@@ -148,7 +249,19 @@ impl Primitive for LoopCamera {
         };
 
         // Travel distance along the axis, from the corridor entry `home`.
-        let travel = home + phase * cell_size;
+        // Flow eases the flight: d(0)=0, d(1)=1, equal seam slopes (the
+        // sin term vanishes at both seams). Stride walks K cells per loop;
+        // integer stride keeps phase 0 == phase 1 in POSITION (K cells
+        // ahead = the identical scene, D4).
+        let two_pi = std::f32::consts::TAU;
+        let eased = phase - flow * (two_pi * phase).sin() / two_pi;
+        let travel = home + eased * stride * cell_size;
+
+        // Sway: the SAME sine adds to lateral and height (the committed
+        // P4 math — a diagonal drift through the cross-section).
+        let sway = sway_amp * (two_pi * sway_cycles * phase).sin();
+        let lateral = lateral + sway;
+        let height = height + sway;
 
         // Build position: travel along axis + lateral/height offsets.
         // Lateral offsets perpendicular to travel; height is Y offset.
@@ -161,9 +274,26 @@ impl Primitive for LoopCamera {
             _ => ([lateral, height, -travel], [0.0, 0.0, -1.0]),     // -Z
         };
 
-        // Target is one unit ahead along the travel axis.
-        let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
-        let cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov_y, near, far);
+        // The lateral direction of each axis arm — the look sweep drifts
+        // the target along it while the position holds its path.
+        let lateral_dir: [f32; 3] = match axis {
+            0 | 1 => [0.0, 0.0, 1.0], // ±X travel → lateral is Z
+            _ => [1.0, 0.0, 0.0],     // ±Y/±Z travel → lateral is X
+        };
+
+        // Target is one unit ahead along the travel axis, drifted by the
+        // look sweep (integer cycles → wrap-pure like sway).
+        let look_sweep = look_sweep_amp * (two_pi * look_sweep_cycles * phase).sin();
+        let target = [
+            pos[0] + fwd[0] + lateral_dir[0] * look_sweep,
+            pos[1] + fwd[1] + lateral_dir[1] * look_sweep,
+            pos[2] + fwd[2] + lateral_dir[2] * look_sweep,
+        ];
+
+        // Zoom pulse: sin(π·phase) is zero at both seams — the fov breathes
+        // once per loop and lands back on the base fov at the wrap.
+        let fov = (fov_y + zoom_pulse_amp * (std::f32::consts::PI * phase).sin()).max(0.01);
+        let cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
 
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
@@ -197,12 +327,75 @@ mod tests {
     }
 
     #[test]
-    fn loop_camera_has_eight_params() {
+    fn loop_camera_has_fifteen_params() {
         let names: Vec<&str> = LoopCamera::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["cell_size", "axis", "lateral", "height", "home", "fov_y", "near", "far"]
+            vec![
+                "cell_size", "axis", "lateral", "height", "home", "fov_y", "near", "far",
+                "flow", "stride", "sway_amp", "sway_cycles", "look_sweep_amp",
+                "look_sweep_cycles", "zoom_pulse_amp",
+            ]
         );
+    }
+
+    /// INV-3 (P4 extension), CPU half. The loop's phase input is fract()'d,
+    /// so the wrap lands on phase 0.0 EXACTLY (fract(1.0) = 0.0) — and at
+    /// phase 0 every offset term is exactly 0 (sin(0) = 0, no 2π residue).
+    /// That exact-seam property is what the pixel gate in
+    /// tests/scene_loop_wrap_parity.rs exercises (beat 0 vs beat 8). Note
+    /// sin(2πc·1.0) is NOT bit-zero in f32 (~1e-7 residue) — the seam must
+    /// come through fract, never through a literal phase of 1.0.
+    #[test]
+    fn movement_controls_vanish_exactly_at_the_seam() {
+        let two_pi = std::f32::consts::TAU;
+        let sway = |phase: f32, cycles: f32| 0.5 * (two_pi * cycles * phase).sin();
+        let look = |phase: f32, cycles: f32| 0.5 * (two_pi * cycles * phase).sin();
+        let zoom = |phase: f32| 0.25 * (std::f32::consts::PI * phase).sin();
+
+        assert_eq!(sway(0.0, 2.0), 0.0, "sway must be exactly 0 at the seam");
+        assert_eq!(look(0.0, 1.0), 0.0, "look sweep must be exactly 0 at the seam");
+        assert_eq!(zoom(0.0), 0.0, "zoom pulse must be exactly 0 at the seam");
+
+        // Wrap mechanics: the phase reader fract()'s its input, so the seam
+        // is phase 0.0 on both sides — a literal 1.0 never survives.
+        let phase_from_beats = |beats: f32, bars: f32| (beats / bars).fract().clamp(0.0, 1.0);
+        assert_eq!(phase_from_beats(0.0, 8.0), phase_from_beats(8.0, 8.0));
+
+        // Flow ease: d(0) = 0 exactly; d(1) within 1 ulp (the f32 sin(2π)
+        // residue, unreachable through fract — documented, not hidden).
+        let d = |phase: f32| phase - 0.8 * (two_pi * phase).sin() / two_pi;
+        assert_eq!(d(0.0), 0.0);
+        assert!(
+            (d(1.0) - 1.0).abs() <= f32::EPSILON,
+            "eased travel end within 1 ulp of 1 (got {})",
+            d(1.0)
+        );
+        // Travel per loop is stride·cell to within 1 ulp — an integer
+        // number of scene periods, so the rendered frame wraps pure.
+        let cell = 10.0f32;
+        let stride = 3.0f32;
+        assert!(
+            ((d(1.0) - d(0.0)) * stride * cell - stride * cell).abs() <= f32::EPSILON * 100.0,
+            "travel per loop must be stride·cell within a hair"
+        );
+    }
+
+    /// Flow ease shape: d(0)=0, d(1)=1 (position purity) and equal seam
+    /// slopes d'(0)==d'(1)==1−A (no velocity kink at the wrap).
+    #[test]
+    fn flow_ease_hits_seams_with_equal_slope() {
+        let two_pi = std::f32::consts::TAU;
+        let d = |p: f32, a: f32| p - a * (two_pi * p).sin() / two_pi;
+        for a in [0.0, 0.25, 0.5, 0.8, 0.95] {
+            assert_eq!(d(0.0, a), 0.0, "d(0) must be exactly 0 (A={a})");
+            assert_eq!(d(1.0, a), 1.0, "d(1) must be exactly 1 (A={a})");
+            let slope = |p: f32| 1.0 - a * (two_pi * p).cos();
+            assert!(
+                (slope(0.0) - slope(1.0)).abs() < 1e-6,
+                "seam slopes must match (A={a})"
+            );
+        }
     }
 
     #[test]
