@@ -528,6 +528,12 @@ impl ContentThread {
             ContentCommand::SetNodeAtlasVisible(nodes) => {
                 self.content_pipeline.set_node_atlas_visible(nodes);
             }
+            ContentCommand::AuditionEnsureCells { cells, tap } => {
+                self.content_pipeline.audition_ensure_cells(cells, tap);
+            }
+            ContentCommand::AuditionSetRenderList(ids) => {
+                self.content_pipeline.audition_set_render_list(ids);
+            }
             ContentCommand::SetClipAtlasVisible(clips) => {
                 self.content_pipeline.set_clip_atlas_visible(clips);
             }

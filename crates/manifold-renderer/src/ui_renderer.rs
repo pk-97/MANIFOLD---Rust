@@ -1317,7 +1317,7 @@ impl UIRenderer {
                 corner_radius: style.corner_radius,
                 handle,
                 depth: self.current_depth(),
-                uv: [0.0, 0.0, 1.0, 1.0],
+                uv: node.uv,
                 clip: self.clip_stack.last().copied(),
             });
         }
