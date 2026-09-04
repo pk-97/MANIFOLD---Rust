@@ -44,17 +44,17 @@ use manifold_foundation::LayerId;
 // the aspect; do not resize cells off 16:9.
 
 /// 16:9 cell size. THE ASPECT IS LOAD-BEARING (audition atlas UVs).
-const CELL_W: f32 = 224.0;
-const CELL_H: f32 = 126.0;
-const CELL_SPACING: f32 = 4.0;
-/// Popup never renders wider than this many columns; 8 columns × 224px +
-/// chrome ≈ 1870px, the D12 "6-8 columns at 1080p-class" target.
+const CELL_W: f32 = 170.0;
+const CELL_H: f32 = 96.0;
+const CELL_SPACING: f32 = 3.0;
+/// Popup never renders wider than this many columns; 8 columns × 170px +
+/// chrome ≈ 1400px, the D12 "6-8 columns at 1080p-class" target.
 const MAX_COLUMNS: usize = 8;
 /// Margin kept between the popup and the screen edges on both axes.
 const SCREEN_MARGIN: f32 = 24.0;
-const PADDING: f32 = 12.0;
+const PADDING: f32 = 10.0;
 const BORDER: f32 = 1.0;
-const SEARCH_BAR_HEIGHT: f32 = 35.0;
+const SEARCH_BAR_HEIGHT: f32 = 30.0;
 const SEARCH_PAD_X: f32 = 10.0;
 const CHIP_ROW_HEIGHT: f32 = 25.0;
 const CHIP_ROW_GAP: f32 = 4.0;
@@ -67,10 +67,10 @@ const ACCENT_BAR_W: f32 = 3.0;
 /// Caption strip + insets (F7/F8/F10): the strip backs the label and badge,
 /// both sit INSIDE it on one baseline, and the x-insets are named here —
 /// never space-padded prefixes.
-const CAPTION_STRIP_H: f32 = 18.0;
-const CAPTION_PAD_X: f32 = 6.0;
+const CAPTION_STRIP_H: f32 = 14.0;
+const CAPTION_PAD_X: f32 = 5.0;
 /// Height of the "No presets match" row when the filter empties the grid (F9).
-const EMPTY_STATE_H: f32 = 56.0;
+const EMPTY_STATE_H: f32 = 44.0;
 const CELL_FONT: u16 = color::FONT_LABEL;
 const SEARCH_FONT: u16 = color::FONT_LABEL;
 
@@ -290,7 +290,7 @@ pub struct BrowserPopupPanel {
     /// Search-focus request raised at open (F5): the app pump drains it and
     /// takes the owned search session, same as the graph-editor Node picker
     /// does at open. `None` once drained or for Node mode.
-    search_focus_dirty: Option<Vec2>,
+    search_focus_dirty: bool,
 }
 
 /// What the app needs to start an audition session on the content thread:
@@ -320,7 +320,7 @@ impl BrowserPopupPanel {
             audition_open_dirty: None,
             audition_close_dirty: false,
             last_render_list: None,
-            search_focus_dirty: None,
+            search_focus_dirty: false,
         }
     }
 
@@ -379,7 +379,7 @@ impl BrowserPopupPanel {
                 layer_id: req.layer_id.clone(),
             });
             self.last_render_list = None;
-            self.search_focus_dirty = Some(req.screen_anchor);
+            self.search_focus_dirty = true;
         }
         let mut layout = BrowserLayout::new();
         layout.anchor = req.screen_anchor;
@@ -419,9 +419,11 @@ impl BrowserPopupPanel {
 
     /// Drain the open-time search-focus request (once per open, non-Node
     /// modes) — the app pump takes the owned search session with it, same
-    /// as the Node picker does at open (F5).
-    pub fn take_search_focus(&mut self) -> Option<Vec2> {
-        self.search_focus_dirty.take()
+    /// as the Node picker does at open (F5). The session's anchor is the
+    /// app's problem: the popup tree doesn't exist yet at open, so the app
+    /// re-anchors over the real search bar every frame until close.
+    pub fn take_search_focus(&mut self) -> bool {
+        std::mem::take(&mut self.search_focus_dirty)
     }
 
     /// The current filtered render list, `Some` only when it changed since

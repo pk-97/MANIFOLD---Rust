@@ -823,8 +823,8 @@ pub const DROPDOWN_SCRIM: Color32 = Color32::new(0, 0, 0, 1);
 // scrim, so the modal pulls focus off the rest of the screen. Hoisted from the
 // per-file `BG_BORDER`/`BG_INNER` + inline scrim literals the two pickers each
 // carried; one definition now, consumed via `PopupStyle::MODAL`.
-pub const MODAL_SCRIM: Color32 = Color32::new(0, 0, 0, 80);
-pub const MODAL_BG: Color32 = Color32::new(19, 19, 20, 250);
+pub const MODAL_SCRIM: Color32 = Color32::new(0, 0, 0, 170);
+pub const MODAL_BG: Color32 = Color32::new(19, 19, 20, 255);
 pub const MODAL_BORDER: Color32 = Color32::new(48, 48, 52, 255);
 
 // Browser popup image cells (PRESET_LIBRARY_DESIGN P6, D7) — a thumbnail-
