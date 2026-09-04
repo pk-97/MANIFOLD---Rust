@@ -4,9 +4,9 @@
 acquire's target cap is lazy — it wipes only the slot it hands out — so an overnight
 wave can leave every slot's warm cargo target on disk. The end of a session is the
 natural teardown point: scrub wipes over-cap targets and then trims least-recently-built
-idle caches until the pool is under its budget. Busy slots (leased, dirty, unlanded,
-hosting a live session) are never touched, so a lane finishing while the lead still
-works cannot pull caches out from under anyone.
+idle caches until the pool is under its budget. Slots with a live lease or a live
+session are never touched; pinned slots (dirty, unlanded) lose only their cargo
+cache — the checkout and branch are never at risk.
 
 Policy and constants (SCRUB_TO_GB, TARGET_CAP_GB) live in scripts/agent-worktree.py —
 this hook only invokes it. Fail-silent: pool hygiene must never block a session from
