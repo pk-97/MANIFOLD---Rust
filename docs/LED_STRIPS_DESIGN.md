@@ -1,11 +1,11 @@
 # LED Strips — Play the Strips + Generalized Patch
 
 **Status: IN PROGRESS — MVP-P1 + MVP-P2 SHIPPED 2026-09-03 (LED layer type, switch routing,
-nine-pattern preset pack — value-gated at 8×120, all fused, zero new primitives). MVP-P3
-designed 2026-09-04, not built (DMX first-class: `LayerType::Dmx` rename, hosts_generator
-guard fixes, LED browser category — section 5b.4). Owed: MVP-P3 execution; Vec4 color
-binding (own pass); in-app LED grid preview and original patch/sACN/island phases (deferred,
-section 5b.5).**
+nine-pattern preset pack — value-gated at 8×120, all fused, zero new primitives); MVP-P3a
+SHIPPED 2026-09-04 (hosts_generator predicate — picker/undo/paste/envelope-reset now work on
+LED lanes). Owed: MVP-P3b (`LayerType::Dmx` rename) and MVP-P3c (LED browser category) —
+section 5b.4; Vec4 color binding (own pass); LED grid preview and original patch/sACN/island
+phases (deferred, section 5b.5).**
 **Prerequisites: none for the MVP (LED-resolution compositing machinery already exists — see MVP audit).
 Original P2 (strip island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 8 (Execution protocol)
