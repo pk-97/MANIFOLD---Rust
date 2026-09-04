@@ -532,6 +532,11 @@ pub struct UINode {
     /// Optional texture for Image nodes (thumbnails, icons).
     /// Port of Unity UINode.Texture field.
     pub texture: Option<TextureHandle>,
+    /// UV sub-rect `[u0, v0, u1, v1]` sampled from `texture` — `[0,0,1,1]`
+    /// (the default) samples the whole texture; a narrower rect samples one
+    /// cell of an atlas (the browser's live audition grid). Same mechanism
+    /// the graph canvas's `draw_image_uv` uses for the node-preview atlas.
+    pub uv: [f32; 4],
     pub draw_order: i32,
 }
 

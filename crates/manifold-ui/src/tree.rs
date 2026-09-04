@@ -336,6 +336,7 @@ impl UITree {
             style,
             text: text.map(String::from),
             texture: None,
+            uv: [0.0, 0.0, 1.0, 1.0],
             draw_order: self.count as i32,
         };
 
@@ -483,6 +484,28 @@ impl UITree {
             UIFlags::empty(),
         );
         self.nodes[id.index()].texture = Some(texture);
+        id
+    }
+
+    /// Add a non-interactive image node that samples a `uv` sub-rect
+    /// (`[u0, v0, u1, v1]`) of `texture` instead of the whole texture — one
+    /// cell of a shared atlas (the browser's live audition grid). Identical
+    /// to [`Self::add_image`] in every other respect; the default `uv` on
+    /// `add_image` is the full `[0, 0, 1, 1]` rect.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_image_uv(
+        &mut self,
+        parent_id: Option<NodeId>,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        corner_radius: f32,
+        texture: TextureHandle,
+        uv: [f32; 4],
+    ) -> NodeId {
+        let id = self.add_image(parent_id, x, y, w, h, corner_radius, texture);
+        self.nodes[id.index()].uv = uv;
         id
     }
 

@@ -809,6 +809,39 @@ pub struct ContentPipeline {
     /// atlas is off or nothing was captured.
     last_node_atlas_layout: Vec<(NodeId, u32)>,
 
+    // ── Preset-browser audition pool (PRESET_BROWSER_AUDITION_DESIGN §3.1) ──
+    /// Standalone preset runtimes rendering live into one atlas while the
+    /// browser is open. `None` until the first `AuditionEnsureCells`; the
+    /// render list empty (browser closed) means `render_tick` costs nothing.
+    audition_pool: Option<manifold_renderer::audition::AuditionPool>,
+    /// The browser's invocation context (D2) — which tap the cells render
+    /// against. The per-frame texture is resolved after the compositor
+    /// render on the same encoder.
+    audition_tap: manifold_renderer::audition::AuditionTapTarget,
+    /// Last completed frame's wall time + the frame budget, threaded from
+    /// the content thread — the D6 budget back-off signal.
+    audition_last_frame_wall_ms: f64,
+    audition_budget_ms: f64,
+    /// ONE shared IOSurface the audition atlas is copied onto (D3: one
+    /// atlas, one transport; the UI samples per-cell UVs). Single-surface
+    /// `SharedAtlasSurface` — the BUG-119 clip-atlas pattern — not a
+    /// triple-buffer bridge: the UI holds its own import of the same kernel
+    /// memory and converges within a frame of each copy, with no clear ever
+    /// (freeze-at-last-good is the surface just stopping changing).
+    #[cfg(target_os = "macos")]
+    audition_surface: Option<Arc<crate::shared_texture::SharedAtlasSurface>>,
+    /// Content-side import of the audition surface (the copy target).
+    #[cfg(target_os = "macos")]
+    audition_surface_tex: Option<manifold_gpu::GpuTexture>,
+    /// Last-created audition surface dimensions (the surface itself exposes
+    /// no accessors) — grid-size changes recreate it.
+    #[cfg(target_os = "macos")]
+    audition_surface_dims: (u32, u32),
+    /// Bumped every time the surface is (re)created — the UI keys its import
+    /// handle by it, so a grid-size change re-imports instead of sampling a
+    /// stale surface.
+    audition_surface_generation: u64,
+
     // ── Clip thumbnail atlas (section 24 5c) ──────────────────────────────
     // BUG-119 root fix (2026-07-11): ONE IOSurface-backed texture shared by
     // both threads, replacing a private persistent texture plus a
@@ -1110,6 +1143,17 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             node_atlas_bridge: None,
             last_node_atlas_layout: Vec::new(),
+            audition_pool: None,
+            audition_tap: manifold_renderer::audition::AuditionTapTarget::Master,
+            audition_last_frame_wall_ms: 0.0,
+            audition_budget_ms: 1000.0 / 60.0,
+            #[cfg(target_os = "macos")]
+            audition_surface: None,
+            #[cfg(target_os = "macos")]
+            audition_surface_tex: None,
+            #[cfg(target_os = "macos")]
+            audition_surface_dims: (0, 0),
+            audition_surface_generation: 0,
             clip_atlas_visible: Vec::new(),
             #[cfg(target_os = "macos")]
             clip_atlas_persistent: None,
@@ -1773,6 +1817,101 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// The `(node_id, cell_index)` layout from the last atlas capture.
     pub fn node_atlas_layout(&self) -> &[(NodeId, u32)] {
         &self.last_node_atlas_layout
+    }
+
+    // ── Preset-browser audition pool (PRESET_BROWSER_AUDITION_DESIGN §3.1) ──
+
+    /// Build the audition cell pool for one browser open (D6: once per
+    /// open, replacing the whole pool — the per-open state reset, D7) and
+    /// select the tap from the browser's invocation context (D2).
+    pub fn audition_ensure_cells(
+        &mut self,
+        cells: Vec<(manifold_core::PresetTypeId, manifold_core::preset_def::PresetKind)>,
+        tap: manifold_renderer::audition::AuditionTapTarget,
+    ) {
+        self.audition_tap = tap;
+        if self.audition_pool.is_none() {
+            let device = self
+                .native_device
+                .as_ref()
+                .expect("audition pool requires the native device")
+                .clone();
+            self.audition_pool = Some(manifold_renderer::audition::AuditionPool::new(device));
+        }
+        self.audition_pool.as_mut().unwrap().ensure_cells(cells);
+        self.ensure_audition_surface();
+    }
+
+    /// Per-frame / per-filter render order (D6); empty at browser close.
+    pub fn audition_set_render_list(&mut self, ids: Vec<manifold_core::PresetTypeId>) {
+        if let Some(pool) = self.audition_pool.as_mut() {
+            pool.set_render_list(ids);
+        }
+    }
+
+    /// Instrumentation (P2 gates 8a/f): cells rendered since the last
+    /// `ensure_cells`. Only the journey-proofs trace driver reads it.
+    #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+    pub fn audition_renders_completed(&self) -> u64 {
+        self.audition_pool
+            .as_ref()
+            .map_or(0, |p| p.renders_completed())
+    }
+
+    /// The content-thread frame signal for the D6 budget back-off: the last
+    /// completed frame's wall time against the frame budget.
+    pub fn set_audition_frame_signal(&mut self, last_frame_wall_ms: f64, budget_ms: f64) {
+        self.audition_last_frame_wall_ms = last_frame_wall_ms;
+        self.audition_budget_ms = budget_ms;
+    }
+
+    /// `(preset, atlas UV rect)` per laid-out audition cell — shipped to the
+    /// UI via `ContentState` so browser cells sample their per-cell sub-rect.
+    pub fn audition_cell_uvs(&self) -> &[(manifold_core::PresetTypeId, [f32; 4])] {
+        self.audition_pool
+            .as_ref()
+            .map_or(&[], |p| p.cell_uvs())
+    }
+
+    /// The audition atlas surface, for the `ContentState` handoff. The UI
+    /// imports its own texture off the surface on first sight of a new
+    /// generation (see [`Self::audition_surface_generation`]).
+    #[cfg(target_os = "macos")]
+    pub fn audition_surface(&self) -> Option<Arc<crate::shared_texture::SharedAtlasSurface>> {
+        self.audition_surface.clone()
+    }
+
+    /// Bumped every time the surface is (re)created — the UI keys its import
+    /// handle by it, so a grid-size change re-imports instead of sampling a
+    /// stale surface.
+    pub fn audition_surface_generation(&self) -> u64 {
+        self.audition_surface_generation
+    }
+
+    /// Create (or resize) the audition atlas surface to the pool's atlas
+    /// geometry and import the content-side texture (the copy target).
+    #[cfg(target_os = "macos")]
+    fn ensure_audition_surface(&mut self) {
+        let Some(pool) = self.audition_pool.as_ref() else {
+            return;
+        };
+        let Some(atlas) = pool.atlas_texture() else {
+            return;
+        };
+        let (w, h) = (atlas.width, atlas.height);
+        let needs_new = self.audition_surface_dims != (w, h);
+        if !needs_new {
+            return;
+        }
+        let surface = Arc::new(crate::shared_texture::SharedAtlasSurface::new(w, h));
+        let device = self
+            .native_device
+            .as_ref()
+            .expect("audition surface requires the native device");
+        self.audition_surface_tex = Some(unsafe { surface.import_texture_native(device) });
+        self.audition_surface = Some(surface);
+        self.audition_surface_dims = (w, h);
+        self.audition_surface_generation = self.audition_surface_generation.wrapping_add(1);
     }
 
     /// Install the content-side texture + keep-alive `Arc` for the single
@@ -2472,6 +2611,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
 
+        // Capture the frame scalars the audition tick needs below — `frame`
+        // borrows the clip renderers, which the generator/upscale blocks
+        // mutate, so its fields can't be read from the audition block.
+        let audition_frame = (
+            frame.time,
+            frame.beat,
+            frame.dt,
+            frame.frame_count,
+            frame.master_trigger_count,
+            frame.output_width,
+            frame.output_height,
+        );
+        let audition_tap_trigger = match &self.audition_tap {
+            manifold_renderer::audition::AuditionTapTarget::Master => frame.master_trigger_count,
+            manifold_renderer::audition::AuditionTapTarget::Layer(layer_id) => frame
+                .layers
+                .iter()
+                .find(|l| l.layer_id == layer_id)
+                .map_or(0, |l| l.trigger_count),
+        };
+
         rtrace.mark("compositor_encode");
 
         // Promote a completed clip-atlas layout (BUG-119 item 3: layout never
@@ -3034,6 +3194,84 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if let Some(l) = eff_layout {
                     self.last_node_atlas_layout = l;
                 }
+            }
+
+            // ── Preset-browser audition grid (PRESET_BROWSER_AUDITION_DESIGN
+            // §3.1) ──
+            // While the browser is open, up to K standalone preset runtimes
+            // render live into the audition atlas against the invocation
+            // context's tap (D2), resolved AFTER the compositor render on the
+            // same encoder — same-command-buffer ordering is the sync, exactly
+            // like the node-atlas taps above. A closed browser (empty render
+            // list) skips this whole block: zero cost (§6.8).
+            if self
+                .audition_pool
+                .as_ref()
+                .is_some_and(manifold_renderer::audition::AuditionPool::has_render_list)
+            {
+                use manifold_renderer::audition::{AuditionTap, CELL_H, CELL_W};
+                let (time, beat, dt, frame_count, _, output_w, output_h) = audition_frame;
+                let (tap, tap_w, tap_h) = match &self.audition_tap {
+                    manifold_renderer::audition::AuditionTapTarget::Master => {
+                        let t = self.compositor.pre_tonemap_output();
+                        (AuditionTap::Master(t), t.width, t.height)
+                    }
+                    manifold_renderer::audition::AuditionTapTarget::Layer(layer_id) => {
+                        let t = self.compositor.layer_scratch_texture(layer_id);
+                        // The layer disappeared mid-browse → `None` texture:
+                        // the pool renders against its once-cleared black
+                        // fallback and the UI keeps last-good pixels.
+                        (AuditionTap::Layer { layer_id: layer_id.clone(), texture: t }, CELL_W, CELL_H)
+                    }
+                };
+                let ctx = manifold_renderer::preset_context::PresetContext {
+                    time,
+                    beat,
+                    dt,
+                    width: CELL_W,
+                    height: CELL_H,
+                    output_width: output_w,
+                    output_height: output_h,
+                    // The tap's true aspect, so aspect-sensitive presets see
+                    // the same shape they would on the committed chain.
+                    aspect: if tap_h > 0 {
+                        tap_w as f32 / tap_h as f32
+                    } else {
+                        1.0
+                    },
+                    owner_key: 0,
+                    is_clip_level: false,
+                    frame_count: frame_count as i64,
+                    anim_progress: 0.0,
+                    // D16: the tap owner's current trigger_count is
+                    // forwarded; no audio-modulation simulation.
+                    trigger_count: audition_tap_trigger,
+                };
+                let budget_ok = self.audition_last_frame_wall_ms <= self.audition_budget_ms;
+                let audition_changed = {
+                    let mut gpu = GpuEncoder::new(&mut native_enc, native_device);
+                    self.audition_pool
+                        .as_mut()
+                        .expect("checked above")
+                        .render_tick(&mut gpu, tap, &ctx, budget_ok)
+                };
+                // Transport: copy the pool atlas onto the shared audition
+                // surface — encoded on this same command buffer, so the copy
+                // lands before the UI can sample more than a frame behind.
+                // Only on frames a cell actually rendered (D6
+                // freeze-at-last-good: a budget-skipped frame leaves the
+                // surface at its last-good pixels).
+                #[cfg(target_os = "macos")]
+                if audition_changed
+                    && let (Some(pool), Some(dst)) = (
+                        self.audition_pool.as_ref(),
+                        self.audition_surface_tex.as_ref(),
+                    )
+                    && let Some(src) = pool.atlas_texture()
+                {
+                    native_enc.copy_texture_to_texture(src, dst, src.width, src.height, 1);
+                }
+                rtrace.mark("audition");
             }
         }
 

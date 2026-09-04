@@ -85,6 +85,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         frame_count: 0,
         time_since_start: Seconds::ZERO,
         last_data_version: 0,
+        audition_last_frame_wall_ms: 0.0,
         midi_input,
         clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
         rendering_paused: false,

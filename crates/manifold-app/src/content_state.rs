@@ -235,6 +235,20 @@ pub struct ContentState {
     /// this frame. The editor canvas maps each visible node to its atlas cell to
     /// blit the thumbnail. Empty unless the editor enabled the atlas.
     pub node_atlas_layout: Vec<(manifold_core::NodeId, u32)>,
+    /// `(preset, atlas UV rect)` for the preset-browser audition grid
+    /// (`docs/PRESET_BROWSER_AUDITION_DESIGN.md` §3.1). The browser popup maps
+    /// each filtered item's type id to its cell UV and samples the audition
+    /// atlas through the surface below. Empty unless the browser is open.
+    pub audition_cells: Vec<(manifold_core::PresetTypeId, [f32; 4])>,
+    /// The audition atlas IOSurface (D3: one atlas, one transport — the
+    /// single-surface clip-atlas pattern, BUG-119). The UI imports its own
+    /// texture from this on first sight of a new `audition_surface_generation`
+    /// and samples it per-cell. `None` until the first browser open.
+    #[cfg(target_os = "macos")]
+    pub audition_surface: Option<std::sync::Arc<crate::shared_texture::SharedAtlasSurface>>,
+    /// Bumped every time the content side (re)creates the surface (grid-size
+    /// change at a later open) — the UI's import handle is keyed by it.
+    pub audition_surface_generation: u64,
     /// `(clip_id, filmstrip_cell_index, atlas_cell_index)` for the timeline
     /// clip-thumbnail **filmstrip** atlas (section 24 5c-2). Each clip owns one entry per
     /// captured filmstrip cell (bar / bar-group); the timeline tiles them across the
@@ -506,6 +520,10 @@ impl Default for ContentState {
             node_preview_info: None,
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
+            audition_cells: Vec::new(),
+            #[cfg(target_os = "macos")]
+            audition_surface: None,
+            audition_surface_generation: 0,
             clip_atlas_layout: Vec::new(),
             automation_latched_params: Vec::new(),
             automation_armed: false,

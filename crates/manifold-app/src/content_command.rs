@@ -315,6 +315,20 @@ pub enum ContentCommand {
     /// live show pays nothing.
     SetNodeAtlasVisible(Vec<manifold_core::NodeId>),
 
+    // ── Preset-browser audition (PRESET_BROWSER_AUDITION_DESIGN section 3.1) ──
+    /// Build the audition cell pool for one browser open (D6: once per open).
+    /// `tap` is the browser's invocation context (D2 — master or layer); the
+    /// per-frame tap texture is resolved by the pipeline after the compositor
+    /// render. Read-only: audition never mutates the project (§4 invariant).
+    AuditionEnsureCells {
+        cells: Vec<(manifold_core::PresetTypeId, manifold_core::preset_def::PresetKind)>,
+        tap: manifold_renderer::audition::AuditionTapTarget,
+    },
+    /// The browser's current filtered render order (D6: cheap reorder, no
+    /// build/evict). Sent only when the filtered set changes; an empty vec at
+    /// browser close makes a closed browser cost literally zero (§6.8).
+    AuditionSetRenderList(Vec<manifold_core::PresetTypeId>),
+
     /// The set of clips that currently want a timeline thumbnail (section 24 5c) —
     /// on-screen generator/video clips wide enough to read. Sent by the UI when
     /// the visible-thumbnail scope changes (scroll/zoom/edit), deduped so a stable

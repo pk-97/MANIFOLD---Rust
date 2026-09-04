@@ -1515,3 +1515,195 @@ fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32)
         unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total as usize) };
     bytes.to_vec()
 }
+
+/// PRESET_BROWSER_AUDITION P2 demo (L2): the browser popup with LIVE audition
+/// cells — a real `AuditionPool` rendering real presets against a synthetic
+/// show frame (the same gradient input the save-time thumbnail path uses),
+/// transported into the cell grid via the shared-atlas handle + per-item UVs
+/// (the exact mechanism the app uses: `add_image_uv` sampling the audition
+/// atlas). Writes `/tmp/p2_audition_browser.png` (or `$SWATCH_OUT`). Also
+/// reports the cold-touch count paid at `ensure_cells` and the steady-state
+/// per-tick cost — the P2 budget evidence.
+#[test]
+fn browser_popup_audition_live() {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use manifold_core::preset_def::PresetKind;
+    use manifold_core::PresetTypeId;
+    use manifold_renderer::audition::{AuditionPool, AuditionTap, CELL_H, CELL_W};
+    use manifold_renderer::gpu_encoder::GpuEncoder;
+    use manifold_renderer::preset_context::PresetContext;
+    use manifold_ui::node::Vec2;
+    use manifold_ui::panels::browser_popup::{
+        BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
+    };
+    use manifold_ui::panels::picker_core::PickerItem;
+    use manifold_ui::panels::InspectorTab;
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
+
+    let device = Arc::new(GpuDevice::new());
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT").unwrap_or_else(|_| "/tmp".to_string());
+    let png = format!("{out_dir}/p2_audition_browser.png");
+    eprintln!("P2 audition demo writing {png}");
+
+    // The audition grid: real presets, built once (like a browser open).
+    let items: Vec<(&str, PresetKind)> = vec![
+        ("Invert", PresetKind::Effect),
+        ("Mirror", PresetKind::Effect),
+        ("Glitch", PresetKind::Effect),
+        ("SoftFocus", PresetKind::Effect),
+        ("Bloom", PresetKind::Effect),
+        ("StarField", PresetKind::Generator),
+        ("Plasma", PresetKind::Generator),
+        ("BlackHole", PresetKind::Generator),
+    ];
+    let mut pool = AuditionPool::new(Arc::clone(&device));
+    manifold_foundation::reset_cold_touch_counts();
+    let build_start = Instant::now();
+    pool.ensure_cells(
+        items.iter().map(|(id, k)| (PresetTypeId::new(id), *k)).collect(),
+    );
+    let build_ms = build_start.elapsed().as_secs_f64() * 1000.0;
+    let cold = manifold_foundation::total_cold_touches();
+    pool.set_render_list(items.iter().map(|(id, _)| PresetTypeId::new(id)).collect());
+
+    // A synthetic "show frame" stand-in (the parity-harness gradient: R=u,
+    // G=v, B=(u+v)/2 — same shape `preset_thumbnail::build_gradient_input`,
+    // inlined because that helper is crate-private), then enough ticks for
+    // every cell to have rendered at least once.
+    let tap = {
+        use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
+        let (w, h) = (CELL_W, CELL_H);
+        let mut pixels = vec![half::f16::from_f32(0.0); (w * h * 4) as usize];
+        let wm = (w.max(1) - 1).max(1) as f32;
+        let hm = (h.max(1) - 1).max(1) as f32;
+        for y in 0..h {
+            for x in 0..w {
+                let idx = ((y * w + x) * 4) as usize;
+                let u = x as f32 / wm;
+                let v = y as f32 / hm;
+                pixels[idx] = half::f16::from_f32(u);
+                pixels[idx + 1] = half::f16::from_f32(v);
+                pixels[idx + 2] = half::f16::from_f32((u + v) * 0.5);
+                pixels[idx + 3] = half::f16::from_f32(1.0);
+            }
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "p2-audition-tap",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                pixels.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(pixels.as_slice()),
+            )
+        };
+        device.upload_texture(&tex, bytes);
+        RenderTarget::view_of(tex, "p2-audition-tap")
+    };
+    let ctx = PresetContext {
+        time: 1.234,
+        beat: 2.5,
+        dt: 1.0 / 60.0,
+        width: CELL_W,
+        height: CELL_H,
+        output_width: CELL_W,
+        output_height: CELL_H,
+        aspect: CELL_W as f32 / CELL_H as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+    };
+    // Fill every cell: K=2 cells per tick, so `ceil(n/2)` ticks cover the
+    // grid. (Per-tick frame cost is the live `MANIFOLD_RENDER_TRACE` gate's
+    // question — headless sync-submits in this harness measure the wait, not
+    // the work, so no timing claim is made here.)
+    let ticks = items.len().div_ceil(2);
+    for _ in 0..ticks {
+        let mut enc = device.create_encoder("audition-demo-tick");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            assert!(pool.render_tick(&mut gpu, AuditionTap::Master(&tap.texture), &ctx, true));
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    // Transport: register the pool atlas as the popup's audition source with
+    // per-item UVs (what `Application::update_audition_src` does per frame).
+    let handle = manifold_ui::node::texture_handle_for_key("__p2_audition_demo_atlas__");
+    let atlas = pool.atlas_texture().expect("atlas").clone();
+    ui.register_external_texture(handle, atlas);
+    let uv_map: ahash::AHashMap<String, [f32; 4]> = pool
+        .cell_uvs()
+        .iter()
+        .map(|(id, uv)| (id.as_str().to_string(), *uv))
+        .collect();
+
+    let picker_items: Vec<PickerItem> = items
+        .iter()
+        .map(|(id, _)| PickerItem {
+            label: id.to_string(),
+            type_id: id.to_string(),
+            category: Some("Stylize".to_string()),
+            search_text: None,
+            badge: None,
+            source: None,
+            missing_from_library: false,
+            thumbnail: None, // no static thumb — the live cell is the only image
+        })
+        .collect();
+
+    let mut popup = BrowserPopupPanel::new();
+    popup.set_screen_size(W as f32, H as f32);
+    popup.open(BrowserPopupRequest {
+        mode: BrowserPopupMode::Effect,
+        tab: InspectorTab::Layer,
+        layer_id: None,
+        items: picker_items,
+        category_names: vec!["Stylize".to_string()],
+        spawn_graph_pos: None,
+        paste_count: 0,
+        screen_anchor: Vec2::new(24.0, 32.0),
+    });
+    popup.set_audition_src(Some((handle, uv_map)));
+
+    let mut tree = UITree::new();
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Overlay,
+        "browser_popup_audition",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
+    popup.build(&mut tree);
+    tree.end_region(region, start);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "audition browser demo produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "browser-popup-audition");
+    {
+        let mut enc = device.create_encoder("browser-popup-audition-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!(
+        "audition browser demo → {png}\n  ensure_cells: {build_ms:.1} ms, cold touches at open: {cold} ({} cells)",
+        items.len()
+    );
+}

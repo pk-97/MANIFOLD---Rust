@@ -238,6 +238,29 @@ pub struct BrowserPopupPanel {
     screen_w: f32,
     screen_h: f32,
     session: Option<BrowserSession>,
+    /// Live audition cell source (PRESET_BROWSER_AUDITION_DESIGN D1/D3):
+    /// the shared audition-atlas texture handle + per-item UV rects, pushed
+    /// per frame by the app while the browser is open. `None` = flat cells
+    /// (Node mode, transport not up yet, or browser closed) — the cell
+    /// renders exactly as before.
+    audition_src: Option<(crate::node::TextureHandle, ahash::AHashMap<String, [f32; 4]>)>,
+    /// Open/close/render-list transitions for the app pump to drain and
+    /// forward over `ContentCommand` (the panel is pure UI — it never sends
+    /// commands itself).
+    audition_open_dirty: Option<AuditionOpenInfo>,
+    audition_close_dirty: bool,
+    last_render_list: Option<Vec<String>>,
+}
+
+/// What the app needs to start an audition session on the content thread:
+/// every item's `(type id, mode)` for `ensure_cells` (the app maps mode →
+/// `PresetKind`; the UI crate doesn't see core types), plus the invocation
+/// context for the tap (D2 — master vs layer).
+#[derive(Debug, Clone)]
+pub struct AuditionOpenInfo {
+    pub items: Vec<(String, BrowserPopupMode)>,
+    pub tab: InspectorTab,
+    pub layer_id: Option<LayerId>,
 }
 
 impl Default for BrowserPopupPanel {
@@ -252,6 +275,10 @@ impl BrowserPopupPanel {
             screen_w: 1920.0,
             screen_h: 1080.0,
             session: None,
+            audition_src: None,
+            audition_open_dirty: None,
+            audition_close_dirty: false,
+            last_render_list: None,
         }
     }
 
@@ -309,6 +336,20 @@ impl BrowserPopupPanel {
     }
 
     pub fn open(&mut self, req: BrowserPopupRequest) {
+        // Audition is effect/generator-only (D1); Node mode renders flat
+        // cells exactly as before and never dirties the session hooks.
+        if req.mode != BrowserPopupMode::Node {
+            self.audition_open_dirty = Some(AuditionOpenInfo {
+                items: req
+                    .items
+                    .iter()
+                    .map(|it| (it.type_id.clone(), req.mode))
+                    .collect(),
+                tab: req.tab,
+                layer_id: req.layer_id.clone(),
+            });
+            self.last_render_list = None;
+        }
         self.session = Some(BrowserSession {
             mode: req.mode,
             tab: req.tab,
@@ -322,7 +363,56 @@ impl BrowserPopupPanel {
     }
 
     pub fn close(&mut self) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.mode != BrowserPopupMode::Node)
+        {
+            self.audition_close_dirty = true;
+        }
         self.session = None;
+    }
+
+    /// Drain the open transition (once per open) — the app forwards it as
+    /// the content-thread `ensure_cells` + tap selection.
+    pub fn take_audition_open(&mut self) -> Option<AuditionOpenInfo> {
+        self.audition_open_dirty.take()
+    }
+
+    /// Drain the close transition (once per close) — the app sends an empty
+    /// render list, making a closed browser cost literally zero (D6/§6.8).
+    pub fn take_audition_close(&mut self) -> bool {
+        std::mem::take(&mut self.audition_close_dirty)
+    }
+
+    /// The current filtered render list, `Some` only when it changed since
+    /// the last drain (search typing / chip picks) — so a stable browse
+    /// sends no per-frame commands at all.
+    pub fn take_audition_render_list(&mut self) -> Option<Vec<String>> {
+        let session = self.session.as_ref()?;
+        if session.mode == BrowserPopupMode::Node {
+            return None;
+        }
+        let current: Vec<String> = session
+            .picker
+            .filtered()
+            .map(|(_, item)| item.type_id.clone())
+            .collect();
+        if self.last_render_list.as_ref() == Some(&current) {
+            return None;
+        }
+        self.last_render_list = Some(current.clone());
+        Some(current)
+    }
+
+    /// Install the live audition cell source for this frame (`None` clears —
+    /// cells fall back to the static thumbnail / flat text). The app
+    /// computes the atlas handle + per-item UVs from the content state.
+    pub fn set_audition_src(
+        &mut self,
+        src: Option<(crate::node::TextureHandle, ahash::AHashMap<String, [f32; 4]>)>,
+    ) {
+        self.audition_src = src;
     }
 
     /// Called when the search filter changes (from TextInputManager commit
@@ -673,10 +763,38 @@ impl BrowserPopupPanel {
             // non-interactive and painted BEFORE the button below, so they
             // never shadow its click region and the button's own (in this
             // case transparent) fill + hover/press tint composite on top.
-            // No thumbnail → skip entirely, today's flat-color cell exactly
-            // (D7's "clean fallback").
-            let has_thumbnail = item.thumbnail.is_some();
-            if let Some(path) = item.thumbnail.as_deref() {
+            // Live audition cell (PRESET_BROWSER_AUDITION_DESIGN D1) takes
+            // precedence: the shared audition atlas sampled at this item's
+            // UV. No audition UV and no thumbnail → skip entirely, today's
+            // flat-color cell exactly (D7's "clean fallback").
+            let audition = self
+                .audition_src
+                .as_ref()
+                .and_then(|(handle, map)| map.get(&item.type_id).map(|uv| (*handle, *uv)));
+            let has_thumbnail = item.thumbnail.is_some() || audition.is_some();
+            if let Some((handle, uv)) = audition {
+                tree.add_image_uv(
+                    clip_parent,
+                    cell_x,
+                    cell_y,
+                    CELL_WIDTH,
+                    CELL_HEIGHT,
+                    CELL_RADIUS,
+                    handle,
+                    uv,
+                );
+                tree.add_panel(
+                    clip_parent,
+                    cell_x,
+                    cell_y + CELL_HEIGHT - CAPTION_STRIP_H,
+                    CELL_WIDTH,
+                    CAPTION_STRIP_H,
+                    UIStyle {
+                        bg_color: CAPTION_STRIP_BG,
+                        ..UIStyle::default()
+                    },
+                );
+            } else if let Some(path) = item.thumbnail.as_deref() {
                 let handle = crate::node::texture_handle_for_key(path);
                 tree.add_image(clip_parent, cell_x, cell_y, CELL_WIDTH, CELL_HEIGHT, CELL_RADIUS, handle);
                 tree.add_panel(

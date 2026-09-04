@@ -78,6 +78,9 @@ pub struct ContentThread {
     pub frame_count: u64,
     pub time_since_start: Seconds,
     pub last_data_version: u64,
+    /// Wall time of the last completed frame (ms) — the audition pool's
+    /// budget back-off signal (PRESET_BROWSER_AUDITION_DESIGN D6).
+    pub audition_last_frame_wall_ms: f64,
     /// MIDI device input — routes hardware note events to ClipLauncher.
     pub midi_input: MidiInputController,
     /// Bridges MIDI note events to LiveClipManager.
@@ -627,8 +630,10 @@ impl ContentThread {
             self.last_midi_device_scan_time = self.time_since_start;
         }
 
-        // Profiling: frame start timestamp
-        #[cfg(feature = "profiling")]
+        // Profiling + audition budget signal (PRESET_BROWSER_AUDITION_DESIGN
+        // D6) frame start timestamp — needed in every build, not just
+        // profiling: the audition pool's skip signal is the last completed
+        // frame's wall time vs the frame budget.
         let _frame_start = std::time::Instant::now();
 
         // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
@@ -808,6 +813,12 @@ impl ContentThread {
             .set_node_preview_normalize(self.node_preview_normalize);
 
         let render_work_start = std::time::Instant::now();
+        // Audition budget back-off signal (PRESET_BROWSER_AUDITION_DESIGN D6):
+        // last completed frame's wall time vs the frame budget.
+        self.content_pipeline.set_audition_frame_signal(
+            self.audition_last_frame_wall_ms,
+            1000.0 / self.timer.target_fps(),
+        );
         self.content_pipeline.render_content(
             &self.gpu,
             &mut self.engine,
@@ -1131,6 +1142,10 @@ impl ContentThread {
         }
 
         // 8. Push state to UI
+        // Audition budget signal (D6): this completed frame's wall time,
+        // consumed by NEXT frame's `render_tick` as the skip signal (one
+        // frame of hysteresis by construction).
+        self.audition_last_frame_wall_ms = _frame_start.elapsed().as_secs_f64() * 1000.0;
         self.engine.reclaim_tick_result(tick_result);
         self.send_state(state_tx);
     }
@@ -1416,6 +1431,10 @@ impl ContentThread {
             node_preview_info: self.content_pipeline.node_preview_info(),
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
+            audition_cells: self.content_pipeline.audition_cell_uvs().to_vec(),
+            #[cfg(target_os = "macos")]
+            audition_surface: self.content_pipeline.audition_surface(),
+            audition_surface_generation: self.content_pipeline.audition_surface_generation(),
             clip_atlas_layout: self.content_pipeline.clip_atlas_layout().to_vec(),
             automation_latched_params: self
                 .engine
