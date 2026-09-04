@@ -255,7 +255,7 @@ pub struct LayerInfo {
     /// send. Drives the teal `A` toggle on the audio row. See LAYER_CONTROLS section 5.3.
     pub analysis_only: bool,
     pub is_led: bool,
-    /// True for `LayerType::Led`. The lane's L chip is then an LED state
+    /// True for `LayerType::Dmx`. The lane's L chip is then an LED state
     /// indicator, not the mirror toggle: rendered permanently on and
     /// non-interactive (`blit_to_led` is inert on LED layers —
     /// LED_STRIPS_DESIGN.md section 5b D11).

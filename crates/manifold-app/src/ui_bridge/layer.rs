@@ -130,7 +130,7 @@ pub(super) fn dispatch_layer(
             if project
                 .timeline
                 .find_layer_by_id(id.as_str())
-                .is_some_and(|(_, l)| l.is_led())
+                .is_some_and(|(_, l)| l.is_dmx())
             {
                 return DispatchResult::handled();
             }

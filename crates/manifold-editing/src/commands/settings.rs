@@ -1232,7 +1232,7 @@ mod tests {
         let mut project = Project::default();
         let mut add = crate::commands::layer::AddLayerCommand::new(
             "LED 1".to_string(),
-            LayerType::Led,
+            LayerType::Dmx,
             TEST_PASTE_GEN_A.clone(),
             0,
             None,

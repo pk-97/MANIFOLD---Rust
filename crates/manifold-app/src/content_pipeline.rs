@@ -2122,7 +2122,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // already excludes LED-routed layers; the occluded blend-skip does
         // not).
         for layer in layers {
-            if layer.is_led() && !self.occluded_layers_scratch.contains(&layer.index) {
+            if layer.is_dmx() && !self.occluded_layers_scratch.contains(&layer.index) {
                 self.occluded_layers_scratch.push(layer.index);
             }
         }
@@ -4091,7 +4091,7 @@ mod render_skip_tests {
             layer(1, BlendMode::Normal, 1.0),
             layer(2, BlendMode::Normal, 1.0),
         ];
-        layers[1].layer_type = LayerType::Led;
+        layers[1].layer_type = LayerType::Dmx;
         let clips = vec![clip(0), clip(1), clip(2)];
         let skip = skip_for(&layers, &clips);
         assert_eq!(

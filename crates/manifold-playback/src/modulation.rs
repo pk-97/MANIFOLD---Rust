@@ -1265,7 +1265,7 @@ mod tests {
 
         let mut layer = Layer::new(
             "LedLayer".into(),
-            manifold_core::types::LayerType::Led,
+            manifold_core::types::LayerType::Dmx,
             0,
         );
         layer.gen_params_or_init().init_defaults_for_type(TEST_GEN.clone());

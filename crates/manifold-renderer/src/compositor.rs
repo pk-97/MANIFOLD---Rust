@@ -249,13 +249,9 @@ pub trait Compositor: Send {
     /// Flush in-flight background work in all effect processors.
     fn flush_all_background_work(&mut self);
 
-    /// LED tap texture: pre-tonemap composite captured when led_exit_index == 0.
-    /// Returns None if exit index is -1.
-    fn led_tap_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
-
     /// Per-layer LED composite texture: final post-tonemap + post-master-FX LED
     /// output built from LED-routed layers (Mirror or Direct route). Returns
-    /// None when no layer is LED-routed (fall back to led_tap_texture or output).
+    /// None when no layer is LED-routed (fall back to output).
     fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 
     /// Read-back accessor: the layer scratch buffer's current source texture.

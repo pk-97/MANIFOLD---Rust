@@ -275,7 +275,7 @@ pub(super) fn dispatch_editing(
                     // underneath it.
                     let cmd = AddLayerCommand::new(
                         name,
-                        LayerType::Led,
+                        LayerType::Dmx,
                         PresetTypeId::new("LED Fill"),
                         idx,
                         None,

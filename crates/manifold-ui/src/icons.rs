@@ -105,7 +105,7 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
         LayerType::Generator => Icon::LayerGenerator,
         LayerType::Group => Icon::LayerGroup,
         LayerType::Audio => Icon::LayerAudio,
-        LayerType::Led => Icon::LayerLed,
+        LayerType::Dmx => Icon::LayerLed,
     }
 }
 
@@ -170,7 +170,7 @@ mod tests {
             layer_badge(LayerType::Generator),
             layer_badge(LayerType::Group),
             layer_badge(LayerType::Audio),
-            layer_badge(LayerType::Led),
+            layer_badge(LayerType::Dmx),
         ];
         for i in 0..badges.len() {
             for j in (i + 1)..badges.len() {

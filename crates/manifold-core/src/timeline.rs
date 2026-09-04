@@ -720,10 +720,10 @@ mod add_layer_tests {
     #[test]
     fn add_led_layer_seeds_gen_params_via_change_generator_type() {
         let mut t = Timeline::default();
-        t.add_layer("LED 1", crate::types::LayerType::Led, PresetTypeId::new("LED Fill"));
+        t.add_layer("LED 1", crate::types::LayerType::Dmx, PresetTypeId::new("LED Fill"));
 
         let layer = &t.layers[0];
-        assert_eq!(layer.layer_type, crate::types::LayerType::Led);
+        assert_eq!(layer.layer_type, crate::types::LayerType::Dmx);
         let genp = layer
             .gen_params()
             .expect("add_layer must seed gen_params on an LED layer (D12)");

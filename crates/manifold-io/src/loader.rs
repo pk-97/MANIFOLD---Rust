@@ -580,3 +580,63 @@ mod layer_led_flag_round_trip_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod layer_type_dmx_round_trip_tests {
+    //! MVP-P3b positive gate (LED_STRIPS_DESIGN.md section 5b D15): the DMX
+    //! layer type must survive a save → reload cycle as int 4, and hand-built
+    //! JSON carrying either int 4 or the legacy string "Led" must load as
+    //! Dmx — not silently fall back to Video. Same harness as the
+    //! blit_to_led round-trip gate: real serde save through the real loader.
+
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    #[test]
+    fn dmx_layer_type_survives_save_reload_as_int_4() {
+        let mut project = Project::default();
+        let layer = Layer::new("DMX 1".to_string(), LayerType::Dmx, 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+
+        let saved = serde_json::to_string(&project).unwrap();
+        let saved_value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            saved_value["timeline"]["layers"][0]["layerType"],
+            serde_json::Value::Number(4.into()),
+            "the wire form stays int 4 (D15 — no migration rung)"
+        );
+
+        let reloaded = load_project_from_json(&saved).expect("re-saved project reloads");
+        let (_, layer) = reloaded.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(
+            layer.layer_type,
+            LayerType::Dmx,
+            "DMX layer must reload as Dmx, not fall back to Video"
+        );
+    }
+
+    #[test]
+    fn hand_built_json_layer_type_led_string_loads_as_dmx() {
+        let json = r#"{
+            "version": 1,
+            "timeline": {
+                "layers": [{
+                    "layerId": "hand-built-led",
+                    "name": "LED 1",
+                    "layerType": "Led",
+                    "index": 0,
+                    "clips": []
+                }]
+            }
+        }"#;
+        let loaded = load_project_from_json(json).expect("hand-built JSON loads");
+        let layer = &loaded.timeline.layers[0];
+        assert_eq!(
+            layer.layer_type,
+            LayerType::Dmx,
+            "legacy string \"Led\" must load as Dmx (D15 alias)"
+        );
+    }
+}
