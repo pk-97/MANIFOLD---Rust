@@ -442,6 +442,31 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
+            PanelAction::Params(ParamsAction::AddModifierClicked(layer_id)) => {
+                // SCENE_MODIFIER_FRAMEWORK section 3.7 (Inspector card region + picker): the modifier picker —
+                // the inspector's configured model (one entry per registry
+                // kind, applicability computed at the structural sync).
+                // Typed dropdown: each clickable item carries its own apply
+                // action, so there is no index→meaning map to keep in sync.
+                let items: Vec<DropdownItem> = self
+                    .inspector
+                    .modifier_picker()
+                    .iter()
+                    .map(|e| match &e.disabled {
+                        Some(reason) => {
+                            DropdownItem::disabled(&format!("{} — {}", e.label, reason))
+                        }
+                        None => DropdownItem::new(&e.label).with_action(
+                            PanelAction::Project(ProjectAction::SceneModifierApply(
+                                layer_id.clone(),
+                                e.kind_id.clone(),
+                            )),
+                        ),
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
             PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;

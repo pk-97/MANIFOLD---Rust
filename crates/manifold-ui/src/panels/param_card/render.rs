@@ -113,6 +113,30 @@ impl ParamCardPanel {
         self.rows = config.rows.clone();
         self.string_param_info = config.string_params.clone();
 
+        // SCENE_MODIFIER_FRAMEWORK section 3.7: modifier cards carry their
+        // kind/layer identity + chrome flags. The wrap-debug stash re-arms
+        // from the live Bars row each configure: a RUNNING loop refreshes the
+        // resume value, a PARKED one (bars == 0) keeps the stash (the graph
+        // no longer carries the real bars — exactly the old SceneLoopUi rule,
+        // relocated to the card).
+        self.modifier = config.modifier.clone();
+        self.wrap_debug_resume_bars = None;
+        self.wrap_debug_row = None;
+        self.cached_wrap_debug_parked = false;
+        if let Some(addr) = self.modifier.as_ref().and_then(|m| m.wrap_debug.clone())
+            && let Some((row_idx, row)) = config
+                .rows
+                .iter()
+                .enumerate()
+                .find(|(_, r)| r.scene_addr.as_ref() == Some(&addr))
+        {
+            self.wrap_debug_row = Some(row_idx);
+            self.cached_wrap_debug_parked = row.value.base.abs() < f32::EPSILON;
+            if row.value.base.abs() >= f32::EPSILON {
+                self.wrap_debug_resume_bars = Some(row.value.base);
+            }
+        }
+
         let n = config.rows.len();
         // BUG-313: rebuild the id→row-index join map from the same rows being
         // rendered, so the per-frame value sync joins by id (never position).
@@ -291,8 +315,13 @@ impl ParamCardPanel {
     /// section label + the six knob rows + the Height From row. Drawn
     /// (greyed when off, never hidden — no-conditionally-visible-ui)
     /// regardless of whether the card has any regular params
-    /// (`docs/DEPTH_RELIGHT_DESIGN.md` P5b).
+    /// (`docs/DEPTH_RELIGHT_DESIGN.md` P5b). Modifier cards never draw it —
+    /// relight is a 2D per-instance concept with no meaning on a scene
+    /// modifier card (a permanent chrome difference between card species).
     fn relight_block_height(&self) -> f32 {
+        if self.modifier.is_some() {
+            return 0.0;
+        }
         // Feature disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
         // the "3D Shading" block is not drawn, so it contributes no height.
         if !RELIGHT_FEATURE_ENABLED {
@@ -531,8 +560,15 @@ impl ParamCardPanel {
     /// added imperatively afterwards (see `build_effect_header`); the name-clip
     /// is laid `Fill` here and shrunk to leave room for active badges by the
     /// in-place re-pack, so badge behaviour is unchanged.
+    ///
+    /// A MODIFIER card (SCENE_MODIFIER_FRAMEWORK section 3.7) is the same
+    /// shell minus the editor furniture — no drag handle (fixed slots, D2), no
+    /// cog, no relight chip — plus the remove × and (loop kinds) the
+    /// wrap-debug button. These are permanent chrome differences between card
+    /// species, not state-conditional visibility.
     fn effect_header_row(&self, header_bg: Color32) -> View {
         let author = self.context == CardContext::Author;
+        let modifier = self.modifier.is_some();
         let transparent_btn = |hover: Color32, pressed: Color32| UIStyle {
             bg_color: Color32::TRANSPARENT,
             hover_bg_color: hover,
@@ -549,7 +585,7 @@ impl ParamCardPanel {
             .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
             .cross_align(Align::Center)
             .key(KEY_HEADER_BG);
-        if !author {
+        if !author && !modifier {
             row = row.child(
                 View::button("")
                     .fixed(DRAG_HANDLE_W, 16.0)
@@ -561,43 +597,76 @@ impl ParamCardPanel {
                     .key(KEY_DRAG),
             );
         }
-        row = row
-            .child(
-                View::panel()
-                    .clip()
-                    .fill_w()
-                    .h(Sizing::Fixed(16.0))
-                    .key(KEY_NAME_CLIP)
-                    .child(
-                        View::label(self.name.as_str())
-                            .fill_w()
-                            .fill_h()
-                            .font(HEADER_FONT_SIZE)
-                            .text_color(self.header_name_color())
-                            .align_text(TextAlign::Left)
-                            .key(KEY_NAME),
-                    ),
-            )
-            .child(
+        row = row.child(
+            View::panel()
+                .clip()
+                .fill_w()
+                .h(Sizing::Fixed(16.0))
+                .key(KEY_NAME_CLIP)
+                .child(
+                    View::label(self.name.as_str())
+                        .fill_w()
+                        .fill_h()
+                        .font(HEADER_FONT_SIZE)
+                        .text_color(self.header_name_color())
+                        .align_text(TextAlign::Left)
+                        .key(KEY_NAME),
+                ),
+        );
+        // Enable toggle: switch kinds carry it in the chrome (writes the
+        // camera switch's `select`); gate kinds put the toggle IN the rows
+        // (D5), so their header has none.
+        if !modifier || self.modifier.as_ref().is_some_and(|m| m.show_enable_toggle) {
+            row = row.child(
                 View::button(if self.enabled { "ON" } else { "OFF" })
                     .fixed(TOGGLE_W, 16.0)
                     .style(toggle_btn_style(self.enabled))
                     .inert()
                     .key(KEY_TOGGLE),
-            )
+            );
+        }
+        if modifier {
+            // Wrap-debug (loop kinds only) — parks the camera at phase 0 via a
+            // real `bars` write through the scene write path.
+            if self.modifier.as_ref().is_some_and(|m| m.wrap_debug.is_some()) {
+                row = row.child(
+                    View::button("DBG")
+                        .fixed(TOGGLE_W, 16.0)
+                        .style(toggle_btn_style(self.wrap_debug_parked()))
+                        .inert()
+                        .key(KEY_WRAP_DEBUG),
+                );
+            }
+            // Remove × — structural inverse through the generic remove command;
+            // the delete-collapse exit animation rides the existing machinery.
+            row = row.child(
+                View::button("\u{2715}")
+                    .fixed(CHEVRON_W, 16.0)
+                    .style(UIStyle {
+                        text_color: color::CHEVRON_COLOR,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
+                    })
+                    .inert()
+                    .key(KEY_MODIFIER_REMOVE),
+            );
+        } else {
             // "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) — hidden
             // entirely while the feature is disabled app-wide
             // (`manifold_foundation::RELIGHT_FEATURE_ENABLED`).
-            .children(RELIGHT_FEATURE_ENABLED.then(|| {
+            row = row.children(RELIGHT_FEATURE_ENABLED.then(|| {
                 View::button("3D")
                     .fixed(RELIGHT_W, 16.0)
                     .style(toggle_btn_style(self.relight.enabled))
                     .inert()
                     .key(KEY_RELIGHT)
             }));
+        }
         // Cog (or a reserved slot in Author) sits LEFT of the chevron so the
         // expand chevron is always the rightmost control — same trailing order as
-        // the generator header (… · cog · ▾).
+        // the generator header (… · cog · ▾). Modifier cards have no cog (no
+        // graph-editor navigation — the card IS the surface).
         // P2 "caret rotate": one down-pointing glyph (▼), rotated to ▶ via
         // `chevron_angle()`/`UIStyle.transform` instead of swapping glyphs —
         // see `chevron_angle`'s doc comment.
@@ -612,7 +681,7 @@ impl ParamCardPanel {
             })
             .inert()
             .key(KEY_CHEVRON);
-        if !author {
+        if !author && !modifier {
             row.child(
                 View::button("")
                     .fixed(COG_W, 16.0)
@@ -702,24 +771,40 @@ impl ParamCardPanel {
         // the toggle — only the active ones take a slot — so the name cell is
         // as wide as possible and a lone badge never floats mid-header.
         // Trailing order (right→left): chevron (always rightmost), cog, toggle —
-        // matches the host View child order in `effect_header_row`.
+        // matches the host View child order in `effect_header_row`. A MODIFIER
+        // card replaces the cog with the remove × (and gains the wrap-debug
+        // button left of it): chevron, ×, [DBG], [toggle] — badges pack left
+        // of the leftmost control.
         let chevron_x = x + w - PADDING - CHEVRON_W;
-        let cog_x = chevron_x - GAP - COG_W;
-        let toggle_x = cog_x - GAP - TOGGLE_W;
-        // Left edge of the name/badge region — after the drag handle (perform) or
-        // at the padding (author, no drag handle).
-        let content_left = x + PADDING
-            + if self.context == CardContext::Author { 0.0 } else { DRAG_HANDLE_W + GAP };
+        let modifier = self.modifier.is_some();
+        let (badge_right, content_left) = if modifier {
+            let remove_x = chevron_x - GAP - CHEVRON_W;
+            let mut chrome_left = remove_x;
+            if self.modifier.as_ref().is_some_and(|m| m.wrap_debug.is_some()) {
+                chrome_left = chrome_left - GAP - TOGGLE_W;
+            }
+            if self.modifier.as_ref().is_some_and(|m| m.show_enable_toggle) {
+                chrome_left = chrome_left - GAP - TOGGLE_W;
+            }
+            let content_left = x + PADDING;
+            (chrome_left, content_left)
+        } else {
+            let cog_x = chevron_x - GAP - COG_W;
+            let toggle_x = cog_x - GAP - TOGGLE_W;
+            let content_left = x + PADDING
+                + if self.context == CardContext::Author { 0.0 } else { DRAG_HANDLE_W + GAP };
+            (toggle_x, content_left)
+        };
         let badges = effect_badge_layout(
             content_left,
-            toggle_x,
+            badge_right,
             self.state.has_graph_mod,
             self.state.has_abl,
             self.state.has_env,
             self.state.has_drv,
             self.state.has_audio,
         );
-        let badge_park = toggle_x - GAP - BADGE_W;
+        let badge_park = badge_right - GAP - BADGE_W;
         let mod_x = badges.mod_x.unwrap_or(badge_park);
         let abl_x = badges.abl_x.unwrap_or(badge_park);
         let env_x = badges.env_x.unwrap_or(badge_park);
@@ -729,8 +814,9 @@ impl ParamCardPanel {
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
         // The header structure (drag handle, name-clip + label, toggle, chevron,
-        // cog) is host-built (see `effect_header_row`); resolve its ids by key.
-        // The badges, the drag bars, and the cog dots below are the imperative
+        // cog — and, on modifier cards, the wrap-debug + remove buttons) is
+        // host-built (see `effect_header_row`); resolve its ids by key. The
+        // badges, the drag bars, and the cog dots below are the imperative
         // decorations layered on top.
         self.drag_icon_id = self.host.node_id_for_key(KEY_DRAG);
         self.name_clip_id = self.host.node_id_for_key(KEY_NAME_CLIP);
@@ -739,6 +825,23 @@ impl ParamCardPanel {
         self.relight_btn_id = self.host.node_id_for_key(KEY_RELIGHT);
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
+        self.modifier_remove_btn_id = self.host.node_id_for_key(KEY_MODIFIER_REMOVE);
+        self.wrap_debug_btn_id = self.host.node_id_for_key(KEY_WRAP_DEBUG);
+        // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): the modifier
+        // chrome buttons get static names — flows reach them by name (the
+        // ON/OFF text they could otherwise be queried by is not unique
+        // across a column of cards).
+        if modifier {
+            if let Some(id) = self.toggle_btn_id {
+                tree.set_name(id, "inspector.modifier.enable_toggle");
+            }
+            if let Some(id) = self.modifier_remove_btn_id {
+                tree.set_name(id, "inspector.modifier.remove");
+            }
+            if let Some(id) = self.wrap_debug_btn_id {
+                tree.set_name(id, "inspector.modifier.wrap_debug");
+            }
+        }
 
         // Drag-handle bars (3 horizontal lines) into the host drag button.
         if let Some(drag_icon_id) = self.drag_icon_id {
@@ -930,7 +1033,8 @@ impl ParamCardPanel {
         self.cached_has_graph_mod = show_mod;
         self.cached_enabled = self.enabled;
 
-        // Cog dots (three in a triangle) into the host cog button.
+        // Cog dots (three in a triangle) into the host cog button. Modifier
+        // cards have no cog — the branch is skipped (`cog_btn_id` is None).
         if let Some(cog_btn_id) = self.cog_btn_id {
             let dot: f32 = 3.0;
             let dot_style = UIStyle {
@@ -938,7 +1042,7 @@ impl ParamCardPanel {
                 corner_radius: dot * 0.5,
                 ..UIStyle::default()
             };
-            let cx = cog_x + COG_W * 0.5;
+            let cx = tree.get_bounds(cog_btn_id).x + COG_W * 0.5;
             let cy = elem_y + 8.0;
             let v_offset = 3.5;
             let h_offset = 4.0;
@@ -1289,8 +1393,11 @@ impl ParamCardPanel {
 
         // ── "3D Shading" relight rows (docs/DEPTH_RELIGHT_DESIGN.md P5b) —
         // always drawn, greyed when the header toggle is off (no-
-        // conditionally-visible-ui). ──
-        self.build_relight_rows(tree, Some(parent), x + PADDING, cy, w - PADDING * 2.0);
+        // conditionally-visible-ui). Never on a modifier card (see
+        // `relight_block_height`). ──
+        if self.modifier.is_none() {
+            self.build_relight_rows(tree, Some(parent), x + PADDING, cy, w - PADDING * 2.0);
+        }
     }
 
     /// The six D3 knob rows + the D4 Height From row — shared between the
@@ -1775,6 +1882,22 @@ impl ParamCardPanel {
             if let Some(toggle_btn_id) = self.toggle_btn_id {
                 tree.set_style(toggle_btn_id, toggle_btn_style(self.enabled));
                 tree.set_text(toggle_btn_id, if self.enabled { "ON" } else { "OFF" });
+            }
+        }
+
+        // Wrap-debug dirty-check (modifier cards): the parked state is the
+        // beat_ramp's REAL `bars`, which the id-join below refreshes in
+        // `base_values` every sync — restyle the DBG button when it flips
+        // (a park/resume write lands through the content thread).
+        if let (Some(row), Some(btn)) = (self.wrap_debug_row, self.wrap_debug_btn_id) {
+            let parked = self
+                .base_values
+                .get(row)
+                .map(|v| v.abs() < f32::EPSILON)
+                .unwrap_or(false);
+            if parked != self.cached_wrap_debug_parked {
+                self.cached_wrap_debug_parked = parked;
+                tree.set_style(btn, toggle_btn_style(parked));
             }
         }
 

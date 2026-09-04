@@ -83,6 +83,52 @@ pub struct RowMapping {
     pub mappable: bool,
 }
 
+/// One row's scene-graph write address (SCENE_MODIFIER_FRAMEWORK D4) — the
+/// `(scope_path, node_doc_id, param)` tuple `ProjectAction::SceneSetupParamChanged`
+/// carries. Populated ONLY by the modifier-card projection
+/// (`modifier_surfaces`, ui_bridge); every other card's rows leave it `None`
+/// and ride the plain manifest-param wires. UI-side copy of the renderer's
+/// `scene_vm::ParamAddr` shape (`ui` cannot depend on `renderer`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneRowAddr {
+    pub scope_path: Vec<u32>,
+    pub node_doc_id: u32,
+    pub param_id: String,
+}
+
+/// Card-level facts for one APPLIED scene modifier (SCENE_MODIFIER_FRAMEWORK
+/// section 3.7) — the chrome + write addressing an ordinary effect-shell card
+/// needs to behave as a modifier card. `None` on every non-modifier surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModifierCardInfo {
+    /// Registry kind id — public API ("scene_loop", "scene_fog"); the wire
+    /// identity the apply/remove/toggle actions carry.
+    pub kind_id: String,
+    /// The OWNING layer — every row gesture addresses `GeneratorOf(this)`.
+    pub layer_id: LayerId,
+    /// `true` for switch kinds (the enable toggle lives in the card chrome,
+    /// writing the camera switch's `select`); `false` for gate kinds (the
+    /// Enabled row IS the toggle, per D5).
+    pub show_enable_toggle: bool,
+    /// The loop kind's wrap-debug target — the beat_ramp's `bars` write
+    /// address. `None` on kinds without wrap-debug.
+    pub wrap_debug: Option<SceneRowAddr>,
+}
+
+/// One entry in the "+ Add Modifier" picker (SCENE_MODIFIER_FRAMEWORK
+/// section 3.7) — one per REGISTRY kind (applied or not: applied and
+/// inapplicable kinds show disabled, per the picker contract). Built
+/// app-side at the same structural sync that configures the modifier cards
+/// (applicability is a function of the live graph, which the UI never reads).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModifierPickerEntry {
+    pub kind_id: String,
+    pub label: String,
+    /// `None` = clickable (applies the kind); `Some(reason)` = disabled with
+    /// the reason appended ("applied", "not applicable").
+    pub disabled: Option<String>,
+}
+
 /// One card row: identity + descriptor + state. THE unit of the layer —
 /// `id` is the WidgetId salt (P2), the wire identity
 /// (`PanelAction`s carry it), and the test address.
@@ -95,6 +141,11 @@ pub struct ParamRow {
     /// [`ParamSurface::audio`]`.rows`, row-indexed — same order).
     pub modulation: RowMod,
     pub mapping: RowMapping,
+    /// The scene-graph write address for a MODIFIER card row (D4) — `Some`
+    /// only on rows the modifier projection built; the card's toggle-row
+    /// gestures turn it into `SceneSetupParamChanged` instead of a plain
+    /// manifest-param toggle.
+    pub scene_addr: Option<SceneRowAddr>,
 }
 
 /// The complete queryable description of one manifest-backed param surface.
@@ -117,6 +168,13 @@ pub struct ParamSurface {
 
     // ── Generator-only identity ──
     pub layer_id: Option<LayerId>,
+
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: `Some` on a scene modifier card
+    /// (an effect-shell card whose rows are the kind's stamped exposures).
+    /// Drives the chrome differences (no drag handle / cog, the enable toggle
+    /// for switch kinds, the remove × and the loop's wrap-debug button) and
+    /// the `GeneratorOf(layer)` write addressing. `None` everywhere else.
+    pub modifier: Option<ModifierCardInfo>,
 
     /// The rows, manifest order == render order.
     pub rows: Vec<ParamRow>,

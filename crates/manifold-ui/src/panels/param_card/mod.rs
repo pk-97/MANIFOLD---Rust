@@ -50,6 +50,13 @@ const KEY_TOGGLE: u64 = 90_010;
 /// Unconditional in both `CardContext`s (like the ON/OFF toggle) — it's a
 /// real per-instance flag, not editor-only chrome.
 const KEY_RELIGHT: u64 = 90_011;
+/// SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier card's remove ×
+/// (right of the collapse chevron's left neighbor — the fixed-slot card's
+/// structural inverse, dispatching `SceneModifierRemove`).
+const KEY_MODIFIER_REMOVE: u64 = 90_012;
+/// SCENE_MODIFIER_FRAMEWORK section 3.7: the loop kind's wrap-debug chrome
+/// button (parks the camera at phase 0 by writing the beat_ramp's `bars`).
+const KEY_WRAP_DEBUG: u64 = 90_013;
 
 /// D1 tab-ink slide: height of the sliding underline beneath the mod-config
 /// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
@@ -264,6 +271,26 @@ pub struct ParamCardPanel {
     // ── Node IDs — generator shell ──
     change_btn_id: Option<NodeId>,
 
+    // ── SCENE_MODIFIER_FRAMEWORK section 3.7: modifier-card shell ──
+    /// `Some` on a scene modifier card — kind identity, owning layer, and the
+    /// chrome flags (enable toggle for switch kinds, wrap-debug for the loop).
+    /// Drives `param_target` (`GeneratorOf(owning layer)` — INV-M4/BUG-292's
+    /// net), the header differences (no drag handle / cog / relight), and the
+    /// remove × / wrap-debug buttons. `None` on every effect/generator card.
+    modifier: Option<crate::param_surface::ModifierCardInfo>,
+    modifier_remove_btn_id: Option<NodeId>,
+    wrap_debug_btn_id: Option<NodeId>,
+    /// Wrap-debug resume stash: the pre-park `bars` value, kept UI-side so a
+    /// parked loop resumes to its real bars (the graph no longer carries it
+    /// once bars=0 lands). Relocated from the deleted `SceneLoopUi`
+    /// (SCENE_MODIFIER_FRAMEWORK P3) — the card state is its home.
+    wrap_debug_resume_bars: Option<f32>,
+    /// The row index of the wrap-debug target (the Bars row), resolved at
+    /// `configure` — the per-frame sync reads the row's live base value from
+    /// `base_values` here instead of re-scanning rows every frame.
+    wrap_debug_row: Option<usize>,
+    cached_wrap_debug_parked: bool,
+
     // ── Dirty-check cache (effect badges + enabled) ──
     cached_enabled: bool,
     cached_has_env: bool,
@@ -446,6 +473,12 @@ impl ParamCardPanel {
             aud_badge_bg_id: None,
             aud_badge_text_id: None,
             change_btn_id: None,
+            modifier: None,
+            modifier_remove_btn_id: None,
+            wrap_debug_btn_id: None,
+            wrap_debug_resume_bars: None,
+            wrap_debug_row: None,
+            cached_wrap_debug_parked: false,
             cached_enabled: true,
             cached_has_env: false,
             cached_has_drv: false,
@@ -483,7 +516,15 @@ impl ParamCardPanel {
 
     /// The [`GraphParamTarget`] this card's per-param actions carry — the
     /// effect index for an effect card, `Generator` for a generator card.
+    /// A MODIFIER card (SCENE_MODIFIER_FRAMEWORK D4) carries
+    /// `GeneratorOf(owning layer)`: its rows are the layer's generator
+    /// manifest rows, and every write must land on the OWNING layer even when
+    /// it isn't the app's active layer (BUG-292/INV-M4's net — the same
+    /// `GeneratorOf` wire the scene panel's rows ride).
     fn param_target(&self) -> GraphParamTarget {
+        if let Some(m) = &self.modifier {
+            return GraphParamTarget::GeneratorOf(m.layer_id.clone());
+        }
         match self.kind {
             ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
             ParamCardKind::Generator => GraphParamTarget::Generator,
@@ -496,6 +537,11 @@ impl ParamCardPanel {
     /// shared constant. Effect instances key on their `EffectId`; generator
     /// cards on their layer (one generator card per layer scope).
     fn identity_key(&self) -> u64 {
+        if let Some(m) = &self.modifier {
+            // One modifier card per kind per layer scope; the kind id is the
+            // identity (fixed slots, D2 — no per-instance id exists).
+            return crate::param_surface::stable_key(&format!("scene_modifier:{}", m.kind_id));
+        }
         match self.kind {
             ParamCardKind::Effect => crate::param_surface::stable_key(self.effect_id.as_str()),
             ParamCardKind::Generator => match &self.layer_id {
@@ -980,6 +1026,7 @@ mod tests {
             supports_envelopes: true,
             string_params: Vec::new(),
             layer_id: None,
+            modifier: None,
             rows: vec![
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("radius"),
@@ -1004,6 +1051,7 @@ mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
+                    scene_addr: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("strength"),
@@ -1028,6 +1076,7 @@ mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
+                    scene_addr: None,
                 },
             ],
             has_graph_mod: false,
@@ -1065,6 +1114,7 @@ mod tests {
                 ableton_range: None,
                 mappable: false,
             },
+            scene_addr: None,
         });
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("reset"),
@@ -1089,6 +1139,7 @@ mod tests {
                 ableton_range: None,
                 mappable: false,
             },
+            scene_addr: None,
         });
         c
     }
@@ -1279,6 +1330,7 @@ mod tests {
                 ableton_range: None,
                 mappable: false,
             },
+            scene_addr: None,
         });
         let n = c.rows.len();
 
@@ -2913,6 +2965,7 @@ mod tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
+            modifier: None,
             rows: vec![
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("speed"),
@@ -2937,6 +2990,7 @@ mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
+                    scene_addr: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("invert"),
@@ -2961,6 +3015,7 @@ mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
+                    scene_addr: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("scale"),
@@ -2985,6 +3040,7 @@ mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
+                    scene_addr: None,
                 },
             ],
             string_params: vec![],

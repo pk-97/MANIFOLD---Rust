@@ -63,7 +63,10 @@ pub use graph_edit::GraphEditCommand;
 pub use hit_targets::{HitTargetEntry, HitTargets};
 pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
-pub use param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec, RowValue};
+pub use param_surface::{
+    ModifierCardInfo, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping, RowSpec, RowValue,
+    SceneRowAddr,
+};
 pub use node::*;
 pub use panels::clip_chrome::ClipChromePanel;
 pub use panels::dropdown::{DropdownAction, DropdownItem, DropdownPanel};

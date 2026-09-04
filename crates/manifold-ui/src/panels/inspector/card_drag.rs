@@ -120,6 +120,11 @@ impl InspectorCompositePanel {
                     .as_mut()
                     .map(|gp| gp.handle_drag(pos, tree, fine))
                     .unwrap_or_default(),
+                PressedTarget::Modifier(i) => self
+                    .modifier_cards
+                    .get_mut(i)
+                    .map(|c| c.handle_drag(pos, tree, fine))
+                    .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }
         } else {
@@ -155,6 +160,11 @@ impl InspectorCompositePanel {
                     .gen_params
                     .as_mut()
                     .map(|gp| gp.handle_drag_end(tree))
+                    .unwrap_or_default(),
+                PressedTarget::Modifier(i) => self
+                    .modifier_cards
+                    .get_mut(i)
+                    .map(|c| c.handle_drag_end(tree))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }

@@ -1713,6 +1713,7 @@ mod tick_parity_tests {
                     ableton_range: None,
                     mappable: false,
                 },
+                scene_addr: None,
             }],
             string_params: Vec::new(),
             collapsed,
@@ -1722,6 +1723,7 @@ mod tick_parity_tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
+            modifier: None,
             audio: Default::default(),
             relight: manifold_ui::RelightCardConfig::default(),
         }
