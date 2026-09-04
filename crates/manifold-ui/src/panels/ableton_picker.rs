@@ -15,6 +15,7 @@ use super::popup_shell;
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
+use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
 
 // ── Layout ────────────────────────────────────────────────────────
@@ -121,6 +122,10 @@ pub struct AbletonPickerPopup {
     is_open: bool,
     rack_tracks: Vec<PickerTrack>,
     selected_track_idx: Option<usize>,
+    /// Body scroll (both columns move together). The clip node minted by
+    /// `begin()` is reparented under the shell container, so scrolled
+    /// content is bound by both the body viewport and the popup surface.
+    scroll: ScrollContainer,
 
     popup_x: f32,
     popup_y: f32,
@@ -130,7 +135,10 @@ pub struct AbletonPickerPopup {
     screen_h: f32,
 
     backdrop_id: Option<NodeId>,
-    track_row_ids: Vec<NodeId>,
+    /// (node_id, track index) for each minted row — culling means the
+    /// minted rows are not a contiguous prefix, so the track index rides
+    /// along instead of being implied by position.
+    track_row_ids: Vec<(NodeId, usize)>,
     /// (node_id, address) for each visible macro item.
     macro_item_ids: Vec<(NodeId, AbletonMacroAddress)>,
     first_node: usize,
@@ -154,6 +162,7 @@ impl AbletonPickerPopup {
             is_open: false,
             rack_tracks: Vec::new(),
             selected_track_idx: None,
+            scroll: ScrollContainer::new(),
             popup_x: 0.0,
             popup_y: 0.0,
             popup_h: 0.0,
@@ -208,6 +217,7 @@ impl AbletonPickerPopup {
         } else {
             Some(0)
         };
+        self.scroll.reset();
         self.is_open = true;
         self.compute_layout(anchor);
     }
@@ -239,6 +249,7 @@ impl AbletonPickerPopup {
         self.selected_track_idx = None;
         self.track_row_ids.clear();
         self.macro_item_ids.clear();
+        self.scroll.reset();
     }
 
     /// Call once per frame (inside the tree-rebuild pass) when `is_open`.
@@ -275,7 +286,6 @@ impl AbletonPickerPopup {
 
         let content_x = px + BORDER + PADDING;
         let content_y = py + BORDER + PADDING;
-        let content_h = ph - BORDER * 2.0 - PADDING * 2.0;
 
         // ── Header row ────────────────────────────────────────────
 
@@ -340,31 +350,40 @@ impl AbletonPickerPopup {
         );
 
         let body_y = sep_y + 2.0;
-        let _body_h = content_h - HEADER_H - 3.0;
+        let body_bottom = py + ph - BORDER - PADDING;
 
-        // ── Vertical divider ──────────────────────────────────────
+        // ── Vertical divider (fixed — the columns scroll behind it) ──
 
         let div_x = content_x + LEFT_COL_W;
-        let divider_h = ph - BORDER * 2.0 - PADDING - (HEADER_H + 3.0) - PADDING;
         tree.add_panel(
             content_parent,
             div_x,
             body_y,
             DIVIDER_W,
-            divider_h,
+            body_bottom - body_y,
             UIStyle {
                 bg_color: DIVIDER_COLOR,
                 ..UIStyle::default()
             },
         );
 
+        // ── Scrollable body (both columns) ────────────────────────
+        // The clip minted by begin() is reparented under the shell container,
+        // so scrolled content is bound by the body viewport AND the popup
+        // surface. Rows outside the viewport are culled, never minted.
+
+        let body_vp = Rect::new(px + BORDER, body_y, pw - BORDER * 2.0, body_bottom - body_y);
+        let clip_id = self.scroll.begin(tree, body_vp);
+        tree.reparent_root_nodes(clip_id.index(), 1, shell.container);
+        let body_parent = Some(clip_id);
+
         // ── Left column: track rows ───────────────────────────────
 
         if self.rack_tracks.is_empty() {
             tree.add_label(
-                content_parent,
+                body_parent,
                 content_x,
-                body_y + 8.0,
+                self.scroll.content_y(8.0),
                 LEFT_COL_W,
                 ITEM_H,
                 "No racks found",
@@ -377,8 +396,12 @@ impl AbletonPickerPopup {
             );
         } else {
             for (i, track) in self.rack_tracks.iter().enumerate() {
+                let local_y = i as f32 * ITEM_H;
+                if !self.scroll.is_visible(local_y, ITEM_H) {
+                    continue;
+                }
                 let is_selected = self.selected_track_idx == Some(i);
-                let row_y = body_y + i as f32 * ITEM_H;
+                let row_y = self.scroll.content_y(local_y);
 
                 let (bg, hover_bg) = if is_selected {
                     (TRACK_SELECTED_BG, TRACK_SELECTED_HOVER)
@@ -387,7 +410,7 @@ impl AbletonPickerPopup {
                 };
 
                 let id = tree.add_button(
-                    content_parent,
+                    body_parent,
                     content_x,
                     row_y,
                     LEFT_COL_W - 2.0,
@@ -404,12 +427,12 @@ impl AbletonPickerPopup {
                     },
                     &format!("  {}", track.track_name),
                 );
-                self.track_row_ids.push(id);
+                self.track_row_ids.push((id, i));
 
                 // Selection arrow
                 if is_selected {
                     tree.add_label(
-                        content_parent,
+                        body_parent,
                         content_x + LEFT_COL_W - 14.0,
                         row_y,
                         12.0,
@@ -432,34 +455,41 @@ impl AbletonPickerPopup {
 
         if let Some(sel_idx) = self.selected_track_idx {
             if let Some(track) = self.rack_tracks.get(sel_idx) {
-                let mut ry = body_y;
+                let mut local_ry = 0.0f32;
                 let track_name = track.track_name.clone();
 
-                for (di, device) in track.devices.iter().enumerate() {
-                    // Skip the entire device if no macros are renamed —
-                    // a device of nothing-but-defaults has no mappable
-                    // surface and shouldn't take up picker space.
-                    if device.macros.iter().all(|m| is_default_macro_name(&m.name)) {
-                        continue;
-                    }
-                    // Device name section header (non-interactive)
-                    tree.add_label(
-                        content_parent,
-                        right_content_x,
-                        ry + 2.0,
-                        RIGHT_COL_W,
-                        SECTION_H,
-                        &device.device_name,
-                        UIStyle {
-                            text_color: TEXT_SECTION,
-                            font_size: color::FONT_LABEL,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
-                    );
-                    ry += SECTION_H + 2.0;
+                // Only devices with at least one renamed macro render (a
+                // device of nothing-but-defaults has no mappable surface) —
+                // separators go between VISIBLE devices, never dangling.
+                let visible_devices: Vec<&PickerDevice> = Self::visible_devices(track);
+                let last_visible = visible_devices.len().saturating_sub(1);
 
-                    for mac in &device.macros {
+                for (vi, device) in visible_devices.iter().enumerate() {
+                    // Device name section header (non-interactive)
+                    let header_local = local_ry + 2.0;
+                    if self.scroll.is_visible(header_local, SECTION_H) {
+                        tree.add_label(
+                            body_parent,
+                            right_content_x,
+                            self.scroll.content_y(header_local),
+                            RIGHT_COL_W,
+                            SECTION_H,
+                            &device.device_name,
+                            UIStyle {
+                                text_color: TEXT_SECTION,
+                                font_size: color::FONT_LABEL,
+                                text_align: TextAlign::Left,
+                                ..UIStyle::default()
+                            },
+                        );
+                    }
+                    local_ry += SECTION_H + 2.0;
+
+                    for mac in device
+                        .macros
+                        .iter()
+                        .filter(|m| !is_default_macro_name(&m.name))
+                    {
                         // Skip unrenamed default macros ("Macro 1".."Macro 8").
                         // Mapping these is what corrupts projects: a previous
                         // resolver could silently rebind a stale "Macro N"
@@ -470,7 +500,8 @@ impl AbletonPickerPopup {
                         // the resolver's name-based lookups can never land on
                         // the wrong rack by accident. Rename the macro in
                         // Ableton (right-click → Rename) to make it mappable.
-                        if is_default_macro_name(&mac.name) {
+                        if !self.scroll.is_visible(local_ry, ITEM_H) {
+                            local_ry += ITEM_H;
                             continue;
                         }
                         let addr = AbletonMacroAddress {
@@ -485,9 +516,9 @@ impl AbletonPickerPopup {
                             macro_name: mac.name.clone(),
                         };
                         let id = tree.add_button(
-                            content_parent,
+                            body_parent,
                             right_content_x,
-                            ry,
+                            self.scroll.content_y(local_ry),
                             RIGHT_COL_W,
                             ITEM_H,
                             UIStyle {
@@ -503,23 +534,26 @@ impl AbletonPickerPopup {
                             &format!("  {}", mac.name),
                         );
                         self.macro_item_ids.push((id, addr));
-                        ry += ITEM_H;
+                        local_ry += ITEM_H;
                     }
 
-                    // Separator between devices (not after last)
-                    if di + 1 < track.devices.len() {
-                        tree.add_panel(
-                            content_parent,
-                            right_content_x,
-                            ry + 3.0,
-                            RIGHT_COL_W,
-                            1.0,
-                            UIStyle {
-                                bg_color: DIVIDER_COLOR,
-                                ..UIStyle::default()
-                            },
-                        );
-                        ry += 8.0;
+                    // Separator between visible devices (not after last)
+                    if vi < last_visible {
+                        let sep_local = local_ry + 3.0;
+                        if self.scroll.is_visible(sep_local, 1.0) {
+                            tree.add_panel(
+                                body_parent,
+                                right_content_x,
+                                self.scroll.content_y(sep_local),
+                                RIGHT_COL_W,
+                                1.0,
+                                UIStyle {
+                                    bg_color: DIVIDER_COLOR,
+                                    ..UIStyle::default()
+                                },
+                            );
+                        }
+                        local_ry += 8.0;
                     }
                 }
             }
@@ -530,9 +564,9 @@ impl AbletonPickerPopup {
                 "Select a track"
             };
             tree.add_label(
-                content_parent,
+                body_parent,
                 right_content_x,
-                body_y + 8.0,
+                self.scroll.content_y(8.0),
                 RIGHT_COL_W,
                 ITEM_H,
                 msg,
@@ -545,6 +579,7 @@ impl AbletonPickerPopup {
             );
         }
 
+        self.scroll.set_content_height(self.body_content_height());
         self.node_count = tree.count() - self.first_node;
     }
 
@@ -560,8 +595,14 @@ impl AbletonPickerPopup {
         }
 
         // Track row → select, update right column next build
-        if let Some(idx) = self.track_row_ids.iter().position(|&tid| tid == node_id) {
-            self.selected_track_idx = Some(idx);
+        if let Some((_, track_idx)) = self
+            .track_row_ids
+            .iter()
+            .find(|(tid, _)| *tid == node_id)
+        {
+            self.selected_track_idx = Some(*track_idx);
+            // Right column content changed — start it from the top.
+            self.scroll.reset();
             return None;
         }
 
@@ -599,28 +640,54 @@ impl AbletonPickerPopup {
 
     // ── Layout ────────────────────────────────────────────────────
 
-    fn compute_layout(&mut self, anchor: Vec2) {
-        let left_h = (self.rack_tracks.len().max(1) as f32) * ITEM_H;
+    /// Devices the build actually renders: those with at least one renamed
+    /// macro. A device of nothing-but-defaults has no mappable surface and
+    /// takes no picker space.
+    fn visible_devices(track: &PickerTrack) -> Vec<&PickerDevice> {
+        track
+            .devices
+            .iter()
+            .filter(|d| d.macros.iter().any(|m| !is_default_macro_name(&m.name)))
+            .collect()
+    }
 
-        let right_h = match self
+    /// Height of one device block as built: section header + its renamed
+    /// macros. The layout math and the build loop must agree on this.
+    fn device_block_h(device: &PickerDevice) -> f32 {
+        let renamed = device
+            .macros
+            .iter()
+            .filter(|m| !is_default_macro_name(&m.name))
+            .count();
+        SECTION_H + 2.0 + renamed as f32 * ITEM_H
+    }
+
+    /// Right-column content height for a track, separators between visible
+    /// devices included.
+    fn right_column_h(track: &PickerTrack) -> f32 {
+        let devices: Vec<&PickerDevice> = Self::visible_devices(track);
+        if devices.is_empty() {
+            return 0.0;
+        }
+        let blocks: f32 = devices.iter().map(|d| Self::device_block_h(d)).sum();
+        blocks + (devices.len() - 1) as f32 * 8.0
+    }
+
+    /// Scrollable body content height: the taller of the two columns.
+    /// Single source for `compute_layout`'s popup sizing and the
+    /// `set_content_height` scroll clamp.
+    fn body_content_height(&self) -> f32 {
+        let left_h = (self.rack_tracks.len().max(1) as f32) * ITEM_H;
+        let right_h = self
             .selected_track_idx
             .and_then(|i| self.rack_tracks.get(i))
-        {
-            Some(track) => {
-                let mut h = 0.0f32;
-                for (di, device) in track.devices.iter().enumerate() {
-                    h += SECTION_H + 2.0;
-                    h += device.macros.len() as f32 * ITEM_H;
-                    if di + 1 < track.devices.len() {
-                        h += 8.0;
-                    }
-                }
-                h
-            }
-            None => ITEM_H,
-        };
+            .map(|t| Self::right_column_h(t).max(ITEM_H))
+            .unwrap_or(ITEM_H);
+        left_h.max(right_h)
+    }
 
-        let body_h = left_h.max(right_h);
+    fn compute_layout(&mut self, anchor: Vec2) {
+        let body_h = self.body_content_height();
         let total_h = BORDER * 2.0 + PADDING * 2.0 + HEADER_H + 3.0 + body_h;
         self.popup_h = total_h.clamp(MIN_POPUP_H, MAX_POPUP_H);
 
@@ -687,7 +754,229 @@ impl Overlay for AbletonPickerPopup {
                 // driver re-runs build_at (track-select repaints the right col).
                 OverlayResponse::Consumed(Vec::new())
             }
+            UIEvent::Scroll { delta, .. } => {
+                self.scroll.apply_scroll_delta(delta.y);
+                // Consumed so the wheel doesn't scroll the viewport behind
+                // the modal; the driver re-runs build_at with the new offset.
+                OverlayResponse::Consumed(Vec::new())
+            }
             _ => OverlayResponse::Ignored,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tree::ZTier;
+
+    fn macro_named(name: &str) -> PickerMacro {
+        PickerMacro {
+            param_id: 1,
+            name: name.to_string(),
+        }
+    }
+
+    fn track(name: &str, devices: Vec<PickerDevice>) -> PickerTrack {
+        PickerTrack {
+            track_id: 1,
+            track_name: name.to_string(),
+            devices,
+        }
+    }
+
+    fn device(name: &str, macros: Vec<PickerMacro>) -> PickerDevice {
+        PickerDevice {
+            device_id: 1,
+            device_name: name.to_string(),
+            device_class_name: "TestDevice".to_string(),
+            macros,
+        }
+    }
+
+    fn session(tracks: Vec<PickerTrack>) -> AbletonPickerSession {
+        AbletonPickerSession { rack_tracks: tracks }
+    }
+
+    /// Open + build through the same path the overlay driver uses, on a
+    /// fresh tree each call so stale nodes from an earlier build never
+    /// pollute assertions.
+    fn open_and_build(
+        tracks: Vec<PickerTrack>,
+    ) -> (AbletonPickerPopup, UITree) {
+        let mut dd = AbletonPickerPopup::new();
+        dd.open(session(tracks), Vec2::new(100.0, 100.0));
+        let mut tree = UITree::new();
+        rebuild(&mut dd, &mut tree);
+        (dd, tree)
+    }
+
+    fn rebuild(dd: &mut AbletonPickerPopup, tree: &mut UITree) {
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            ZTier::Overlay,
+            "overlay",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
+        Overlay::build_at(
+            dd,
+            tree,
+            OverlayPlacement {
+                rect: Rect::ZERO,
+                screen: Vec2::new(1920.0, 1080.0),
+            },
+        );
+        tree.end_region(region, start);
+    }
+
+    fn container_rect(dd: &AbletonPickerPopup) -> Rect {
+        Rect::new(dd.popup_x, dd.popup_y, POPUP_W, dd.popup_h)
+    }
+
+    fn scroll_by(dd: &mut AbletonPickerPopup, tree: &mut UITree, delta_y: f32) {
+        let event = UIEvent::Scroll {
+            pos: Vec2::new(150.0, 150.0),
+            delta: Vec2::new(0.0, delta_y),
+            modifiers: crate::input::Modifiers::default(),
+        };
+        assert!(
+            matches!(dd.on_event(&event, tree), OverlayResponse::Consumed(_)),
+            "the open modal consumes wheel events"
+        );
+    }
+
+    #[test]
+    fn tall_track_list_scrolls_and_stays_contained() {
+        // 30 tracks × 26px = 780px of left column against a 480px popup cap:
+        // rows past the body viewport must be culled, scrollable to, and
+        // hittable only inside the container.
+        let tracks: Vec<PickerTrack> = (0..30)
+            .map(|i| track(&format!("Track {i}"), vec![]))
+            .collect();
+        let (mut dd, mut tree) = open_and_build(tracks);
+
+        let container = container_rect(&dd);
+        assert!(
+            (dd.popup_h - MAX_POPUP_H).abs() < 0.01,
+            "30 tracks overflow the popup cap, popup_h={}",
+            dd.popup_h
+        );
+        assert!(
+            dd.track_row_ids.len() < 30,
+            "rows past the viewport are culled, minted {}",
+            dd.track_row_ids.len()
+        );
+
+        // Every minted row is interactive with its top inside the container.
+        // A row straddling the viewport edge overhangs the container by up to
+        // a row height — the shell container's CLIPS_CHILDREN cuts it on
+        // paint and hit-test, exactly like the dropdown's edge swatches.
+        for (id, _) in &dd.track_row_ids {
+            let node = tree.get_node(*id).unwrap();
+            assert!(node.flags.contains(UIFlags::INTERACTIVE));
+            assert!(
+                node.bounds.y >= container.y - 0.01 && node.bounds.y < container.y_max() + 0.01,
+                "row top inside the container: {:?} vs {:?}",
+                node.bounds,
+                container
+            );
+        }
+
+        // Nothing is hittable below the container (the scrim takes the click).
+        let below = Vec2::new(container.x + 40.0, container.y_max() + 10.0);
+        let hit = tree.hit_test(below);
+        assert!(
+            !dd.track_row_ids.iter().any(|(id, _)| Some(*id) == hit),
+            "no row is hittable below the container"
+        );
+
+        // Wheel to the bottom: the last track becomes reachable.
+        scroll_by(&mut dd, &mut tree, -10_000.0);
+        assert!(
+            (dd.scroll.scroll_offset() - dd.scroll.max_scroll()).abs() < 0.01,
+            "scroll reaches the bottom"
+        );
+        let mut tree = UITree::new();
+        rebuild(&mut dd, &mut tree);
+        let last = dd
+            .track_row_ids
+            .iter()
+            .find(|(_, i)| *i == 29)
+            .map(|(id, _)| *id)
+            .expect("last track minted after scrolling");
+        let node = tree.get_node(last).unwrap();
+        let container = container_rect(&dd);
+        assert!(
+            node.bounds.y >= container.y - 0.01 && node.bounds.y < container.y_max() + 0.01,
+            "last row top visible inside the container after scrolling"
+        );
+
+        // Clicking it selects track 29 — culling must not shift indices.
+        let action = dd.handle_click(last);
+        assert!(action.is_none(), "track select consumes without closing");
+        assert_eq!(dd.selected_track_idx, Some(29));
+        // Track change resets the scroll for the new right column.
+        assert_eq!(dd.scroll.scroll_offset(), 0.0);
+    }
+
+    #[test]
+    fn right_column_height_counts_only_shown_macros() {
+        // One device with 8 default (unmappable, hidden) macros and 1 renamed:
+        // the old layout counted all 9, inflating the popup ~200px; the new
+        // one sizes to the single visible row.
+        let renamed = vec![
+            macro_named("Macro 1"),
+            macro_named("Macro 2"),
+            macro_named("Macro 3"),
+            macro_named("Macro 4"),
+            macro_named("Macro 5"),
+            macro_named("Macro 6"),
+            macro_named("Macro 7"),
+            macro_named("Macro 8"),
+            macro_named("Filter Cut"),
+        ];
+        let (dd, tree) = open_and_build(vec![track("Drums", vec![device("Eq Eight", renamed)])]);
+
+        let expected_body = ITEM_H.max(SECTION_H + 2.0 + ITEM_H);
+        let expected_h = (BORDER * 2.0 + PADDING * 2.0 + HEADER_H + 3.0 + expected_body)
+            .clamp(MIN_POPUP_H, MAX_POPUP_H);
+        assert!(
+            (dd.popup_h - expected_h).abs() < 0.01,
+            "popup sized to visible content only: got {}, expected {expected_h}",
+            dd.popup_h
+        );
+        assert_eq!(
+            dd.macro_item_ids.len(),
+            1,
+            "only the renamed macro is minted"
+        );
+        let _ = tree;
+    }
+
+    #[test]
+    fn all_default_device_takes_no_space_and_no_separator_dangles() {
+        // Two devices: the first all-default (hidden), the second with one
+        // renamed macro. The hidden device contributes no block and no
+        // separator before the visible one.
+        let hidden_device = device(
+            "Hidden Rack",
+            vec![macro_named("Macro 1"), macro_named("Macro 2")],
+        );
+        let visible_device = device("Visible Rack", vec![macro_named("Resonance")]);
+        let (dd, _tree) = open_and_build(vec![track(
+            "Bass",
+            vec![hidden_device, visible_device],
+        )]);
+
+        let expected_body = ITEM_H.max(SECTION_H + 2.0 + ITEM_H);
+        let expected_h = (BORDER * 2.0 + PADDING * 2.0 + HEADER_H + 3.0 + expected_body)
+            .clamp(MIN_POPUP_H, MAX_POPUP_H);
+        assert!(
+            (dd.popup_h - expected_h).abs() < 0.01,
+            "hidden device contributes no height: got {}, expected {expected_h}",
+            dd.popup_h
+        );
+        assert_eq!(dd.macro_item_ids.len(), 1);
     }
 }
