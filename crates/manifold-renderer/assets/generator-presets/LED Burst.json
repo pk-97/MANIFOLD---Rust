@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "LED Burst",
     "displayName": "LED Burst",
-    "category": "Pattern",
+    "category": "LED",
     "oscPrefix": "ledBurst",
     "available": true,
     "isLineBased": false,

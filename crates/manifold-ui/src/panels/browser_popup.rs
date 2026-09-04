@@ -281,6 +281,21 @@ impl BrowserPopupPanel {
         self.session.as_ref().map_or("", |s| s.picker.filter())
     }
 
+    /// The active category chip, if any (`None` = "All"). Read-side mirror
+    /// of [`Self::set_category`] — lane-scoped opens (LED_STRIPS_DESIGN
+    /// MVP-P3c) and tests assert through it.
+    pub fn active_category(&self) -> Option<&str> {
+        self.session.as_ref().and_then(|s| s.picker.active_category())
+    }
+
+    /// Read-only reach to the session's picker — the item list, the chip
+    /// set, and the active chips. App-side tests (LED_STRIPS_DESIGN
+    /// MVP-P3c) and overlay drivers introspect through this; `None` when
+    /// the popup is closed.
+    pub fn picker(&self) -> Option<&PickerCore> {
+        self.session.as_ref().map(|s| &s.picker)
+    }
+
     /// Every open item's thumbnail path (PRESET_LIBRARY_DESIGN P6, D7),
     /// regardless of the current filter/category/source — the app decodes +
     /// registers each one, once per distinct path, so the picture is ready
@@ -1004,6 +1019,9 @@ fn category_color(category: &str) -> Color32 {
         "Post-Process" => CAT_POST_PROCESS,
         "Filmic" => CAT_FILMIC,
         "Surveillance" => CAT_SURVEILLANCE,
+        // LED generator presets (LED_STRIPS_DESIGN MVP-P3c) — the same
+        // green the rest of the UI accents LED state with.
+        "LED" => color::LED_COLOR,
         _ => TEXT_DIM,
     }
 }

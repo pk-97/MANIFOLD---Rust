@@ -107,9 +107,10 @@ impl UIRoot {
     ///   reads as plumbing, not a real project preset.
     ///
     /// `tag_project_category` sets `category: Some("Project")` on the
-    /// This-Project items (Effect mode's existing "Project" chip grouping);
-    /// Generator mode passes `false`, matching its pre-P5 behavior of never
-    /// tagging generator items by category (it renders no category chips).
+    /// This-Project items (Effect mode's existing "Project" chip grouping).
+    /// Generator mode passes `true` since LED_STRIPS_DESIGN MVP-P3c: generator
+    /// items carry their registry category (e.g. the LED presets' `"LED"`)
+    /// and the chip row renders in the generator browser too.
     fn build_preset_picker_items(
         &self,
         kind: manifold_core::preset_def::PresetKind,
@@ -387,11 +388,25 @@ impl UIRoot {
                 use manifold_core::preset_def::PresetKind;
                 use manifold_ui::panels::browser_popup::*;
 
-                // Generator mode has never rendered category chips (no
-                // `category_names` below) — `tag_project_category: false`
-                // keeps that unchanged; only the source classification is new.
-                let mut items = self.build_preset_picker_items(PresetKind::Generator, false);
+                // LED_STRIPS_DESIGN MVP-P3c: generator items now carry their
+                // registry category and the browser renders the chip row —
+                // same machinery as Effect mode, no fork.
+                let mut items = self.build_preset_picker_items(PresetKind::Generator, true);
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+
+                // Category chips derived from the items themselves (first
+                // appearance order after the label sort) — generator mode has
+                // no fixed bucket list the way ALL_CATEGORIES is for effects;
+                // a "Project" chip falls out of the same derivation when
+                // embedded generator presets exist.
+                let mut cat_names: Vec<String> = Vec::new();
+                for it in items.iter() {
+                    if let Some(c) = it.category.as_deref()
+                        && !cat_names.iter().any(|n| n == c)
+                    {
+                        cat_names.push(c.to_string());
+                    }
+                }
 
                 self.browser_popup
                     .set_screen_size(self.screen_width, self.screen_height);
@@ -400,11 +415,30 @@ impl UIRoot {
                     tab: InspectorTab::Layer,
                     layer_id: layer_id.clone(),
                     items,
-                    category_names: Vec::new(),
+                    category_names: cat_names,
                     spawn_graph_pos: None,
                     paste_count: 0,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
                 });
+
+                // Lane-scoped open (MVP-P3c): from a DMX lane the browser
+                // starts on the "LED" chip — a starting filter the performer
+                // widens to "All", never a hard filter (D17: data on the
+                // shared surface). AFTER open() on purpose: set_category
+                // no-ops while the popup session is None, and the session is
+                // created inside open(). The layer's type comes from the
+                // layer-header snapshot state_sync feeds every frame — the
+                // project reach UiRoot already has; no new channel, no
+                // request field.
+                let is_dmx_lane = layer_id.as_ref().is_some_and(|id| {
+                    self.layer_headers
+                        .layers()
+                        .iter()
+                        .any(|l| l.layer_id == id.as_str() && l.is_led_layer)
+                });
+                if is_dmx_lane {
+                    self.browser_popup.set_category(Some("LED".to_string()));
+                }
                 true
             }
             PanelAction::Browser(BrowserAction::BrowserCellRightClicked(mode, type_id, source)) => {
@@ -1171,5 +1205,132 @@ impl UIRoot {
                 Some(PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color)))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod led_browser_scoped_open_tests {
+    //! LED_STRIPS_DESIGN MVP-P3c, asserted against the real `UIRoot` the way
+    //! the region structural tests do: a Generator-mode picker request built
+    //! for a DMX-layer context opens the one shared browser with the "LED"
+    //! chip active and only LED-category items filtered in; a plain
+    //! generator lane opens unscoped ("All").
+
+    use super::*;
+    use manifold_ui::node::Color32;
+    use manifold_ui::panels::layer_header::LayerInfo;
+
+    fn layer_info(name: &str, is_led_layer: bool) -> LayerInfo {
+        LayerInfo {
+            name: name.into(),
+            layer_id: name.into(),
+            is_collapsed: false,
+            is_group: false,
+            is_generator: true,
+            is_audio: false,
+            is_muted: false,
+            is_solo: false,
+            analysis_only: false,
+            is_led: is_led_layer,
+            is_led_layer,
+            parent_layer_id: None,
+            blend_mode: "Normal".into(),
+            generator_type: None,
+            clip_count: 0,
+            video_folder_path: None,
+            source_clip_count: 0,
+            midi_note: -1,
+            midi_channel: -1,
+            midi_device: None,
+            midi_all_notes: false,
+            audio_gain_db: 0.0,
+            audio_send_name: None,
+            is_selected: false,
+            color: Color32::new(100, 148, 210, 220),
+        }
+    }
+
+    fn open_gen_browser(ui: &mut UIRoot, layer_id: Option<manifold_core::LayerId>) -> bool {
+        ui.try_open_dropdown(
+            &PanelAction::Params(ParamsAction::GenTypeClicked(layer_id)),
+            None,
+        )
+    }
+
+    #[test]
+    fn gen_browser_from_dmx_lane_opens_scoped_to_led() {
+        let mut ui = UIRoot::new();
+        ui.resize(1536.0, 1216.0);
+        ui.layer_headers.set_layers(vec![layer_info("LED 1", true)]);
+
+        assert!(
+            open_gen_browser(&mut ui, Some(manifold_core::LayerId::new("LED 1"))),
+            "GenTypeClicked must open the browser popup"
+        );
+
+        let picker = ui
+            .browser_popup
+            .picker()
+            .expect("browser session must exist after open()");
+
+        // Items carry their registry category and the chip set derived from
+        // them contains "LED" (steps 1-3 end to end, real bundled presets).
+        assert!(
+            picker
+                .all_items()
+                .any(|it| it.category.as_deref() == Some("LED")),
+            "LED presets must reach the picker items with their category"
+        );
+        assert!(
+            picker.categories().iter().any(|c| c == "LED"),
+            "category_names derived from the items must contain \"LED\""
+        );
+
+        // Scoped open (step 5): the LED chip is active and only LED items
+        // pass the filter — the starting chip the performer can widen.
+        assert_eq!(picker.active_category(), Some("LED"));
+        let filtered: Vec<&str> = picker.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert!(
+            !filtered.is_empty(),
+            "scoped open must leave the ten LED presets visible"
+        );
+        assert_eq!(
+            filtered.len(),
+            picker
+                .all_items()
+                .filter(|it| it.category.as_deref() == Some("LED"))
+                .count(),
+            "every filtered item must be an LED-category item"
+        );
+    }
+
+    #[test]
+    fn gen_browser_from_plain_generator_lane_opens_unscoped() {
+        let mut ui = UIRoot::new();
+        ui.resize(1536.0, 1216.0);
+        ui.layer_headers
+            .set_layers(vec![layer_info("Generator 1", false)]);
+
+        assert!(open_gen_browser(
+            &mut ui,
+            Some(manifold_core::LayerId::new("Generator 1"))
+        ));
+
+        let picker = ui
+            .browser_popup
+            .picker()
+            .expect("browser session must exist after open()");
+        assert_eq!(
+            picker.active_category(),
+            None,
+            "a non-DMX lane must open on \"All\", not a scoped chip"
+        );
+        assert!(
+            picker.filtered_len() > picker
+                .all_items()
+                .filter(|it| it.category.as_deref() == Some("LED"))
+                .count(),
+            "unscoped open must list more than just the LED presets"
+        );
     }
 }

@@ -347,6 +347,30 @@ mod tests {
         assert_eq!(labels, vec!["Gaussian Blur", "Blur TOP"]);
     }
 
+    /// Generator items re-tagged `category: "LED"` (LED_STRIPS_DESIGN
+    /// MVP-P3c) filter through `set_category` exactly like effect items —
+    /// the lane-scoped browser open is a plain category prefilter.
+    #[test]
+    fn led_category_prefilter_selects_only_led_items() {
+        let mut p = PickerCore::new(
+            vec![
+                item_with_source("LED Fill", Some("LED"), None, Some(Source::Factory)),
+                item_with_source("LED Pulse", Some("LED"), None, Some(Source::Factory)),
+                item_with_source("Plasma", Some("Pattern"), None, Some(Source::Factory)),
+                item("Wave", None, None),
+            ],
+            vec!["LED".to_string(), "Pattern".to_string()],
+        );
+        p.set_category(Some("LED".to_string()));
+        let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert_eq!(labels, vec!["LED Fill", "LED Pulse"]);
+
+        // Widening back to "All" returns the full list — the scoped open is
+        // a starting chip, not a hard filter.
+        p.set_category(None);
+        assert_eq!(p.filtered_len(), 4);
+    }
+
     // ── Source filter (PRESET_LIBRARY_DESIGN P5, D6) ────────────────────
 
     #[test]

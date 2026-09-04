@@ -5,9 +5,12 @@
 //! `generator_type_registry` modules. One [`PresetTypeRegistration`] carries
 //! both kinds (discriminated by `kind`); effect ids and generator ids are
 //! globally disjoint (verified, and the definition store asserts it), so a
-//! single flat registry is unambiguous. `category` is effect-only
-//! (generators carry `None`); the [`ALL_CATEGORIES`] buckets are read only by
-//! the effect picker.
+//! single flat registry is unambiguous. JSON-loaded presets of both kinds
+//! carry their `category` (generator presets re-tagged `LED` included —
+//! LED_STRIPS_DESIGN MVP-P3c); inventory submissions carry only what their
+//! metadata struct has (effects: a category; generators: none).
+//! [`ALL_CATEGORIES`] is the effect picker's fixed bucket list — generator
+//! mode derives its chip names from the items instead.
 
 use crate::effect_graph_def::PresetMetadata;
 use crate::preset_def::PresetKind;
@@ -20,7 +23,9 @@ use std::sync::{Arc, LazyLock};
 pub struct PresetTypeRegistration {
     pub id: PresetTypeId,
     pub display_name: &'static str,
-    /// Effect category bucket; `None` for generators (no categories today).
+    /// Category bucket from the preset JSON; `None` for inventory
+    /// submissions whose metadata carries no category (all generators
+    /// today — `GeneratorMetadata` has no category field).
     pub category: Option<&'static str>,
     pub kind: PresetKind,
     /// Whether this type appears in its kind's browser popup.
@@ -108,7 +113,7 @@ fn build_registry(
             v.push(PresetTypeRegistration {
                 id: preset.id.clone(),
                 display_name: leak(&preset.display_name),
-                category: None,
+                category: Some(leak(&preset.category)),
                 kind: PresetKind::Generator,
                 available: preset.available,
             });
@@ -163,8 +168,9 @@ pub fn display_name(id: &PresetTypeId) -> &str {
         .unwrap_or(id.as_str())
 }
 
-/// Effect category bucket for a type. `Post-Process` fallback (matches the
-/// former effect registry). Generators have no category.
+/// Category bucket for a type. `Post-Process` fallback (matches the
+/// former effect registry) when the registration carries none —
+/// inventory-registered generators, today.
 pub fn category(id: &PresetTypeId) -> &str {
     REGISTRY
         .load()
@@ -239,6 +245,45 @@ mod tests {
 
         // Restore the real registry: other (later-running) tests / doctests
         // in this process may read it via the public accessors.
+        rebuild(
+            crate::preset_definition_registry::effect::loaded_preset_metadata(),
+            crate::preset_definition_registry::generator::loaded_preset_metadata(),
+        );
+    }
+
+    /// LED_STRIPS_DESIGN MVP-P3c step 1: the registry stops discarding
+    /// generator JSON categories — `Some(category)` for every JSON-loaded
+    /// generator, LED and non-LED alike (not a special case for one name).
+    /// Inventory submissions keep `None` (`GeneratorMetadata` has no
+    /// category field).
+    #[test]
+    fn generator_json_categories_pass_through() {
+        let led = PresetTypeId::from_string("__p3c_probe_led__".to_string());
+        let pattern = PresetTypeId::from_string("__p3c_probe_pattern__".to_string());
+        assert!(!is_registered(&led) && !is_registered(&pattern));
+
+        let mut led_meta = probe_meta(led.as_str(), "Probe LED");
+        led_meta.category = "LED".to_string();
+        let mut pattern_meta = probe_meta(pattern.as_str(), "Probe Pattern");
+        pattern_meta.category = "Pattern".to_string();
+
+        rebuild(&[], &[led_meta, pattern_meta]);
+
+        let gens = all_of_kind(PresetKind::Generator);
+        assert_eq!(
+            gens.iter().find(|r| r.id == led).and_then(|r| r.category),
+            Some("LED"),
+            "generator JSON category must reach the registration (LED)"
+        );
+        assert_eq!(
+            gens.iter()
+                .find(|r| r.id == pattern)
+                .and_then(|r| r.category),
+            Some("Pattern"),
+            "generator JSON category must reach the registration (non-LED)"
+        );
+
+        // Restore the real registry, as the rebuild test above does.
         rebuild(
             crate::preset_definition_registry::effect::loaded_preset_metadata(),
             crate::preset_definition_registry::generator::loaded_preset_metadata(),
