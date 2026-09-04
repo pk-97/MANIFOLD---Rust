@@ -592,20 +592,46 @@ impl Application {
             // open. The `MainOverlay(BrowserPopup)` owner tag is what the
             // closed-overlay pump cancels by on every close path (backdrop,
             // Escape, pick, perform-mode entry) — no orphaned SearchFilter
-            // session. The anchor rect is cosmetic: the popup tree isn't
-            // built yet this frame, and keystrokes route by the active
-            // SearchFilter field, not by hit position. The dirty flag makes
-            // this once per open, not per frame.
-            if let Some(anchor) = self.ws.ui_root.browser_popup.take_search_focus() {
+            // session. The anchor is a zero placeholder: the popup tree
+            // isn't built yet this frame, and the re-anchor pass below
+            // pins the overlay over the popup's real search bar as soon as
+            // the tree exists. The dirty flag makes this once per open,
+            // not per frame.
+            if self.ws.ui_root.browser_popup.take_search_focus() {
                 self.text_input.begin_owned(
                     crate::text_input::TextSessionOwner::MainOverlay(
                         crate::ui_root::OverlayId::BrowserPopup,
                     ),
                     crate::text_input::TextInputField::SearchFilter,
                     "",
-                    crate::text_input::AnchorRect::new(anchor.x, anchor.y, 200.0, 24.0),
+                    crate::text_input::AnchorRect::zero(),
                     11.0,
                 );
+            }
+            // Re-anchor the popup's search session over the popup's real
+            // search bar on every frame the session is up. The open-time
+            // begin_owned can't know the bar rect (tree not built yet), and
+            // render_text_input_overlay paints a bordered box AT the anchor
+            // — left at the placeholder, the user sees a second input next
+            // to the popup's own search bar. The zero-rect guard skips the
+            // frame(s) before the tree exists; after a commit or a popup
+            // close the owner/field check is false and this is a no-op.
+            if self.text_input.owner
+                == Some(crate::text_input::TextSessionOwner::MainOverlay(
+                    crate::ui_root::OverlayId::BrowserPopup,
+                ))
+                && self.text_input.field == crate::text_input::TextInputField::SearchFilter
+            {
+                let r = self
+                    .ws
+                    .ui_root
+                    .browser_popup
+                    .search_bar_rect(&self.ws.ui_root.tree);
+                if r.width > 0.0 && r.height > 0.0 {
+                    self.text_input.update_anchor(crate::text_input::AnchorRect::new(
+                        r.x, r.y, r.width, r.height,
+                    ));
+                }
             }
             // Per-frame cell source: the shared audition-atlas surface import
             // (once per generation) + the per-item UV map. Runs while open so
@@ -838,6 +864,25 @@ impl Application {
                 // These actions dispatch against the EDITOR's UIRoot in the
                 // trailing `editor_card_actions` segment below.
                 editor_card_actions.extend(ed.ui_root.route_inspector_events(&events));
+            }
+            // Re-anchor the Node picker's search session over the popup's
+            // real search bar every frame (same pass as the main window's):
+            // the open-time begin_owned anchored at zero because the tree
+            // didn't exist yet, and render_text_input_overlay paints a
+            // bordered box AT the anchor. The zero-rect guard skips the
+            // frame(s) before the tree exists.
+            if self.text_input.owner
+                == Some(crate::text_input::TextSessionOwner::EditorOverlay(
+                    crate::ui_root::OverlayId::BrowserPopup,
+                ))
+                && self.text_input.field == crate::text_input::TextInputField::SearchFilter
+            {
+                let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
+                if r.width > 0.0 && r.height > 0.0 {
+                    self.text_input.update_anchor(crate::text_input::AnchorRect::new(
+                        r.x, r.y, r.width, r.height,
+                    ));
+                }
             }
             // Overlay-hosted text sessions (editor window): same pump as the
             // main window above, draining both the bespoke browser-popup
@@ -2133,22 +2178,18 @@ impl Application {
                     }
                     // Auto-focus the search field so the user types
                     // immediately. The popup tree isn't built yet (it builds
-                    // next frame in present_graph_editor_window), so anchor
-                    // the overlay at the click point; the field rect is
-                    // cosmetic for the picker — keystrokes route by the
-                    // active SearchFilter field, not by hit position.
+                    // next frame in present_graph_editor_window), so the
+                    // anchor starts as a zero placeholder — the editor
+                    // window's re-anchor pass below pins the overlay over
+                    // the popup's real search bar as soon as the tree
+                    // exists (same fix as the main window's open path).
                     self.text_input.begin_owned(
                         crate::text_input::TextSessionOwner::EditorOverlay(
                             crate::ui_root::OverlayId::BrowserPopup,
                         ),
                         crate::text_input::TextInputField::SearchFilter,
                         "",
-                        crate::text_input::AnchorRect::new(
-                            screen_pos.0,
-                            screen_pos.1,
-                            200.0,
-                            24.0,
-                        ),
+                        crate::text_input::AnchorRect::zero(),
                         11.0,
                     );
                     continue;

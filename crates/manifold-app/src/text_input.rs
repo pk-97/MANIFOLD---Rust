@@ -482,6 +482,17 @@ impl TextInputState {
         self.owner = Some(owner);
     }
 
+    /// Move the overlay's anchor rect mid-session. The browser popup's
+    /// search session begins before the popup tree exists, so its open-time
+    /// anchor is a placeholder; the app calls this every frame once the
+    /// tree is built to pin the overlay over the popup's real search bar
+    /// (and to follow relayouts). No-op without an active session.
+    pub fn update_anchor(&mut self, rect: AnchorRect) {
+        if self.active {
+            self.anchor = rect;
+        }
+    }
+
     /// Cancel iff the active session is owned by `owner` — called by the
     /// app's overlay pump when `owner`'s overlay just closed. A no-op if the
     /// active session belongs to a different overlay (or is panel-owned), so
