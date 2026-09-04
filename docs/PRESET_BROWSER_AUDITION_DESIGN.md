@@ -56,8 +56,9 @@ content), lead-reviewed. <!-- sections 1.1-1.3 filled from audit reports -->
   triple-buffered Rgba16Float IOSurface `SharedTextureBridge`; UI samples via
   `UIRenderer::register_external_texture` (`ui_renderer.rs:744`).
   **The graph editor already ships an N-cell live atlas**: content packs every
-  visible node's output into one atlas (`content_pipeline.rs:2974-2999`), publishes
-  one IOSurface, UI samples per-cell UVs (`editor_bridge.rs:1580-1623`,
+  visible node's output into one atlas
+  (`crates/manifold-app/src/content_pipeline.rs:2974-2999`), publishes
+  one IOSurface, UI samples per-cell UVs (`crates/manifold-app/src/editor_bridge.rs:1580-1623`,
   `graph_canvas::set_node_preview_src`). Structurally identical to an audition grid.
 - Missing: round-robin cell scheduler (nothing throttles preview work across frames);
   a budget-backoff signal (`frame_wall_ms` exists at `content_thread.rs:964` but is
@@ -118,10 +119,6 @@ Verified with headless renders (label/baseline defects confirmed visually).
   `ContentCommand::Execute` → EditingService → undoable. Undo does not reopen the
   browser; owned search session cancelled by the closed-overlay pump. Dismissal:
   backdrop, Escape, selection, paste, perform-mode entry.
-
-Classification: layout/UX defects **exist-and-replace** (F3, F7-F13) · context/target
-bug **blocks redesign** (F1) · badge/source and category-divergence **decide in this
-design** (F2, F4) · cleanup **trivial** (F14-F17).
 
 Classification: layout/UX defects **exist-and-replace** (F3, F7-F13) · context/target
 bug **blocks redesign** (F1) · badge/source and category-divergence **decide in this
@@ -190,9 +187,9 @@ design** (F2, F4) · cleanup **trivial** (F14-F17).
   active layer at pick time (dropdowns.rs:377 and dispatch/params.rs:781-792 change
   shape; the modal crutch disappears).
 - **D3 — One atlas, one bridge.** All visible cells render into one atlas texture
-  (pattern: `content_pipeline.rs:2974-2999`), published over one triple-buffered
+  (pattern: `crates/manifold-app/src/content_pipeline.rs:2974-2999`), published over one triple-buffered
   Rgba16Float IOSurface `SharedTextureBridge`; UI samples per-cell UVs (pattern:
-  `editor_bridge.rs:1580-1623`). *Rejected: one bridge per cell* — N triple-buffer
+  `crates/manifold-app/src/editor_bridge.rs:1580-1623`). *Rejected: one bridge per cell* — N triple-buffer
   surface sets, N `register_external_texture` calls, N-slot lifetime discipline per
   cell; the atlas machinery is production-proven today.
 - **D4 — The audition pool lives on the content thread, owned by `ContentPipeline`;
@@ -207,12 +204,37 @@ design** (F2, F4) · cleanup **trivial** (F14-F17).
   untouched. The browser never reopens on undo (status quo, kept deliberately —
   reopen-on-undo was considered and rejected: the perform gesture is "undo and pick
   again", not "watch the browser reappear").
-- **D6 — Round-robin scheduling with budget back-off.** K cells per frame (initial
-  K=2, visible-first); `frame_wall_ms` (`content_thread.rs:964`) is threaded into
-  the pipeline and the whole audition block skips when the frame is over budget;
-  `set_audition_visible(Vec<PresetTypeId>)` mirrors `set_node_atlas_visible`
-  (content_pipeline.rs:1766) so a closed browser costs literally zero. *Rejected:
-  fixed per-cell cadence* — a busy show frame shouldn't queue 27 cells of debt.
+- **D6 — Round-robin scheduling with budget back-off; cells are built once per
+  browser open, never rebuilt mid-browse.** Build/evict is split from render
+  scheduling: `ensure_cells` runs once at open (builds every browser item's cell,
+  no eviction); `set_render_list` is a cheap per-frame/per-filter reorder with no
+  build or evict; eviction happens only at browser close. K cells per frame
+  (initial K=2, render-list order first); the skip signal is last completed frame's
+  `frame_wall_ms` (`content_thread.rs:964`) against `1000/target_fps` (:971) — one
+  frame of hysteresis by construction. **Under sustained overload the grid freezes
+  at last-good frames, never black**: publish is gated on cells-rendered-this-frame
+  (the node-atlas skip-clear-and-publish pattern,
+  `crates/manifold-app/src/content_pipeline.rs:2988-2993`), resuming when a frame
+  lands under budget. Both
+  commands ride `ContentCommand` drain-to-latest exactly as `set_node_atlas_visible`
+  does today (`crates/manifold-app/src/content_commands.rs:529`) — no new channel.
+  `set_render_list(empty)` at close means a closed browser costs literally zero.
+  *Rejected: fixed per-cell cadence* — a busy show frame shouldn't queue 27 cells
+  of debt. *Rejected: rebuild-on-filter* (the review's Finding 1) — rebuilding
+  `PresetRuntime`s at typing cadence is cold-pipeline-touch churn mid-browse.
+- **D16 — Audition renders the preset exactly as committed-with-defaults.**
+  `PresetContext` (`crates/manifold-renderer/src/preset_context.rs:25-47`) carries
+  no audio fields; modulation arrives upstream as the `ParamManifest` at render
+  (`crates/manifold-renderer/src/preset_runtime/core.rs:2034-2053`), and factory
+  presets' `bindings` arrays are card→node wiring, not audio modulation. So cells
+  render default params — and the tap owner's current `trigger_count`
+  (`CompositorFrame.master_trigger_count`,
+  `crates/manifold-renderer/src/compositor.rs:56-61`) IS forwarded, so
+  trigger-driven presets (Plasma's clip-trigger cycle) behave correctly. **No
+  audio-modulation simulation in v1** — the grid shows the first-seconds look, not
+  the bound look. *Consequences, stated honestly:* an audio-reactive generator can
+  look static in the grid mid-set. Peter accepted this trade for v1 (the Deferred
+  section carries the revival trigger).
 - **D7 — Stateful presets reset per browser open.** Watercolor, StylizedFeedback
   etc. start clean each open via the existing `clear_state` contract. Audition ≠
   committed-instance state; stated honestly: a feedback preset looks different in
@@ -263,7 +285,7 @@ device handle it already holds.
 pub struct AuditionPool {
     cells: AHashMap<PresetTypeId, AuditionCell>,
     atlas: AtlasLayout,            // cell rect packing, mirrors node-atlas layout math
-    visible: Vec<PresetTypeId>,    // set via set_audition_visible, drained by scheduler
+    render_list: Vec<PresetTypeId>, // cheap reorder, no build/evict; empty = browser closed
     round_robin: RoundRobinCursor,
 }
 struct AuditionCell {
@@ -274,22 +296,53 @@ struct AuditionCell {
 }
 ```
 
-API surface (called from `ContentPipeline` on the content thread only):
+API surface (called from `ContentPipeline` on the content thread only; the two setters
+ride `ContentCommand` drain-to-latest like `set_node_atlas_visible`,
+`crates/manifold-app/src/content_commands.rs:529`):
 
 ```rust
 impl AuditionPool {
-    pub fn set_visible(&mut self, ids: Vec<(PresetTypeId, PresetKind)>); // builds new cells, evicts the rest
+    pub fn ensure_cells(&mut self, ids: Vec<(PresetTypeId, PresetKind)>); // once per browser open: build every item's cell, no eviction
+    pub fn set_render_list(&mut self, ids: Vec<PresetTypeId>);            // per-frame/per-filter reorder; empty at close
     pub fn render_tick(&mut self, gpu: &GpuDevice, tap: AuditionTap, ctx: &PresetContext, budget_ok: bool);
     pub fn atlas_texture(&self) -> &GpuTexture;   // consumed by the shared-texture copy on the same encoder
 }
 pub enum AuditionTap<'a> { Master(&'a GpuTexture), Layer { layer_id: LayerId }, Clip { clip_id: ClipId } }
 ```
 
+**Def resolution:** cells resolve defs via `loaded_preset_view_by_id`
+(`crates/manifold-renderer/src/loaded_preset_view.rs:108`) — the one existing funnel
+over the catalog that merges stock roots + user dir + project-embedded overlays
+(`preset_loader.rs:185-231`), the same resolution `PresetRuntime::try_build`
+requires (`core.rs:486`). The UI ships ids only; no def crosses the channel.
+*Forbidden by name:* carrying `EffectGraphDef`s in the command — a second resolution
+path that can disagree with the chain's.
+
+**Audio semantics (D16):** cells render with default params; the tap owner's current
+`trigger_count` is forwarded into the cell's `PresetContext` so trigger-driven
+presets behave; no audio-modulation simulation in v1.
+
+**Lifecycle edges (defaults, no escalation):**
+- Tap layer deleted/disappears mid-browse → cells render against a once-cleared
+  black target; the UI keeps last-good pixels; close/reopen re-resolves.
+- Empty project / master tap with no layers → the tap is whatever `self.main` holds,
+  possibly black; acceptable, no escalation.
+- Cell build failure (`try_build` → None / errors accumulator, `core.rs:458`) → the
+  cell is skipped, the UI falls back to the existing flat text cell, one log line;
+  never a panic.
+- DMX-layer invocation (the Layer-tab button is ungated today,
+  `inspector/render.rs:568`) → the audition tap is that layer's pre-chain source
+  texture, whatever an LED-routed layer holds there; no gating added in this design.
+- **Atlas sizing:** the node atlas is 8×8×(256×144) = 64 cells
+  (`crates/manifold-app/src/content_pipeline.rs:200-208`); the browser can exceed
+  that (27 effects + 42 generators + user items). The audition atlas sizes
+  independently — grid derived from item count at open, cap 128 cells at 16:9
+  256×144. *Consequences, stated honestly:* ~38MB Rgba16Float at the cap.
+
 Effect cells pre-bind the tap texture per frame (pattern:
 `MetalBackend::pre_bind_texture_2d`, preset_thumbnail.rs:339-345). Generator cells
-render standalone. The pool is rebuilt when the browser opens (cells built while the
-transport is stopped when possible; cold touches counted, not hidden — gate P2
-reports them).
+render standalone. The pool builds at browser open regardless of transport state;
+cold touches are counted, not hidden — gate P2 reports them.
 
 **Plausible-wrong architecture, forbidden by name:** you will want to insert a
 temporary instance into the live chain and delete it on close — no (D4). You will
@@ -302,10 +355,12 @@ file-backed images; audition cells are GPU textures from frame to frame.
 
 One `SharedTextureBridge` instance + Rgba16Float IOSurface set for the audition
 atlas (new instance of `shared_texture.rs` machinery, pattern at
-`content_pipeline.rs:2974-2999` / `editor_bridge.rs:1580-1623`). UI registers the
+(`crates/manifold-app/src/content_pipeline.rs:2974-2999` /
+`crates/manifold-app/src/editor_bridge.rs:1580-1623`). UI registers the
 IOSurface once via `register_external_texture` (ui_renderer.rs:744) and samples
 per-cell UVs exactly like `graph_canvas::set_node_preview_src`. Publish only on
-frames the atlas changed (`atlas_filled_this_frame` precedent, content_pipeline.rs:2034).
+frames the atlas changed (`atlas_filled_this_frame` precedent,
+`crates/manifold-app/src/content_pipeline.rs:2034`).
 
 ### 3.3 Browser popup (UI)
 
@@ -319,9 +374,23 @@ screen, content-sized). Category chips from the item set's actual categories
 Keyboard nav in grid geometry with scroll reveal; empty state row.
 
 Invocation context (D2) rides the open request: `AddEffectClicked(tab)` becomes
-`AddEffectClicked { tab, target: EffectTarget }` where `EffectTarget` names layer id
-or master explicitly; dispatch stops re-resolving. Seam brief in P1: old → new
-shapes written out, call-site inventory, compiler-driven migration.
+`AddEffectClicked { target: EffectTarget }` **reusing `manifold-editing`'s existing
+`EffectTarget`** (`crates/manifold-editing/src/commands/effect_target.rs` — the
+addressing model `AddEffectCommand` already takes, effects.rs:13-28). The
+`InspectorTab` → `EffectTarget` mapping happens at the routing layer.
+*Rejected:* a UI-side `EffectTarget` twin converted at dispatch — a translation
+layer between two systems that already share a type. *Rejected:* re-resolving the
+active layer at pick time (the status-quo bug, F1). Call-site inventory (re-derive
+at execution time; counts differing = stop and list):
+`manifold-ui/src/panels/inspector/routing.rs:252` (Master emitter) and `:255`
+(Layer emitter); resolver `crates/manifold-app/src/ui_bridge/dispatch/params.rs:781-800`.
+Compiler-driven migration: change the action type first, let build errors enumerate
+every consumer.
+
+**Node mode:** the graph editor's second `BrowserPopupPanel` instance
+(`app_render.rs:1957-2050`) keeps flat text cells — Node items have no preset and
+no audition. Cell rendering takes `Option<cell UV>`: `None` renders exactly as
+today. **No layout fork between modes.**
 
 ### 3.4 Preset metadata changes (core)
 
@@ -342,6 +411,9 @@ shapes written out, call-site inventory, compiler-driven migration.
   early return), asserted via a render-section trace or instrumentation counter.
 - **No new shared state.** Enforcement: negative `rg 'Arc<Mutex|Arc<RwLock'`
   restricted to the new `audition/` module returns zero hits.
+- **Budget-skip never publishes an empty atlas.** Enforcement: named test — with
+  the budget flag forced over-budget, `atlas_texture` contents are unchanged frame
+  over frame and the bridge is not published (D6 freeze semantics).
 - **Context-atomic add: the layer an effect lands on is the layer whose button was
   clicked.** Enforcement: unit test on the dispatch path constructing a non-active
   layer, invoking, asserting the command targets it; L3 flow if the harness can
@@ -361,14 +433,17 @@ One phase = one session; each ends committable with gates run by the orchestrato
   item-construction tests (LED gating, category presence), negative rg for removed
   preset files. Demo: headless PNG of both browsers post-recuration — L2.
 - **P2 — Audition engine + vertical slice.** Deliverables: `audition/` module,
-  pool + round-robin + budget skip, `set_audition_visible` plumbing, tap selection
-  (master + layer), atlas bridge instance, minimal browser cell wiring (live
-  texture in place of static thumb). Gates: pool test (visible-set drives renders,
-  closed = zero), budget-skip test, `MANIFOLD_RENDER_TRACE=1` run with browser open
-  (no frame >20ms), cold-touch report at open, value test: a cell's rendered pixels
-  differ between two presets applied to the same synthetic tap (computed, not
-  eyeballed). Demo: headless render of the browser with live cells — L2 minimum,
-  L3 flow if reachable.
+  pool (`ensure_cells`/`set_render_list` split, D6) + round-robin + budget skip,
+  `ContentCommand` variants riding the existing dispatch (pattern:
+  `content_commands.rs:529`), tap selection (master + layer), atlas bridge instance,
+  minimal browser cell wiring (live texture in place of static thumb). Gates:
+  pool test (render list drives renders, empty = zero); budget-skip test asserting
+  the atlas freezes at last-good without publishing an empty frame; value tests
+  against CPU-computed expected (per the no-PNG-oracle rule): (a) an Invert cell
+  over a synthetic tap readback-compares to `1.0 - tap` pixelwise within tolerance;
+  (b) a known near-passthrough cell ≈ tap within tolerance; (c) `MANIFOLD_RENDER_TRACE=1`
+  run with browser open (no frame >20ms); cold-touch report at open. Demo: headless
+  render of the browser with live cells — L2 minimum, L3 flow if reachable.
 - **P3 — Browser polish + nav.** Deliverables: dense content-sized layout, caption
   strip/label row alignment, font-metric chips, empty state, search auto-focus +
   aliases (D13), grid keyboard nav + scroll reveal (D14), dead-code cleanup
@@ -402,3 +477,6 @@ One phase = one session; each ends committable with gates run by the orchestrato
   — the one-shot bin still works; only do it if a non-browser consumer appears.
 - Alias authoring UI (letting Peter edit preset aliases) — aliases ship seeded from
   registry data; UI waits for demand.
+- **Audition with synthesized audio bindings** — driving one audio-reactive param
+  from the live snapshot so the grid reflects the bound look, not just defaults
+  (D16). Trigger: Peter asks why the grid looks static mid-set.
