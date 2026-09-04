@@ -352,7 +352,13 @@ impl GpuDepthStencilState {
 /// Near-zero overhead polling (direct counter read).
 pub struct GpuEvent {
     raw: Retained<ProtocolObject<dyn MTLSharedEvent>>,
-    pub(crate) counter: std::cell::Cell<u64>,
+    /// Host-side mirror of the signal counter (store-after-signal value).
+    /// `Arc<AtomicU64>` so a [`Self::second_handle`] shares the same counter
+    /// and both stays sound under the `Send`/`Sync` impls below no matter
+    /// which thread drops a handle. Monotonic, relaxed ordering is enough —
+    /// the GPU-side `signaledValue` is the authority, this is only the
+    /// predicted next-signal value.
+    pub(crate) counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 unsafe impl Send for GpuEvent {}
@@ -363,7 +369,24 @@ impl GpuEvent {
     pub(crate) fn new(raw: Retained<ProtocolObject<dyn MTLSharedEvent>>) -> Self {
         Self {
             raw,
-            counter: std::cell::Cell::new(0),
+            counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Second handle to the SAME underlying shared event and host counter.
+    /// `signaled_value()`/`is_done()` on either handle observe the same GPU
+    /// timeline; `current_value()` on either sees the same predicted value.
+    /// Used by TexturePool (fence-aware recycling) to observe the frame
+    /// completion event without owning the encoder's handle.
+    pub fn second_handle(&self) -> Self {
+        let ptr = &*self.raw as *const ProtocolObject<dyn MTLSharedEvent>
+            as *mut ProtocolObject<dyn MTLSharedEvent>;
+        // Safety: `self.raw` is a live strong ref; retain yields another
+        // strong ref to the same MTLSharedEvent.
+        let raw = unsafe { Retained::retain(ptr) }.expect("MTLSharedEvent retain returned nil");
+        Self {
+            raw,
+            counter: std::sync::Arc::clone(&self.counter),
         }
     }
 
@@ -374,7 +397,7 @@ impl GpuEvent {
 
     /// Current signal counter (store after signal_event).
     pub fn current_value(&self) -> u64 {
-        self.counter.get()
+        self.counter.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Read the GPU-side signaled value directly.
