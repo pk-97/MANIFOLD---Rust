@@ -287,17 +287,16 @@ impl DropdownPanel {
                 items_h += SEPARATOR_HEIGHT;
             }
         }
-        self.content_height = items_h;
+        // The color grid is part of the scrollable content: `content_height`
+        // must include it or scrolling can never reach the lower swatch rows
+        // (they used to lay out past the height-capped container instead).
+        let grid_h = self.grid_section_height();
+        self.content_height = items_h + grid_h;
 
-        let mut h = items_h + PADDING_V * 2.0;
-
-        // Add color grid height.
-        if !self.color_grid.is_empty() && self.color_grid_cols > 0 {
-            let rows = self.color_grid.len().div_ceil(self.color_grid_cols);
-            let swatch = color::COLOR_SWATCH_SIZE;
-            let gap = color::COLOR_SWATCH_GAP;
-            // Separator + grid rows + padding.
-            h += SEPARATOR_HEIGHT + rows as f32 * (swatch + gap) - gap + PADDING_V;
+        let mut h = self.content_height + PADDING_V * 2.0;
+        if grid_h > 0.0 {
+            // Bottom breathing room below the last swatch row.
+            h += PADDING_V;
         }
 
         // Cap height at MAX_DROPDOWN_HEIGHT, then clamp to screen.
@@ -335,15 +334,11 @@ impl DropdownPanel {
         // the dropdown's nodes here (so it's visible the instant it opens,
         // not waiting for the next full `build_overlays()` cycle) — this runs
         // from event-handling code, outside `UIRoot::build_overlays()`'s own
-        // `begin_region` bracket, so it needs its own. The LATER rebuild path
-        // (`Overlay::build_at` -> `rebuild_nodes` -> `build_nodes`) runs
-        // INSIDE that bracket already (`open_regions > 0`, so no assertion
-        // risk either way) — this mints a second, nested region there (an
-        // extra small container clipping to the same rect the outer one
-        // already clips to). Harmless — one extra node against a dropdown's
-        // handful, and the D4 structural test only cares that the tree
-        // ROOT's children are all regions, not that regions never nest —
-        // but not free, so a P3 cleanup could hoist this out if it matters.
+        // `begin_region` bracket, so it needs its own. Content containment
+        // does NOT come from this region (the later rebuild path re-mints
+        // everything under build_overlays' full-screen region) — it comes
+        // from the shell container's CLIPS_CHILDREN (`popup_shell::build`)
+        // plus per-element viewport culling in `build_nodes`.
         let region =
             tree.begin_region(self.container_bounds, crate::tree::ZTier::Overlay, "dropdown", UIFlags::empty());
         let region_start = tree.count();
@@ -509,6 +504,7 @@ impl DropdownPanel {
         if !self.color_grid.is_empty() && self.color_grid_cols > 0 {
             // Separator line above grid.
             let sep_y = cy + SEPARATOR_HEIGHT / 2.0 - 0.5;
+            let sep_visible = (sep_y + 1.0) > viewport_top && sep_y < viewport_bottom;
             let sep_style = UIStyle {
                 bg_color: color::DIVIDER_C32,
                 ..UIStyle::default()
@@ -521,6 +517,9 @@ impl DropdownPanel {
                 1.0,
                 sep_style,
             );
+            if !sep_visible {
+                tree.set_visible(sep_id, false);
+            }
             self.separator_ids.push(sep_id);
             cy += SEPARATOR_HEIGHT;
 
@@ -532,7 +531,13 @@ impl DropdownPanel {
                 let col = i % cols;
                 let row = i / cols;
                 let sx = bounds.x + PADDING_H + col as f32 * (swatch + gap);
-                let sy = bounds.y + cy + row as f32 * (swatch + gap);
+                let swatch_top = cy + row as f32 * (swatch + gap);
+                let sy = bounds.y + swatch_top;
+
+                // Same viewport culling as the text items above: a swatch
+                // outside the viewport is hidden and inert — it can neither
+                // paint nor take a click beyond the container.
+                let visible = swatch_top + swatch > viewport_top && swatch_top < viewport_bottom;
 
                 let swatch_style = UIStyle {
                     bg_color: swatch_color,
@@ -550,8 +555,15 @@ impl DropdownPanel {
                     UINodeType::Button,
                     swatch_style,
                     None,
-                    UIFlags::INTERACTIVE,
+                    if visible {
+                        UIFlags::INTERACTIVE
+                    } else {
+                        UIFlags::empty()
+                    },
                 );
+                if !visible {
+                    tree.set_visible(id, false);
+                }
                 self.color_swatch_ids.push(id);
             }
         }
@@ -771,6 +783,18 @@ impl DropdownPanel {
         if item_bottom > self.scroll_offset + self.viewport_height {
             self.scroll_offset = (item_bottom - self.viewport_height).min(max_scroll);
         }
+    }
+
+    /// Height of the color-grid section (separator line + swatch rows), or 0
+    /// when there is no grid. Single source for `open_at`'s container sizing
+    /// and `build_nodes`' layout — the two must never disagree.
+    fn grid_section_height(&self) -> f32 {
+        if self.color_grid.is_empty() || self.color_grid_cols == 0 {
+            return 0.0;
+        }
+        let rows = self.color_grid.len().div_ceil(self.color_grid_cols);
+        SEPARATOR_HEIGHT + rows as f32 * (color::COLOR_SWATCH_SIZE + color::COLOR_SWATCH_GAP)
+            - color::COLOR_SWATCH_GAP
     }
 
     fn compute_content_width(&self) -> f32 {
@@ -1205,6 +1229,95 @@ mod tests {
         };
         let result = dd.handle_event(&event, &mut tree);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn color_grid_is_scrollable_content_and_never_leaves_the_container() {
+        // Regression: the color grid was bolted on after the items — excluded
+        // from `content_height` and from viewport culling — so a menu whose
+        // items+grid exceed MAX_DROPDOWN_HEIGHT laid the lower swatch rows
+        // out below the capped container, where they painted and took clicks.
+        let mut tree = UITree::new();
+        let mut dd = DropdownPanel::new();
+        dd.set_screen_size(1920.0, 1080.0);
+
+        let items: Vec<DropdownItem> =
+            (0..9).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        dd.open_context_with_colors(
+            items,
+            crate::color::COLOR_GRID.to_vec(),
+            crate::color::COLOR_GRID_COLS,
+            Vec2::new(100.0, 100.0),
+            &mut tree,
+        );
+
+        let container = dd.container_bounds();
+        assert!(container.height <= MAX_DROPDOWN_HEIGHT + 0.01);
+        assert!(
+            dd.content_height > dd.viewport_height,
+            "9 items + the 10-row color grid must overflow the capped container, \
+             making the grid scrollable content"
+        );
+        // Containment is structural: the shell container clips children, so a
+        // partially-visible swatch at the viewport edge is scissor-cut at the
+        // container edge and can never be hit outside it.
+        assert!(tree.has_flag(dd.root_id.unwrap(), UIFlags::CLIPS_CHILDREN));
+
+        // At open (scroll 0): swatches below the viewport are hidden AND inert.
+        let mut hidden = 0usize;
+        for &id in &dd.color_swatch_ids {
+            let node = tree.get_node(id).unwrap();
+            if node.flags.contains(UIFlags::VISIBLE) {
+                assert!(node.flags.contains(UIFlags::INTERACTIVE));
+            } else {
+                hidden += 1;
+                assert!(
+                    !node.flags.contains(UIFlags::INTERACTIVE),
+                    "a culled swatch must not be clickable"
+                );
+            }
+        }
+        assert!(hidden > 0, "lower swatch rows start culled");
+
+        // A point below the container (where swatches used to paint) hits the
+        // dismiss scrim, never a swatch.
+        let below = Vec2::new(container.x + 30.0, container.y_max() + 8.0);
+        let hit = tree.hit_test(below);
+        assert!(
+            !dd.color_swatch_ids.contains(&hit.unwrap_or(NodeId::PLACEHOLDER)),
+            "no swatch is hittable below the container"
+        );
+
+        // Scrolling reaches the grid: at max scroll the LAST swatch is visible.
+        let scroll = UIEvent::Scroll {
+            pos: Vec2::new(container.x + 10.0, container.y + 10.0),
+            delta: Vec2::new(0.0, -1000.0),
+            modifiers: crate::input::Modifiers::default(),
+        };
+        dd.handle_event(&scroll, &mut tree);
+        assert!(
+            (dd.scroll_offset - (dd.content_height - dd.viewport_height)).abs() < 0.01,
+            "scroll reaches the bottom of the grid"
+        );
+        let last = *dd.color_swatch_ids.last().unwrap();
+        let last_node = tree.get_node(last).unwrap();
+        assert!(
+            last_node.flags.contains(UIFlags::VISIBLE | UIFlags::INTERACTIVE),
+            "the last swatch row is reachable by scrolling"
+        );
+
+        // Clicking that now-visible swatch selects its color and closes.
+        let click = UIEvent::Click {
+            node_id: last,
+            pos: Vec2::new(
+                last_node.bounds.x + 1.0,
+                last_node.bounds.y + 1.0,
+            ),
+            modifiers: crate::input::Modifiers::default(),
+        };
+        let result = dd.handle_event(&click, &mut tree);
+        assert!(matches!(result, Some(DropdownAction::ColorSelected(69))));
+        assert!(!dd.is_open());
     }
 
     #[test]
