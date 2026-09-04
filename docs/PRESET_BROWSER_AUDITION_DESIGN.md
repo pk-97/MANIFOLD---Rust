@@ -1,6 +1,6 @@
 # Preset Browser — live audition grid, crud removal, and layout polish
 
-**Status:** APPROVED · 2026-09-04 · k3 (lead) — K3 adversarial review APPROVE-WITH-FIXES (7 findings folded), Peter approved; P1+P2 lanes in flight
+**Status:** IN PROGRESS — P1 SHIPPED 2026-09-05 (crud removal, recuration, layer-type gating, atomic EffectTarget adds; L2) · owed: P2 audition engine (in flight), P3 browser polish (blocked on P2) · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
