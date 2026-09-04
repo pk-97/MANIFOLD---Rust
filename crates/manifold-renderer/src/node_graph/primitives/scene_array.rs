@@ -387,18 +387,25 @@ mod gpu_tests {
 
         // Determinism + seed sensitivity on the CPU oracle (the GPU half is
         // proven above): same seed → identical, different seed → different.
+        // Field-wise (InstanceTransform carries no Debug/PartialEq).
+        let same = |a: &[InstanceTransform], b: &[InstanceTransform]| {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(x, y)| {
+                    x.pos_scale == y.pos_scale && x.rot_pad == y.rot_pad
+                })
+        };
         let a = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0);
         let b = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0);
         let c = cpu_scene_array_jitter(4, 4, 10.0, 1, 1.0);
-        assert_eq!(a, b, "same seed must re-roll identically");
-        assert_ne!(
-            a[0].rot_pad, c[0].rot_pad,
+        assert!(same(&a, &b), "same seed must re-roll identically");
+        assert!(
+            !same(&a, &c),
             "a different seed must change the instance transforms"
         );
 
         // Zero amount is byte-identical to the no-jitter oracle.
         let zero = cpu_scene_array_jitter(4, 4, 10.0, 99, 0.0);
         let plain = cpu_scene_array(4, 4, 10.0);
-        assert_eq!(zero, plain, "amount 0 must keep identity TRS");
+        assert!(same(&zero, &plain), "amount 0 must keep identity TRS");
     }
 }
