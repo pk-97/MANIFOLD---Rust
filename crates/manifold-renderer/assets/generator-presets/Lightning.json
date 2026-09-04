@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Lightning",
-  "description": "A grown bolt, not an animated one. Each strike runs one CPU midpoint-displacement pass: a jagged core channel plus two generations of branches, thick at the trunk and hairline at the tips (per-point width taper through draw_lines). The bolt is live for exactly one frame - the afterglow is a decaying feedback Max, the air glow a wide gaussian screened on top, and the whole frame kicks with a strike-driven flash envelope. Strikes arrive from clip triggers (gate card) or beat-quantized auto-strike. Near-white HDR core over pure black through the Log tone curve - never saturated purple, never slow cartoon animation.",
   "presetMetadata": {
     "id": "Lightning",
     "displayName": "Lightning",

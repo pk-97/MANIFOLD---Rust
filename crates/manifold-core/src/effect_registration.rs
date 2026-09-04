@@ -168,6 +168,9 @@ impl EffectMetadata {
             display_name: self.display_name,
             category: Some(self.category),
             kind: PresetKind::Effect,
+            // Rust-factory effects carry no layer scoping; JSON presets
+            // may (the LED-* DMX gate rides the metadata field).
+            layer_types: None,
             available: self.available,
         }
     }

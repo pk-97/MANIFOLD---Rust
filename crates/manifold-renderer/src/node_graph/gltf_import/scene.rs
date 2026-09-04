@@ -854,6 +854,7 @@ pub(super) fn build_import_graph(
         legacy_discriminant: None,
         available: true,
         is_line_based: false,
+        layer_types: None,
         params: card_params,
         bindings: card_bindings,
         param_aliases: Vec::new(),

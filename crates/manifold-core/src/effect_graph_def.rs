@@ -398,6 +398,13 @@ pub struct PresetMetadata {
     /// can ride the same section 11 unified-registry path effects already use.
     #[serde(default)]
     pub is_line_based: bool,
+    /// Layers allowed to run this preset (generator-picker gating,
+    /// PRESET_BROWSER_AUDITION D8/§3.4). `None` = every layer type;
+    /// `Some([LayerType::Dmx])` = DMX layers only (the LED-* presets).
+    /// `LayerType` accepts both its camelCase name and its legacy
+    /// pre-D15 spelling on the wire (see `types.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_types: Option<Vec<crate::types::LayerType>>,
     /// Outer-card slider definitions. Each entry corresponds to one
     /// host-visible parameter.
     pub params: Vec<ParamSpecDef>,
@@ -1153,6 +1160,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
+            layer_types: None,
             params: vec![ParamSpecDef {
                 id: "amount".to_string(),
                 name: "Amount".to_string(),

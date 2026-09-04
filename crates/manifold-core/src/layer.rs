@@ -1298,6 +1298,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                layer_types: None,
                 params: vec![],
                 bindings: vec![],
                 param_aliases: vec![],

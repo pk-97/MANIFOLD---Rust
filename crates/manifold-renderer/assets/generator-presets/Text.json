@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Text",
-  "description": "Text rendering: input passes through Render Text node to output. All parameters bind directly to the primitive for animation via LFO or envelope.",
   "presetMetadata": {
     "id": "Text",
     "displayName": "Text",

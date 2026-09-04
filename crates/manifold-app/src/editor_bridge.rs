@@ -2000,6 +2000,7 @@ mod binding_reroute_tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
+                    layer_types: None,
                 params: vec![ParamSpecDef {
                     id: "amount".into(),
                     name: "Amount".into(),

@@ -1431,10 +1431,13 @@
     }
 
     #[test]
-    fn bundled_trivial_passthrough_preset_loads_and_executes() {
-        let json = include_str!("../../../assets/generator-presets/TrivialPassthrough.json");
+    fn fixture_trivial_passthrough_preset_loads_and_executes() {
+        // PRESET_BROWSER_AUDITION P1 (D8): TrivialPassthrough moved out of the
+        // shipped bundle into the test fixtures — the JSON-loader smoke test
+        // loads it from there.
+        let json = include_str!("../../../tests/fixtures/presets/TrivialPassthrough.json");
         let mut preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
-            .expect("bundled TrivialPassthrough must load");
+            .expect("fixture TrivialPassthrough must load");
         assert_eq!(preset.type_id().as_str(), "TrivialPassthrough");
         preset.set_frame_context(FrameContextInputs {
             time: 0.0,

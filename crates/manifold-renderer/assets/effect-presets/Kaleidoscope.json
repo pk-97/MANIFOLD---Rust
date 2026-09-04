@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Kaleidoscope",
-  "description": "Kaleidoscope is a polar segment-mirror effect decomposed into three atomic stages for clarity and editability.\n\nThe flow is source in, three processing steps, output. First, Fold UV computes the radial folding coordinates for the selected segment count (default 6) and mirror geometry. Next, Resample reads the source texture at those folded UVs, effectively tiling the mirrored pattern into the canvas. Finally, Blend Crossfade mixes between the original source and the resampled kaleidoscope image using the Amount slider (0 = pure source, 1 = pure kaleidoscope).\n\nThe Fold UV shader is a verbatim port of the legacy node.kaleidoscope kernel, so the visual result is bit-exact with the original bundle. Segments is editable at any time and affects the fold geometry live. This decomposition replaces the monolithic legacy shader with three well-named, independently usable atoms.",
   "presetMetadata": {
     "id": "Kaleidoscope",
     "displayName": "Kaleidoscope",

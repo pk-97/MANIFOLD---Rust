@@ -1,10 +1,9 @@
 {
   "version": 2,
   "name": "Strobe",
-  "description": "SCENE_FX P3 scene-mod preset: a beat-quantised light strobe. node.beat_gate drives the light's port-shadowed intensity input, so the flash is locked to the tempo and the amount knob sets peak brightness.",
   "presetMetadata": {
     "id": "SceneStrobe",
-    "displayName": "Strobe",
+    "displayName": "Scene Strobe",
     "category": "Geometry",
     "oscPrefix": "scenestrobe",
     "available": true,

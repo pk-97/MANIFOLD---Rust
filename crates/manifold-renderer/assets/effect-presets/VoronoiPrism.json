@@ -1,11 +1,10 @@
 {
   "version": 2,
   "name": "VoronoiPrism",
-  "description": "Voronoi Prism decomposes the legacy fused node into named stages. The graph reseeds a per-cell partition every beat, derives a per-cell UV offset and visibility, and composites the result over the source.\n\nThe Voronoi Cells group partitions the frame into a cell grid (node.voronoi_2d), reseeds the grid every beat by hashing the beat counter. This cell identity is fanned to two independent streams: the Prism Refraction group consumes it to drive both spatial offset and visibility masking.\n\nThe Prism Refraction group takes the cell ID and beat counter and produces a darkened, offset sample of the source. The offset stream hashes the cell ID (seeded by the beat counter) to a per-cell UV offset, scales it to ±0.2, adds it to a windowed UV, and remaps the source at that offset. The visibility stream does the same hash (with different seed constants), thresholds it to ~60% of cells visible, fades cells in over the first 15% of each beat (beat_ramp), and multiplies the offset prism by the visibility mask. A final crossfade (amount slider) blends the result over the original source.\n\nThe two groups flatten to byte-identical behavior with the ungrouped form: all node IDs are preserved, all wires route through group ports, and card bindings reach inner nodes directly via nodeId.",
   "presetMetadata": {
     "id": "VoronoiPrism",
     "displayName": "Voronoi Prism",
-    "category": "Stylize",
+    "category": "Spatial",
     "oscPrefix": "voronoiPrism",
     "legacyDiscriminant": 16,
     "available": true,

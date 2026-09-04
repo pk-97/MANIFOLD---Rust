@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "ColorGrade",
-  "description": "Color Grade applies tonal shaping as a linear chain of atoms, each wireableindependently to a driver. Exposure (Gain) → saturation (luma-weighted) → hue rotation → contrast (pivot 0.5) → colorize tints the highlights → crossfade the result back over the source by Amount. Then clamp floors any negatives to zero, matching the legacy behavior. Every stage is a reusable node you can drop, reorder, or drive; the chain order and constants match the fused node.color_grade kernel exactly (Rec.709 luma, HSV K-matrix, smoothstep mask bounds).",
   "presetMetadata": {
     "id": "ColorGrade",
     "displayName": "Color Grade",

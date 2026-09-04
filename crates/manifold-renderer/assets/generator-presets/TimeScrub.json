@@ -1,13 +1,12 @@
 {
   "version": 2,
   "name": "Time Scrub",
-  "description": "SCENE_FX P3 scene-mod preset: gltf animation driven by a beat-synced ramp. node.gltf_animation_source's progress input is port-shadowed; node.beat_ramp is wired into it so the imported object's keyframes scrub through time with the tempo. Wire the source's pos/rot/scale outputs straight into node.transform_3d.",
   "presetMetadata": {
     "id": "TimeScrub",
     "displayName": "Time Scrub",
     "category": "Geometry",
     "oscPrefix": "timescrub",
-    "available": true,
+    "available": false,
     "isLineBased": false,
     "params": [],
     "bindings": [],

@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "BlackHole",
-  "description": "Kerr black hole with relativistic geodesic lensing and a cinematic accretion disk. The heavy work is baked once, the shading runs per frame.\n\nCamera Setup converts the Tilt, Rotate, and Roll sliders into the radians and uv-scale the lens trace needs. Geodesic Ray Trace is the expensive part, a 150-step null-geodesic trace through Kerr spacetime that bakes three maps - the front disk crossing, the lensed back-disk crossing, and the escape-to-sky direction - then blurs each with a separable Gaussian. The bake is pure camera: it re-dispatches only when a camera, spin, or scale slider moves.\n\nThe Cinematic Display Compositor does the per-frame shading. The disk is optically thin luminous plasma: emission and opacity both come from one Keplerian-sheared filament field, so bright streaks occlude, dark lanes go translucent, and the rim dissolves into streak tails instead of a hard edge. It composites back to front - lensed star field, the folded-over back of the disk, the photon ring, a volumetric sheen bounded to the disk's extent, then the front disk. Speed drives the visible churn, Rotate carries the Doppler-bright side with it, and Disk Glow sets the HDR headroom the bloom pipeline turns into light.\n\nThe groups are a presentation layer only. They flatten to the flat graph at load, and every card binding reaches its inner node by stable nodeId, so grouping never touches the live performance surface.",
   "presetMetadata": {
     "id": "BlackHole",
     "displayName": "Black Hole",

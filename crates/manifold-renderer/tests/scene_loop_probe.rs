@@ -207,6 +207,7 @@ fn fanout_loop_def(count: f32) -> EffectGraphDef {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
+                layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),

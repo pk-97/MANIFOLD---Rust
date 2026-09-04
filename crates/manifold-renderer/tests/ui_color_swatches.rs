@@ -1515,3 +1515,165 @@ fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32)
         unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total as usize) };
     bytes.to_vec()
 }
+
+/// PRESET_BROWSER_AUDITION P1 demo artifact (L2): renders BOTH preset
+/// browsers from the REAL registry — the actual post-recuration item set,
+/// categories, factory thumbnails (with the deleted placeholders now falling
+/// back to text cells), and the generator browser's video-layer view (the
+/// LED-* presets gated out per D8). Unlike `browser_popup_demo` above, which
+/// uses synthetic names to check the container, this is the choosing surface
+/// a performer would see. Item construction mirrors
+/// `manifold-app/src/ui_root/dropdowns.rs::build_preset_picker_items`.
+#[test]
+fn browser_popup_real_registry_p1_demo() {
+    use manifold_core::preset_def::PresetKind;
+    use manifold_core::preset_type_registry;
+    use manifold_ui::node::Vec2;
+    use manifold_ui::panels::browser_popup::{
+        BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
+    };
+    use manifold_ui::panels::picker_core::{PickerItem, Source};
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+
+    fn items_for(kind: PresetKind) -> Vec<PickerItem> {
+        let mut items: Vec<PickerItem> = preset_type_registry::available_of_kind(kind)
+            .iter()
+            .map(|reg| PickerItem {
+                label: reg.display_name.to_string(),
+                type_id: reg.id.as_str().to_string(),
+                category: reg.category.map(|c| c.to_string()),
+                search_text: None,
+                badge: None,
+                source: Some(Source::Factory),
+                missing_from_library: false,
+                thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+                    kind,
+                    reg.id.as_str(),
+                )
+                .filter(|p| p.is_file())
+                .map(|p| p.to_string_lossy().into_owned()),
+            })
+            .collect();
+        items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+        items
+    }
+
+    // Category chips the way the app builds them: effect mode keeps the
+    // fixed ALL_CATEGORIES order (minus buckets with no items post-D9 —
+    // Diagnostic is gone), generator mode derives from the items.
+    fn chip_names(items: &[PickerItem], fixed: Option<&[&str]>) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if let Some(buckets) = fixed {
+            for b in buckets {
+                if items.iter().any(|it| it.category.as_deref() == Some(b)) {
+                    names.push((*b).to_string());
+                }
+            }
+        }
+        for it in items {
+            if let Some(c) = it.category.as_deref()
+                && !names.iter().any(|n| n == c)
+            {
+                names.push(c.to_string());
+            }
+        }
+        names
+    }
+
+    // The generator view is rendered for a non-DMX (video/generator) layer —
+    // D8's layer_types gate must keep every LED-* preset out of this list.
+    let effect_items = items_for(PresetKind::Effect);
+    let generator_items: Vec<PickerItem> = preset_type_registry::available_of_kind(PresetKind::Generator)
+        .iter()
+        .filter(|reg| reg.layer_types.is_none())
+        .map(|reg| PickerItem {
+            label: reg.display_name.to_string(),
+            type_id: reg.id.as_str().to_string(),
+            category: reg.category.map(|c| c.to_string()),
+            search_text: None,
+            badge: None,
+            source: Some(Source::Factory),
+            missing_from_library: false,
+            thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+                PresetKind::Generator,
+                reg.id.as_str(),
+            )
+            .filter(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned()),
+        })
+        .collect();
+    let mut generator_items = generator_items;
+    generator_items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    assert!(
+        generator_items.iter().all(|it| !it.type_id.starts_with("LED ")),
+        "D8 gate: LED presets must not appear in the non-DMX generator browser"
+    );
+
+    let cases = [
+        (
+            "p1_effects_browser.png",
+            BrowserPopupRequest {
+                mode: BrowserPopupMode::Effect,
+                tab: manifold_ui::panels::InspectorTab::Master,
+                layer_id: None,
+                items: effect_items.clone(),
+                category_names: chip_names(&effect_items, Some(preset_type_registry::ALL_CATEGORIES)),
+                spawn_graph_pos: None,
+                paste_count: 0,
+                screen_anchor: Vec2::new(30.0, 40.0),
+            },
+        ),
+        (
+            "p1_generators_browser.png",
+            BrowserPopupRequest {
+                mode: BrowserPopupMode::Generator,
+                tab: manifold_ui::panels::InspectorTab::Layer,
+                layer_id: None,
+                items: generator_items.clone(),
+                category_names: chip_names(&generator_items, None),
+                spawn_graph_pos: None,
+                paste_count: 0,
+                screen_anchor: Vec2::new(30.0, 40.0),
+            },
+        ),
+    ];
+
+    for (filename, request) in cases {
+        let png = format!("{out_dir}/{filename}");
+        let mut popup = BrowserPopupPanel::new();
+        popup.set_screen_size(W as f32, H as f32);
+        popup.open(request);
+
+        let mut tree = UITree::new();
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, W as f32, H as f32),
+            ZTier::Overlay,
+            "browser_popup",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
+        popup.build(&mut tree);
+        tree.end_region(region, start);
+
+        ui.begin_frame();
+        ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
+        ui.render_tree(&tree, None);
+        let drew = ui.prepare(&device, W, H, 1.0);
+        assert!(drew, "browser popup produced no draw commands");
+        let target = RenderTarget::new(&device, W, H, FORMAT, "browser-popup-p1-demo");
+        {
+            let mut enc = device.create_encoder("browser-popup-p1-render");
+            ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+            enc.commit_and_wait_completed();
+        }
+        let bytes = readback(&device, &target.texture);
+        image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {png}: {e}"));
+        eprintln!("browser popup P1 demo → {png}");
+    }
+}

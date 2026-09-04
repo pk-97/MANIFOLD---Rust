@@ -370,7 +370,12 @@ inventory::submit! {
         id: PresetTypeId::MRI_VOLUME,
         display_name: "MRI Volume",
         is_line_based: false,
-        available: true,
+        // PRESET_BROWSER_AUDITION D8: gated from the browser alongside the
+        // other scene-asset companions (the JSON preset's `available: false`
+        // can't reach the picker on its own — this inventory submission
+        // shadows it, same supersede pattern as Plasma). The preset stays
+        // loadable; the scene-asset host panel is its door back in.
+        available: false,
         osc_prefix: "mriVolume",
         legacy_discriminant: Some(20),
         params: &[

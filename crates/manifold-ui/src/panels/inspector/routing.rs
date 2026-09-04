@@ -248,12 +248,32 @@ impl InspectorCompositePanel {
             self.mods_compact = !self.mods_compact;
             return vec![PanelAction::Params(ParamsAction::ModsCompactToggled)];
         }
-        // Add Effect buttons
+        // Add Effect buttons. The action carries the invocation context
+        // the button rendered from — the tab plus the inspected layer's
+        // id (foundation type; the app dispatch layer builds the editing
+        // crate's EffectTarget from it at pick time, PRESET_BROWSER_AUDITION
+        // D2/§3.3). Never re-resolved from the active layer.
         if self.add_master_effect_btn == Some(node_id) {
-            return vec![PanelAction::Params(ParamsAction::AddEffectClicked(InspectorTab::Master))];
+            return vec![PanelAction::Params(ParamsAction::AddEffectClicked {
+                tab: InspectorTab::Master,
+                layer_id: None,
+            })];
         }
         if self.add_layer_effect_btn == Some(node_id) {
-            return vec![PanelAction::Params(ParamsAction::AddEffectClicked(InspectorTab::Layer))];
+            // No inspecting layer ⇒ the layer scope (and its button) isn't
+            // rendered; a click here is unaddressable, so emit nothing —
+            // the same outcome as today's pick-time bail.
+            return self
+                .inspecting_layer_id
+                .clone()
+                .map(|layer_id| {
+                    PanelAction::Params(ParamsAction::AddEffectClicked {
+                        tab: InspectorTab::Layer,
+                        layer_id: Some(layer_id),
+                    })
+                })
+                .into_iter()
+                .collect();
         }
         if let Some(target) = self.find_target_for_node(node_id) {
             self.update_last_effect_tab(&target);

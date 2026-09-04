@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "EdgeStretch",
-  "description": "Edge stretch remaps source material toward its edges: a decomposed, shaderless pipeline that builds on three atoms. The UV Strip Clamp shader resamples the source texture by clamping a sample width along one or both axes (horizontal, vertical, or both). Remapped Source then resamples the original at those clamped coordinates. Finally, Crossfade blends the remapped texture back toward the original, using the Amount parameter to dial the effect in and out from zero to full stretch. The result is the live input, preserving the performance surface bindings: Amount and Width drive the mix and clamp width, Direction routes to both stretch controls, and the preset skips when Amount is zero.",
   "presetMetadata": {
     "id": "EdgeStretch",
     "displayName": "Edge Stretch",

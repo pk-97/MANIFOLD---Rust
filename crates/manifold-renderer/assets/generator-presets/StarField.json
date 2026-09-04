@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Star Field",
-  "description": "Star Field generator, layered from time through animation and rendering into clearly named stages. Motion Control integrates time with drift speed and direction to produce animated offsets for the cell grid. Spatial Grid applies center compensation and generates a voronoi cell field. The cells' distance metric feeds Star Core, which inverts and sharpens to a spike, then masks by density threshold to isolate star locations. The cell hash output is routed at the top level as a shared signal: Cell Hash splits to both the star density mask and the Twinkle Animation subsystem. Twinkle Animation reads the per-cell hash, derives unique frequency and phase for each cell, computes a sine wave, and scales to a [0, 1] blend factor. Star Core and Twinkle Animation merge inside the graph (masked_stars blended with twinkle wave), then pass to Display for final brightness scaling and RGB broadcast (red channel to all three channels for pure white stars). Groups are transparent at load, flattening to byte-identical behavior; all bindings continue to target inner nodes by their preserved nodeId.",
   "presetMetadata": {
     "id": "StarField",
     "displayName": "Star Field",
