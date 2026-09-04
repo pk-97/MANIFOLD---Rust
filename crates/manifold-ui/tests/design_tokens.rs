@@ -33,7 +33,10 @@ use std::path::{Path, PathBuf};
 // redesign closes, then ratchet the baseline back down toward the section 15 ramp.
 // 214→213, 2026-07-21 (convergence-lane merge): the lane's P2 slice deleted
 // one raw literal in scene_setup_panel.rs; ratcheted per the test's own rule.
-const COLOR_BASELINE: usize = 213;
+// 213→209, 2026-09-05 (preset-browser P3): the browser popup's category accent
+// table moved to `design-token-exempt` palette consts (tokenize into color.rs
+// at landing); the four raw literals it replaced came out of the count.
+const COLOR_BASELINE: usize = 209;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

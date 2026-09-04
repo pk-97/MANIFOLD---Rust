@@ -15,13 +15,13 @@
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": " LED ", "type": "Button" } },
+      "selector": { "Query": { "text": "LED", "type": "Button" } },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "     LED Pulse", "type": "Button" } },
+      "selector": { "Query": { "text": "LED Pulse", "type": "Button" } },
       "check": "Exists"
     }
   },
@@ -33,7 +33,7 @@
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "     LED Pulse", "type": "Button" } },
+      "target": { "Query": { "text": "LED Pulse", "type": "Button" } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },

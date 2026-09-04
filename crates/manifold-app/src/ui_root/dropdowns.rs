@@ -152,6 +152,43 @@ impl UIRoot {
             .collect();
     }
 
+    /// D13 search haystack for one preset picker item — a PARTIAL seed: presets
+    /// have no alias source in the registry (the node picker's descriptor
+    /// aliases never extended to preset metadata), so the haystack carries what
+    /// exists — the label, the category, and the id stem with camelCase and
+    /// separators split into words — so category queries ("stylize") and
+    /// id-shaped queries ("edge detect" for EdgeDetect) hit. Real aliases wait
+    /// for an alias authoring source (design §7, Deferred). The haystack
+    /// REPLACES the label in filtering (search_text.unwrap_or(label)), so the
+    /// label is always first.
+    fn preset_search_haystack(label: &str, category: Option<&str>, id: &str) -> String {
+        let mut stem = String::with_capacity(id.len() + 8);
+        let mut prev: Option<char> = None;
+        for ch in id.chars() {
+            if ch == '_' || ch == '-' {
+                stem.push(' ');
+            } else if ch.is_ascii_uppercase()
+                && prev.is_some_and(|p| p.is_ascii_lowercase() || p.is_ascii_digit())
+            {
+                stem.push(' ');
+                stem.push(ch);
+            } else {
+                stem.push(ch);
+            }
+            prev = Some(ch);
+        }
+        let mut hay = label.to_string();
+        if let Some(c) = category {
+            hay.push(' ');
+            hay.push_str(c);
+        }
+        if stem.trim() != label {
+            hay.push(' ');
+            hay.push_str(stem.trim());
+        }
+        hay
+    }
+
     /// Classify one `kind`'s Add-picker items by source
     /// (PRESET_LIBRARY_DESIGN P5, D6) — the single place this rule lives, so
     /// `AddEffectClicked` and `GenTypeClicked` can't drift apart:
@@ -237,7 +274,11 @@ impl UIRoot {
                     } else {
                         None
                     },
-                    search_text: None,
+                    search_text: Some(Self::preset_search_haystack(
+                        reg.display_name,
+                        reg.category,
+                        reg.id.as_str(),
+                    )),
                     badge: if is_user {
                         factory_ids
                             .contains(&id)
@@ -270,7 +311,11 @@ impl UIRoot {
                 label: e.display_name.clone(),
                 type_id: e.type_id.clone(),
                 category: if tag_project_category { Some("Project".to_string()) } else { None },
-                search_text: None,
+                search_text: Some(Self::preset_search_haystack(
+                    &e.display_name,
+                    if tag_project_category { Some("Project") } else { None },
+                    &e.type_id,
+                )),
                 // Saved project presets are an ordinary state, not an
                 // exceptional one (D10) — only the unresolvable Snapshot
                 // gets a badge.
@@ -489,9 +534,13 @@ impl UIRoot {
                 // the active layer.
                 let (tab, layer_id) = (*tab, layer_id.clone());
 
-                // Unique category names (+ "Project" when embedded effects exist).
+                // Category chips — only buckets that actually hold items
+                // (D9: Diagnostic left the filter row with the recuration;
+                // an empty chip would filter the grid straight into the
+                // empty state), plus "Project" when embedded effects exist.
                 let mut cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
                     .iter()
+                    .filter(|c| items.iter().any(|it| it.category.as_deref() == Some(c)))
                     .map(|&c| c.to_string())
                     .collect();
                 if has_project_items {
