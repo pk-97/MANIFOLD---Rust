@@ -209,9 +209,10 @@ pub struct InspectorCompositePanel {
 
     /// The layer the inspector is currently showing. Fed by the app through
     /// `configure_gen_params` on every rebuild; `None` when no layer is
-    /// selected. The Add-Effect routing maps the Layer button to
-    /// `EffectTarget::Layer` with this id (PRESET_BROWSER_AUDITION D2), so
-    /// the click carries its invocation context atomically.
+    /// selected. The Add-Effect routing attaches it to the open action so
+    /// the invocation context rides click → request → pick atomically
+    /// (PRESET_BROWSER_AUDITION D2); the app dispatch layer constructs the
+    /// editing crate's EffectTarget from it at pick time.
     inspecting_layer_id: Option<LayerId>,
 
     // Scroll state — two independent columns via ScrollContainer

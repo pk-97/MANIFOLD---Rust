@@ -2508,7 +2508,6 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "bitflags 2.11.0",
- "manifold-editing",
  "manifold-foundation",
  "serde",
  "serde_json",

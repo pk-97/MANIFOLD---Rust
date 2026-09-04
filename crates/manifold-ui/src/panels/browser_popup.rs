@@ -1069,10 +1069,16 @@ impl Overlay for BrowserPopupPanel {
                     layer_id,
                 }) => {
                     let action = match mode {
-                        BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect(
+                        BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect {
                             tab,
-                            crate::types::PresetTypeId::from_string(type_id),
-                        )),
+                            // The session's layer_id — captured at open from
+                            // the invoking button — rides the pick
+                            // atomically (PRESET_BROWSER_AUDITION D2);
+                            // dispatch builds EffectTarget from it instead
+                            // of re-resolving the active layer.
+                            layer_id,
+                            preset: crate::types::PresetTypeId::from_string(type_id),
+                        }),
                         BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
                             layer_id,
                             crate::types::PresetTypeId::from_string(type_id),
@@ -1101,10 +1107,13 @@ impl Overlay for BrowserPopupPanel {
                         layer_id,
                     }) => {
                         let action = match mode {
-                            BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect(
+                            BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect {
                                 tab,
-                                crate::types::PresetTypeId::from_string(type_id),
-                            )),
+                                // Same atomic layer_id as the keyboard arm
+                                // above (PRESET_BROWSER_AUDITION D2).
+                                layer_id,
+                                preset: crate::types::PresetTypeId::from_string(type_id),
+                            }),
                             BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
                                 layer_id,
                                 crate::types::PresetTypeId::from_string(type_id),

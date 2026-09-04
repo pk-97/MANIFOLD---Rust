@@ -442,9 +442,8 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::Params(ParamsAction::AddEffectClicked { target }) => {
+            PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
-                use manifold_editing::commands::effect_target::EffectTarget;
                 use manifold_ui::panels::browser_popup::*;
 
                 // Effect mode keeps its existing "Project" category chip
@@ -456,16 +455,14 @@ impl UIRoot {
                     items.iter().any(|it| it.category.as_deref() == Some("Project"));
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
-                // The atomic invocation context (D2): the request carries
-                // exactly the target the button named — Master stays
-                // Master; the clicked layer's id rides `layer_id` (the
-                // popup session echoes both back at pick time).
-                let (tab, layer_id) = match target {
-                    EffectTarget::Master => (InspectorTab::Master, None),
-                    EffectTarget::Layer { layer_id } => {
-                        (InspectorTab::Layer, Some(layer_id.clone()))
-                    }
-                };
+                // The atomic invocation context (D2): the action carries
+                // exactly what the button rendered from — Master → no
+                // layer; the Layer button → the inspected layer's id. The
+                // request's `layer_id` slot (already used by generator
+                // mode) carries it through the popup session to the pick;
+                // dispatch builds EffectTarget from it, never re-resolving
+                // the active layer.
+                let (tab, layer_id) = (*tab, layer_id.clone());
 
                 // Unique category names (+ "Project" when embedded effects exist).
                 let mut cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
