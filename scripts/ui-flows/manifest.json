@@ -90,7 +90,7 @@
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
     "led-layer-create": "timeline",
-    "led-browser-scoped-open": "timeline",
+    "led-browser-scoped-open": "dmxcard",
     "envelope-modulation": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",
