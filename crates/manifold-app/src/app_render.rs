@@ -349,7 +349,7 @@ impl Application {
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
-        // (read-only viewer of the running NodeGraphTestFX). Translate the
+        // (read-only viewer of the watched effect's graph). Translate the
         // renderer snapshot into the UI view-model once (cached by Arc identity).
         // Per-node preview screens take the project aspect ratio, so a portrait
         // or wide show reads correctly on every node face. Set before
@@ -546,14 +546,18 @@ impl Application {
                             (manifold_core::PresetTypeId::from_string(id.clone()), kind)
                         })
                         .collect();
-                    // D2: the tap is the browser's invocation context. A
-                    // Layer-tab open without a layer id (the pre-P1 request
-                    // shape) falls back to the master tap; P1's EffectTarget
-                    // seam populates the id without any change here.
+                    // D2: the tap is the browser's invocation context —
+                    // exactly the context dispatch builds the add's
+                    // EffectTarget from (params.rs: Master tab → master,
+                    // Layer/Group tab → the carried layer_id; Group renders
+                    // through the layer column). An open without a layer id
+                    // falls back to the master tap.
                     let tap = match (&open.tab, &open.layer_id) {
-                        (manifold_ui::panels::InspectorTab::Layer, Some(lid)) => {
-                            manifold_renderer::audition::AuditionTapTarget::Layer(lid.clone())
-                        }
+                        (
+                            manifold_ui::panels::InspectorTab::Layer
+                            | manifold_ui::panels::InspectorTab::Group,
+                            Some(lid),
+                        ) => manifold_renderer::audition::AuditionTapTarget::Layer(lid.clone()),
                         _ => manifold_renderer::audition::AuditionTapTarget::Master,
                     };
                     Pump::Ensure { cells, tap }

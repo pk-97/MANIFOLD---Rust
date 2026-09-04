@@ -1,11 +1,10 @@
 {
   "version": 2,
   "name": "WireframeDepth",
-  "description": "Wireframe Depth is a 3D mesh wireframe effect driven by real-time depth estimation, optical flow tracking, and person segmentation. The graph reads as a pipeline: first, three parallel DNNs (MiDaS depth, optical flow, person mask) analyze the source frame at low resolution; the analysis pass converts depth to luminance. The optical flow is cleaned with denoise and confidence-boosting. In parallel, the depth is smoothed over time against the previous frame, and a semantic classifier builds body/face/boundary masks from luma gradients, depth, and flow confidence. The mesh-tracking stage is the core: a per-pixel coordinate grid is initialized once, then advected by the cleaned flow with trust/cooldown state, refined by per-cell flow-Jacobian affine correction, smoothed via Laplacian + rigid rotation alignment, and warped inside face regions by flow derivatives. The surface-stability cache tracks coordinate identity and age for later perceptual boosts. The wire renderer rasterizes the perspective-warped, density-scaled grid with 4x rotated-grid MSAA antialiasing, subject isolation (hard masking to the person or foreground), depth fading, and surface-age stability boost. A TAA-style temporal accumulator (wire-blend) smooths the wireframe with neighbourhood clamping and persistence decay. Finally, composite blends the accumulated wire over the source in one of seven blend modes (Normal, Add, Multiply, Screen, Overlay, Stencil, Opaque), gated by the Amount slider. The entire mesh pipeline runs at the analysis resolution and is resampled to the output canvas via bicubic upsampling — this is why the wire stays crisp and performant at any canvas size. Parameter derivation nodes compute the six motion-adaptive strength factors (flow lock, mesh regularize, cell affine, face warp, surface persistence, wire TAA) from the Smooth slider and a normalized time factor, following the same linear coefficients the legacy Rust implementation used. All groups flatten to byte-identical behavior: the organization is presentation only, and nodeId-addressing for bindings remains unchanged.",
   "presetMetadata": {
     "id": "WireframeDepth",
     "displayName": "Wireframe Depth",
-    "category": "Diagnostic",
+    "category": "Stylize",
     "oscPrefix": "wireframeDepth",
     "legacyDiscriminant": 29,
     "available": true,

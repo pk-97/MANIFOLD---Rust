@@ -1,13 +1,12 @@
 {
   "version": 2,
   "name": "Scene Starter",
-  "description": "SCENE_SETUP_PANEL_DESIGN.md D7 starter scene: a grid floor and a cube, sun + soft fill light, softbox environment, subtle fog, orbit camera framing the cube. The generator assigned by the Scene Setup panel's \"New 3D Scene\" empty-state action — good at defaults, every value an ordinary graph param from birth.",
   "presetMetadata": {
     "id": "SceneStarter",
     "displayName": "Scene Starter",
     "category": "Geometry",
     "oscPrefix": "scenestarter",
-    "available": true,
+    "available": false,
     "isLineBased": false,
     "params": [],
     "bindings": []

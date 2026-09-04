@@ -12054,7 +12054,6 @@
         "Lightning",
         "MetallicGlass",
         "Mirror",
-        "NodeGraphTest",
         "OilyFluid",
         "ParticleText",
         "QuadMirror",
@@ -22809,8 +22808,7 @@
         "LED Chase Sweep",
         "LED Cycle",
         "LED Step Chase",
-        "LED Strip ID",
-        "TrivialPassthrough"
+        "LED Strip ID"
       ],
       "fusion": "source",
       "inputs": [],
@@ -23757,7 +23755,6 @@
         "Mirror",
         "MriVolume",
         "NestedCubes",
-        "NodeGraphTest",
         "OilyFluid",
         "ParticleText",
         "Plasma",
@@ -23774,7 +23771,6 @@
         "Text",
         "TimeScrub",
         "Transform",
-        "TrivialPassthrough",
         "VoronoiPrism",
         "Watercolor",
         "Wireframe",
@@ -23848,7 +23844,6 @@
         "Tesseract",
         "Text",
         "TimeScrub",
-        "TrivialPassthrough",
         "VoronoiPrism",
         "Wireframe"
       ],
@@ -23968,7 +23963,6 @@
         "Invert",
         "Kaleidoscope",
         "Mirror",
-        "NodeGraphTest",
         "QuadMirror",
         "SoftFocus",
         "Strobe",
@@ -23995,7 +23989,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 68,
+  "preset_count": 67,
   "presets": [
     {
       "category": "Geometry",
@@ -25225,7 +25219,7 @@
       ]
     },
     {
-      "category": "Stylize",
+      "category": "Color",
       "id": "AutoGain",
       "is_line_based": false,
       "kind": "effect",
@@ -25434,7 +25428,7 @@
       ]
     },
     {
-      "category": "Diagnostic",
+      "category": "Stylize",
       "id": "BlobTracking",
       "is_line_based": false,
       "kind": "effect",
@@ -25951,7 +25945,7 @@
       ]
     },
     {
-      "category": "Filmic",
+      "category": "Stylize",
       "id": "DigitalDrift",
       "is_line_based": false,
       "kind": "effect",
@@ -26165,7 +26159,7 @@
       ]
     },
     {
-      "category": "Color",
+      "category": "Stylize",
       "id": "Dither",
       "is_line_based": false,
       "kind": "effect",
@@ -26274,7 +26268,7 @@
       ]
     },
     {
-      "category": "Diagnostic",
+      "category": "Stylize",
       "id": "EdgeDetect",
       "is_line_based": false,
       "kind": "effect",
@@ -26327,7 +26321,7 @@
       ]
     },
     {
-      "category": "Stylize",
+      "category": "Filmic",
       "id": "FilmGrain",
       "is_line_based": false,
       "kind": "effect",
@@ -27287,7 +27281,7 @@
       ]
     },
     {
-      "category": "Filmic",
+      "category": "Stylize",
       "id": "Glitch",
       "is_line_based": false,
       "kind": "effect",
@@ -27368,7 +27362,7 @@
       ]
     },
     {
-      "category": "Color",
+      "category": "Filmic",
       "id": "Infrared",
       "is_line_based": false,
       "kind": "effect",
@@ -30692,22 +30686,6 @@
       ]
     },
     {
-      "category": "Diagnostic",
-      "id": "NodeGraphTest",
-      "is_line_based": false,
-      "kind": "effect",
-      "name": "Node Graph Test",
-      "params": [
-        {
-          "default": "0.5",
-          "id": "amount",
-          "max": "1",
-          "min": "0",
-          "name": "Amount"
-        }
-      ]
-    },
-    {
       "category": "Sim",
       "id": "OilyFluid",
       "is_line_based": false,
@@ -31940,7 +31918,7 @@
       "id": "SceneStrobe",
       "is_line_based": false,
       "kind": "generator",
-      "name": "Strobe",
+      "name": "Scene Strobe",
       "params": [
         {
           "default": "0.7",
@@ -32913,7 +32891,7 @@
       ]
     },
     {
-      "category": "Stylize",
+      "category": "Filmic",
       "id": "SoftFocus",
       "is_line_based": false,
       "kind": "effect",
@@ -33904,7 +33882,7 @@
       ]
     },
     {
-      "category": "Stylize",
+      "category": "Spatial",
       "id": "VoronoiPrism",
       "is_line_based": false,
       "kind": "effect",
@@ -34064,7 +34042,7 @@
       ]
     },
     {
-      "category": "Diagnostic",
+      "category": "Stylize",
       "id": "WireframeDepth",
       "is_line_based": false,
       "kind": "effect",

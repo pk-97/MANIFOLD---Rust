@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Step Chase",
-  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): a comet that jumps hard between positions, one step per note division, constant between jumps — the 8x120 grid reads hard steps better than sweeps. beat_ramp at attack=1 gives the tempo phase; floor(phase * Steps) / Steps + 1/Steps places the head at the column's right edge so the one-cell head fills it, and jumps land exactly on division boundaries (Steps = positions per cycle; at Rate 0.5 cycles/beat and Steps 8 the comet jumps one column per 16th). Direction flips the sign; the rest is the Chase Sweep comet (negated u-ramp + signed phase offset, wrap, power tail, invert, colorize). Section 2.5 audit: every atom exists (beat_ramp, math, switch_value, uv_field + field_combine, scale_offset_image, wrap, smoothstep, invert, colorize) — no new primitive.",
   "presetMetadata": {
     "id": "LED Step Chase",
     "displayName": "LED Step Chase",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledStepChase",
     "available": true,
     "isLineBased": false,

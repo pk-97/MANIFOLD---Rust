@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Watercolor",
-  "description": "A feedback-based painterly effect that accumulates painted strokes over time, shaped by a low-resolution flow field. The flow field (half-resolution, warp-free) wakes nearby pixels and is fed to the blur radius for edge softness; a slope-displacement pass extracts local luminance as a pigment-pull. The diffused edges and luma-weighted mask are mixed with a soft reuse of the flow field to modulate the feedback strength, which decays each frame and guards against overflow. Finally, a wet-dry slider composites the accumulated paint against the input. Time is read from the frame clock; no external seed is needed. Performance matches the legacy single-pass node.watercolor: the flow runs at half resolution with no domain warp, and the dilution reuses the flow texture instead of a second independent noise pass.",
   "presetMetadata": {
     "id": "Watercolor",
     "displayName": "Watercolor",

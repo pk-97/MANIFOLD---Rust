@@ -1,6 +1,6 @@
 # Preset Browser — live audition grid, crud removal, and layout polish
 
-**Status:** PROPOSED — awaiting adversarial review and Peter approval · 2026-09-04 · k3 (lead)
+**Status:** IN PROGRESS — P1 SHIPPED 2026-09-05 (crud removal, recuration, layer-type gating, atomic EffectTarget adds; L2) · owed: P2 audition engine (in flight), P3 browser polish (blocked on P2) · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -185,7 +185,14 @@ design** (F2, F4) · cleanup **trivial** (F14-F17).
   audit finding F1 as a precondition: the invocation context (layer id, tab) is
   carried atomically from the click through to dispatch — no re-resolving the
   active layer at pick time (dropdowns.rs:377 and dispatch/params.rs:781-792 change
-  shape; the modal crutch disappears).
+  shape; the modal crutch disappears). **Implementation note (P1, accepted
+  deviation):** the atomic context rides as `manifold-editing`'s `EffectTarget`
+  on the UI action itself, which required a `ui → editing` crate dependency — the
+  first and only one. *Consequences, stated honestly:* `ui` now transitively
+  depends on `core`; the CLAUDE.md crates table records the exception. The
+  alternative (app-crate-only construction from a tab+layer_id pair) was lead-ruled
+  mid-flight and overruled by the doc's own "reuse EffectTarget, reject the twin"
+  text; the seam was judged cleaner paid once than twinned forever.
 - **D3 — One atlas, one bridge.** All visible cells render into one atlas texture
   (pattern: `crates/manifold-app/src/content_pipeline.rs:2974-2999`), published over one triple-buffered
   Rgba16Float IOSurface `SharedTextureBridge`; UI samples per-cell UVs (pattern:

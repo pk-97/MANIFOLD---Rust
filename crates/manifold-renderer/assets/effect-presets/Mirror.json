@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Mirror",
-  "description": "Axis mirror and kaleidoscope fold effect. The source texture is split into two paths: one path transforms the sampling coordinates based on the selected mirror mode (Identity, Mirror, MirrorX, MirrorY, FlipY, QuadMirror, FoldX, FoldY, FoldBoth) via the UV Transform node; the other path passes the source straight through. The transformed coordinates are used to resample the source texture (Remapped node), producing a folded or mirrored version. Finally, the Mix node crossfades between the original source and the resampled folded version using the Amount slider, giving smooth interpolation from unaffected to fully transformed. The effect is bit-exact with the legacy transform mirror mode, decomposed for clarity: the mirror fold math is separated from the affine transform.",
   "presetMetadata": {
     "id": "Mirror",
     "displayName": "Mirror",

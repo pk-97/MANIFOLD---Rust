@@ -207,6 +207,14 @@ pub struct InspectorCompositePanel {
     add_master_effect_btn: Option<NodeId>,
     add_layer_effect_btn: Option<NodeId>,
 
+    /// The layer the inspector is currently showing. Fed by the app through
+    /// `configure_gen_params` on every rebuild; `None` when no layer is
+    /// selected. The Add-Effect routing attaches it to the open action so
+    /// the invocation context rides click → request → pick atomically
+    /// (PRESET_BROWSER_AUDITION D2); the app dispatch layer constructs the
+    /// editing crate's EffectTarget from it at pick time.
+    inspecting_layer_id: Option<LayerId>,
+
     // Scroll state — two independent columns via ScrollContainer
     master_scroll: ScrollContainer,
     layer_scroll: ScrollContainer,
@@ -321,6 +329,10 @@ impl InspectorCompositePanel {
             mods_compact: false,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
+            // Set by `configure_gen_params`, which the app calls with the
+            // selected layer's id on every inspector rebuild (video layers
+            // included — `config` is what goes None, not the id).
+            inspecting_layer_id: None,
             master_scroll: ScrollContainer::new(),
             layer_scroll: ScrollContainer::new(),
             viewport_rect: Rect::ZERO,

@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "NodeGraphTest",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
   "presetMetadata": {
     "id": "NodeGraphTest",
     "displayName": "Node Graph Test",

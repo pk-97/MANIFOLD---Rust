@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Pixel Walk",
-  "description": "MVP-P2 utility family (LED_STRIPS_DESIGN.md section 5b.4): one white LED cell steps through the whole grid in linear order — the dead-LED finder and the reversed/top-down wiring revealer. beat_ramp at attack=1 gives the tempo phase; floor(phase * Steps) is the walk index k (Steps defaults to the full grid cell count); k decomposes into row = floor(k/8) and column = k mod 8 (8 = the LED grid's column step count, 120 = its row step count — step counts, not pixel dims); rectangle_mask centred on that cell at half-extents 1/16 x 1/240 (one cell as a UV fraction, so the rectangle edges align with the cell boundaries and the 256-to-8x120 LED downsample sees the whole cell at ~1.0 and its neighbours at 0); the mask IS the output — a single white cell, no tint. Order is x-major across each row, top row first: index = row * 8 + column, so a reversed or top-down-patched strip shows the walk jumping. Section 2.5 audit: every atom exists (beat_ramp, math, rectangle_mask — LED Step Scan precedent), no new primitive.",
   "presetMetadata": {
     "id": "LED Pixel Walk",
     "displayName": "LED Pixel Walk",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledPixelWalk",
     "available": true,
     "isLineBased": false,

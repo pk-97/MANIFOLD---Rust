@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Light Orbit",
-  "description": "SCENE_FX P3 scene-mod preset: a point light that orbits the scene on two LFOs — one drives X, one drives Z with a quarter-phase offset. The LFOs port-shadow node.light's pos_x and pos_z inputs, so the light circles the object without writing new atoms.",
   "presetMetadata": {
     "id": "LightOrbit",
     "displayName": "Light Orbit",

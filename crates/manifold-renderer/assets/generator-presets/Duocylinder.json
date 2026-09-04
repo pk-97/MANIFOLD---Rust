@@ -1,7 +1,6 @@
 {
   "version": 2,
   "name": "Duocylinder",
-  "description": "4D duocylinder parametric surface generator, organized by pipeline stage. The top level shows the transformation spine: Input feeds time to three rotation-speed multipliers, which compute per-plane angles for continuous rotation through XY, ZW, and XW planes. These angles drive Rotate, which transforms the 4D surface; Project then collapses to 2D perspective; Render displays the geometry as line edges and vertices. Between Input and Rotate sits Surface Generation, a grouped stage that builds the parametric torus: a 24x24 u/v grid is decomposed into cosine and sine sweeps per axis, normalized by 0.25/sqrt(2) magnitude to match the legacy screen-fit factor, and zipped into a 576-vertex array; Edge topology (1152 u-wrap and v-wrap edges) is emitted separately. This organization is purely presentational—the groups flatten to byte-identical behavior at load, and all bindings reach inner nodes by stable nodeId, so it never touches the instrument surface.",
   "presetMetadata": {
     "id": "Duocylinder",
     "displayName": "Duocylinder",

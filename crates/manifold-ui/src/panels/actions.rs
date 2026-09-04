@@ -462,11 +462,28 @@ pub enum ParamsAction {
     MacroLabelRename(usize),     // macro_index — opens inline rename input
     ParamLabelRightClick(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu
-    AddEffectClicked(InspectorTab),
+    /// Open the Add-Effect browser. Carries the invocation context the
+    /// button rendered from — tab plus the inspected layer's id
+    /// (foundation type; `None` for Master / no selection). The editing
+    /// crate's `EffectTarget` is constructed from this ONCE, at pick time,
+    /// in the app dispatch layer (PRESET_BROWSER_AUDITION D2/§3.3): one
+    /// addressing model, no UI twin, never re-resolved from the active
+    /// layer.
+    AddEffectClicked {
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+    },
     RemoveEffect(usize),
     BrowserSearchClicked,
     PasteEffects,
-    AddEffect(InspectorTab, PresetTypeId), // tab, preset type id
+    /// The browser's pick: `tab` + `layer_id` echo the open request
+    /// atomically (D2 — the layer an effect lands on is the layer whose
+    /// button was clicked, captured at open, never re-resolved).
+    AddEffect {
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+        preset: PresetTypeId,
+    },
 }
 
 #[derive(Debug, Clone)]

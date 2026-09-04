@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Burst",
-  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): a pad hit fires a decaying strobe burst, retriggerable. envelope_decay watches the clip trigger count — any integer change snaps the envelope to 1, then it decays exponentially — and beat_ramp at attack=Duty is the flash clock, inverted by scale_offset_value (-x + 1) so each cycle starts bright and snaps dark at the duty point. env * flash gates the burst: N flashes inside the envelope's life, each dimmer than the last. circle_mask at radii 4 fills the frame with white; node.exposure multiplies it by the gate; colorize at amount=1/focus=0 turns luma into HSV(hue, sat, 1). Section 2.5 audit: every atom exists (envelope_decay, beat_ramp, scale_offset_value, math, circle_mask, exposure, colorize) — no new primitive.",
   "presetMetadata": {
     "id": "LED Burst",
     "displayName": "LED Burst",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledBurst",
     "available": true,
     "isLineBased": false,

@@ -1,11 +1,11 @@
 {
   "version": 2,
   "name": "LED Step Scan",
-  "description": "MVP-P2 performance family (LED_STRIPS_DESIGN.md section 5b.4): one column lights at a time, stepping hard per note division — a scanner that walks the strips. beat_ramp at attack=1 gives the tempo phase; floor(phase * Steps) / Steps quantizes it (jumps exactly on division boundaries); adding 1/(2*Steps) centres the lit column on its grid cell; rectangle_mask at half_width 1/(2*Steps), half_height 4 (spans every strip vertically) draws the hard-edged column; colorize at amount=1/focus=0 turns it into HSV(hue, sat, 1). Section 2.5 audit: every atom exists (beat_ramp, math, rectangle_mask, colorize) — no new primitive.",
   "presetMetadata": {
     "id": "LED Step Scan",
     "displayName": "LED Step Scan",
     "category": "LED",
+  "layerTypes": ["Dmx"],
     "oscPrefix": "ledStepScan",
     "available": true,
     "isLineBased": false,

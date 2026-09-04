@@ -355,8 +355,8 @@ pub struct Application {
     pub(crate) graph_editor_geometry:
         Option<(winit::dpi::PhysicalPosition<i32>, winit::dpi::PhysicalSize<u32>)>,
     /// Read-only graph canvas hosted in the editor. `Some` while the
-    /// editor window is open; cleared on close. Phase 4 seeds it with
-    /// a hardcoded view of `NodeGraphTestFX`'s graph.
+    /// editor window is open; cleared on close. Phase 4 seeded it with
+    /// a hardcoded view of a test effect's graph.
     pub(crate) graph_canvas: Option<crate::graph_canvas::GraphCanvas>,
     /// Cached UI-local translation of `content_state.active_graph_snapshot`
     /// (Phase 8: the canvas reads `manifold_ui::graph_view`, so the app

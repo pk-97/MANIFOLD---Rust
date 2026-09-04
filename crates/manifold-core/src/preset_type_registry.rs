@@ -28,6 +28,10 @@ pub struct PresetTypeRegistration {
     /// today — `GeneratorMetadata` has no category field).
     pub category: Option<&'static str>,
     pub kind: PresetKind,
+    /// Layers allowed to run this preset (`None` = all). The generator
+    /// picker filters by the invoking layer's type (PRESET_BROWSER_AUDITION
+    /// D8): `Some([Dmx])` keeps the LED-* presets off video layers.
+    pub layer_types: Option<Vec<crate::types::LayerType>>,
     /// Whether this type appears in its kind's browser popup.
     pub available: bool,
 }
@@ -97,6 +101,7 @@ fn build_registry(
                 display_name: leak(&preset.display_name),
                 category: Some(leak(&preset.category)),
                 kind: PresetKind::Effect,
+                layer_types: preset.layer_types.clone(),
                 available: preset.available,
             });
         }
@@ -115,6 +120,7 @@ fn build_registry(
                 display_name: leak(&preset.display_name),
                 category: Some(leak(&preset.category)),
                 kind: PresetKind::Generator,
+                layer_types: preset.layer_types.clone(),
                 available: preset.available,
             });
         }
@@ -211,6 +217,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),
@@ -284,6 +291,45 @@ mod tests {
         );
 
         // Restore the real registry, as the rebuild test above does.
+        rebuild(
+            crate::preset_definition_registry::effect::loaded_preset_metadata(),
+            crate::preset_definition_registry::generator::loaded_preset_metadata(),
+        );
+    }
+
+    /// PRESET_BROWSER_AUDITION P1 (D8/§3.4): a JSON preset's `layer_types`
+    /// reaches the picker registration so the generator picker can gate by
+    /// the invoking layer's type (LED presets = DMX layers only). `None`
+    /// (the default) means every layer type.
+    #[test]
+    fn layer_types_pass_through() {
+        let dmx_only = PresetTypeId::from_string("__p1_probe_dmx_only__".to_string());
+        let general = PresetTypeId::from_string("__p1_probe_general__".to_string());
+        assert!(!is_registered(&dmx_only) && !is_registered(&general));
+
+        let mut dmx_meta = probe_meta(dmx_only.as_str(), "Probe DMX");
+        dmx_meta.layer_types = Some(vec![crate::types::LayerType::Dmx]);
+        let general_meta = probe_meta(general.as_str(), "Probe General");
+
+        rebuild(&[], &[dmx_meta, general_meta]);
+
+        let gens = all_of_kind(PresetKind::Generator);
+        assert_eq!(
+            gens.iter()
+                .find(|r| r.id == dmx_only)
+                .and_then(|r| r.layer_types.clone()),
+            Some(vec![crate::types::LayerType::Dmx]),
+            "JSON layer_types must reach the registration"
+        );
+        assert_eq!(
+            gens.iter()
+                .find(|r| r.id == general)
+                .and_then(|r| r.layer_types.clone()),
+            None,
+            "absent layer_types must stay None (all layer types)"
+        );
+
+        // Restore the real registry, as the rebuild tests above do.
         rebuild(
             crate::preset_definition_registry::effect::loaded_preset_metadata(),
             crate::preset_definition_registry::generator::loaded_preset_metadata(),
