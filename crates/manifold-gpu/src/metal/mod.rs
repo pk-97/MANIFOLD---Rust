@@ -27,6 +27,7 @@ pub mod raytrace;
 mod shader_compiler;
 pub mod surface;
 mod texture_pool;
+pub mod defer_drop;
 mod types;
 
 // Re-export all public types so external code paths remain identical.

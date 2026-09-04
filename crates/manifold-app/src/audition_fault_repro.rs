@@ -106,6 +106,9 @@ fn tick_frame(ct: &mut crate::content_thread::ContentThread, frame: u64, dt: f64
         ct.editing_service.data_version(),
     );
     ct.engine.reclaim_tick_result(tick_result);
+    // Age the BUG-l7t4 deferred-drop probe queue (no-op unless
+    // MANIFOLD_DEFER_DROP_FRAMES is set).
+    manifold_gpu::defer_drop::pump_deferred_drops();
 }
 
 /// Drive `frames` frames, polling the GPU fault registry every frame. Returns
@@ -507,4 +510,118 @@ fn audition_fault_reopen_during_playback() {
         manifold_gpu::gpu_fault::fault_count(),
         manifold_gpu::gpu_fault::submissions_ignored()
     );
+}
+
+/// Class discriminator for the ParticleText page fault: is it an
+/// in-flight-overlap lifetime race, or a deterministic bad dispatch in
+/// the real pipeline's Compositor CB content? Identical shape to the
+/// faulting solo run (layer tap, single ParticleText cell, 40 frames)
+/// but after EVERY frame the probe commits an EMPTY command buffer on
+/// the pipeline's own queue and waits for its completion — same-queue
+/// ordering means every earlier Generators/Compositor CB has fully
+/// retired before the next frame encodes. Zero overlap, zero frames
+/// ahead.
+///
+///   DRAIN=off (or unset) — control: expect the fault (~frame 15).
+///   DRAIN=on  — discriminating run.
+///
+/// Fault GONE  → the mechanism needs concurrent in-flight command
+///               buffers (lifetime/timing class; next probe is the
+///               deferred-drop bisect). Fault PERSISTS → deterministic
+///               bad dispatch in what the real pipeline adds around the
+///               standalone runtime (compositor blend, blit, surface
+///               copy); the standalone bisect can never see it.
+#[test]
+fn audition_fault_particletext_drain_each_frame() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+    let drain = std::env::var("DRAIN").as_deref() == Ok("on");
+    eprintln!("[audition-fault] drain-each-frame: {drain}");
+
+    // Churn prefix: the sweep only faults when prior ContentThread
+    // create/drop churn precedes ParticleText. Replicate it — one
+    // ContentThread driven briefly and dropped — so both arms face the
+    // same conditions as the faulting sweep.
+    // HOLD_CHURN=1 keeps the churn ContentThread ALIVE for the whole
+    // test (scoped to the end of the fn) — discriminates "the drop's
+    // freeing is required" from "the extra thread/queue merely existing
+    // is enough".
+    let _held_churn = if std::env::var("HOLD_CHURN").is_ok() {
+        let (churn_project, _) = layer_tap_project();
+        let mut churn = headless_content_thread(churn_project, 320, 180);
+        churn.engine.play();
+        for frame in 0..10u64 {
+            tick_frame(&mut churn, frame, 1.0 / 60.0);
+        }
+        eprintln!("[audition-fault] churn prefix done — holding ContentThread alive");
+        Some(churn)
+    } else {
+        {
+            let (churn_project, _) = layer_tap_project();
+            let mut churn = headless_content_thread(churn_project, 320, 180);
+            churn.engine.play();
+            for frame in 0..10u64 {
+                tick_frame(&mut churn, frame, 1.0 / 60.0);
+            }
+            eprintln!("[audition-fault] churn prefix done — dropping ContentThread");
+        }
+        None
+    };
+
+    let (project, layer_id) = layer_tap_project();
+    let res = repro_resolution();
+    let mut ct = headless_content_thread(project, res.0, res.1);
+    let id = PresetTypeId::from_string("ParticleText".to_string());
+    let items = vec![(id.clone(), PresetKind::Generator)];
+    ct.content_pipeline
+        .audition_ensure_cells(items.clone(), manifold_renderer::audition::AuditionTapTarget::Layer(layer_id));
+    ct.content_pipeline
+        .audition_set_render_list(items.iter().map(|(id, _)| id.clone()).collect());
+    ct.engine.play();
+
+    let device = ct
+        .content_pipeline
+        .native_gpu_for_tests()
+        .expect("pipeline native device")
+        .clone();
+    let (rendered, fault) = if drain {
+        let mut first_fault = None;
+        let dt = 1.0 / 60.0;
+        for frame in 0..40u64 {
+            tick_frame(&mut ct, frame, dt);
+            // Empty CB on the SAME queue: its completion implies every
+            // CB committed before it (this frame's Generators +
+            // Compositor) has retired.
+            device
+                .create_encoder("drain")
+                .commit_and_wait_completed();
+            if manifold_gpu::gpu_fault::fault_count() > 0 && first_fault.is_none() {
+                first_fault = Some(frame);
+                eprintln!(
+                    "[audition-fault] drain: FIRST fault after frame {frame} \
+                     (count={} ignored={})",
+                    manifold_gpu::gpu_fault::fault_count(),
+                    manifold_gpu::gpu_fault::submissions_ignored()
+                );
+            }
+            if manifold_gpu::gpu_fault::submissions_ignored() {
+                break;
+            }
+        }
+        (
+            ct.content_pipeline.audition_renders_completed(),
+            first_fault,
+        )
+    } else {
+        drive_and_watch(&mut ct, 40, "drain-control")
+    };
+    eprintln!(
+        "[audition-fault] drain={drain} rendered={rendered} fault={fault:?} \
+         faults={} ignored={}",
+        manifold_gpu::gpu_fault::fault_count(),
+        manifold_gpu::gpu_fault::submissions_ignored()
+    );
+    if !drain && fault.is_none() && manifold_gpu::gpu_fault::fault_count() == 0 {
+        panic!("[audition-fault] CONTROL DID NOT FAULT — this run proves nothing");
+    }
 }

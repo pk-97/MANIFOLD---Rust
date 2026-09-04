@@ -30,6 +30,18 @@ pub struct GpuTexture {
 unsafe impl Send for GpuTexture {}
 unsafe impl Sync for GpuTexture {}
 
+// TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): env-gated deferred
+// destruction. Disabled unless MANIFOLD_DEFER_DROP_FRAMES is set — the
+// default path releases at the same point the old automatic `Retained`
+// drop did. The clone is one atomic retain; the deferred clone holds the
+// Metal object alive past the struct's own release until the probe pump
+// drains it.
+impl Drop for GpuTexture {
+    fn drop(&mut self) {
+        super::defer_drop::drop_texture(self.raw.clone());
+    }
+}
+
 impl GpuTexture {
     /// Wrap an existing Metal texture (e.g. from IOSurface).
     pub fn from_raw(
@@ -149,6 +161,14 @@ pub struct GpuBuffer {
 
 unsafe impl Send for GpuBuffer {}
 unsafe impl Sync for GpuBuffer {}
+
+// TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): see the GpuTexture
+// Drop impl above.
+impl Drop for GpuBuffer {
+    fn drop(&mut self) {
+        super::defer_drop::drop_buffer(self.raw.clone());
+    }
+}
 
 impl GpuBuffer {
     /// Wrap an existing Metal buffer.

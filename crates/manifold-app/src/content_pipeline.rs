@@ -1288,10 +1288,18 @@ impl ContentPipeline {
     /// Initialize the native Metal GPU device, event, and texture pool.
     /// Called once at startup after the content pipeline is created.
     #[cfg(target_os = "macos")]
+    /// Test-only access to the native device the pipeline renders on
+    /// (BUG-l7t4 diagnosis harness: queue-drain probes must wait on the
+    /// SAME command queue the pipeline submits to).
+    #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+    pub(crate) fn native_gpu_for_tests(&self) -> Option<&std::sync::Arc<manifold_gpu::GpuDevice>> {
+        self.native_device.as_ref()
+    }
+
+    #[cfg(target_os = "macos")]
     /// Set a pre-created native GPU device (transfers ownership).
     /// Used when the device must exist before the content pipeline (e.g. for
     /// compositor native pipeline creation).
-    #[cfg(target_os = "macos")]
     pub fn set_native_gpu(&mut self, device: std::sync::Arc<manifold_gpu::GpuDevice>) {
         // BUG-j8gy: the chain-fusion worker prewarms fused-kernel pipelines
         // against this device so an edit-time fused swap-in never pays the
