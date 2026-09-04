@@ -110,6 +110,9 @@ pub enum ResolvedScrub {
         param_id: ParamId,
         baseline: f32,
         live: f32,
+        /// P4 coupled rows (Stride/Spacing): the resolved secondary writes,
+        /// applied live on Move and committed in the same undo unit.
+        coupled: Vec<super::project::CoupledWriteTarget>,
     },
     /// The master-opacity slider (`settings.master_opacity`).
     MasterOpacity { baseline: f32, live: f32 },
@@ -303,6 +306,7 @@ impl ResolvedScrub {
                 target,
                 param_id,
                 live,
+                coupled,
                 ..
             } => {
                 // Restore through `set_base_param` — the write `Move` ticks use
@@ -311,6 +315,10 @@ impl ResolvedScrub {
                 project.with_preset_graph_mut(target, |inst| {
                     inst.set_base_param(param_id.as_ref(), *live);
                 });
+                // P4 coupled secondaries re-stamp at their latest live value.
+                for t in coupled {
+                    super::project::apply_coupled_write_live(project, target, t, t.live);
+                }
             }
             ResolvedScrub::MasterOpacity { live, .. } => {
                 project.settings.master_opacity = *live;
@@ -638,10 +646,19 @@ pub(crate) fn dispatch_scrub(
                             );
                         }
                         ctx.scrub.active = Some(ResolvedScrub::Param {
-                            target,
+                            target: target.clone(),
                             param_id: param_id.clone(),
                             baseline: val,
                             live: val,
+                            // P4 coupled rows (Stride/Spacing): resolve the
+                            // secondaries now (addresses + undo baselines);
+                            // Move applies them live, Commit lands them in
+                            // the same undo unit.
+                            coupled: super::project::coupled_write_targets_for_binding(
+                                ctx.project,
+                                &target,
+                                param_id.as_ref(),
+                            ),
                         });
                     }
                 }
@@ -662,8 +679,16 @@ pub(crate) fn dispatch_scrub(
                     ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), val);
                     });
-                    if let Some(ResolvedScrub::Param { live, .. }) = &mut ctx.scrub.active {
+                    if let Some(ResolvedScrub::Param { live, coupled, .. }) = &mut ctx.scrub.active {
                         *live = val;
+                        // P4 coupled secondaries track the drag live (the
+                        // performer sees the copies/spacing follow within the
+                        // gesture, not at release).
+                        for t in coupled.iter_mut() {
+                            let v = (t.value_fn)(val);
+                            super::project::apply_coupled_write_live(ctx.project, &target, t, v);
+                            t.live = v;
+                        }
                     }
                     let pid = param_id.clone();
                     let t = target.clone();
@@ -675,6 +700,21 @@ pub(crate) fn dispatch_scrub(
                             });
                         })),
                     );
+                    // And the same live writes on the content thread.
+                    if let Some(ResolvedScrub::Param { coupled, .. }) = &ctx.scrub.active
+                        && !coupled.is_empty()
+                    {
+                        let t = target.clone();
+                        let targets: Vec<super::project::CoupledWriteTarget> = coupled.clone();
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::MutateProjectLive(Box::new(move |p| {
+                                for ct in &targets {
+                                    super::project::apply_coupled_write_live(p, &t, ct, ct.live);
+                                }
+                            })),
+                        );
+                    }
                 }
                 DispatchResult::handled()
             }
@@ -708,9 +748,83 @@ pub(crate) fn dispatch_scrub(
                     if let Some(new_val) = new_val
                         && (old_val - new_val).abs() > f32::EPSILON
                     {
-                        let cmd =
-                            ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        // P4 coupled rows: land the secondaries in the SAME
+                        // undo unit (one CompositeCommand per gesture).
+                        let changed: Vec<super::project::CoupledWriteTarget> =
+                            match &ctx.scrub.active {
+                                Some(ResolvedScrub::Param { coupled, .. }) => coupled
+                                    .iter()
+                                    .filter(|t| (t.live - t.baseline).abs() > f32::EPSILON)
+                                    .cloned()
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                        if changed.is_empty() {
+                            let cmd = ChangeGraphParamCommand::new(
+                                target,
+                                param_id.clone(),
+                                old_val,
+                                new_val,
+                            );
+                            ContentCommand::send(
+                                ctx.content_tx,
+                                ContentCommand::Execute(Box::new(cmd)),
+                            );
+                        } else {
+                            let mut cmds: Vec<Box<dyn manifold_editing::command::Command>> =
+                                Vec::new();
+                            let primary: Box<dyn manifold_editing::command::Command> =
+                                Box::new(ChangeGraphParamCommand::new(
+                                    target.clone(),
+                                    param_id.clone(),
+                                    old_val,
+                                    new_val,
+                                ));
+                            cmds.push(primary);
+                            // Unbound secondaries need the catalog default;
+                            // a layer without one falls back to the primary
+                            // alone (same guard as the panel write path).
+                            let default = match &target {
+                                GraphTarget::Generator(layer_id) => {
+                                    super::project::generator_catalog_default(
+                                        ctx.project,
+                                        layer_id,
+                                    )
+                                }
+                                _ => None,
+                            };
+                            if let Some(default) = default {
+                                for t in &changed {
+                                    let c: Box<dyn manifold_editing::command::Command> =
+                                        super::project::coupled_write_command(
+                                            &target,
+                                            t,
+                                            t.live,
+                                            default.clone(),
+                                        );
+                                    cmds.push(c);
+                                }
+                                let batch: Vec<Box<dyn manifold_editing::command::Command>> = cmds;
+                                ContentCommand::send(
+                                    ctx.content_tx,
+                                    ContentCommand::ExecuteBatch(
+                                        batch,
+                                        "Scene Loop coupled row write".to_string(),
+                                    ),
+                                );
+                            } else {
+                                let cmd = ChangeGraphParamCommand::new(
+                                    target,
+                                    param_id.clone(),
+                                    old_val,
+                                    new_val,
+                                );
+                                ContentCommand::send(
+                                    ctx.content_tx,
+                                    ContentCommand::Execute(Box::new(cmd)),
+                                );
+                            }
+                        }
                     }
                 }
                 ctx.scrub.active = None;

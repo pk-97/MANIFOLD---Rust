@@ -72,16 +72,20 @@ pub struct CoupledSecondary {
     pub value: fn(f32) -> f32,
 }
 
+/// One resolved coupled secondary: `(kind_id, node_id, param, value_fn)` —
+/// the app evaluates `value_fn` at the write's value (it changes per scrub
+/// Move).
+pub type CoupledWriteTarget = (&'static str, &'static str, &'static str, fn(f32) -> f32);
+
 /// Resolve the coupled secondaries for a modifier row write: given the
-/// written `(node_id, param, value)` on a graph carrying applied kinds,
-/// return `(kind_id, node_id, param, value)` per secondary that must land
-/// in the same undo unit. Empty when the row isn't coupled.
+/// written `(node_id, param)` on a graph carrying applied kinds, return one
+/// per secondary that must land in the same undo unit. Empty when the row
+/// isn't coupled.
 pub fn coupled_writes_for(
     def: &EffectGraphDef,
     node_id: &str,
     param: &str,
-    value: f32,
-) -> Vec<(&'static str, &'static str, &'static str, f32)> {
+) -> Vec<CoupledWriteTarget> {
     let mut out = Vec::new();
     for d in descriptors() {
         if d.coupled_writes.is_empty() {
@@ -95,7 +99,7 @@ pub fn coupled_writes_for(
         for cw in d.coupled_writes {
             if cw.primary.0 == node_id && cw.primary.1 == param {
                 for s in cw.secondaries {
-                    out.push((d.kind_id, s.node_id, s.param, (s.value)(value)));
+                    out.push((d.kind_id, s.node_id, s.param, s.value));
                 }
             }
         }

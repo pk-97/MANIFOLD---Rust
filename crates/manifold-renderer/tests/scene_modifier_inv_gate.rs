@@ -297,7 +297,7 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
 /// nothing).
 #[test]
 fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
-    let (mut project, idx) = applied_project(grouped_scene_def());
+    let (project, idx) = applied_project(grouped_scene_def());
     let graph = project.timeline.layers[idx]
         .generator_graph()
         .expect("graph")
