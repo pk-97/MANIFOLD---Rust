@@ -324,6 +324,17 @@ impl Layer {
         }
     }
 
+    /// Gen-carrying predicate — the single "this layer hosts a generator"
+    /// test every generator-mutation guard reads (LED_STRIPS_DESIGN.md
+    /// section 5b D16). Type membership, NOT `gen_params` presence:
+    /// `change_generator_type`/`restore_generator_state` create gen_params
+    /// on demand to serve Generator layers that have no generator yet, so a
+    /// presence-based guard would turn that path into a silent no-op.
+    #[inline]
+    pub fn hosts_generator(&self) -> bool {
+        matches!(self.layer_type, LayerType::Generator | LayerType::Led)
+    }
+
     /// Image clips may only be dropped here.
     #[inline]
     pub fn is_video(&self) -> bool {
@@ -881,7 +892,7 @@ impl Layer {
     /// to undo a type change snapshot the old graph alongside the old
     /// params and restore both together.
     pub fn change_generator_type(&mut self, new_type: PresetTypeId) {
-        if self.layer_type != LayerType::Generator {
+        if !self.hosts_generator() {
             return;
         }
         let gp = self
@@ -910,7 +921,7 @@ impl Layer {
     ///
     /// Run on load to repair files saved while the identity was desynced.
     pub fn reconcile_generator_identity(&mut self) -> bool {
-        if self.layer_type != LayerType::Generator {
+        if !self.hosts_generator() {
             return false;
         }
         let Some(gp) = self.gen_params.as_mut() else {
@@ -942,7 +953,7 @@ impl Layer {
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
-        if self.layer_type != LayerType::Generator {
+        if !self.hosts_generator() {
             return;
         }
         let gp = self
