@@ -1,6 +1,6 @@
 # Preset Browser — live audition grid, crud removal, and layout polish
 
-**Status:** IN PROGRESS — P1 SHIPPED 2026-09-05 (crud removal, recuration, layer-type gating, atomic EffectTarget adds; L2) · owed: P2 audition engine (in flight), P3 browser polish (blocked on P2) · k3 (lead)
+**Status:** IN PROGRESS — P1 SHIPPED 2026-09-05 (crud removal, recuration, layer-type gating, atomic EffectTarget adds; L2) · P2 SHIPPED 2026-09-05 (live audition engine, CPU-computed value tests, trace drive clean; L2) · owed: P3 browser polish + nav · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -198,7 +198,15 @@ design** (F2, F4) · cleanup **trivial** (F14-F17).
   Rgba16Float IOSurface `SharedTextureBridge`; UI samples per-cell UVs (pattern:
   `crates/manifold-app/src/editor_bridge.rs:1580-1623`). *Rejected: one bridge per cell* — N triple-buffer
   surface sets, N `register_external_texture` calls, N-slot lifetime discipline per
-  cell; the atlas machinery is production-proven today.
+  cell; the atlas machinery is production-proven today. **Implementation note (P2,
+  accepted deviation):** shipped as one `SharedAtlasSurface` — the single-surface
+  IOSurface pattern the clip atlas uses — rather than the triple-buffered
+  `SharedTextureBridge`, because the bridge's read-lease/publish plumbing lives in
+  files outside the lane's ownership. Same D3 properties: one atlas, one IOSurface,
+  per-cell UVs, publish gated on cells-rendered. *Consequences, stated honestly:* a
+  single surface can tear if the UI samples mid-write; no tear observed in the
+  trace drive or demo. Revival trigger: any visible tearing live → upgrade to the
+  triple bridge (work lives in frame/present.rs + app.rs).
 - **D4 — The audition pool lives on the content thread, owned by `ContentPipeline`;
   it never touches `Project` or `EditingService`.** Cells are standalone
   `PresetRuntime`/`Executor` builds (`PresetRuntime::from_def_with_device`,
