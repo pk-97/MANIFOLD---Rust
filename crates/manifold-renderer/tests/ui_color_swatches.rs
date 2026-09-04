@@ -1873,7 +1873,7 @@ fn browser_popup_real_registry_p1_demo() {
 /// PRESET_BROWSER_AUDITION P3 demo artifact (L2): the real-registry browsers
 /// on the P3 layout — content-sized width (8 columns of 16:9 cells at this
 /// 1080p-class canvas), caption strip with the label row inside it, measured
-/// + wrapped chips, the new accent table, and the "No presets match" empty
+/// and wrapped chips, the new accent table, and the "No presets match" empty
 /// state (third PNG, a search that filters everything out). Renders at
 /// 1920×1080 because the P3 popup is wider than the standard swatches canvas.
 #[test]
