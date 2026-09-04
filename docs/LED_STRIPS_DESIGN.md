@@ -2,10 +2,12 @@
 
 **Status: IN PROGRESS — MVP-P1 + MVP-P2 SHIPPED 2026-09-03 (LED layer type, switch routing, creation UI,
 L3 flow; nine-pattern pack: Fill, Chase Sweep, Pulse, Step Chase, Step Scan, Burst, Cycle, Studio Light,
-Strip ID, Pixel Walk — all value-gated at 8×120, all fused, zero new primitives). Owed: Vec4 color
-binding (own pass — pack params are hue/sat until then); in-app LED grid preview (deferred, section 5b.5);
-Peter's L4 rig pass (pad-fire each preset). Original patch/sACN/island phases P1–P3 remain approved and
-unbuilt; deferred in section 5b.5.**
+Strip ID, Pixel Walk — all value-gated at 8×120, all fused, zero new primitives). MVP-P3 designed
+2026-09-04 (DMX first-class: rename to `LayerType::Dmx`, gen-carrying predicate fixes picker no-op +
+envelope ratchet, LED browser category + lane-scoped open — section 5b.4, not yet built). Owed: MVP-P3
+execution; Vec4 color binding (own pass — pack params are hue/sat until then); in-app LED grid preview
+(deferred, section 5b.5); Peter's L4 rig pass (pad-fire each preset). Original patch/sACN/island phases
+P1–P3 remain approved and unbuilt; deferred in section 5b.5.**
 **Prerequisites: none for the MVP (LED-resolution compositing machinery already exists — see MVP audit).
 Original P2 (strip island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 8 (Execution protocol)
@@ -295,6 +297,68 @@ already exists.
 silently downgrades them to video layers (tiny content on screen, no strip output).
 Accepted — same hazard class as when `Audio = 3` was added.
 
+**MVP-P3 decisions (2026-09-04, four-lane read-only audit; bead BUG-ng6a (DMX lane first-class campaign)):**
+
+- **D15 — `LayerType::Led` renames to `LayerType::Dmx` (Peter's call, verbatim: "the
+  LayerType should be updated to DMX … the easiest time we will ever have to refactor base
+  stuff like this. … A first class 'DMX' type sounds sensible here?").** Discriminant stays
+  `4`; Deserialize accepts int 4 + string "Dmx" + string "Led"; Serialize keeps emitting
+  the int unconditionally (serialization audit: no code ever writes the string form, so
+  **no migration rung** — precedent `Audio = 3`, `migrate.rs:678-694` bidirectional
+  deserialize). Rejected: keep `Led` (Peter's directive above). Rejected: "Universe"
+  (Resolume's Lumiverse concept) — a lane is the DMX *source* whose pixels map onto
+  fixtures across universes; it is not itself a 512-channel universe. DMX names the data
+  (DMX512), not one wire protocol — stays true when sACN lands, since sACN is a transport
+  for DMX512.
+- **D16 — Every generator-mutation guard widens from `== LayerType::Generator` to one
+  "gen-carrying layer" predicate.** Audited sites: `change_generator_type`
+  (`layer.rs:884`), `restore_generator_state` (`:945`), load-time identity reconcile
+  (`:913`), `reset_all_effectives` (modulation.rs:204), drag-move
+  (`editing_host.rs:170`), scene panel (`projection/inspector.rs:183`), MIDI import
+  (`midi_import.rs:67`), percussion import (`percussion_import.rs:372`), string-param
+  collect (`io/collect.rs:142`). The `change_generator_type` guard is the root cause of the
+  observed card jank — the picker is a silent no-op on LED lanes (BUG-ev8u (generator picker no-ops on LED/DMX lanes)); the `reset_all_effectives` guard makes envelopes ratchet
+  on LED lanes (BUG-p3rq (modulation reset gated to Generator lanes)). **Rejected: adding
+  `|| is_dmx()` per guard** — that manufactures N copies of one distinction; the predicate
+  lives once on `Layer` and every gate reads it. Where a site's intent genuinely differs
+  (drag-move LED↔Video, scene-panel scope, MIDI import meaning) the item is a Peter call,
+  not a predicate widening — those are beads, not silent edits.
+- **D17 — DMX-ness in the UI is data on shared surfaces, never a new surface.** The card
+  stays the generic manifest-backed `ParamCardPanel` (WIDGET_TREE_DESIGN section 5b is the
+  machine rule); the browser stays the one `BrowserPopupPanel`. What arrives: presets
+  re-tag `category: "LED"` (from "Pattern"), the registry stops discarding generator
+  categories (`preset_type_registry.rs:111`), generator mode renders the existing category
+  chip row, and opening the browser from a DMX lane scopes to "LED" via the existing
+  `set_category` hook (`browser_popup.rs:323`). **Forbidden: a bespoke DMX card, a DMX
+  browser, bespoke param rows — any of those forks the unified surface for zero capability.**
+- **D18 — Preset ids and filenames keep the `LED *` names.** Bundled preset ids are JSON
+  filename stems (`bundled_presets.rs:23`) referenced by saved projects; renaming them is a
+  compat problem for zero behavior gain. The category carries the grouping. Consequences,
+  stated honestly: preset display names keep the "LED" prefix while the lane type says DMX
+  — accepted; the presets *are* LED-pattern presets.
+- **D19 — The card reconcile path was never the bug; the model no-op was.** Audited
+  end-to-end: `configure_gen_params` panel reuse keyed on layer id is intentional
+  (`inspector/render.rs:191-213`); `ParamCardPanel::configure` fully rebuilds rows/state
+  from the new surface; the projection gate at `projection/inspector.rs:1138-1156` is keyed
+  on `gen_params` presence, not layer type. Recorded so no worker re-chases the reconcile
+  path (both audit lanes initially suspected it; the defect is one guard at `layer.rs:884`).
+- **D20 — Scene Setup scope for DMX lanes is a Peter call, deferred** — BUG-p8ma (decide Scene Setup panel scope for DMX lanes). The panel's `!= Generator` guard would work
+  widened (DMX lanes have gen_params + bundled defs), but whether a DMX lane *should* host
+  scene setup is product judgment, not an audit finding.
+- **D21 — Muted/invisible DMX lanes still rendering full-res generators is deferred** —
+  BUG-n6dm (skip generator GPU work for muted/invisible LED lanes). Overlaps the 5b.5
+  native LED-res rendering revival trigger — do not build the skip and then rebuild it
+  natively.
+
+**MVP-P3 plausible-wrong architectures, forbidden by name:** (1) You will want a bespoke
+DMX card or DMX browser — no: D17. (2) You will want to rename the `LED *.json` preset ids
+to match the DMX lane — no: D18, ids are a persisted contract. (3) You will want to fix each
+`== Generator` guard with an `|| is_dmx()` — no: D16, one predicate. (4) You will want to
+touch the card reconcile/reuse machinery for the swap jank — no: D19, the model guard is
+the whole defect. (5) You will want to widen Scene Setup or MIDI import silently — no: D16,
+those are Peter calls, carried as beads. (6) You will want a migration rung rewriting layer
+type 4 — no: D15, the int is the only wire form and it stays 4.
+
 ### 5b.3 Data model seam
 
 ```rust
@@ -304,17 +368,20 @@ pub enum LayerType {
     Generator = 1,
     Group = 2,
     Audio = 3,
-    Led = 4,   // serde: int 4 + string "Led"; unknown → Video (existing fallback)
+    Dmx = 4,   // serde: int 4 + strings "Dmx"|"Led"; unknown → Video (existing fallback)
 }
 
 // crates/manifold-renderer/src/layer_compositor.rs:377 — replaces LayerOutput.blit_to_led
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedRoute { None, Mirror, Direct }
 // Built once at descriptor construction (:1851, :1958):
-//   layer_type == Led → Direct
+//   layer_type == Dmx → Direct
 //   else blit_to_led  → Mirror
 //   else              → None
 ```
+
+(MVP-P3, D15: `Led` renamed to `Dmx`; the int is the only wire form on disk and `"Led"`
+stays accepted on load, so no migration rung.)
 
 Default generator for a new LED layer: `PresetTypeId("LED Fill")` (bundled by MVP-P2;
 MVP-P1 may ship a minimal single-node Fill placeholder preset under the same id — the id is
@@ -468,6 +535,112 @@ for the whole pack (Vec4 color binding is deferred to its own pass — noted in 
   touching the P1 gates or the send path.
 - *Test scope:* renderer crate tests + graph-tool pre-flight; gpu-proofs gate (fusion golden
   touched — mandatory).
+
+**MVP-P3 — DMX lane first-class (rename, browser category, card fixes; bead BUG-ng6a (DMX lane first-class campaign)).**
+Three sessions, ordered so behavior lands before the rename and the rename before UI data
+work. Peter (2026-09-04): "the LayerType should be updated to DMX … the easiest time we
+will ever have to refactor base stuff like this"; "LED presets should be a unique category
+in the effects browser"; "we must handle all UI and UX, commands, drivers, edge cases,
+LFOs, triggers."
+
+**MVP-P3a — behavior fixes: gen-carrying predicate + guard widening (vertical slice).**
+- *Entry state:* MVP-P2 on main; `cargo nextest run -p manifold-core -p manifold-playback`
+  green at entry.
+- *Read-back:* D16, D19, D21; beads BUG-ev8u (generator picker no-ops on LED/DMX lanes) and
+  BUG-p3rq (modulation reset gated to Generator lanes). Re-verify anchors:
+  `rg -n 'change_generator_type|restore_generator_state' crates/manifold-core/src/layer.rs`,
+  `rg -n 'reset_all_effectives' crates/manifold-playback` — counts must match this doc
+  (3 guards in layer.rs, 1 in modulation.rs) or stop and re-list.
+- *Deliverables:* one predicate on `Layer` (name it `carries_generator` — true when
+  `gen_params` exists with a non-NONE type; the audit's candidate predicate), replacing the
+  `!= LayerType::Generator` early returns in `change_generator_type` (layer.rs:884),
+  `restore_generator_state` (:945), and the identity reconcile (:913); the
+  `== LayerType::Generator` gate in `reset_all_effectives` (modulation.rs:204) reads the
+  same predicate; `Timeline::add_layer` LED arm seeds gen_params (timeline.rs:352 — same
+  default contract as D12). Plus the two characterization tests below.
+- *Gate (positive):* (1) unit — build a `LayerType::Led` layer with the LED Fill default,
+  run `ChangeGeneratorTypeCommand`, assert `generator_type` changed and undo restores —
+  fails on pre-fix code, mandatory; (2) unit — envelope on a DMX-lane generator param
+  returns to base after the driving note ends (the BUG-p3rq (modulation reset gated to Generator lanes) ratchet) —
+  fails on pre-fix code, mandatory.
+- *Gate (negative):* `rg -n '!= LayerType::Generator' crates/manifold-core/src/layer.rs`
+  returns zero hits outside the predicate definition itself.
+- *Demo:* L3 — ui-flow: select LED layer → click the gen card's Change button → pick LED
+  Pulse → assert the card header reads "LED Pulse". Pre-fix behavior for comparison:
+  header stays "LED Fill".
+- *Performer gesture:* fire Step Chase from a pad on the rig; the swap means the whole
+  preset pack is one click away per lane.
+- *Forbidden moves:* touching the card/reconcile machinery (D19 — the model guard is the
+  whole defect); widening the drag-move / scene-panel / MIDI-import guards (Peter calls,
+  D16); any change to the send path.
+- *Test scope:* `cargo nextest run -p manifold-core -p manifold-playback -p manifold-editing`;
+  clippy same set. No GPU path touched.
+
+**MVP-P3b — rename `LayerType::Led` → `LayerType::Dmx` (compiler-driven).**
+- *Entry state:* P3a landed and merged.
+- *Read-back:* D15, D18; DESIGN_DOC_STANDARD.md section 6 (seam briefs, compiler-driven migration).
+  Re-derivation command:
+  `rg -n 'LayerType::Led|is_led\(\)|"Led"' crates/ --no-heading -g '*.rs' | wc -l` — the
+  audit counted ~60 non-test sites in 14 files; if the count differs materially, stop and
+  re-list before touching anything.
+- *Deliverables:* rename the variant + `is_led()` → `is_dmx()` (keep `routes_to_led` —
+  it names the LED composite incl. mirror routing); serde Deserialize accepts `4`,
+  `"Dmx"`, `"Led"` (Serialize unchanged, int only); delete the dead `led_tap` path
+  (BUG-zu92 (delete or confirm dead led_tap compositor path)) once no reference remains;
+  widen `io/collect.rs:142` string-param gate to the D16 predicate
+  (BUG-bbg5 (string-param collect gated Generator-only in io/collect)); doc prose sweep
+  (the `Led = 4` pin in this doc's history is updated by this landing's status edit).
+- *Gate (positive):* round-trip via `project_tool` — save a project containing a DMX
+  layer, reload, assert type is Dmx AND a hand-built JSON with `"layerType": 4` and one
+  with `"layerType": "Led"` both load as Dmx (the silent-fallback-to-Video failure mode
+  is what this pins).
+- *Gate (negative):* `rg -n 'LayerType::Led\b' crates/` returns zero hits except the serde
+  alias arm; `rg -n '\bLed\b' crates/manifold-core/src/types.rs` likewise.
+- *Demo:* L1 — no user-visible surface changes; the P3a L3 flow re-run as regression.
+- *Forbidden moves:* renaming `LED *.json` preset ids/filenames (D18); a migration rung
+  (D15); renaming `settings.led_*` persisted keys (they're settings, not the layer type —
+  the `manifold-led` crate and its settings keep their names).
+- *Test scope:* touched-crate nextest + clippy (core, io, editing, playback, renderer,
+  app, ui); gpu-proofs NOT needed (no kernel/graph change — D9's render path is
+  identifier-only).
+
+**MVP-P3c — browser: LED category + generator chips + lane-scoped open.**
+- *Entry state:* P3b landed. Ten `LED *.json` presets on disk with `category: "Pattern"`.
+- *Read-back:* D17, D18. Re-verify anchors:
+  `rg -n 'category: None' crates/manifold-core/src/preset_type_registry.rs`,
+  `rg -n 'tag_project_category' crates/manifold-app/src/ui_root/dropdowns.rs` (must match
+  the audit's two call sites).
+- *Deliverables (the audit's six steps, in order):* (1) `preset_type_registry.rs:111`
+  stops discarding generator JSON categories (`category: Some(leak(&preset.category))`);
+  (2) the ten LED preset JSONs re-tag `category: "LED"` (line 8 of each), each
+  pre-flighted through `graph-tool validate --kind generator`; (3) generator mode passes
+  categories through `build_preset_picker_items` and builds `category_names` by the same
+  derivation Effect mode uses (dropdowns.rs:364-370); (4) `category_color`
+  (browser_popup.rs:996) gains an "LED" arm; (5) scoped open: the GenTypeClicked arm looks
+  up the requesting layer's type and calls the existing `set_category(Some("LED"))`
+  (browser_popup.rs:323) after open; (6) no `BrowserPopupRequest` schema change.
+- *Gate (positive):* (1) `graph-tool validate --kind generator` clean on all ten re-tagged
+  presets; (2) unit — a Generator-mode picker request built for a DMX layer carries the
+  LED category active and items filtered to `category == "LED"`; (3) the P1 default-preset
+  contract still green (LED Fill id unchanged — D18).
+- *Gate (negative):* `rg -n '"category": "Pattern"' crates/manifold-renderer/assets/generator-presets/`
+  returns zero hits in `LED*.json`; `rg -n 'category: None' crates/manifold-core/src/preset_type_registry.rs`
+  returns zero hits outside inventory-generator registration.
+- *Demo:* L3 — ui-flow: open the generator browser from a DMX lane → assert the LED chip
+  is active and only the ten LED presets are listed; switch the chip to "All" → the full
+  generator list returns.
+- *Forbidden moves:* a DMX-only browser or request-mode fork (D17); renaming preset ids
+  (D18); hard-filtering (scoped open is a *starting* chip the performer can widen — the
+  audit's step 6 deliberately reuses `set_category`).
+- *Test scope:* `cargo nextest run -p manifold-core -p manifold-app -p manifold-ui`;
+  clippy same set. No GPU paths.
+
+*Deferred by decision, not by omission:* scene-panel scope (D20, BUG-p8ma (decide Scene Setup panel scope for DMX lanes)),
+drag-move intent (BUG-6nar (layer drag-move generator predicate excludes LED/DMX lanes)),
+MIDI import meaning (BUG-xlrx (MIDI import treats LED lane as video lane)), percussion
+import (BUG-d0gb (percussion import scans Generator lanes only)), muted-lane GPU skip
+(D21, BUG-n6dm (skip generator GPU work for muted/invisible LED lanes)) — each is a Peter
+call or its own trigger, tracked as beads.
 
 ### 5b.5 Deferred (explicitly not MVP — each with its revival trigger)
 
