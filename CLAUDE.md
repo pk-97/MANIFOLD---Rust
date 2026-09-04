@@ -68,7 +68,7 @@ The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, a
 | `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11, `docs/AUDIO_MODULATION_DESIGN.md`) |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
 
-Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends only on `foundation`, not `core`** — UI-reachable shared types go in `foundation`. `renderer` depends on `core`+`gpu`+`native`+`playback`+`ui`; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
+Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends on `foundation` + `editing` (not `core` directly)** — the single editing dependency is the `EffectTarget` addressing type (PRESET_BROWSER_AUDITION D2, 2026-09-04: one shared addressing model, no UI twin); UI-reachable shared types otherwise go in `foundation`. `renderer` depends on `core`+`gpu`+`native`+`playback`+`ui`; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
 
 ## Invariants
 
