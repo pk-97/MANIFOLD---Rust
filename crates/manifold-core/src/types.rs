@@ -122,10 +122,10 @@ pub enum LayerType {
     /// can drive audio modulation. No visual output (the compositor skips it).
     /// See `docs/AUDIO_LAYER_DESIGN.md`.
     Audio = 3,
-    /// A direct-drive LED layer: renders its generator like any layer but
+    /// A direct-drive DMX/LED layer: renders its generator like any layer but
     /// routes ONLY to the LED composite — screen-invisible by construction.
-    /// See `docs/LED_STRIPS_DESIGN.md` section 5b (D10/D11/D14).
-    Led = 4,
+    /// See `docs/LED_STRIPS_DESIGN.md` section 5b (D10/D11/D14, D15 rename).
+    Dmx = 4,
 }
 
 impl Serialize for LayerType {
@@ -143,7 +143,7 @@ impl<'de> Deserialize<'de> for LayerType {
                 1 => LayerType::Generator,
                 2 => LayerType::Group,
                 3 => LayerType::Audio,
-                4 => LayerType::Led,
+                4 => LayerType::Dmx,
                 _ => LayerType::Video,
             },
             serde_json::Value::String(s) => match s.as_str() {
@@ -151,7 +151,8 @@ impl<'de> Deserialize<'de> for LayerType {
                 "Generator" => LayerType::Generator,
                 "Group" => LayerType::Group,
                 "Audio" => LayerType::Audio,
-                "Led" => LayerType::Led,
+                // "Led" is the pre-D15 name; hand-built JSON may carry it (D15).
+                "Dmx" | "Led" => LayerType::Dmx,
                 _ => LayerType::Video,
             },
             _ => LayerType::Video,
@@ -1027,4 +1028,38 @@ pub enum TonemapCurve {
     /// Khronos PBR Neutral — minimal hue shift, low saturation loss in highlights.
     /// Designed for cross-display consistency (glTF standard tonemapper).
     KhronosPbrNeutral = 3,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MVP-P3b wire-form pin (LED_STRIPS_DESIGN.md section 5b D15): the int is
+    /// the only form ever written; "Led" stays accepted on load from hand-built
+    /// JSON; an unknown value must keep falling back to Video, never panic.
+    #[test]
+    fn layer_type_dmx_wire_form_round_trip() {
+        assert_eq!(serde_json::to_string(&LayerType::Dmx).unwrap(), "4");
+        assert_eq!(
+            serde_json::from_str::<LayerType>("4").unwrap(),
+            LayerType::Dmx
+        );
+        assert_eq!(
+            serde_json::from_str::<LayerType>("\"Dmx\"").unwrap(),
+            LayerType::Dmx
+        );
+        assert_eq!(
+            serde_json::from_str::<LayerType>("\"Led\"").unwrap(),
+            LayerType::Dmx,
+            "pre-D15 hand-built JSON keeps loading as Dmx"
+        );
+        assert_eq!(
+            serde_json::from_str::<LayerType>("99").unwrap(),
+            LayerType::Video
+        );
+        assert_eq!(
+            serde_json::from_str::<LayerType>("\"Nonsense\"").unwrap(),
+            LayerType::Video
+        );
+    }
 }

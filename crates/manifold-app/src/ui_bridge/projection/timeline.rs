@@ -72,7 +72,7 @@ pub fn sync_project_data(
                     // D11). The mirror toggle renders non-interactive on LED
                     // layers; this keeps its style truthfully "on".
                     is_led: layer.routes_to_led(),
-                    is_led_layer: layer.is_led(),
+                    is_led_layer: layer.is_dmx(),
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                     blend_mode: format!("{:?}", layer.default_blend_mode),
                     generator_type: layer.gen_params().map(|g| {

@@ -45,7 +45,7 @@ impl Command for AddLayerCommand {
         } else {
             let mut new_layer = if self.layer_type == LayerType::Generator {
                 Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0)
-            } else if self.layer_type == LayerType::Led {
+            } else if self.layer_type == LayerType::Dmx {
                 // An LED layer is generator-driven (LED_STRIPS_DESIGN.md section
                 // 5b D12): seeded exactly like a generator layer so the standard
                 // clip workflow plays the LED preset out of the box.
@@ -53,7 +53,7 @@ impl Command for AddLayerCommand {
                 // `gen_params` has no public setter, so the type is flipped here.
                 let mut layer =
                     Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0);
-                layer.layer_type = LayerType::Led;
+                layer.layer_type = LayerType::Dmx;
                 layer
             } else {
                 Layer::new(self.name.clone(), self.layer_type, 0)
@@ -982,7 +982,7 @@ mod tests {
 
         let mut cmd = AddLayerCommand::new(
             "LED 2".to_string(),
-            LayerType::Led,
+            LayerType::Dmx,
             PresetTypeId::new("LED Fill"),
             1,
             None,
@@ -990,8 +990,8 @@ mod tests {
         cmd.execute(&mut project);
 
         let layer = &project.timeline.layers[1];
-        assert_eq!(layer.layer_type, LayerType::Led);
-        assert!(layer.is_led());
+        assert_eq!(layer.layer_type, LayerType::Dmx);
+        assert!(layer.is_dmx());
         let genp = layer
             .gen_params()
             .expect("LED layer must carry gen_params (D12)");
@@ -1043,7 +1043,7 @@ mod tests {
         let mut project = Project::default();
         let mut add = AddLayerCommand::new(
             "LED 1".to_string(),
-            LayerType::Led,
+            LayerType::Dmx,
             TEST_LED_GEN_A.clone(),
             0,
             None,
