@@ -23,8 +23,8 @@ use manifold_editing::commands::graph::{
     ApplySceneModifierCommand, RemoveSceneModifierCommand, SetGraphNodeParamCommand,
 };
 use manifold_renderer::node_graph::scene_modifier::{
-    FOG_KIND_ID, LOOP_KIND_ID, build_plan, descriptor_for, migrate_pre_switch_scene_loops,
-    trace_modifier,
+    FOG_KIND_ID, LOOP_KIND_ID, build_plan, descriptor_for, migrate_loop_exposure_rows,
+    migrate_pre_switch_scene_loops, trace_modifier,
 };
 use manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
 
@@ -271,6 +271,14 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         ("scene_array", "count"),
         ("loop_camera", "height"),
         ("loop_camera", "lateral"),
+        ("loop_camera", "flow"),
+        ("loop_camera", "stride"),
+        ("loop_camera", "sway_amp"),
+        ("loop_camera", "sway_cycles"),
+        ("loop_camera", "look_sweep_amp"),
+        ("loop_camera", "zoom_pulse_amp"),
+        ("loop_camera", "cell_size"),
+        ("scene_array", "jitter_amount"),
     ]
     .iter()
     .map(|(n, p)| (n.to_string(), p.to_string()))
@@ -279,6 +287,89 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         targets, expected,
         "INV-M3: Scene Loop section rows must be exactly the whitelist"
     );
+}
+
+/// P4 load migration (INV-M3 extension): a loop applied BEFORE the control
+/// enrichment carries only the four D6 rows. Stripping the new rows to
+/// simulate that project, one load migration must stamp exactly the new P4
+/// rows — old rows untouched (ids preserved), Spacing's range curated to
+/// auto×0.25..4.0, and the migration idempotent (a second run changes
+/// nothing).
+#[test]
+fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
+    let (mut project, idx) = applied_project(grouped_scene_def());
+    let graph = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph")
+        .clone();
+    let mut def = graph;
+
+    // Simulate the pre-P4 project: drop every Scene Loop row except the
+    // four D6 rows, exactly what an old save carries.
+    let old_targets: std::collections::BTreeSet<(&str, &str)> = [
+        ("loop_phase", "bars"),
+        ("scene_array", "count"),
+        ("loop_camera", "height"),
+        ("loop_camera", "lateral"),
+    ]
+    .into_iter()
+    .collect();
+    let meta = def.preset_metadata.as_mut().unwrap();
+    let keep_ids: std::collections::BTreeSet<String> = meta
+        .bindings
+        .iter()
+        .filter(|b| {
+            matches!(
+                &b.target,
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                    if old_targets.contains(&(node_id.as_str(), param.as_str()))
+            )
+        })
+        .map(|b| b.id.clone())
+        .collect();
+    meta.params.retain(|p| keep_ids.contains(p.id.as_str()));
+    meta.bindings.retain(|b| keep_ids.contains(b.id.as_str()));
+    let old_param_count = meta.params.len();
+    assert_eq!(old_param_count, 4, "fixture starts from the four D6 rows");
+
+    // One migration: the eight new rows land.
+    assert!(
+        migrate_loop_exposure_rows(&mut def),
+        "the first migration must stamp the new rows"
+    );
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let section_rows = meta
+        .params
+        .iter()
+        .filter(|p| p.section.as_deref() == Some("Scene Loop"))
+        .count();
+    assert_eq!(section_rows, 12, "4 old + 8 new rows after migration");
+
+    // The old four ids are untouched (no re-stamp churn).
+    for id in &keep_ids {
+        assert!(
+            meta.bindings.iter().any(|b| &b.id == id),
+            "old row {id} must survive the migration"
+        );
+    }
+
+    // Spacing row: curated range against the node's cell (auto = 10 for
+    // the 5-unit Z extent ×2 gap rule), default = the auto cell.
+    let spacing = meta
+        .params
+        .iter()
+        .find(|p| p.name == "Spacing")
+        .expect("Spacing row stamped by the migration");
+    assert_eq!((spacing.min, spacing.max), (2.5, 40.0), "auto×0.25..4.0");
+
+    // Idempotent: a second load changes nothing.
+    assert!(
+        !migrate_loop_exposure_rows(&mut def),
+        "the migration must be a no-op once every row is stamped"
+    );
+
+    // No loop applied → no stamping at all.
+    assert!(!migrate_loop_exposure_rows(&mut empty_def()));
 }
 
 /// INV-M2: apply → remove are exact inverses across THREE layers: the
@@ -309,7 +400,7 @@ fn inv_m2_apply_remove_exact_inverse_three_layers() {
             .map(|b| b.id.clone())
             .collect()
     };
-    assert_eq!(stamped_ids.len(), 4, "four whitelist rows stamped");
+    assert_eq!(stamped_ids.len(), 12, "twelve whitelist rows stamped");
     project
         .with_preset_graph_mut(&target, |inst| {
             inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {

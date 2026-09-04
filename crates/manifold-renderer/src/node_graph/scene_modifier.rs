@@ -48,8 +48,59 @@ pub struct SceneModifierDescriptor {
     pub trace: &'static [TraceNode],
     /// Which stamped params become card rows (None = full manifest).
     pub row_whitelist: Option<&'static [(&'static str, &'static str, &'static str)]>,
+    /// P4 coupled rows: a card row whose write also writes second params in
+    /// the SAME undo unit (Stride → scene_array.count, Spacing → the other
+    /// cell_size + home). Resolved app-side at write time; the UI never
+    /// learns about it (rows stay pure data).
+    pub coupled_writes: &'static [CoupledWrite],
     /// How the enable toggle wires (D5).
     pub enable: EnableDecl,
+}
+
+/// One coupled row write: `primary` (node_id, param) is the whitelisted row
+/// the performer drags; each secondary derives its value from the primary's
+/// new value and lands in the same undoable command.
+pub struct CoupledWrite {
+    pub primary: (&'static str, &'static str),
+    pub secondaries: &'static [CoupledSecondary],
+}
+
+pub struct CoupledSecondary {
+    pub node_id: &'static str,
+    pub param: &'static str,
+    /// Secondary value from the primary's new value.
+    pub value: fn(f32) -> f32,
+}
+
+/// Resolve the coupled secondaries for a modifier row write: given the
+/// written `(node_id, param, value)` on a graph carrying applied kinds,
+/// return `(kind_id, node_id, param, value)` per secondary that must land
+/// in the same undo unit. Empty when the row isn't coupled.
+pub fn coupled_writes_for(
+    def: &EffectGraphDef,
+    node_id: &str,
+    param: &str,
+    value: f32,
+) -> Vec<(&'static str, &'static str, &'static str, f32)> {
+    let mut out = Vec::new();
+    for d in descriptors() {
+        if d.coupled_writes.is_empty() {
+            continue;
+        }
+        // Coupling applies only while the kind is applied — a hand-removed
+        // modifier's rows are gone, and a stray write must not couple.
+        if !trace_modifier(d, &def.nodes).applied(d) {
+            continue;
+        }
+        for cw in d.coupled_writes {
+            if cw.primary.0 == node_id && cw.primary.1 == param {
+                for s in cw.secondaries {
+                    out.push((d.kind_id, s.node_id, s.param, (s.value)(value)));
+                }
+            }
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,7 +374,7 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 
 /// Re-export the loop kind's builder so `gltf_import`'s historical public
 /// path keeps working for tests and tooling during the D6 migration.
-pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
+pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_loop_exposure_rows, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
 
 pub use scene_modifier_fog::{FOG_KIND_ID, SCENE_FOG_DESCRIPTOR};
 
@@ -351,17 +402,91 @@ pub mod scene_modifier_loop {
         "node.look_at_camera",
     ];
 
-    /// D6 P4 whitelist: the ONLY params stamped as "Scene Loop" rows, as
+    /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment: the ONLY
+    /// params stamped as "Scene Loop" rows, as
     /// `(stable node_id, param) → row label`. Everything else on the loop
-    /// nodes — cell_size, axis, home, near, far, fov_y, attack — is internal:
-    /// the plan builder computes it once and a panel row for it would
-    /// desync the loop.
+    /// nodes — axis, home, near, far, fov_y, attack, jitter_seed,
+    /// look_sweep_cycles — is internal: the plan builder computes it once
+    /// and a panel row for it would desync the loop. Spacing rides
+    /// loop_camera.cell_size (its stamped range is curated to
+    /// auto×0.25..4.0 at apply time); look_sweep_cycles stays internal at
+    /// 1 (integer cycles are a wrap-safety requirement, INV-3).
     const LOOP_ROW_WHITELIST: &[(&str, &str, &str)] = &[
         ("loop_phase", "bars", "Bars"),
         ("scene_array", "count", "Copies"),
         ("loop_camera", "height", "Height"),
         ("loop_camera", "lateral", "Lateral"),
+        ("loop_camera", "flow", "Flow"),
+        ("loop_camera", "stride", "Stride"),
+        ("loop_camera", "sway_amp", "Sway"),
+        ("loop_camera", "sway_cycles", "Sway Rate"),
+        ("loop_camera", "look_sweep_amp", "Look Sway"),
+        ("loop_camera", "zoom_pulse_amp", "Zoom Pulse"),
+        ("loop_camera", "cell_size", "Spacing"),
+        ("scene_array", "jitter_amount", "Jitter"),
     ];
+
+    /// Coupled row writes (P4). Stride travels K cells per loop, so the
+    /// instance array must scale with it: count = K+2 (behind + current +
+    /// ahead), clamped at count's own ceiling of 8 — K ≥ 7 outruns the
+    /// array by one cell (reported, not hidden). Spacing writes BOTH
+    /// cell_size params in one undo unit (INV-4: camera travel ==
+    /// instance spacing by construction) and home = −cell/2 must track the
+    /// cell or the mid-gap phase-0 framing desyncs.
+    const LOOP_COULED_WRITES: &[CoupledWrite] = &[
+        CoupledWrite {
+            primary: ("loop_camera", "stride"),
+            secondaries: &[CoupledSecondary {
+                node_id: "scene_array",
+                param: "count",
+                value: stride_to_count,
+            }],
+        },
+        CoupledWrite {
+            primary: ("loop_camera", "cell_size"),
+            secondaries: &[
+                CoupledSecondary {
+                    node_id: "scene_array",
+                    param: "cell_size",
+                    value: identity_value,
+                },
+                CoupledSecondary {
+                    node_id: "loop_camera",
+                    param: "home",
+                    value: cell_to_home,
+                },
+            ],
+        },
+    ];
+
+    fn stride_to_count(k: f32) -> f32 {
+        // K cells of travel need K+2 copies (behind + current + ahead);
+        // count's own range caps at 8, so K ≥ 7 runs one copy short.
+        (k + 2.0).min(8.0)
+    }
+
+    fn identity_value(v: f32) -> f32 {
+        v
+    }
+
+    fn cell_to_home(cell: f32) -> f32 {
+        // The D10/P2 mid-gap phase-0 start tracks the cell (home = −cell/2).
+        -cell * 0.5
+    }
+
+    /// Curate the Spacing row (the loop_camera.cell_size exposure): narrow
+    /// the stamped spec range from the manifest's generic 0.01..1000 to
+    /// auto×0.25..4.0 (the P4-pinned band) so the slider is usable. Applied
+    /// by BOTH the plan builder and the load migration — one fn, two
+    /// call sites, no drift.
+    fn curate_spacing_row(exposure: &mut NodeExposure, cell_size: f32) {
+        for m in &mut exposure.metadata {
+            if m.name == "cell_size" {
+                m.min = cell_size * 0.25;
+                m.max = cell_size * 4.0;
+            }
+        }
+    }
 
     pub static SCENE_LOOP_DESCRIPTOR: SceneModifierDescriptor = SceneModifierDescriptor {
         kind_id: LOOP_KIND_ID,
@@ -381,6 +506,7 @@ pub mod scene_modifier_loop {
             TraceNode { type_id: "node.camera_switch", node_id: "loop_cam_switch", required: false },
         ],
         row_whitelist: Some(LOOP_ROW_WHITELIST),
+        coupled_writes: LOOP_COULED_WRITES,
         enable: EnableDecl::Switch { node_id: "loop_cam_switch" },
     };
 
@@ -473,15 +599,22 @@ pub mod scene_modifier_loop {
         new_nodes.push(mint_node(beat_ramp_id, "loop_phase", "node.beat_ramp", params));
 
         // scene_array: the shared copy array — count 3, axis +Z default.
+        // jitter_seed/jitter_amount pinned off: the loop's copies repeat
+        // exactly until the performer dials the Jitter row.
         let mut params = std::collections::BTreeMap::new();
         f32_param(&mut params, "count", 3.0);
         params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z
         f32_param(&mut params, "cell_size", cell_size);
+        f32_param(&mut params, "jitter_seed", 0.0);
+        f32_param(&mut params, "jitter_amount", 0.0);
         new_nodes.push(mint_node(scene_array_id, "scene_array", "node.scene_array", params));
 
         // loop_camera: flies one cell per loop. home = -cell/2 = mid-gap
         // before copy 0. Scale-aware framing (BUG-j65u): height/near/far
-        // derive from the cell, never room-scale constants.
+        // derive from the cell, never room-scale constants. P4 movement
+        // controls pinned at "off" defaults (flow 0 = linear travel, sway /
+        // look / zoom 0 = no effect, stride 1 = one cell) — the performer
+        // dials them from the card rows.
         let mut params = std::collections::BTreeMap::new();
         f32_param(&mut params, "cell_size", cell_size);
         params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z — must match scene_array
@@ -491,6 +624,13 @@ pub mod scene_modifier_loop {
         f32_param(&mut params, "near", (cell_size * 0.002).max(1e-4));
         f32_param(&mut params, "far", cell_size * 4.0);
         f32_param(&mut params, "fov_y", 0.9);
+        f32_param(&mut params, "flow", 0.0);
+        f32_param(&mut params, "stride", 1.0);
+        f32_param(&mut params, "sway_amp", 0.0);
+        f32_param(&mut params, "sway_cycles", 1.0);
+        f32_param(&mut params, "look_sweep_amp", 0.0);
+        f32_param(&mut params, "look_sweep_cycles", 1.0);
+        f32_param(&mut params, "zoom_pulse_amp", 0.0);
         new_nodes.push(mint_node(loop_camera_id, "loop_camera", "node.loop_camera", params));
 
         for s in &mut group_splices {
@@ -524,7 +664,15 @@ pub mod scene_modifier_loop {
             restore_types: CAMERA_RESTORE_TYPES,
         }];
 
-        let skeleton = plan_skeleton(&SCENE_LOOP_DESCRIPTOR, &new_nodes, repoints);
+        let mut skeleton = plan_skeleton(&SCENE_LOOP_DESCRIPTOR, &new_nodes, repoints);
+        // Spacing row range curation: the stamped cell_size spec spans the
+        // manifest's generic 0.01..1000 — unusable. Narrow it to the
+        // P4-pinned auto×0.25..4.0 band (the plan's cell IS the auto cell).
+        for exposure in &mut skeleton.exposures {
+            if exposure.node_id.as_str() == "loop_camera" {
+                curate_spacing_row(exposure, cell_size);
+            }
+        }
 
         Some(SceneModifierPlan {
             kind_id: LOOP_KIND_ID.to_string(),
@@ -608,6 +756,50 @@ pub mod scene_modifier_loop {
         def.wires.push(wire(switch_id, "out", target, "camera"));
         true
     }
+
+    /// P4 load migration: an applied loop stamped before the enrichment
+    /// carries only the four D6 rows. Re-stamp the loop nodes' curated
+    /// exposures through the CURRENT whitelist — the stamper is idempotent
+    /// by (node_id, param), so existing rows are untouched and only the new
+    /// P4 rows (Flow/Stride/Sway/…/Spacing/Jitter) land. The Spacing row's
+    /// range is curated against the node's CURRENT cell_size (the auto cell
+    /// for every pre-P4 project — none have Spacing-written cells yet).
+    /// Runs in the same per-layer load loop as `migrate_scene_exposures`.
+    /// Returns true when any new row was stamped.
+    pub fn migrate_loop_exposure_rows(def: &mut EffectGraphDef) -> bool {
+        let result = trace_modifier(&SCENE_LOOP_DESCRIPTOR, &def.nodes);
+        if !result.applied(&SCENE_LOOP_DESCRIPTOR) {
+            return false;
+        }
+        let mut changed = false;
+        for t in SCENE_LOOP_DESCRIPTOR.trace {
+            let Some(&doc_id) = result.doc_ids.get(t.node_id) else { continue };
+            let Some(node) = def.nodes.iter().find(|n| n.id == doc_id) else { continue };
+            let Some(mut exposure) = curated_exposure(SCENE_LOOP_DESCRIPTOR.row_whitelist, node) else {
+                continue;
+            };
+            if t.node_id == "loop_camera" {
+                let cell = exposure
+                    .params
+                    .get("cell_size")
+                    .and_then(|v| match v {
+                        SerializedParamValue::Float { value } => Some(*value),
+                        _ => None,
+                    })
+                    .unwrap_or(10.0);
+                curate_spacing_row(&mut exposure, cell);
+            }
+            if manifold_core::scene_exposure::stamp_scene_node_exposures(
+                def,
+                doc_id,
+                "Scene Loop",
+                &exposure.metadata,
+            ) {
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 pub mod scene_modifier_fog {
@@ -657,6 +849,7 @@ pub mod scene_modifier_fog {
             TraceNode { type_id: "node.math", node_id: "fog_mul", required: true },
         ],
         row_whitelist: Some(FOG_ROW_WHITELIST),
+        coupled_writes: &[],
         enable: EnableDecl::Gate {
             enabled_node: "fog_enabled",
             amount_node: "fog_amount",
