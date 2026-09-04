@@ -322,7 +322,13 @@ Accepted — same hazard class as when `Audio = 3` was added.
   `|| is_dmx()` per guard** — that manufactures N copies of one distinction; the predicate
   lives once on `Layer` and every gate reads it. Where a site's intent genuinely differs
   (drag-move LED↔Video, scene-panel scope, MIDI import meaning) the item is a Peter call,
-  not a predicate widening — those are beads, not silent edits.
+  not a predicate widening — those are beads, not silent edits. **The predicate is type
+  membership, not gen_params presence:** `Layer::hosts_generator() = matches!(self.layer_type,
+  LayerType::Generator | LayerType::Led)`. A presence-based guard is a shipped regression —
+  `change_generator_type` and `restore_generator_state` create gen_params via
+  `get_or_insert_with` when absent (layer.rs:890, :951) precisely to serve Generator layers
+  with no generator yet; gating on presence would turn "assign a generator to an empty
+  Generator layer" into a silent no-op (adversarial review, k3, 2026-09-04).
 - **D17 — DMX-ness in the UI is data on shared surfaces, never a new surface.** The card
   stays the generic manifest-backed `ParamCardPanel` (WIDGET_TREE_DESIGN section 5b is the
   machine rule); the browser stays the one `BrowserPopupPanel`. What arrives: presets
@@ -551,18 +557,25 @@ LFOs, triggers."
   `rg -n 'change_generator_type|restore_generator_state' crates/manifold-core/src/layer.rs`,
   `rg -n 'reset_all_effectives' crates/manifold-playback` — counts must match this doc
   (3 guards in layer.rs, 1 in modulation.rs) or stop and re-list.
-- *Deliverables:* one predicate on `Layer` (name it `carries_generator` — true when
-  `gen_params` exists with a non-NONE type; the audit's candidate predicate), replacing the
-  `!= LayerType::Generator` early returns in `change_generator_type` (layer.rs:884),
-  `restore_generator_state` (:945), and the identity reconcile (:913); the
+- *Deliverables:* one predicate on `Layer` — `hosts_generator()`, type membership per D16 —
+  replacing the `!= LayerType::Generator` early returns in `change_generator_type`
+  (layer.rs:884), `restore_generator_state` (:945), and the identity reconcile (:904); the
   `== LayerType::Generator` gate in `reset_all_effectives` (modulation.rs:204) reads the
-  same predicate; `Timeline::add_layer` LED arm seeds gen_params (timeline.rs:352 — same
-  default contract as D12). Plus the two characterization tests below.
+  same predicate. The widening also covers `PasteGeneratorCommand`
+  (crates/manifold-editing/src/commands/settings.rs:487-505), which reaches the model
+  through `restore_generator_state`. **No production change in `timeline.rs`** — its LED
+  arm calls `change_generator_type`, which the widening fixes automatically (adversarial
+  review finding; the pre-amendment "seed gen_params in timeline.rs" deliverable was
+  wrong-shaped). Tests: the two characterization tests below, plus a paste-onto-DMX-lane
+  regression through PasteGeneratorCommand, plus an `add_layer` regression (Led layer +
+  "LED Fill" → gen_params seeded).
 - *Gate (positive):* (1) unit — build a `LayerType::Led` layer with the LED Fill default,
   run `ChangeGeneratorTypeCommand`, assert `generator_type` changed and undo restores —
   fails on pre-fix code, mandatory; (2) unit — envelope on a DMX-lane generator param
   returns to base after the driving note ends (the BUG-p3rq (modulation reset gated to Generator lanes) ratchet) —
-  fails on pre-fix code, mandatory.
+  fails on pre-fix code, mandatory; (3) paste a generator onto an empty-aside-from-type
+  Generator layer still assigns (the predicate-shape regression the adversarial review
+  caught) — fails if the predicate is presence-based.
 - *Gate (negative):* `rg -n '!= LayerType::Generator' crates/manifold-core/src/layer.rs`
   returns zero hits outside the predicate definition itself.
 - *Demo:* L3 — ui-flow: select LED layer → click the gen card's Change button → pick LED
@@ -582,7 +595,8 @@ LFOs, triggers."
   Re-derivation command:
   `rg -n 'LayerType::Led|is_led\(\)|"Led"' crates/ --no-heading -g '*.rs' | wc -l` — the
   audit counted ~60 non-test sites in 14 files; if the count differs materially, stop and
-  re-list before touching anything.
+  re-list before touching anything. The P3a tests name `LayerType::Led` — they are
+  expected rename call sites and belong in the seam inventory.
 - *Deliverables:* rename the variant + `is_led()` → `is_dmx()` (keep `routes_to_led` —
   it names the LED composite incl. mirror routing); serde Deserialize accepts `4`,
   `"Dmx"`, `"Led"` (Serialize unchanged, int only); delete the dead `led_tap` path
@@ -616,9 +630,14 @@ LFOs, triggers."
   pre-flighted through `graph-tool validate --kind generator`; (3) generator mode passes
   categories through `build_preset_picker_items` and builds `category_names` by the same
   derivation Effect mode uses (dropdowns.rs:364-370); (4) `category_color`
-  (browser_popup.rs:996) gains an "LED" arm; (5) scoped open: the GenTypeClicked arm looks
-  up the requesting layer's type and calls the existing `set_category(Some("LED"))`
-  (browser_popup.rs:323) after open; (6) no `BrowserPopupRequest` schema change.
+  (browser_popup.rs:996) gains an "LED" arm (the "Generators" chip-label skip at
+  browser_popup.rs:566 is effect-browser-specific and stays — say so, or a lane will
+  "fix" it); (5) scoped open: the GenTypeClicked arm calls the existing
+  `set_category(Some("LED"))` (browser_popup.rs:323) **after `open()` in the same arm** —
+  `set_category` no-ops while the popup session is None, and the session is created inside
+  `open()` (:296), so calling it before/without open() is a silent dead end; the arm needs
+  the requesting layer's type from the project snapshot — if UiRoot has no reach to it,
+  escalate; do NOT add a request field; (6) no `BrowserPopupRequest` schema change.
 - *Gate (positive):* (1) `graph-tool validate --kind generator` clean on all ten re-tagged
   presets; (2) unit — a Generator-mode picker request built for a DMX layer carries the
   LED category active and items filtered to `category == "LED"`; (3) the P1 default-preset
