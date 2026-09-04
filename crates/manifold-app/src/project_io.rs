@@ -408,6 +408,11 @@ impl ProjectIOService {
                     if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
                         manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
                         manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
+                        // SCENE_MODIFIER_FRAMEWORK D8 (INV-M8): pre-switch
+                        // loop graphs gain the loop_cam_switch camera mux at
+                        // load, once, through the same generic shape the
+                        // apply mints — never a manual migrate button.
+                        manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
                     }
                 }
 

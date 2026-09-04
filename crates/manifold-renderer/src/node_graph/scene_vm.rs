@@ -55,8 +55,6 @@ const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
 const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
 const LOOK_AT_CAMERA_TYPE_ID: &str = "node.look_at_camera";
 const LOOP_CAMERA_TYPE_ID: &str = "node.loop_camera";
-const SCENE_ARRAY_TYPE_ID: &str = "node.scene_array";
-const BEAT_RAMP_TYPE_ID: &str = "node.beat_ramp";
 const CAMERA_LENS_TYPE_ID: &str = "node.camera_lens";
 const MOTION_BLUR_TYPE_ID: &str = "node.motion_blur";
 const BOKEH_GATHER_TYPE_ID: &str = "node.bokeh_gather";
@@ -113,9 +111,13 @@ pub struct SceneVm {
     pub camera: CameraVm,
     pub environment: EnvironmentVm,
     pub atmosphere: AtmosphereVm,
-    /// SCENE_LOOP_DESIGN P2: `Some` when the graph contains loop nodes
-    /// (structural trace, never a flag — the panel derives state from this).
-    pub scene_loop: Option<SceneLoopInfo>,
+    /// SCENE_MODIFIER_FRAMEWORK D2/D3: one entry per registry kind, in
+    /// canonical slot order — presence, order, and identity all DERIVED
+    /// from the generic structural trace, never stored. The loop is kind
+    /// #1 (`scene_loop`); kind fields for the UI's existing surfaces come
+    /// from here (e.g. the panel's Scene Loop section reads the applied
+    /// `scene_loop` entry).
+    pub modifiers: Vec<SceneModifierVm>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when the graph stores import-time bounds (populated by the glTF importer
     /// from `GltfImportSummary`), read at VM-build time to compute scene-relative
@@ -372,20 +374,28 @@ pub struct LoopCameraRow {
     pub lens: Option<LensRow>,
 }
 
-/// SCENE_LOOP_DESIGN P2: info about the scene loop nodes when applied.
-/// `Some` = loop is applied (structural trace, never a flag).
+/// SCENE_MODIFIER_FRAMEWORK section 3.4: one modifier kind's VM entry —
+/// applied or not, never filtered out (D2: the list is derived, and "not
+/// applied" is the picker's information, not a dead card).
 #[derive(Debug, Clone, PartialEq)]
-pub struct SceneLoopInfo {
-    /// Doc id of the `node.beat_ramp` (loop_phase).
-    pub beat_ramp_doc_id: u32,
-    /// The loop_phase `node.beat_ramp`'s current `bars` (0 = parked at phase
-    /// 0) — read for the panel's wrap-debug toggle to restore after parking.
-    /// `None` for a pre-P4 loop node that carries only the legacy `rate`.
-    pub beat_ramp_bars: Option<f32>,
-    /// Doc id of the `node.scene_array`.
-    pub scene_array_doc_id: u32,
-    /// Doc id of the `node.loop_camera`.
-    pub loop_camera_doc_id: u32,
+pub struct SceneModifierVm {
+    pub kind_id: &'static str,
+    pub display_name: &'static str,
+    /// All REQUIRED trace nodes resolved (D3 all-or-nothing); a partial
+    /// hand-edit reads as not applied.
+    pub applied: bool,
+    /// Doc id per trace node_id (applied kinds only; includes optional
+    /// trace nodes like the loop's camera switch when present).
+    pub doc_ids: std::collections::HashMap<&'static str, u32>,
+    /// The enable toggle's current state, read off the graph at VM build
+    /// (the state is the graph's, never a UI flag — the wrap-debug lesson).
+    /// `None` when the kind carries no enable wiring or the wiring node is
+    /// absent (e.g. a hand-deleted camera switch).
+    pub enabled: Option<bool>,
+    /// `true` when the graph carries more than one live render_scene —
+    /// the kind's apply refuses (INV-M6), and surfaces that offer the
+    /// modifier show it blocked.
+    pub multiple_scenes_blocked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -530,7 +540,35 @@ impl SceneVm {
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
-        let scene_loop = trace_scene_loop(&root);
+        // D2: the modifier list is derived, one VM entry per registry kind
+        // in canonical slot order — never stored, never filtered.
+        let modifiers = crate::node_graph::scene_modifier::descriptors()
+            .into_iter()
+            .map(|descriptor| {
+                let result =
+                    crate::node_graph::scene_modifier::trace_modifier(descriptor, root.nodes);
+                let applied = result.applied(descriptor);
+                let enabled = match descriptor.enable {
+                    crate::node_graph::scene_modifier::EnableDecl::Switch { node_id } => result
+                        .doc_ids
+                        .get(node_id)
+                        .and_then(|&doc| root.node(doc))
+                        .and_then(|n| n.params.get("select"))
+                        .map(|v| matches!(v, SerializedParamValue::Enum { value } if *value == 1)),
+                    // Gate kinds (P2's scene_fog) read their enabled value
+                    // atom then; v1 has no gate kind.
+                    crate::node_graph::scene_modifier::EnableDecl::Gate { .. } => None,
+                };
+                SceneModifierVm {
+                    kind_id: descriptor.kind_id,
+                    display_name: descriptor.display_name,
+                    applied,
+                    doc_ids: result.doc_ids.into_iter().collect(),
+                    enabled,
+                    multiple_scenes_blocked: multiple_scenes,
+                }
+            })
+            .collect();
 
         let object_count = objects.len();
         let light_count = lights.len();
@@ -590,7 +628,7 @@ impl SceneVm {
             camera,
             environment,
             atmosphere,
-            scene_loop,
+            modifiers,
             scene_bounds,
         })
     }
@@ -1139,47 +1177,6 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
         return AtmosphereVm::None;
     }
     AtmosphereVm::Wired(Box::new(AtmosphereRow { node_doc_id: node.id }))
-}
-
-/// SCENE_LOOP_DESIGN P2: trace for loop nodes in the graph. Returns `Some`
-/// when the graph contains a `node.beat_ramp` with node_id "loop_phase", a
-/// `node.scene_array`, and a `node.loop_camera` — the three atoms the
-/// apply-command always creates. The atmosphere node is optional (only minted
-/// when the graph had none).
-fn trace_scene_loop(level: &Level) -> Option<SceneLoopInfo> {
-    let mut beat_ramp_doc_id = None;
-    let mut beat_ramp_bars = None;
-    let mut scene_array_doc_id = None;
-    let mut loop_camera_doc_id = None;
-
-    for node in level.nodes {
-        match node.type_id.as_str() {
-            BEAT_RAMP_TYPE_ID if node.node_id.as_ref() == "loop_phase" => {
-                beat_ramp_doc_id = Some(node.id);
-                // bars governs the loop phase (1/bars cycles/beat); 0 = parked
-                // at phase 0. Pre-P4 loops carry only `rate` — treat a missing
-                // bars as the 8-bar default rather than parked.
-                beat_ramp_bars = node.params.get("bars").and_then(|v| match v {
-                    SerializedParamValue::Float { value } => Some(*value),
-                    _ => None,
-                });
-            }
-            SCENE_ARRAY_TYPE_ID => {
-                scene_array_doc_id = Some(node.id);
-            }
-            LOOP_CAMERA_TYPE_ID => {
-                loop_camera_doc_id = Some(node.id);
-            }
-            _ => {}
-        }
-    }
-
-    Some(SceneLoopInfo {
-        beat_ramp_doc_id: beat_ramp_doc_id?,
-        beat_ramp_bars,
-        scene_array_doc_id: scene_array_doc_id?,
-        loop_camera_doc_id: loop_camera_doc_id?,
-    })
 }
 
 /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether `param_id`
