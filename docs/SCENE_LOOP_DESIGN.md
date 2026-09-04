@@ -1,9 +1,15 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** IN PROGRESS — P1–P4 on main (P4 2026-09-03: D6 whitelist panel Bars/Copies/Height/Lateral, D7 fog cut, D11 round-trip gate green; BUG-twa6 wrap gate deleted not muted, INV-3 on minimal graph). Awaiting Peter's sakura acceptance run (enable → play → save → reload; four rows). Owed: VD BUG-nkxg (pixel-level copies gate), BUG-twa6 (real-import wrap parity blocked on AO seed control), BUG-59j1 (legacy fog on Remove). · k3 (lead)
+**Status:** SHIPPED — absorbed into SCENE_MODIFIER_FRAMEWORK as kind `scene_loop` (loop behavior contract below unchanged; the panel fold section is superseded by inspector modifier cards). Owed: BUG-nkxg (scene-loop-copies-gate-VD), BUG-twa6 (real-import-seed-nondeterminism), BUG-59j1 (legacy-fog-on-remove), Peter's sakura acceptance run. · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 Lifecycle: contract — scene-loop atoms and commands remain the cited contract for any future scene-loop work.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
+
+Absorbed 2026-09-05: SCENE_MODIFIER_FRAMEWORK P1–P5 generalized the loop into kind
+`scene_loop` — the atom params, wrap purity, gap rule, and invariants in this doc are
+the unchanged behavior contract. The Scene Setup panel fold section (D6) was replaced
+by inspector modifier cards (framework D4); the wrap-debug affordance moved to card
+chrome. P4-era history (2026-09-03 whitelist/INV-3 gate work) is in git.
 
 A classic VJ loop is a fixed 10-second render. This design makes an imported GLB
 scene loop infinitely, beat-locked: the scene is instanced end-to-end along a
