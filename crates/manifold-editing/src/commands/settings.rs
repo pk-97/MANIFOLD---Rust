@@ -1183,5 +1183,127 @@ mod tests {
         assert_eq!(project.settings.rt_quality.realtime.reflections, RtQualityTier::Ultra);
         assert_eq!(project.settings.rt_quality.realtime.ray_resolution, RtRayResolution::Quarter);
     }
+
+    // ── MVP-P3a: paste generator on gen-carrying lanes (LED_STRIPS_DESIGN.md section 5b D16) ──
+
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    const TEST_PASTE_GEN_A: PresetTypeId = PresetTypeId::new("TestPasteGenA");
+    const TEST_PASTE_GEN_B: PresetTypeId = PresetTypeId::new("TestPasteGenB");
+
+    inventory::submit! {
+        GeneratorMetadata {
+            id: PresetTypeId::new("TestPasteGenA"),
+            display_name: "Test Paste Gen A",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "testPasteGenA",
+            legacy_discriminant: None,
+            params: &[ParamSpec::continuous("speed", "Speed", 0.0, 10.0, 0.0, "F2", "")],
+        }
+    }
+    inventory::submit! {
+        GeneratorMetadata {
+            id: PresetTypeId::new("TestPasteGenB"),
+            display_name: "Test Paste Gen B",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "testPasteGenB",
+            legacy_discriminant: None,
+            params: &[ParamSpec::continuous("speed", "Speed", 0.0, 10.0, 0.0, "F2", "")],
+        }
+    }
+
+    fn default_instance(gen_type: &PresetTypeId) -> PresetInstance {
+        let mut inst = PresetInstance::new_generator(gen_type.clone());
+        inst.init_defaults_for_type(gen_type.clone());
+        inst
+    }
+
+    /// PasteGeneratorCommand reaches the model through
+    /// `restore_generator_state`, so the D16 widening covers it: pasting a
+    /// generator onto an LED lane assigns the pasted type. Pre-fix the
+    /// `!= Generator` guard made the paste a silent no-op.
+    #[test]
+    fn paste_generator_onto_led_layer_assigns() {
+        let mut project = Project::default();
+        let mut add = crate::commands::layer::AddLayerCommand::new(
+            "LED 1".to_string(),
+            LayerType::Led,
+            TEST_PASTE_GEN_A.clone(),
+            0,
+            None,
+        );
+        add.execute(&mut project);
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+
+        let (old_type, old_params, old_drivers, old_envelopes) = {
+            let gp = project.timeline.layers[0].gen_params().unwrap();
+            (
+                gp.generator_type().clone(),
+                gp.snapshot_params(),
+                gp.snapshot_drivers(),
+                gp.snapshot_envelopes(),
+            )
+        };
+        let new_inst = default_instance(&TEST_PASTE_GEN_B);
+
+        let mut cmd = PasteGeneratorCommand::new(
+            layer_id,
+            old_type,
+            old_params,
+            old_drivers,
+            old_envelopes,
+            TEST_PASTE_GEN_B.clone(),
+            new_inst.snapshot_params(),
+            new_inst.snapshot_drivers(),
+            new_inst.snapshot_envelopes(),
+        );
+        cmd.execute(&mut project);
+
+        assert_eq!(
+            project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .generator_type(),
+            &TEST_PASTE_GEN_B,
+            "paste must assign the pasted generator onto an LED lane"
+        );
+    }
+
+    /// Predicate-shape pin (adversarial review, LED_STRIPS_DESIGN.md section
+    /// 5b D16): the predicate is type membership, NOT gen_params presence.
+    /// Pasting onto a Generator layer whose gen_params is None must still
+    /// create the instance — a presence-based guard regresses this to a
+    /// silent no-op.
+    #[test]
+    fn paste_generator_onto_generator_layer_without_gen_params_creates_it() {
+        let mut project = Project::default();
+        let gen_layer = Layer::new("Gen 1".into(), LayerType::Generator, 0);
+        let layer_id = gen_layer.layer_id.clone();
+        project.timeline.layers = vec![gen_layer];
+
+        let new_inst = default_instance(&TEST_PASTE_GEN_B);
+        let mut cmd = PasteGeneratorCommand::new(
+            layer_id,
+            PresetTypeId::NONE,
+            vec![],
+            None,
+            None,
+            TEST_PASTE_GEN_B.clone(),
+            new_inst.snapshot_params(),
+            new_inst.snapshot_drivers(),
+            new_inst.snapshot_envelopes(),
+        );
+        cmd.execute(&mut project);
+
+        let gp = project.timeline.layers[0]
+            .gen_params()
+            .expect("paste must create gen_params on an empty Generator layer");
+        assert_eq!(gp.generator_type(), &TEST_PASTE_GEN_B);
+    }
 }
 

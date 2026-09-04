@@ -24,7 +24,6 @@ use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
-use manifold_core::types::LayerType;
 
 // ── Shared modulation core ──────────────────────────────────────────────────
 //
@@ -201,7 +200,7 @@ pub fn reset_all_effectives(project: &mut Project) {
     let layers = &mut project.timeline.layers;
     for layer in layers.iter_mut() {
         // Generator params: reset only driven/enveloped params (per Unity semantics)
-        if layer.layer_type == LayerType::Generator
+        if layer.hosts_generator()
             && let Some(gp) = layer.gen_params_mut()
         {
             gp.reset_effectives();
@@ -1244,6 +1243,53 @@ mod tests {
         let mut project = project_with(layer);
         let timing = vec![(Beats(0.0), Beats(8.0))];
         assert!(!evaluate_all_envelopes(&mut project, &timing));
+    }
+
+    /// BUG-p3rq characterization (LED_STRIPS_DESIGN.md section 5b D16): an
+    /// LED lane hosts a generator, so its modulated params must reset to base
+    /// each tick like any generator layer's. Pre-fix the reset gate keyed on
+    /// `layer_type == Generator`, the envelope offset stacked frame over
+    /// frame, and the param ratcheted to max and stayed there after the
+    /// driving note ended.
+    #[test]
+    fn led_layer_envelope_returns_to_base_after_note_end() {
+        fn speed(project: &Project) -> f32 {
+            project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .params
+                .get("speed")
+                .unwrap()
+                .value
+        }
+
+        let mut layer = Layer::new(
+            "LedLayer".into(),
+            manifold_core::types::LayerType::Led,
+            0,
+        );
+        layer.gen_params_or_init().init_defaults_for_type(TEST_GEN.clone());
+        {
+            let gp = layer.gen_params_mut().unwrap();
+            gp.envelopes = Some(vec![full_depth_env("speed")]);
+        }
+        let mut project = project_with(layer);
+
+        // Note active: rising edge, full-depth decay → speed driven to max.
+        reset_all_effectives(&mut project);
+        assert!(evaluate_all_envelopes(&mut project, &[(Beats(0.0), Beats(8.0))]));
+        assert!(
+            (speed(&project) - 10.0).abs() < 1e-6,
+            "envelope drives speed to max, got {}",
+            speed(&project)
+        );
+
+        // Note ended (sentinel elapsed -1): the tick reset must return speed
+        // to base. Pre-fix the LED layer skipped the reset and the value
+        // stayed ratcheted at max.
+        reset_all_effectives(&mut project);
+        assert!(!evaluate_all_envelopes(&mut project, &[(Beats(-1.0), Beats::ZERO)]));
+        assert_eq!(speed(&project), 0.0, "speed returns to base once the note ends");
     }
 
     // ── envelope Step/Random actions (PARAM_STEP_ACTIONS D8) ─────────────
