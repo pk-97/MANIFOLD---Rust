@@ -1,6 +1,6 @@
 # Scene Modifier Framework — 3D scene behaviors as first-class cards
 
-**Status:** IN PROGRESS — design approved (K3 adversarial review APPROVE-WITH-FIXES, all 11 fixes applied; Peter green-lit implementation 2026-09-04) · P1 executing · k3 (lead)
+**Status:** IN PROGRESS — P1 LANDED 2026-09-04 (framework core + loop-as-kind; gate 7/7) · P2 (fog kind) next · k3 (lead)
 **Prerequisites:** SCENE_LOOP P1–P4 (on main — the loop is this framework's first kind), WIDGET_TREE_DESIGN P1–P5 (the `ParamSurface` card layer), SCENE_PANEL_EXPOSURE_CONVERGENCE (scene rows are card rows). All on main; nothing unbuilt.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
