@@ -123,6 +123,11 @@ impl InspectorCompositePanel {
                 return vec![a];
             }
         }
+        for card in &self.modifier_cards {
+            if let Some(a) = card.value_cell_typein(node_id, tree) {
+                return vec![a];
+            }
+        }
         Vec::new()
     }
 
@@ -142,6 +147,11 @@ impl InspectorCompositePanel {
             return vec![a];
         }
         for card in &self.effects[Self::SCOPE_LAYER] {
+            if let Some(a) = card.driver_period_typein(node_id, tree) {
+                return vec![a];
+            }
+        }
+        for card in &self.modifier_cards {
             if let Some(a) = card.driver_period_typein(node_id, tree) {
                 return vec![a];
             }
@@ -204,6 +214,11 @@ impl InspectorCompositePanel {
         {
             return Some(PressedTarget::GenParam);
         }
+        for (i, card) in self.modifier_cards.iter().enumerate() {
+            if in_range(idx, card.first_node(), card.node_count()) {
+                return Some(PressedTarget::Modifier(i));
+            }
+        }
         for (i, card) in self.effects[Self::SCOPE_LAYER].iter().enumerate() {
             if in_range(idx, card.first_node(), card.node_count()) {
                 return Some(PressedTarget::LayerEffect(i));
@@ -254,6 +269,15 @@ impl InspectorCompositePanel {
         }
         if self.add_layer_effect_btn == Some(node_id) {
             return vec![PanelAction::Params(ParamsAction::AddEffectClicked(InspectorTab::Layer))];
+        }
+        // SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier picker — the
+        // owning layer rides on the action; the app builds the kind list
+        // (applied/inapplicable disabled) and opens the typed dropdown.
+        if self.add_modifier_btn == Some(node_id) {
+            return match self.modifier_scope_id.clone() {
+                Some(lid) => vec![PanelAction::Params(ParamsAction::AddModifierClicked(lid))],
+                None => Vec::new(),
+            };
         }
         if let Some(target) = self.find_target_for_node(node_id) {
             self.update_last_effect_tab(&target);
@@ -320,6 +344,13 @@ impl InspectorCompositePanel {
                     .gen_params
                     .as_mut()
                     .map(|gp| gp.handle_click(node_id, tree))
+                    .unwrap_or_default(),
+                // Modifier cards: plain click routing — no selection set, no
+                // drag-reorder (fixed slots, D2), no EffectCardClicked.
+                PressedTarget::Modifier(i) => self
+                    .modifier_cards
+                    .get_mut(i)
+                    .map(|c| c.handle_click(node_id, tree))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }
@@ -395,6 +426,11 @@ impl InspectorCompositePanel {
                     .gen_params
                     .as_mut()
                     .map(|gp| gp.handle_pointer_down(node_id, pos, tree))
+                    .unwrap_or_default(),
+                PressedTarget::Modifier(i) => self
+                    .modifier_cards
+                    .get_mut(i)
+                    .map(|c| c.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => {
                     self.dragging_scrollbar = true;

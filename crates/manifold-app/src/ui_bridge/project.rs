@@ -3,6 +3,7 @@
 
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 use manifold_ui::ProjectAction;
@@ -332,22 +333,17 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
 
-        // SCENE_MODIFIER_FRAMEWORK P1 (D6): "Enable Scene Loop" dispatches
-        // the GENERIC ApplySceneModifierCommand with the scene_loop kind's
-        // plan built from the scene's bounds + current graph.
-        ProjectAction::SceneSetupApplyLoop(layer_id, render_scene_node_id) => {
+        // SCENE_MODIFIER_FRAMEWORK P3 (section 3.7): the generic modifier
+        // actions — apply/remove/toggle by kind id through the same generic
+        // command pair P1 shipped (the loop-specific arms they replace were
+        // the same dispatch with the kind pinned to `scene_loop`).
+        ProjectAction::SceneModifierApply(layer_id, kind_id) => {
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
             };
             let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-            let plan = match build_scene_modifier_plan(
-                project,
-                layer_id,
-                *render_scene_node_id,
-                manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID,
-            ) {
-                Some(plan) => plan,
-                None => return DispatchResult::handled(),
+            let Some(plan) = modifier_plan_for(project, layer_id, kind_id) else {
+                return DispatchResult::handled();
             };
             let cmd = manifold_editing::commands::graph::ApplySceneModifierCommand::new(
                 target,
@@ -360,23 +356,12 @@ pub(super) fn dispatch_project(
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-        // SCENE_MODIFIER_FRAMEWORK P1: "Remove Scene Loop" dispatches the
-        // generic remove — the plan it needs to invert is built the same way
-        // apply builds it; the command derives the pre-modifier state from
-        // the current graph (D5 symmetric removal, no panel-side snapshot),
-        // and prunes the instance layer (manifest params + modulation) the
-        // old loop remove left orphaned (BUG-6vv7 (scene-loop-remove-orphan-presetinstance-params)).
-        ProjectAction::SceneSetupRemoveLoop(layer_id, render_scene_node_id) => {
+        ProjectAction::SceneModifierRemove(layer_id, kind_id) => {
             if generator_catalog_default(project, layer_id).is_none() {
                 return DispatchResult::handled();
             }
             let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-            let Some(plan) = build_scene_modifier_plan(
-                project,
-                layer_id,
-                *render_scene_node_id,
-                manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID,
-            ) else {
+            let Some(plan) = modifier_plan_for(project, layer_id, kind_id) else {
                 return DispatchResult::handled();
             };
             let cmd = manifold_editing::commands::graph::RemoveSceneModifierCommand::new(
@@ -388,6 +373,66 @@ pub(super) fn dispatch_project(
             boxed.execute(project);
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
+        }
+        // D5/INV-M7: the enable toggle is ONE param write on the kind's
+        // enable target, resolved app-side from the descriptor + trace —
+        // never a graph rebuild. Switch kinds write the camera switch's
+        // `select` (an Enum param — the write preserves its storage variant);
+        // gate kinds write the enabled value atom's `value` through the
+        // standard scene write path (it IS a stamped exposure).
+        ProjectAction::SceneModifierToggleEnabled(layer_id, kind_id) => {
+            let Some(default) = generator_catalog_default(project, layer_id) else {
+                return DispatchResult::handled();
+            };
+            let Some((doc_id, param, current)) =
+                modifier_enable_target(project, layer_id, kind_id)
+            else {
+                return DispatchResult::handled();
+            };
+            let next = if current > 0.5 { 0.0 } else { 1.0 };
+            let enable_decl_switch = manifold_renderer::node_graph::scene_modifier::descriptor_for(kind_id)
+                .is_some_and(|d| {
+                    matches!(
+                        d.enable,
+                        manifold_renderer::node_graph::scene_modifier::EnableDecl::Switch { .. }
+                    )
+                });
+            if enable_decl_switch {
+                // The switch's `select` is internal (never an exposure), so
+                // the f32-only scene write path can't be used — write the
+                // node param directly, preserving its Enum storage variant.
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let (_, layer) = match project.timeline.find_layer_by_id(layer_id) {
+                    Some(pair) => pair,
+                    None => return DispatchResult::handled(),
+                };
+                let is_enum = layer
+                    .generator_graph()
+                    .and_then(|def| def.nodes.iter().find(|n| n.id == doc_id))
+                    .and_then(|n| n.params.get(param))
+                    .is_some_and(|v| matches!(v, SerializedParamValue::Enum { .. }));
+                let value = if is_enum {
+                    SerializedParamValue::Enum { value: next as u32 }
+                } else {
+                    SerializedParamValue::Float { value: next }
+                };
+                let mut cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                        target,
+                        doc_id,
+                        param.to_string(),
+                        value,
+                        default,
+                    ),
+                );
+                cmd.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+            } else if let Some(cmd) =
+                apply_scene_param_write(project, layer_id, Vec::new(), doc_id, param, next)
+            {
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+            }
+            DispatchResult::handled()
         }
 
         // P2 "+ Object"/"+ Light" buttons: the SAME `AddSceneObjectCommand`/
@@ -1085,14 +1130,13 @@ fn map_skin_target_map(
 /// graph. The plan is built RENDERER-side by the kind descriptor's
 /// `plan_builder` (D1 — it can read the primitive manifests the exposure
 /// stamping needs), so this app-side helper only resolves the current
-/// effective `EffectGraphDef` and delegates through the registry. The plan
-/// is built even when the modifier is already applied (the remove arm reuses
-/// this builder to know the shape it inverts), so nothing here assumes a
-/// pre-modifier graph.
-fn build_scene_modifier_plan(
+/// effective `EffectGraphDef` + the `render_scene` node id and delegates
+/// through the registry. The plan is built even when the modifier is already
+/// applied (the remove arm reuses this builder to know the shape it
+/// inverts), so nothing here assumes a pre-modifier graph.
+fn modifier_plan_for(
     project: &Project,
     layer_id: &LayerId,
-    render_scene_node_id: u32,
     kind_id: &str,
 ) -> Option<manifold_core::scene_modifier::SceneModifierPlan> {
     let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
@@ -1100,7 +1144,49 @@ fn build_scene_modifier_plan(
         Some(d) => d,
         None => generator_catalog_default(project, layer_id)?,
     };
+    let render_scene_node_id = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+        .map(|n| n.id)?;
     manifold_renderer::node_graph::scene_modifier::build_plan(kind_id, &def, render_scene_node_id)
+}
+
+/// D5/INV-M7: resolve the kind's enable toggle target to
+/// `(node_doc_id, param, current_value)` — the descriptor's `enable` decl
+/// names the node, the generic trace resolves its live doc id, and the
+/// node's stored param gives the current value to flip.
+fn modifier_enable_target(
+    project: &Project,
+    layer_id: &LayerId,
+    kind_id: &str,
+) -> Option<(u32, &'static str, f32)> {
+    let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
+    let def = match layer.generator_graph().cloned() {
+        Some(d) => d,
+        None => generator_catalog_default(project, layer_id)?,
+    };
+    let descriptor = manifold_renderer::node_graph::scene_modifier::descriptor_for(kind_id)?;
+    let trace = manifold_renderer::node_graph::scene_modifier::trace_modifier(descriptor, &def.nodes);
+    if !trace.applied(descriptor) {
+        return None;
+    }
+    let (node_key, param) = match descriptor.enable {
+        manifold_renderer::node_graph::scene_modifier::EnableDecl::Switch { node_id } => {
+            (node_id, "select")
+        }
+        manifold_renderer::node_graph::scene_modifier::EnableDecl::Gate { enabled_node, .. } => {
+            (enabled_node, "value")
+        }
+    };
+    let doc_id = *trace.doc_ids.get(node_key)?;
+    let node = def.nodes.iter().find(|n| n.id == doc_id)?;
+    let current = match node.params.get(param) {
+        Some(SerializedParamValue::Enum { value }) => *value as f32,
+        Some(SerializedParamValue::Float { value }) => *value,
+        _ => return None,
+    };
+    Some((doc_id, param, current))
 }
 
 #[cfg(test)]
@@ -1655,5 +1741,151 @@ mod tests {
             }
             other => panic!("expected Float, got {other:?}"),
         }
+    }
+
+    /// INV-M4 (SCENE_MODIFIER_FRAMEWORK): a modifier row write lands on
+    /// `GeneratorOf(owning layer)`. Apply the `scene_loop` kind through the
+    /// dispatch arm, then write the Bars row through the SAME
+    /// `SceneSetupParamChanged` wire the modifier card's toggle row rides —
+    /// the value must land in the OWNING layer's graph, addressed by the
+    /// trace's beat_ramp doc id (the BUG-292/INV-5 net, extended to
+    /// modifiers). Value-level, like the BUG-229 dispatch tests above —
+    /// reads the def's real params after dispatch.
+    #[test]
+    fn modifier_row_write_targets_generator_of_owning_layer() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+
+        // Apply the loop via the generic dispatch arm.
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let apply = ProjectAction::SceneModifierApply(
+            layer_id.clone(),
+            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
+        );
+        dispatch_project(
+            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+
+        // The modifier card's Bars row address: the trace's beat_ramp doc id
+        // on the OWNING layer — exactly what the row's ParamAddr sidecar
+        // carries (binding id → Node target → trace doc id).
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+            .expect("looped graph traces");
+        let loop_vm = vm
+            .modifiers
+            .iter()
+            .find(|m| {
+                m.kind_id
+                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
+                    && m.applied
+            })
+            .expect("the loop kind traces applied");
+        let beat_ramp_doc = loop_vm.doc_ids["loop_phase"];
+
+        let write = ProjectAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            beat_ramp_doc,
+            "bars".to_string(),
+            16.0,
+        );
+        let result = dispatch_project(
+            &write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        assert!(!result.structural_change, "a modifier row write is not structural");
+
+        // Bound-row write truth (SCENE_PANEL_CARD_CONVERGENCE): the Bars row
+        // is a stamped exposure, so the write LIVES in the binding's instance
+        // slot on the OWNING layer's generator — never the def's node param
+        // (the def keeps the minted default; the manifest slot is the live
+        // value). Asserting the slot is the GeneratorOf(owning layer) net.
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let binding = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(beat_ramp_doc, "bars")
+            })
+            .flatten()
+            .expect("the Bars row is a stamped exposure on the owning layer");
+        let slot = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.get_base_param(manifold_core::effects::ParamId::from(binding).as_ref())
+            })
+            .expect("the bound slot exists on the owning layer's manifest");
+        assert_eq!(
+            slot, 16.0,
+            "the Bars row write lands on GeneratorOf(owning layer)'s manifest"
+        );
+    }
+
+    /// INV-M7 (SCENE_MODIFIER_FRAMEWORK D5): the enable toggle is exactly ONE
+    /// param write — the graph's node/wire sets are byte-identical across the
+    /// toggle, and the switch's `select` flips (Enum storage preserved —
+    /// the camera_switch's select is internal, never an exposure).
+    #[test]
+    fn modifier_enable_toggle_is_one_param_write_no_structural_change() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let apply = ProjectAction::SceneModifierApply(
+            layer_id.clone(),
+            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
+        );
+        dispatch_project(
+            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+
+        let def_before = effective_def(&project, &layer_id);
+        let node_count = def_before.nodes.len();
+        let wire_count = def_before.wires.len();
+
+        // Toggle OFF.
+        let toggle = ProjectAction::SceneModifierToggleEnabled(
+            layer_id.clone(),
+            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
+        );
+        dispatch_project(
+            &toggle, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        let def_off = effective_def(&project, &layer_id);
+        assert_eq!(def_off.nodes.len(), node_count, "toggle adds no nodes");
+        assert_eq!(def_off.wires.len(), wire_count, "toggle adds no wires");
+        let switch_off = def_off
+            .nodes
+            .iter()
+            .find(|n| n.node_id.as_str() == "loop_cam_switch")
+            .expect("the camera switch is traced");
+        assert!(
+            matches!(
+                switch_off.params.get("select"),
+                Some(SerializedParamValue::Enum { value: 0 })
+            ),
+            "toggle OFF writes select = A (the original camera)"
+        );
+
+        // Toggle back ON.
+        dispatch_project(
+            &toggle, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        let def_on = effective_def(&project, &layer_id);
+        assert_eq!(def_on.nodes.len(), node_count, "toggle adds no nodes");
+        assert_eq!(def_on.wires.len(), wire_count, "toggle adds no wires");
+        let switch_on = def_on
+            .nodes
+            .iter()
+            .find(|n| n.node_id.as_str() == "loop_cam_switch")
+            .expect("the camera switch is traced");
+        assert!(
+            matches!(
+                switch_on.params.get("select"),
+                Some(SerializedParamValue::Enum { value: 1 })
+            ),
+            "toggle ON writes select = B (the loop camera)"
+        );
     }
 }

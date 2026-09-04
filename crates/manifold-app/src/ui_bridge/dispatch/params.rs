@@ -326,6 +326,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // ── Effect modulation ──────────────────────────────────────
         // ── Effect management ──────────────────────────────────────
         ParamsAction::AddEffectClicked(_tab) => DispatchResult::handled(),
+        // SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier picker opens an
+        // app-side overlay (UIRoot::try_open_dropdown); the dispatch layer
+        // has nothing to mutate.
+        ParamsAction::AddModifierClicked(_layer_id) => DispatchResult::handled(),
         ParamsAction::BrowserSearchClicked => DispatchResult::handled(),
         ParamsAction::RemoveEffect(fx_idx) => {
             let tab = effective_tab;

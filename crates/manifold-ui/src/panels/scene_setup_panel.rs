@@ -549,7 +549,6 @@ pub struct SceneSetupVm {
     /// environment/bake node + the atmosphere/fog node, whichever are
     /// wired) — see `ObjectKnownRow::sections`.
     pub world_sections: Vec<String>,
-    pub scene_loop: Option<super::scene_setup_loop::SceneLoopRow>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when bounds are available (stored import bounds or camera-distance proxy),
     /// used to compute scene-relative slider ranges (center ± 2×extent per axis).
@@ -568,7 +567,6 @@ pub enum SceneSelection {
     Light(u32),
     Camera,
     World,
-    SceneLoop,
     /// scene-panel-ux lane: outliner group fold toggle (Scene/Lights/Objects)
     OutlinerFold(&'static str),
 }
@@ -801,6 +799,7 @@ fn placeholder_param_info() -> ParamRow {
             ableton_range: None,
             mappable: false,
         },
+        scene_addr: None,
     }
 }
 
@@ -844,9 +843,6 @@ pub struct ScenePanel {
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
     import_model_id: Option<NodeId>,
-    /// P2 Scene Loop section's UI ids + wrap-debug resume rate (lives in the
-    /// module, not the godfile).
-    pub(crate) scene_loop: super::scene_setup_loop::SceneLoopUi,
     /// P5 (D7): the outliner selection, per layer — UI-local workspace
     /// state, like fold state, NEVER serialized. Missing entry = the
     /// default (first object, else World) — resolved by
@@ -956,7 +952,6 @@ impl Default for ScenePanel {
             add_light_id: None,
             add_plane_id: None,
             import_model_id: None,
-            scene_loop: Default::default(),
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
@@ -1150,7 +1145,6 @@ impl ScenePanel {
         self.add_light_id = None;
         self.add_plane_id = None;
         self.import_model_id = None;
-        self.scene_loop = Default::default();
         self.outliner_row_ids.clear();
         self.outliner_eye_ids.clear();
         self.object_name_ids.clear();
@@ -1317,7 +1311,7 @@ impl ScenePanel {
 
     fn selection_exists(vm: &SceneSetupVm, sel: SceneSelection) -> bool {
         match sel {
-            SceneSelection::Camera | SceneSelection::World | SceneSelection::SceneLoop => true,
+            SceneSelection::Camera | SceneSelection::World => true,
             SceneSelection::OutlinerFold(_) => true, // Fold headers always exist
             SceneSelection::Object(id) => {
                 vm.objects.iter().any(|o| matches!(o, ObjectRowVm::Known(r) if r.object_node_id == id))
@@ -1366,8 +1360,6 @@ impl ScenePanel {
             cy = self.build_outliner_row(
                 tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, EyeSlot::Empty,
             );
-            let loop_lbl = if vm.scene_loop.is_some() { "\u{1F501} Scene Loop" } else { "\u{1F501} Scene Loop (off)" };
-            cy = self.build_outliner_row(tree, inner_x, inner_w, cy, loop_lbl, SceneSelection::SceneLoop, selected, EyeSlot::Empty);
         }
 
         // Lights group header
@@ -1945,9 +1937,6 @@ impl ScenePanel {
             }
             SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
-            SceneSelection::SceneLoop => {
-                super::scene_setup_loop::build_properties(self, tree, inner_x, inner_w, cy, vm)
-            }
             SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
         }
     }
@@ -2540,10 +2529,6 @@ impl ScenePanel {
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                         )));
-                    } else if let Some(act) = super::scene_setup_loop::click_dispatch(
-                        self, *node_id, vm,
-                    ) {
-                        actions.push(act);
                     } else if let Some((group_node_id, _, current_name)) =
                         self.object_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -2880,7 +2865,6 @@ fn outliner_row_key(sel: SceneSelection) -> u64 {
     match sel {
         SceneSelection::Camera => OUTLINER_KEY_BASE,
         SceneSelection::World => OUTLINER_KEY_BASE + 1,
-        SceneSelection::SceneLoop => OUTLINER_KEY_BASE + 50,
         SceneSelection::OutlinerFold(name) => match name {
             "Scene" => KEY_OUTLINER_SCENE,
             "Lights" => KEY_OUTLINER_LIGHTS,
@@ -3074,7 +3058,6 @@ mod tests {
             lights: Vec::new(),
             camera: CameraRowVm::None,
             camera_sections: Vec::new(), world_sections: Vec::new(),
-            scene_loop: None,
             scene_bounds: None,
         })));
         let mut tree = UITree::new();
@@ -3172,7 +3155,6 @@ mod tests {
                 }),
             })),
             camera_sections: Vec::new(), world_sections: Vec::new(),
-            scene_loop: None,
             scene_bounds: None,
         }
     }
@@ -3184,11 +3166,11 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Outliner rows: Scene fold + Camera + World + Scene Loop + Lights fold + 1 Known light + Objects fold + 1 Known object are
+        // Outliner rows: Scene fold + Camera + World + Lights fold + 1 Known light + Objects fold + 1 Known object are
         // selectable (`outliner_row_ids`); the Custom object/light are
         // listed too but as plain labels (D3: never hidden, but no
         // addressable node id to select by, D12).
-        assert_eq!(panel.outliner_row_ids.len(), 8, "Scene/Camera/World/Scene Loop fold rows + Lights fold + 1 known light + Objects fold + 1 known object");
+        assert_eq!(panel.outliner_row_ids.len(), 7, "Scene/Camera/World fold rows + Lights fold + 1 known light + Objects fold + 1 known object");
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
@@ -3829,8 +3811,10 @@ mod tests {
                     ableton_range: None,
                     mappable: false,
                 },
+                scene_addr: None,
             }],
             string_params: Vec::new(),
+            modifier: None,
             audio: AudioCardState::default(),
             relight: crate::panels::param_card::RelightCardConfig::default(),
         };

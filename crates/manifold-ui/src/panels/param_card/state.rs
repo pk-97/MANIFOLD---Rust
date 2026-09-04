@@ -302,6 +302,22 @@ impl ParamCardPanel {
         self.collapse_configured = true;
     }
 
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: whether the loop kind's
+    /// wrap-debug is parked — the beat_ramp's REAL `bars` is 0. The state is
+    /// the graph's (the DBG button's park/resume is a real param write), read
+    /// off the card's own Bars row, never a UI flag (the wrap-debug lesson of
+    /// the deleted `SceneLoopUi`).
+    pub(crate) fn wrap_debug_parked(&self) -> bool {
+        let Some(addr) = self.modifier.as_ref().and_then(|m| m.wrap_debug.as_ref()) else {
+            return false;
+        };
+        self.rows
+            .iter()
+            .find(|r| r.scene_addr.as_ref() == Some(addr))
+            .map(|r| r.value.base.abs() < f32::EPSILON)
+            .unwrap_or(false)
+    }
+
     /// D17 "card collapse" fraction: `1.0` fully expanded, `0.0` fully
     /// collapsed, eased between by `collapse_anim` for Effect cards.
     /// Generator cards always read the settled boolean (see `collapse_anim`'s

@@ -59,6 +59,20 @@ const TAB_FONT_SIZE: u16 = 12;
 /// key is reused per column — each [`chrome::materialize`] call returns only its
 /// own button).
 const KEY_ADD_EFFECT_BTN: u64 = 95_001;
+/// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's key —
+/// one per layer scope, below the modifier cards.
+const KEY_ADD_MODIFIER_BTN: u64 = 95_002;
+
+/// The "+ Add Modifier" button as a typed Chrome view — the same neutral kit
+/// button as "+ Add Effect" (`add_effect_button_view`), keyed separately so
+/// the two never alias each other's materialised node id.
+fn add_modifier_button_view() -> View {
+    View::button("+ Add Modifier")
+        .fill()
+        .style(chrome::components::button_secondary_style())
+        .inert()
+        .key(KEY_ADD_MODIFIER_BTN)
+}
 
 /// A section-card background — the outer 1px border panel + the inset inner fill,
 /// as a typed Chrome view. Materialised into the section's rect each frame;
@@ -112,6 +126,10 @@ enum PressedTarget {
     ClipChrome,
     MasterEffect(usize),
     LayerEffect(usize),
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: one of the layer scope's
+    /// modifier cards (fixed slots — no selection or drag-reorder machinery,
+    /// unlike the effect targets).
+    Modifier(usize),
     GenParam,
     Scrollbar,
 }
@@ -152,6 +170,20 @@ pub struct InspectorCompositePanel {
     /// directly) instead of duplicating a match arm per touchpoint.
     effects: [Vec<ParamCardPanel>; 2],
     gen_params: Option<ParamCardPanel>,
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the layer scope's modifier
+    /// cards — applied scene-modifier kinds only, in slot order, below the
+    /// generator card. Reconciled by effect identity (the kind-keyed
+    /// synthesized id) exactly like the effect cards, so a removed kind
+    /// plays the delete-collapse exit instead of vanishing.
+    modifier_cards: Vec<ParamCardPanel>,
+    /// The layer whose modifiers `modifier_cards` currently holds —
+    /// same navigation semantics as `layer_scope_id`: a scope switch drops
+    /// instantly (no delete-collapse for a navigated-away layer).
+    modifier_scope_id: Option<LayerId>,
+    /// The "+ Add Modifier" dropdown model — one entry per registry kind,
+    /// rebuilt alongside the cards at the structural sync (applicability is
+    /// app-side knowledge; the UI only renders it).
+    modifier_picker: Vec<crate::param_surface::ModifierPickerEntry>,
     /// D17 "delete collapse" (exit-state pattern, `anim.rs`'s doc comment) —
     /// cards `reconcile_cards` no longer finds a config for, kept alive here
     /// so they keep collapsing/fading instead of vanishing the instant the
@@ -163,6 +195,9 @@ pub struct InspectorCompositePanel {
     /// `update()` once `ParamCardPanel::is_delete_finished` is true.
     master_dying: Vec<ParamCardPanel>,
     layer_dying: Vec<ParamCardPanel>,
+    /// D17 exit state for modifier cards — same delete-collapse machinery as
+    /// `layer_dying`, scoped to the modifier region.
+    modifier_dying: Vec<ParamCardPanel>,
     /// The layer whose effects `effects[SCOPE_LAYER]` currently holds. When
     /// `configure_layer_effects` is called for a DIFFERENT scope (a different
     /// selected layer, or none), that's navigation — not an edit of the
@@ -206,6 +241,11 @@ pub struct InspectorCompositePanel {
     // Add Effect button node IDs
     add_master_effect_btn: Option<NodeId>,
     add_layer_effect_btn: Option<NodeId>,
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's
+    /// node id (layer scope only), and whether the current layer scope is a
+    /// scene layer at all (the picker needs a live scene to offer kinds).
+    add_modifier_btn: Option<NodeId>,
+    show_add_modifier: bool,
 
     // Scroll state — two independent columns via ScrollContainer
     master_scroll: ScrollContainer,
@@ -309,8 +349,12 @@ impl InspectorCompositePanel {
             clip_chrome: ClipChromePanel::new(),
             effects: [Vec::new(), Vec::new()],
             gen_params: None,
+            modifier_cards: Vec::new(),
+            modifier_scope_id: None,
+            modifier_picker: Vec::new(),
             master_dying: Vec::new(),
             layer_dying: Vec::new(),
+            modifier_dying: Vec::new(),
             layer_scope_id: None,
             card_context: CardContext::Perform,
             active_tab: InspectorTab::Master,
@@ -321,6 +365,8 @@ impl InspectorCompositePanel {
             mods_compact: false,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
+            add_modifier_btn: None,
+            show_add_modifier: false,
             master_scroll: ScrollContainer::new(),
             layer_scroll: ScrollContainer::new(),
             viewport_rect: Rect::ZERO,
@@ -379,6 +425,9 @@ impl InspectorCompositePanel {
         if let Some(gp) = self.gen_params.as_mut() {
             any |= gp.skip_to_settled(tree);
         }
+        for card in self.modifier_cards.iter_mut() {
+            any |= card.skip_to_settled(tree);
+        }
         if any {
             self.drawer_anim_active = false;
         }
@@ -433,6 +482,9 @@ impl InspectorCompositePanel {
         if let Some(gp) = self.gen_params.as_mut() {
             gp.set_compact(c);
         }
+        for card in self.modifier_cards.iter_mut() {
+            card.set_compact(c);
+        }
     }
 
     /// Number of effect cards in the active column (master or layer/clip).
@@ -477,6 +529,7 @@ impl InspectorCompositePanel {
             .iter()
             .flatten()
             .chain(self.gen_params.iter())
+            .chain(self.modifier_cards.iter())
             .find_map(|card| card.mapping_chevron_rect(tree, param_id))
     }
 
@@ -508,6 +561,27 @@ impl InspectorCompositePanel {
         self.gen_params.as_mut()
     }
 
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the layer the modifier region is
+    /// scoped to — the app's modifier-picker sync reads it to build the
+    /// "+ Add Modifier" dropdown for exactly this layer.
+    pub fn modifier_scope_id(&self) -> Option<&LayerId> {
+        self.modifier_scope_id.as_ref()
+    }
+
+    /// The "+ Add Modifier" dropdown model (one entry per registry kind),
+    /// configured alongside the modifier cards. Empty when the scope isn't
+    /// a scene layer.
+    pub fn modifier_picker(&self) -> &[crate::param_surface::ModifierPickerEntry] {
+        &self.modifier_picker
+    }
+
+    /// Mutable access to the modifier cards — the per-frame value sync rides
+    /// the layer's generator manifest slot stream (modifier rows ARE manifest
+    /// rows), joined by id exactly like the generator card.
+    pub fn modifier_cards_mut(&mut self) -> &mut Vec<ParamCardPanel> {
+        &mut self.modifier_cards
+    }
+
     /// D9 widget catalog for the inspector's manifest-backed cards — every LIVE
     /// [`ParamCardPanel`] this panel owns (both effect scopes' cards + the
     /// generator card) as a [`CatalogSurface`], in render order. Only cards
@@ -529,6 +603,12 @@ impl InspectorCompositePanel {
         }
         if let Some(gen_card) = &self.gen_params {
             let surface = gen_card.catalog(tree);
+            if !surface.affordances.is_empty() {
+                out.push(surface);
+            }
+        }
+        for card in &self.modifier_cards {
+            let surface = card.catalog(tree);
             if !surface.affordances.is_empty() {
                 out.push(surface);
             }
@@ -642,6 +722,9 @@ impl InspectorCompositePanel {
         if let Some(gp) = &self.gen_params {
             gp.update_fire_meters(tree, fire_level, dt);
         }
+        for card in &self.modifier_cards {
+            card.update_fire_meters(tree, fire_level, dt);
+        }
         self.audio_trigger_section.update_fire_meters(tree, fire_level, dt);
     }
 
@@ -662,6 +745,11 @@ impl InspectorCompositePanel {
         {
             return Some(id);
         }
+        for card in &self.modifier_cards {
+            if let Some(id) = card.open_fire_mode_drawer_send() {
+                return Some(id);
+            }
+        }
         self.audio_trigger_section.open_fire_mode_drawer_send()
     }
 
@@ -679,6 +767,11 @@ impl InspectorCompositePanel {
         {
             return Some(b);
         }
+        for card in &self.modifier_cards {
+            if let Some(b) = card.open_fire_mode_drawer_band() {
+                return Some(b);
+            }
+        }
         self.audio_trigger_section.open_fire_mode_drawer_band()
     }
 
@@ -692,6 +785,7 @@ impl InspectorCompositePanel {
             || self.clip_chrome.is_dragging()
             || self.effects.iter().flatten().any(|e| e.is_dragging())
             || self.gen_params.as_ref().is_some_and(|p| p.is_dragging())
+            || self.modifier_cards.iter().any(|c| c.is_dragging())
     }
 
     // ── Scrolling ─────────────────────────────────────────────────
@@ -743,6 +837,7 @@ impl InspectorCompositePanel {
             PressedTarget::LayerChrome
             | PressedTarget::LayerEffect(_)
             | PressedTarget::GenParam
+            | PressedTarget::Modifier(_)
             | PressedTarget::AudioTriggers => {
                 self.last_effect_tab = InspectorTab::Layer;
             }
@@ -955,16 +1050,26 @@ impl Panel for InspectorCompositePanel {
             any |= gp.tick_drawers(dt_ms);
             gp.tick_value_flash(tree, dt_ms);
         }
+        for card in self.modifier_cards.iter_mut() {
+            any |= card.tick_drawers(dt_ms);
+            card.tick_value_flash(tree, dt_ms);
+        }
         // D17 "delete collapse" (exit-state pattern) — dying cards keep
         // ticking (and forcing the rebuild that reflows what follows them)
         // until their collapse+fade finishes, then get dropped for good. The
         // data model already forgot these; this only controls how long the
         // UI keeps painting a card it no longer has.
-        for card in self.master_dying.iter_mut().chain(self.layer_dying.iter_mut()) {
+        for card in self
+            .master_dying
+            .iter_mut()
+            .chain(self.layer_dying.iter_mut())
+            .chain(self.modifier_dying.iter_mut())
+        {
             any |= card.tick_drawers(dt_ms);
         }
         self.master_dying.retain(|c| !c.is_delete_finished());
         self.layer_dying.retain(|c| !c.is_delete_finished());
+        self.modifier_dying.retain(|c| !c.is_delete_finished());
         // Stay "active" one extra frame after the last tween settles so its final
         // (target) value gets a build to render — the settling tick returns false
         // but its new value hasn't reached the screen yet.
@@ -1062,6 +1167,9 @@ impl Panel for InspectorCompositePanel {
         }
         if let Some(gp) = self.gen_params.as_ref() {
             gp.register_intents(intents);
+        }
+        for card in &self.modifier_cards {
+            card.register_intents(intents);
         }
         for card in &self.effects[Self::SCOPE_LAYER] {
             card.register_intents(intents);
@@ -1261,6 +1369,7 @@ mod tests {
                 ableton_range: None,
                 mappable: false,
             },
+            scene_addr: None,
         }
     }
 
@@ -1293,6 +1402,7 @@ mod tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
+            modifier: None,
             audio: Default::default(),
             relight: RelightCardConfig::default(),
         }

@@ -555,9 +555,17 @@ impl SceneVm {
                         .and_then(|&doc| root.node(doc))
                         .and_then(|n| n.params.get("select"))
                         .map(|v| matches!(v, SerializedParamValue::Enum { value } if *value == 1)),
-                    // Gate kinds (P2's scene_fog) read their enabled value
-                    // atom then; v1 has no gate kind.
-                    crate::node_graph::scene_modifier::EnableDecl::Gate { .. } => None,
+                    // Gate kinds (P2's scene_fog): the enabled value atom's
+                    // `value` param is the toggle (P3 ships this arm — P1 had
+                    // no gate kind to read).
+                    crate::node_graph::scene_modifier::EnableDecl::Gate { enabled_node, .. } => {
+                        result
+                            .doc_ids
+                            .get(enabled_node)
+                            .and_then(|&doc| root.node(doc))
+                            .and_then(|n| n.params.get("value"))
+                            .map(|v| matches!(v, SerializedParamValue::Float { value } if *value > 0.5))
+                    }
                 };
                 SceneModifierVm {
                     kind_id: descriptor.kind_id,

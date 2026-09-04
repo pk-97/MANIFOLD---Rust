@@ -15,6 +15,7 @@ use crate::ui_root::UIRoot;
 
 use super::cards::{
     OscScope, SurfaceVisibility, attach_audio_sends, effects_to_surfaces, gen_params_to_surface,
+    modifier_surfaces,
 };
 use super::scene::sections_for_doc_ids;
 
@@ -164,7 +165,6 @@ pub fn sync_inspector_data(
             AtmosphereRowVm, EnvironmentRowVm, ObjectMaterialVm, ObjectRowVm, RowAddr, RowValue,
             SceneSetupState, SceneSetupVm, TransformRowVm,
         };
-        use manifold_ui::panels::scene_setup_loop::SceneLoopRow;
 
         let sel_layer_idx = selection
             .selected_layer_id_for_clip
@@ -993,41 +993,9 @@ pub fn sync_inspector_data(
                                 camera,
                                 camera_sections,
                                 world_sections,
-                                // SCENE_MODIFIER_FRAMEWORK D6: the panel's
-                                // Scene Loop section derives from the generic
-                                // modifier trace (`scene_loop` kind applied)
-                                // — same rows, same wrap-debug address, zero
-                                // UX change. `bars` reads the beat_ramp's
-                                // REAL param (pre-P4 rate-only nodes fall
-                                // back to the 8-bar default, as the old
-                                // trace did).
-                                scene_loop: vm
-                                    .modifiers
-                                    .iter()
-                                    .find(|m| {
-                                        m.kind_id
-                                            == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
-                                            && m.applied
-                                    })
-                                    .map(|m| {
-                                        let beat_ramp_doc_id = m.doc_ids["loop_phase"];
-                                        let bars = def
-                                            .as_ref()
-                                            .and_then(|d| {
-                                                d.nodes.iter().find(|n| n.id == beat_ramp_doc_id)
-                                            })
-                                            .and_then(|n| n.params.get("bars"))
-                                            .and_then(|v| match v {
-                                                manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
-                                                _ => None,
-                                            })
-                                            .unwrap_or(8.0);
-                                        SceneLoopRow {
-                                            section: "Scene Loop".to_string(),
-                                            beat_ramp_doc_id,
-                                            bars,
-                                        }
-                                    }),
+                                // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
+                                // Loop's panel surface is deleted — the loop
+                                // lives on the inspector's modifier card now.
                                 scene_bounds: vm.scene_bounds,
                             }))
                         }
@@ -1184,9 +1152,60 @@ pub fn sync_inspector_data(
             let layer_id = layer.layer_id.clone();
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
+
+            // SCENE_MODIFIER_FRAMEWORK section 3.7: the layer scope's modifier
+            // cards. Same layer as the generator card above (never a
+            // differently-resolved scope — the cards stack). The applied list
+            // derives from the generic trace (`SceneVm`); the surfaces come
+            // from `modifier_surfaces`' ONE All-visibility projection of THIS
+            // layer's generator manifest, section-filtered per kind. A layer
+            // whose graph isn't a scene (no render_scene) gets no region.
+            {
+                let modifier_region = (|| {
+                    let def = layer
+                        .generator_graph()
+                        .cloned()
+                        .or_else(|| {
+                            manifold_renderer::node_graph::bundled_preset_def(
+                                &layer.generator_type().clone(),
+                            )
+                            .cloned()
+                        })?;
+                    let layer_ids: Vec<manifold_core::LayerId> = project
+                        .timeline
+                        .layers
+                        .iter()
+                        .map(|l| l.layer_id.clone())
+                        .collect();
+                    let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def_with_layers(
+                        &def, &layer_ids,
+                    )?;
+                    let gp = layer.gen_params()?;
+                    // The picker's model rides the same configure call — one
+                    // entry per registry kind, applicability read off the
+                    // SAME def + VM (the UI never reads the graph).
+                    let picker = super::cards::modifier_picker_entries(&def, &vm);
+                    Some((
+                        modifier_surfaces(gp, &def, &vm, lid, automation_latched),
+                        picker,
+                    ))
+                })();
+                match modifier_region {
+                    Some((surfaces, picker)) => ui.inspector.configure_modifier_cards(
+                        &surfaces,
+                        Some(&layer.layer_id),
+                        true,
+                        picker,
+                    ),
+                    None => {
+                        ui.inspector.configure_modifier_cards(&[], None, false, Vec::new())
+                    }
+                }
+            }
         } else {
             ui.inspector.configure_layer_effects(&[], None);
             ui.inspector.configure_gen_params(None, None);
+            ui.inspector.configure_modifier_cards(&[], None, false, Vec::new());
             ui.inspector
                 .audio_trigger_section_mut()
                 .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());
@@ -1194,6 +1213,7 @@ pub fn sync_inspector_data(
     } else {
         ui.inspector.configure_layer_effects(&[], None);
         ui.inspector.configure_gen_params(None, None);
+        ui.inspector.configure_modifier_cards(&[], None, false, Vec::new());
         ui.inspector
             .audio_trigger_section_mut()
             .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());

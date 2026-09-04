@@ -1,0 +1,186 @@
+[
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Scene Loop"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene Loop"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Bars"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.39_bars.value",
+          "node_type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "8"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.39_bars.slider",
+          "node_type": "Button"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 1300.0,
+              "y": 1177.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.39_bars.value",
+          "node_type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "32"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 90
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Bars"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

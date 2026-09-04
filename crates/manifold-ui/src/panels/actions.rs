@@ -283,14 +283,20 @@ pub enum ProjectAction {
     /// RT Quality settings: replace entire RtQualitySettings struct.
     /// Dispatches `ChangeRtQualityCommand`. One undo unit covers all changes.
     ChangeRtQuality(manifold_foundation::settings::RtQualitySettings),
-    /// SCENE_MODIFIER_FRAMEWORK P1 (D6): "Enable Scene Loop" button.
-    /// Dispatches the generic apply command with the `scene_loop` kind's
-    /// plan built from the scene's bounds. `(layer_id, render_scene_node_doc_id)`.
-    SceneSetupApplyLoop(LayerId, u32),
-    /// SCENE_MODIFIER_FRAMEWORK P1: "Remove Scene Loop" action. Dispatches
-    /// the generic remove command (inverse-of-plan, no snapshot).
-    /// `(layer_id, render_scene_node_doc_id)`.
-    SceneSetupRemoveLoop(LayerId, u32),
+    /// SCENE_MODIFIER_FRAMEWORK P1/D1: apply a scene modifier kind to the
+    /// layer's scene. Dispatches the generic `ApplySceneModifierCommand` with
+    /// the kind descriptor's plan built against the layer's current graph.
+    /// `(layer_id, kind_id)`.
+    SceneModifierApply(LayerId, String),
+    /// SCENE_MODIFIER_FRAMEWORK P1/D1: remove an applied kind — the generic
+    /// remove command re-derives the plan it inverts. `(layer_id, kind_id)`.
+    SceneModifierRemove(LayerId, String),
+    /// SCENE_MODIFIER_FRAMEWORK D5/P3: the modifier card's enable toggle.
+    /// ONE param write on the kind's enable target (switch kinds: the camera
+    /// switch's `select`; gate kinds: the enabled value atom's `value`),
+    /// resolved app-side from the descriptor + trace — undoable, no
+    /// structural change (INV-M7). `(layer_id, kind_id)`.
+    SceneModifierToggleEnabled(LayerId, String),
 }
 
 #[derive(Debug, Clone)]
@@ -412,6 +418,11 @@ pub enum ParamsAction {
     /// Reorder multiple effect cards as a group: (sorted source indices, target index).
     EffectReorderGroup(Vec<usize>, usize),
     GenTypeClicked(Option<LayerId>), // layer_id
+    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the inspector "+ Add Modifier"
+    /// button on a scene layer's scope. Opens the modifier picker (one entry
+    /// per registry kind; applied/inapplicable kinds disabled) — the layer
+    /// the picker applies to rides on the action.
+    AddModifierClicked(LayerId), // layer_id
     GenStringParamClicked(usize), // string_param_index — open text input
     GenStringParamDropdownClicked(usize), // string_param_index — open dropdown selector
     GenStringParamSelected(usize, String), // string_param_index, selected value
