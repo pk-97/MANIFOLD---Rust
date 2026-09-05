@@ -53,6 +53,23 @@ struct ReflectUniforms {
     dispatch_count: u32,
 }
 
+/// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
+/// dependency set — every resolved uniform value PLUS the input array's
+/// write generation (params alone are NOT sufficient: the input buffer's
+/// content can change while every reflect param holds constant, e.g. an
+/// animated loop count upstream). `None` = unwired `in` (the constant
+/// identity fallback). Skip-and-declare-unchanged when equal, so static
+/// scenes hold their slot generation and the RT path pays zero per-frame
+/// cost. `rebuild_epoch` folds in the executor lifetime (D6).
+#[derive(Clone, Copy, PartialEq)]
+pub struct ReflectStasisKey {
+    pub axis: u32,
+    pub plane_offset: f32,
+    pub enabled: f32,
+    pub in_generation: Option<u64>,
+    pub rebuild_epoch: u64,
+}
+
 crate::primitive! {
     name: ReflectArray,
     type_id: "node.reflect_array",
@@ -102,6 +119,8 @@ crate::primitive! {
     input_access: [BufferGather],
     extra_fields: {
         identity_fallback: Option<manifold_gpu::GpuBuffer> = None,
+        // INV-RTI4 stasis cache — see `ReflectStasisKey` and `run`.
+        stasis_key: Option<ReflectStasisKey> = None,
     },
 }
 
@@ -159,6 +178,24 @@ impl Primitive for ReflectArray {
                 in_buf.size / item_size,
                 out_buf.size / item_size,
             );
+            return;
+        }
+
+        // INV-RTI4 stasis: uniform values + the INPUT's write generation —
+        // the mirror's output depends on the input buffer's content, which
+        // can change with every reflect param held constant. Skip the
+        // rewrite (declaring the output unchanged) only when all of it
+        // holds, so static scenes keep their slot generation steady and
+        // the RT accel key holds across frames.
+        let stasis = ReflectStasisKey {
+            axis,
+            plane_offset,
+            enabled,
+            in_generation: ctx.inputs.slot_generation("in"),
+            rebuild_epoch: ctx.rebuild_epoch,
+        };
+        if self.stasis_key == Some(stasis) {
+            ctx.mark_outputs_unchanged();
             return;
         }
 
@@ -228,6 +265,7 @@ impl Primitive for ReflectArray {
             [out_cap.div_ceil(256), 1, 1],
             "node.reflect_array",
         );
+        self.stasis_key = Some(stasis);
     }
 }
 

@@ -5479,19 +5479,18 @@ impl EffectNode for RenderScene {
         // `ShadowRayParams::new` is well-formed with that (`caster_count
         // = 0`, kernel's `n_casters` loop is zero-iteration, every
         // `shadow_factor` caster-slot lookup already returns fully-lit
-        // for a light with no caster slot). KNOWN LIMITATION: the accel
-        // structure below uses each object's single `model` transform —
-        // instanced objects (`instances_n` wired) get ONE ray-traced copy
-        // at that base transform, not one per instance (photoscanned-
-        // hero-object scenes, this design's whole framing, are not
-        // instanced; a scene that instances RT-shadowed geometry gets
-        // wrong per-instance shadow positions — escalate if this becomes
-        // load-bearing, per the P1 brief's own escalation line). ----
+        // for a light with no caster slot). RT_INSTANCING_DESIGN.md D1/D2:
+        // the accel below is instance-aware — one TLAS slot per wired
+        // instance capacity, composed GPU-side (descriptor-build kernel),
+        // so instanced objects trace one copy per live raster slot. ----
         if rt_enabled {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
                 .iter()
-                .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
+                .map(|d| {
+                    let rt_instances_wired =
+                        matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
+                    manifold_gpu::raytrace::RtObjectGeometry {
                     vertex_buffer: d.vertices,
                     vertex_stride: vsize,
                     vertex_offset: 0,
@@ -5533,6 +5532,32 @@ impl EffectNode for RenderScene {
                     emissive_uv_m: d.uniforms.emissive_uv_m,
                     emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
                     cast_shadows: d.cast_shadows,
+                    // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
+                    // instance binding from `d.instances` /
+                    // `d.instance_count` — the buffer's GPU address (the
+                    // same bindless-address accessor `vertex_base_addr`
+                    // uses) plus its CAPACITY. `instance_count` is
+                    // buffer_size / 32 (D2/INV-RTI5, BUG-757c discipline:
+                    // the live count is in-band — dead slots carry
+                    // pos_scale.w == 0 — and a param change never resizes
+                    // the buffer), so a capacity change is topology (topo
+                    // key below) and rebuilds the accel; content changes
+                    // ride the accel key via `instances_generation` (D9).
+                    // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
+                    // buffer (instance_count == 0 is a legal raster no-op)
+                    // normalizes to UNWIRED — the descriptor kernel would
+                    // otherwise read slot 0 of a zero-byte allocation (OOB
+                    // GPU read) and trace a ghost copy the raster never
+                    // draws. Unwired keeps the D7 fast path (single
+                    // identity-slot descriptor per object).
+                    instances_addr: if rt_instances_wired {
+                        d.instances.map_or(0, |b| b.gpu_address())
+                    } else {
+                        0
+                    },
+                    instances_buffer: if rt_instances_wired { d.instances } else { None },
+                    instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
+                }
                 })
                 .collect();
 
@@ -5600,16 +5625,41 @@ impl EffectNode for RenderScene {
                 // refit — the flag rides the TOPO key (BUG-308's one-frame
                 // defer gives the bounded raster-presenting transition).
                 hasher.write_u8(o.translucent as u8);
+                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
+                // CAPACITY is topology — the TLAS slot count is baked at
+                // build time, so a capacity change rebuilds through
+                // BUG-308's one-frame defer. Same rule as manifold-gpu's
+                // `effective_instance_slots` (P1.5: any WIRED object takes
+                // the GPU path, 1-capacity included — its TRS is GPU-side).
+                // The wired buffer's IDENTITY deliberately does NOT ride
+                // here (D9: the descriptor kernel reads whatever buffer is
+                // wired each refit); content changes ride the accel key
+                // below.
+                hasher.write_u32(if o.instances_addr != 0 {
+                    o.instance_slots.max(1)
+                } else {
+                    1
+                });
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
-            for o in &objects {
+            for (o, d) in objects.iter().zip(opaque_draws.iter()) {
                 hasher.write(bytemuck::bytes_of(&o.transform));
                 // Per-object cast_shadows toggle rewrites only the instance
                 // mask (see `refit_accel`), same cheap path as a transform
                 // change — folded into the SAME key so a toggle with no
                 // transform change still triggers a refit.
                 hasher.write_u8(o.cast_shadows as u8);
+                // RT_INSTANCING_DESIGN.md D9/INV-RTI4: a wired instances
+                // buffer's CONTENT changes refit (descriptor-build
+                // re-dispatch + TLAS refit in one command buffer). Static
+                // loop/mirror buffers never bump the generation, so the
+                // common case is zero per-frame cost. Deliberately NOT in
+                // the content-settle key: a re-scattering producer bumps
+                // every frame and would never settle, suppressing its
+                // rebuilds. `None` (unwired) hashes as a distinct state,
+                // mirroring the vertices_generation Option discipline.
+                d.instances_generation.hash(&mut hasher);
             }
             let accel_key = hasher.finish();
             // Content key: topo key plus every draw's slot generation, on a
@@ -5630,11 +5680,24 @@ impl EffectNode for RenderScene {
             // count, same NLL-borrow reason the tracer/masks/params
             // buffers above are ensured before `opaque_draws`'
             // long-lived immutable borrow starts.
+            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
+            // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
+            // `ensure_normal_sources` — object-indexed readers (n4.w
+            // roughness, RS-C sampler) use the canonical rows,
+            // instance_id-indexed readers add N via params.slot_row_base.
+            // A wired draw contributes `instance_count` (buffer capacity —
+            // D2) slot rows; unwired draws contribute their one identity
+            // slot.
+            let rt_gi_slot_count: usize = objects
+                .iter()
+                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
+                .sum::<usize>()
+                + objects.len();
             ensure_rt_gi_materials(
                 &mut self.rt_gi_materials,
                 &mut self.rt_gi_materials_capacity,
                 gpu.device,
-                objects.len(),
+                rt_gi_slot_count,
             );
             // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
             // placement as `ensure_rt_gi_materials` above.
@@ -5811,6 +5874,16 @@ impl EffectNode for RenderScene {
                     .and_then(|a| a.emissive_table.as_ref())
                     .map(|t| t.mean_power)
                     .unwrap_or(0.0);
+                // RT_INSTANCING_DESIGN.md D8: the kernel composes emissive
+                // entries from the TLAS descriptor buffer when the table is
+                // local-space (instanced mode); the D7 fast path uploads
+                // world entries (flag 0, byte-identical data path).
+                let emissive_entries_are_local = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.entries_are_local)
+                    .unwrap_or(false);
                 let emissive_table_entry_count = self
                     .rt_accel
                     .as_ref()
@@ -5931,7 +6004,11 @@ impl EffectNode for RenderScene {
                     emissive_table_entry_count,
                     emissive_table_total_area,
                     svt_slot,
-                );
+                )
+                // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+                // normal/gi-material reads land in the slot rows [N, N+Σ).
+                .with_slot_row_base(objects.len() as u32)
+                .with_emissive_entries_local(emissive_entries_are_local);
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
@@ -5971,9 +6048,21 @@ impl EffectNode for RenderScene {
                     emissive_table_entry_count,
                     emissive_table_total_area,
                     svt_slot,
-                );
+                )
+                // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+                // normal/gi-material reads land in the slot rows [N, N+Σ).
+                .with_slot_row_base(objects.len() as u32)
+                .with_emissive_entries_local(emissive_entries_are_local);
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
+                // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
+                // [0, N) (the built block, one memcpy) + per-slot rows at
+                // [N, N+Σ) duplicating each object's row object-major
+                // (same slot addressing as `ensure_normal_sources`), so
+                // instance_id-indexed kernel reads via params.slot_row_base
+                // land on the slot rows while object-indexed readers use
+                // the canonical block. With every object at ≤ 1 slot the
+                // slot region is a verbatim copy of the canonical block.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
                 {
                     // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
@@ -5981,17 +6070,36 @@ impl EffectNode for RenderScene {
                     // `bytemuck_bytes` (bytemuck isn't a manifold-gpu
                     // dependency, so this crate can't derive `Pod` on it;
                     // a raw byte view is the same shape without adding one).
-                    let bytes: &[u8] = unsafe {
+                    const GI_SIZE: usize =
+                        std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>();
+                    let ptr = gi_materials_buffer
+                        .mapped_ptr()
+                        .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
+                    // Canonical block [0, N).
+                    let canonical_bytes: &[u8] = unsafe {
                         std::slice::from_raw_parts(
                             gi_materials_data.as_ptr() as *const u8,
                             std::mem::size_of_val(gi_materials_data.as_slice()),
                         )
                     };
-                    let ptr = gi_materials_buffer
-                        .mapped_ptr()
-                        .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
                     unsafe {
-                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                        std::ptr::copy_nonoverlapping(canonical_bytes.as_ptr(), ptr, canonical_bytes.len());
+                    }
+                    // Slot region [N, N+Σ): per-slot duplicates.
+                    let mut slot_row = 0usize;
+                    for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
+                        let slots =
+                            if o.instances_addr != 0 { o.instance_slots.max(1) } else { 1 };
+                        for _ in 0..slots {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    mat as *const manifold_gpu::raytrace::GiMaterial as *const u8,
+                                    ptr.add((objects.len() + slot_row) * GI_SIZE),
+                                    GI_SIZE,
+                                );
+                            }
+                            slot_row += 1;
+                        }
                     }
                 }
                 // RT-T2-C: per-object world→prev-world motion delta
