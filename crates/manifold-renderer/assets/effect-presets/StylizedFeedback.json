@@ -134,6 +134,23 @@
       "title": "Amount"
     },
     {
+      "id": 7,
+      "nodeId": "crush",
+      "typeId": "node.smoothstep",
+      "handle": "crush",
+      "params": {
+        "low": {
+          "type": "Float",
+          "value": 0.08
+        },
+        "high": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "Opaque Hold"
+    },
+    {
       "id": 4,
       "nodeId": "vignette",
       "typeId": "node.vignette",
@@ -204,6 +221,12 @@
     },
     {
       "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 4,
       "toPort": "in"

@@ -2480,7 +2480,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r4);
 }
 
-=== effect:StylizedFeedback node:7 ===
+=== effect:StylizedFeedback node:8 ===
 // @input_access: src_0 gather
 // @input_access: src_1 coincident
 struct Params {
@@ -2489,13 +2489,17 @@ struct Params {
     n0_scale: f32,
     n0_rotation: f32,
     n1_gain: f32,
-    n2_shape: u32,
-    n2_size: f32,
-    n2_softness: f32,
-    n2_strength: f32,
-    n3_amount: f32,
-    n3_mode: u32,
+    n2_low: f32,
+    n2_high: f32,
+    n3_shape: u32,
+    n3_size: f32,
+    n3_softness: f32,
+    n3_strength: f32,
+    n4_amount: f32,
+    n4_mode: u32,
     _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -2576,7 +2580,16 @@ fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32>
     return vec4<f32>(c.rgb * gain, c.a);
 }
 
-fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, shape: u32, size: f32, softness: f32, strength: f32) -> vec4<f32> {
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, shape: u32, size: f32, softness: f32, strength: f32) -> vec4<f32> {
     let aspect = dims.x / dims.y;
     let centered = uv - vec2<f32>(0.5);
 
@@ -2602,7 +2615,7 @@ fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, shape: u32, size: f32, 
     return vec4<f32>(c.rgb * final_mask, c.a * final_mask);
 }
 
-fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
@@ -2626,9 +2639,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let ext_1 = textureLoad(src_1, coord, 0);
     let r0 = q16(n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_translate_x, params.n0_translate_y, params.n0_scale, params.n0_rotation));
     let r1 = q16(n1_body(r0, uv, vec2<f32>(dims), params.n1_gain));
-    let r2 = q16(n2_body(r1, uv, vec2<f32>(dims), params.n2_shape, params.n2_size, params.n2_softness, params.n2_strength));
-    let r3 = q16(n3_body(ext_1, r2, uv, vec2<f32>(dims), params.n3_amount, params.n3_mode));
-    textureStore(dst, coord, r3);
+    let r2 = q16(n2_body(r1, uv, vec2<f32>(dims), params.n2_low, params.n2_high));
+    let r3 = q16(n3_body(r2, uv, vec2<f32>(dims), params.n3_shape, params.n3_size, params.n3_softness, params.n3_strength));
+    let r4 = q16(n4_body(ext_1, r3, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode));
+    textureStore(dst, coord, r4);
 }
 
 === effect:VoronoiPrism node:16 ===

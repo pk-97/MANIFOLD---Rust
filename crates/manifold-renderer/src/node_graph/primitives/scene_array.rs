@@ -44,6 +44,25 @@ struct SceneArrayUniforms {
     _pad: u32,
 }
 
+/// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
+/// input tuple — every resolved value that feeds the uniforms, compared
+/// fixed-size on the hot path. When unchanged, `run` skips the buffer
+/// rewrite and declares `mark_outputs_unchanged`, so the output slot's
+/// write generation HOLDS — which is exactly what lets the RT accel key
+/// hold across static frames ("static instances are free"). `rebuild_epoch`
+/// folds in the executor lifetime (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
+/// D6): a state-carrying rebuild resets generation counters, and a stale
+/// key from the old executor must never match the new one's low numbers.
+#[derive(Clone, Copy, PartialEq)]
+pub struct SceneArrayStasisKey {
+    pub count: u32,
+    pub axis: u32,
+    pub cell_size: f32,
+    pub jitter_seed: u32,
+    pub jitter_amount: f32,
+    pub rebuild_epoch: u64,
+}
+
 crate::primitive! {
     name: SceneArray,
     type_id: "node.scene_array",
@@ -110,6 +129,10 @@ crate::primitive! {
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/scene_array_body.wgsl"),
     wgsl_includes: [NOISE_COMMON],
+    extra_fields: {
+        // INV-RTI4 stasis cache — see `SceneArrayStasisKey` and `run`.
+        stasis_key: Option<SceneArrayStasisKey> = None,
+    },
 }
 
 impl Primitive for SceneArray {
@@ -160,6 +183,24 @@ impl Primitive for SceneArray {
         let capacity = (out_buf.size / item_size) as u32;
         let count = count.min(capacity);
 
+        // INV-RTI4 stasis: every frame this node's output depends on is in
+        // the key — skip the rewrite when unchanged and declare the output
+        // unchanged, so the slot's write generation (and with it the RT
+        // accel key) holds across static frames. First evaluate after
+        // wiring, and every param write, misses the cache by construction.
+        let stasis = SceneArrayStasisKey {
+            count,
+            axis,
+            cell_size,
+            jitter_seed,
+            jitter_amount,
+            rebuild_epoch: ctx.rebuild_epoch,
+        };
+        if self.stasis_key == Some(stasis) {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
@@ -196,6 +237,7 @@ impl Primitive for SceneArray {
             [capacity.div_ceil(256), 1, 1],
             "node.scene_array",
         );
+        self.stasis_key = Some(stasis);
     }
 }
 

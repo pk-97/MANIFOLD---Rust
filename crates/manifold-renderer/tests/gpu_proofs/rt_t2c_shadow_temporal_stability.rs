@@ -187,6 +187,9 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
