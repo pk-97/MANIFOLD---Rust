@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
+    GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    GroupDef, GroupInterface, InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
@@ -271,47 +272,33 @@ fn scene_loop_apply_rejects_multi_scene() {
     assert_eq!(graph.nodes.len(), 2, "INV-M6: modifier nodes must not be added to a multi-scene graph");
 }
 
-/// INV-M6/INV-2/INV-4 net against the REAL import shape: two object groups
-/// wired into render_scene.object_0/object_1, lens between the orbit camera
-/// and render. Applies the loop (hand-built plan with splices + the switch
-/// repoint) and verifies:
-///  - each group gained an `instances` interface input + group_input node +
-///    inner wire to its scene_object,
-///  - top-level `scene_array.out → group.instances` wires exist,
-///  - the camera path runs orbit → loop_cam_switch.a / loop_camera → b /
-///    switch.out → lens.camera (the D5 Switch shape), and the old
-///    `orbit_camera.out → lens.camera` wire was dropped,
-///  - loop nodes carry stable nodeIds (INV-2).
-#[test]
-fn scene_loop_apply_splices_groups_and_repoints_lens() {
-    use manifold_core::effect_graph_def::{
-        GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
-    };
+fn scene_object_node(id: u32, handle: &str) -> EffectGraphNode {
+    node(id, handle, "node.scene_object", BTreeMap::new())
+}
 
-    fn scene_object(id: u32, handle: &str) -> EffectGraphNode {
-        node(id, handle, "node.scene_object", BTreeMap::new())
-    }
-    fn group(id: u32, handle: &str, object_bind_id: u32) -> EffectGraphNode {
-        let mut g = node(id, handle, GROUP_TYPE_ID, BTreeMap::new());
-        let out_id = object_bind_id + 1000;
-        g.group = Some(Box::new(GroupDef {
-            interface: GroupInterface {
-                inputs: Vec::new(),
-                outputs: vec![InterfacePortDef { name: "object".to_string(), port_type: "Object".to_string() }],
-                params: Vec::new(),
-            },
-            nodes: vec![
-                scene_object(object_bind_id, &format!("{handle}_bind")),
-                node(out_id, &format!("{handle}_out"), "system.group_output", BTreeMap::new()),
-            ],
-            wires: vec![wire(object_bind_id, "object", out_id, "object")],
-            tint: None,
-        }));
-        g
-    }
+fn object_group(id: u32, handle: &str, object_bind_id: u32) -> EffectGraphNode {
+    let mut g = node(id, handle, GROUP_TYPE_ID, BTreeMap::new());
+    let out_id = object_bind_id + 1000;
+    g.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: Vec::new(),
+            outputs: vec![InterfacePortDef { name: "object".to_string(), port_type: "Object".to_string() }],
+            params: Vec::new(),
+        },
+        nodes: vec![
+            scene_object_node(object_bind_id, &format!("{handle}_bind")),
+            node(out_id, &format!("{handle}_out"), "system.group_output", BTreeMap::new()),
+        ],
+        wires: vec![wire(object_bind_id, "object", out_id, "object")],
+        tint: None,
+    }));
+    g
+}
 
-    // ids: 0 camera(orbit), 1 lens, 2 render_scene, 10 group A (bind 11), 20 group B (bind 21).
-    let def = EffectGraphDef {
+/// The two-object-group scene the splice tests share: ids 0 camera(orbit),
+/// 1 lens, 2 render_scene, 10 group A (bind 11), 20 group B (bind 21).
+fn grouped_scene_def() -> EffectGraphDef {
+    EffectGraphDef {
         version: 1,
         name: None,
         description: None,
@@ -336,8 +323,8 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             node(0, "camera", "node.orbit_camera", BTreeMap::new()),
             node(1, "lens", "node.camera_lens", BTreeMap::new()),
             node(2, "render", "node.render_scene", BTreeMap::new()),
-            group(10, "Object A", 11),
-            group(20, "Object B", 21),
+            object_group(10, "Object A", 11),
+            object_group(20, "Object B", 21),
         ],
         wires: vec![
             wire(0, "out", 1, "camera"),
@@ -345,10 +332,14 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             wire(10, "object", 2, "object_0"),
             wire(20, "object", 2, "object_1"),
         ],
-    };
+    }
+}
 
-    // Hand-built plan on the grouped scene: minted ids 30..33, camera
-    // target = the lens (1), previous camera producer = the orbit (0).
+/// Hand-built loop plan on the grouped scene (minted ids 30..33): splices
+/// WITH take-over consent (replace_existing: true — the D6 loop semantics),
+/// lens camera repoint, switch enable. Shared so the take-over tests build
+/// on the exact applied state the loop leaves behind.
+fn grouped_loop_plan() -> SceneModifierPlan {
     let switch_id = 33;
     let mut switch_params = BTreeMap::new();
     switch_params.insert("select".to_string(), SerializedParamValue::Enum { value: 1 });
@@ -363,7 +354,7 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
     camera_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
     camera_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
 
-    let plan = SceneModifierPlan {
+    SceneModifierPlan {
         kind_id: "scene_loop".to_string(),
         display_name: "Scene Loop".to_string(),
         trace: loop_trace(),
@@ -380,6 +371,7 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
                 inner_port: "instances",
                 source_doc_id: 31,
                 source_port: "out".to_string(),
+                replace_existing: true,
             },
             GroupSplice {
                 group_node_id: 20,
@@ -387,6 +379,7 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
                 inner_port: "instances",
                 source_doc_id: 31,
                 source_port: "out".to_string(),
+                replace_existing: true,
             },
         ],
         repoints: vec![PortRepoint {
@@ -410,7 +403,81 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
                 wire(switch_id, "out", 1, "camera"),
             ],
         },
-    };
+    }
+}
+
+/// A second modifier's plan splicing group 10's `instances` from
+/// `source_doc_id` — the kind-#3 (mirror-shaped) splice. `replace_existing`
+/// selects which INV-MR8 arm applies.
+fn takeover_plan(source_doc_id: u32, replace_existing: bool) -> SceneModifierPlan {
+    SceneModifierPlan {
+        kind_id: "modifier_b".to_string(),
+        display_name: "Modifier B".to_string(),
+        trace: vec![],
+        new_nodes: vec![node(
+            source_doc_id,
+            "modifier_b_src",
+            "node.scene_array",
+            BTreeMap::new(),
+        )],
+        new_wires: vec![],
+        group_splices: vec![GroupSplice {
+            group_node_id: 10,
+            inner_node_type: "node.scene_object",
+            inner_port: "instances",
+            source_doc_id,
+            source_port: "out".to_string(),
+            replace_existing,
+        }],
+        repoints: vec![],
+        exposures: vec![],
+        enable: EnablePlan {
+            toggle: ToggleDecl::ValueAtom {
+                node_id: manifold_core::NodeId::new("modifier_b_enable"),
+            },
+            extra_nodes: vec![],
+            extra_wires: vec![],
+        },
+    }
+}
+
+fn grouped_project() -> (Project, usize) {
+    let mut project = Project::default();
+    let idx = project.timeline.add_layer(
+        "Grouped Scene",
+        LayerType::Generator,
+        PresetTypeId::from_string("GroupSpliceTest".to_string()),
+    );
+    project.timeline.layers[idx].gen_params_or_init().graph = Some(grouped_scene_def());
+    (project, idx)
+}
+
+fn apply_on_grouped(project: &mut Project, idx: usize, plan: SceneModifierPlan) {
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id);
+    let mut cmd = ApplySceneModifierCommand::new(target, Vec::new(), plan, empty_def());
+    cmd.execute(project);
+}
+
+/// INV-M6/INV-2/INV-4 net against the REAL import shape: two object groups
+/// wired into render_scene.object_0/object_1, lens between the orbit camera
+/// and render. Applies the loop (hand-built plan with splices + the switch
+/// repoint) and verifies:
+///  - each group gained an `instances` interface input + group_input node +
+///    inner wire to its scene_object,
+///  - top-level `scene_array.out → group.instances` wires exist,
+///  - the camera path runs orbit → loop_cam_switch.a / loop_camera → b /
+///    switch.out → lens.camera (the D5 Switch shape), and the old
+///    `orbit_camera.out → lens.camera` wire was dropped,
+///  - loop nodes carry stable nodeIds (INV-2).
+#[test]
+fn scene_loop_apply_splices_groups_and_repoints_lens() {
+    let def = grouped_scene_def();
+
+    // Hand-built plan on the grouped scene: minted ids 30..33, camera
+    // target = the lens (1), previous camera producer = the orbit (0).
+    let switch_id = 33;
+    let plan = grouped_loop_plan();
 
     let mut project = Project::default();
     let idx = project.timeline.add_layer(
@@ -514,4 +581,107 @@ fn scene_loop_apply_splices_groups_and_repoints_lens() {
             "modifier node {expected} missing after apply"
         );
     }
+}
+
+/// INV-MR8 replace arm (SCENE_MIRROR_DESIGN section 3.5): a second splicer
+/// WITH replace_existing takes the port over — the previous owner's wire
+/// to (group, instances) is dropped, the new source's lands, and the
+/// interface input + group_input are not duplicated. Group 20 keeps its
+/// owner: the take-over is per (group, port).
+#[test]
+fn scene_modifier_splice_replace_existing_takes_over_port() {
+    let (mut project, idx) = grouped_project();
+    apply_on_grouped(&mut project, idx, grouped_loop_plan());
+
+    // The kind-#3 (mirror-shaped) splicer takes group 10's port.
+    apply_on_grouped(&mut project, idx, takeover_plan(40, true));
+
+    let graph = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph present");
+
+    let feeders: Vec<u32> = graph
+        .wires
+        .iter()
+        .filter(|w| w.to_node == 10 && w.to_port == "instances")
+        .map(|w| w.from_node)
+        .collect();
+    assert_eq!(
+        feeders,
+        vec![40],
+        "exactly one wire to (group 10, instances), from the new owner"
+    );
+    assert!(
+        !graph
+            .wires
+            .iter()
+            .any(|w| w.to_node == 10 && w.to_port == "instances" && w.from_node == 31),
+        "the displaced owner's wire to group 10 must be dropped"
+    );
+    assert!(
+        graph
+            .wires
+            .iter()
+            .any(|w| w.to_node == 20 && w.to_port == "instances" && w.from_node == 31),
+        "group 20 keeps its owner — the take-over is per (group, port)"
+    );
+
+    let group = graph.nodes.iter().find(|n| n.id == 10).expect("group 10 present");
+    let body = group.group.as_deref().expect("group 10 body present");
+    assert_eq!(
+        body.interface.inputs.iter().filter(|p| p.name == "instances").count(),
+        1,
+        "the take-over must not duplicate the interface input"
+    );
+    assert_eq!(
+        body.nodes.iter().filter(|n| n.type_id == GROUP_INPUT_TYPE_ID).count(),
+        1,
+        "the take-over must not duplicate the group_input node"
+    );
+    assert!(
+        graph.nodes.iter().any(|n| n.id == 31),
+        "the displaced owner node stays in-graph inert (D6)"
+    );
+}
+
+/// INV-MR8 fail-loud arm (SCENE_MIRROR_DESIGN section 3.5): a splice
+/// WITHOUT replace_existing onto an already-spliced port refuses the WHOLE
+/// apply — no nodes, no wire. The old conflated behaviour added the nodes
+/// and silently skipped the wire, leaving the new kind believing it owned a
+/// port it never wired.
+#[test]
+fn scene_modifier_splice_without_takeover_fails_loud() {
+    let (mut project, idx) = grouped_project();
+    apply_on_grouped(&mut project, idx, grouped_loop_plan());
+    let nodes_before = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph present")
+        .nodes
+        .len();
+
+    apply_on_grouped(&mut project, idx, takeover_plan(50, false));
+
+    let graph = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph present");
+    assert_eq!(
+        graph.nodes.len(),
+        nodes_before,
+        "fail-loud: the refused apply must add no nodes"
+    );
+    assert!(
+        !graph.nodes.iter().any(|n| n.id == 50),
+        "the refused splicer's node is absent"
+    );
+    assert!(
+        !graph.wires.iter().any(|w| w.from_node == 50),
+        "no wire from the refused splicer"
+    );
+    assert!(
+        graph
+            .wires
+            .iter()
+            .any(|w| w.from_node == 31 && w.to_node == 10 && w.to_port == "instances"),
+        "the existing owner's wire survives untouched"
+    );
 }

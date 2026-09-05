@@ -574,6 +574,9 @@ pub mod scene_modifier_loop {
                 inner_port: "instances",
                 source_doc_id: 0, // filled once scene_array's id is known
                 source_port: "out".to_string(),
+                // D6: the loop's scene_array takes over (group, instances)
+                // from whatever fed it before (the camera-switch precedent).
+                replace_existing: true,
             });
         }
 
