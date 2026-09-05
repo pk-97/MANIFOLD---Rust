@@ -223,11 +223,11 @@
         },
         "tolerance": {
           "type": "Float",
-          "value": 0.35
+          "value": 0.12
         },
         "softness": {
           "type": "Float",
-          "value": 0.15
+          "value": 0.03
         },
         "mode": {
           "type": "Enum",
@@ -261,11 +261,11 @@
         },
         "tolerance": {
           "type": "Float",
-          "value": 0.35
+          "value": 0.12
         },
         "softness": {
           "type": "Float",
-          "value": 0.15
+          "value": 0.03
         },
         "mode": {
           "type": "Enum",
