@@ -1,0 +1,404 @@
+{
+  "version": 2,
+  "name": "LED Studio Mask",
+  "presetMetadata": {
+    "id": "LED Studio Mask",
+    "displayName": "LED Studio Mask",
+    "category": "LED",
+    "layerTypes": ["Dmx"],
+    "oscPrefix": "ledStudioMask",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "stripStart",
+        "name": "Strip Start",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "stripStart"
+      },
+      {
+        "id": "stripCount",
+        "name": "Strip Count",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 8.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "stripCount"
+      },
+      {
+        "id": "ledStart",
+        "name": "LED Start",
+        "min": 0.0,
+        "max": 100.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "ledStart"
+      },
+      {
+        "id": "ledLength",
+        "name": "LED Length",
+        "min": 0.0,
+        "max": 100.0,
+        "defaultValue": 100.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "ledLength"
+      },
+      {
+        "id": "softness",
+        "name": "Softness",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.05,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "softness"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 45.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.25,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      },
+      {
+        "id": "brightness",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "brightness"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "stripStart",
+        "label": "Strip Start",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cx_start",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "stripCount",
+        "label": "Strip Count",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cx_count",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "stripCount",
+        "label": "Strip Count",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "half_width",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "ledStart",
+        "label": "LED Start",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cy_start",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "ledLength",
+        "label": "LED Length",
+        "defaultValue": 100.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cy_len",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "ledLength",
+        "label": "LED Length",
+        "defaultValue": 100.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "half_height",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "softness",
+        "label": "Softness",
+        "defaultValue": 0.05,
+        "target": {
+          "kind": "node",
+          "nodeId": "studio_rect",
+          "param": "softness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 45.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "brightness",
+        "label": "Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "brightness",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.scale_offset_value",
+      "handle": "cx_start",
+      "nodeId": "cx_start",
+      "params": {
+        "a": { "type": "Float", "value": 1.0 },
+        "scale": { "type": "Float", "value": 0.125 },
+        "offset": { "type": "Float", "value": -0.125 }
+      },
+      "title": "Strip Start Pos"
+    },
+    {
+      "id": 3,
+      "typeId": "node.scale_offset_value",
+      "handle": "cx_count",
+      "nodeId": "cx_count",
+      "params": {
+        "a": { "type": "Float", "value": 8.0 },
+        "scale": { "type": "Float", "value": 0.0625 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Strip Centre Offset"
+    },
+    {
+      "id": 4,
+      "typeId": "node.math",
+      "handle": "cx_sum",
+      "nodeId": "cx_sum",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 0 }
+      },
+      "title": "Centre X"
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_value",
+      "handle": "cy_start",
+      "nodeId": "cy_start",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "scale": { "type": "Float", "value": 0.01 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "LED Start Pos"
+    },
+    {
+      "id": 6,
+      "typeId": "node.scale_offset_value",
+      "handle": "cy_len",
+      "nodeId": "cy_len",
+      "params": {
+        "a": { "type": "Float", "value": 100.0 },
+        "scale": { "type": "Float", "value": 0.005 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "LED Centre Offset"
+    },
+    {
+      "id": 7,
+      "typeId": "node.math",
+      "handle": "cy_sum",
+      "nodeId": "cy_sum",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 0 }
+      },
+      "title": "Centre Y"
+    },
+    {
+      "id": 8,
+      "typeId": "node.scale_offset_value",
+      "handle": "half_width",
+      "nodeId": "half_width",
+      "params": {
+        "a": { "type": "Float", "value": 8.0 },
+        "scale": { "type": "Float", "value": 0.0625 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Half Width"
+    },
+    {
+      "id": 9,
+      "typeId": "node.scale_offset_value",
+      "handle": "half_height",
+      "nodeId": "half_height",
+      "params": {
+        "a": { "type": "Float", "value": 100.0 },
+        "scale": { "type": "Float", "value": 0.005 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Half Height"
+    },
+    {
+      "id": 10,
+      "typeId": "node.rectangle_mask",
+      "handle": "studio_rect",
+      "nodeId": "studio_rect",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "half_width": { "type": "Float", "value": 0.5 },
+        "half_height": { "type": "Float", "value": 0.5 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.05 }
+      },
+      "title": "Studio Rectangle"
+    },
+    {
+      "id": 11,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 45.0 },
+        "saturation": { "type": "Float", "value": 0.25 },
+        "focus": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Tint"
+    },
+    {
+      "id": 12,
+      "typeId": "node.exposure",
+      "handle": "brightness",
+      "nodeId": "brightness",
+      "params": {
+        "gain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Brightness"
+    }
+  ],
+  "wires": [
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "b" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 10, "toPort": "cx" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "cy" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "half_width" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "half_height" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

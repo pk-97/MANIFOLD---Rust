@@ -1,0 +1,396 @@
+{
+  "version": 2,
+  "name": "LED Strip Fire",
+  "presetMetadata": {
+    "id": "LED Strip Fire",
+    "displayName": "LED Strip Fire",
+    "category": "LED",
+    "layerTypes": ["Dmx"],
+    "oscPrefix": "ledStripFire",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "intensity",
+        "name": "Intensity",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.8,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "intensity"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.1,
+        "max": 2.0,
+        "defaultValue": 0.6,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "speed"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.5,
+        "max": 4.0,
+        "defaultValue": 1.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "scale"
+      },
+      {
+        "id": "base",
+        "name": "Base Glow",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "base"
+      },
+      {
+        "id": "brightness",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "brightness"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "intensity",
+        "label": "Intensity",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "final_gain",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "node",
+          "nodeId": "rise_speed",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "scale_recip",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "base",
+        "label": "Base Glow",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "node",
+          "nodeId": "glow_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "brightness",
+        "label": "Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "final_gain",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 3,
+      "typeId": "node.math",
+      "handle": "scale_recip",
+      "nodeId": "scale_recip",
+      "params": {
+        "a": { "type": "Float", "value": 1.5 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 9 }
+      },
+      "title": "Scale Reciprocal"
+    },
+    {
+      "id": 4,
+      "typeId": "node.math",
+      "handle": "noise_scale",
+      "nodeId": "noise_scale",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 6.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Noise Scale"
+    },
+    {
+      "id": 5,
+      "typeId": "node.math",
+      "handle": "rise_speed",
+      "nodeId": "rise_speed",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.6 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Rise Speed"
+    },
+    {
+      "id": 6,
+      "typeId": "node.noise",
+      "handle": "fire_noise",
+      "nodeId": "fire_noise",
+      "params": {
+        "type": { "type": "Enum", "value": 0 },
+        "scale": { "type": "Float", "value": 4.0 },
+        "offset_x": { "type": "Float", "value": 0.0 },
+        "offset_y": { "type": "Float", "value": 0.0 },
+        "octaves": { "type": "Int", "value": 3 },
+        "lacunarity": { "type": "Float", "value": 2.0 },
+        "persistence": { "type": "Float", "value": 0.5 }
+      },
+      "title": "Flame Noise"
+    },
+    {
+      "id": 7,
+      "typeId": "node.power",
+      "handle": "tongues",
+      "nodeId": "tongues",
+      "params": {
+        "exponent": { "type": "Float", "value": 2.5 }
+      },
+      "title": "Tongues"
+    },
+    {
+      "id": 8,
+      "typeId": "node.gradient",
+      "handle": "fire_palette",
+      "nodeId": "fire_palette",
+      "params": {
+        "stops": {
+          "type": "Table",
+          "rows": [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.2995, 0.0, 0.0, 0.0],
+            [0.3, 0.55, 0.03, 0.0],
+            [0.5995, 0.55, 0.03, 0.0],
+            [0.6, 1.0, 0.35, 0.02],
+            [0.7995, 1.0, 0.35, 0.02],
+            [0.8, 1.0, 0.85, 0.4],
+            [1.0, 1.0, 0.9, 0.55]
+          ]
+        },
+        "domain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Fire Palette"
+    },
+    {
+      "id": 9,
+      "typeId": "node.color_lut",
+      "handle": "fire_map",
+      "nodeId": "fire_map",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "contrast": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Fire Map"
+    },
+    {
+      "id": 10,
+      "typeId": "node.field_combine",
+      "handle": "v_field",
+      "nodeId": "v_field",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 1.0 },
+        "c": { "type": "Float", "value": 0.0 }
+      },
+      "title": "V Field"
+    },
+    {
+      "id": 11,
+      "typeId": "node.smoothstep",
+      "handle": "glow_fall",
+      "nodeId": "glow_fall",
+      "params": {
+        "low": { "type": "Float", "value": 0.05 },
+        "high": { "type": "Float", "value": 0.45 }
+      },
+      "title": "Glow Fall"
+    },
+    {
+      "id": 12,
+      "typeId": "node.invert",
+      "handle": "glow_mask",
+      "nodeId": "glow_mask",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Glow Mask"
+    },
+    {
+      "id": 13,
+      "typeId": "node.circle_mask",
+      "handle": "white_field",
+      "nodeId": "white_field",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      },
+      "title": "White Field"
+    },
+    {
+      "id": 14,
+      "typeId": "node.colorize",
+      "handle": "warm",
+      "nodeId": "warm",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 30.0 },
+        "saturation": { "type": "Float", "value": 1.0 },
+        "focus": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Warm Tint"
+    },
+    {
+      "id": 15,
+      "typeId": "node.mix",
+      "handle": "glow_masked",
+      "nodeId": "glow_masked",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 4 }
+      },
+      "title": "Glow Masked"
+    },
+    {
+      "id": 16,
+      "typeId": "node.exposure",
+      "handle": "glow_gain",
+      "nodeId": "glow_gain",
+      "params": {
+        "gain": { "type": "Float", "value": 0.15 }
+      },
+      "title": "Glow Gain"
+    },
+    {
+      "id": 17,
+      "typeId": "node.mix",
+      "handle": "fire_add",
+      "nodeId": "fire_add",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 2 }
+      },
+      "title": "Fire + Glow"
+    },
+    {
+      "id": 18,
+      "typeId": "node.math",
+      "handle": "final_gain",
+      "nodeId": "final_gain",
+      "params": {
+        "a": { "type": "Float", "value": 0.8 },
+        "b": { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Intensity x Brightness"
+    },
+    {
+      "id": 19,
+      "typeId": "node.exposure",
+      "handle": "final",
+      "nodeId": "final",
+      "params": {
+        "gain": { "type": "Float", "value": 0.8 }
+      },
+      "title": "Final Gain"
+    }
+  ],
+  "wires": [
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "scale" },
+    { "fromNode": 0, "fromPort": "beat", "toNode": 5, "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "offset_y" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "lut" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "a" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 15, "toPort": "b" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 17, "toPort": "a" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "b" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 19, "toPort": "in" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 19, "toPort": "gain" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

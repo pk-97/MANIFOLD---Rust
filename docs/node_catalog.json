@@ -13,6 +13,9 @@
       "examples": [
         "Cymatics",
         "DepthOfField",
+        "LED Barber Pole",
+        "LED Beat Rain",
+        "LED Chevron",
         "OilyFluid",
         "QuadMirror"
       ],
@@ -1525,11 +1528,15 @@
       "category": "Control",
       "examples": [
         "FogBlast",
+        "LED Barber Pole",
         "LED Burst",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Pixel Walk",
         "LED Step Chase",
         "LED Step Scan",
+        "LED Strobe",
         "TimeScrub",
         "VoronoiPrism"
       ],
@@ -3070,6 +3077,9 @@
         "LED Burst",
         "LED Fill",
         "LED Pulse",
+        "LED Shaped Pulse",
+        "LED Strip Fire",
+        "LED Strobe",
         "LED Studio Light"
       ],
       "fusion": "source",
@@ -3462,6 +3472,7 @@
       "category": "Color & Tone",
       "examples": [
         "Infrared",
+        "LED Strip Fire",
         "LED Strip ID"
       ],
       "fusion": "multi_input_coincident",
@@ -3579,14 +3590,22 @@
       "category": "Color & Tone",
       "examples": [
         "ColorGrade",
+        "LED Barber Pole",
+        "LED Beat Rain",
         "LED Burst",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Fill",
         "LED Pulse",
+        "LED Shaped Pulse",
         "LED Step Chase",
         "LED Step Scan",
-        "LED Studio Light"
+        "LED Strip Fire",
+        "LED Strobe",
+        "LED Studio Light",
+        "LED Studio Mask"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -6212,6 +6231,7 @@
         "FluidSim2D",
         "FluidSim3D",
         "LED Burst",
+        "LED Shaped Pulse",
         "ParticleText",
         "Strobe"
       ],
@@ -6464,7 +6484,11 @@
         "HighlightBoost",
         "LED Burst",
         "LED Pulse",
+        "LED Shaped Pulse",
+        "LED Strip Fire",
+        "LED Strobe",
         "LED Studio Light",
+        "LED Studio Mask",
         "Lantern",
         "MetallicGlass",
         "OilyFluid",
@@ -6780,9 +6804,13 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "LED Barber Pole",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Step Chase",
+        "LED Strip Fire",
         "LED Strip ID"
       ],
       "fusion": "pointwise",
@@ -8894,6 +8922,7 @@
       "category": "Generate",
       "examples": [
         "Infrared",
+        "LED Strip Fire",
         "LED Strip ID"
       ],
       "fusion": "source",
@@ -10004,9 +10033,15 @@
         "DepthOfField",
         "Glitch",
         "Invert",
+        "LED Barber Pole",
+        "LED Beat Rain",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Step Chase",
+        "LED Strip Fire",
+        "LED Strobe",
         "MriVolume",
         "StrangeAttractor"
       ],
@@ -11486,7 +11521,8 @@
       ],
       "category": "Detection & Sampling",
       "examples": [
-        "AutoGain"
+        "AutoGain",
+        "LED Shaped Pulse"
       ],
       "fusion": "boundary:barriered_reduction",
       "inputs": [
@@ -11576,6 +11612,7 @@
         "DepthOfField",
         "DigitalDrift",
         "Glitch",
+        "LED Strobe",
         "Watercolor"
       ],
       "fusion": "multi_input_coincident",
@@ -11707,11 +11744,17 @@
         "FluidSim2D",
         "FluidSim3D",
         "HighlightBoost",
+        "LED Barber Pole",
+        "LED Beat Rain",
         "LED Burst",
+        "LED Chase",
         "LED Chase Sweep",
         "LED Pixel Walk",
+        "LED Shaped Pulse",
         "LED Step Chase",
         "LED Step Scan",
+        "LED Strip Fire",
+        "LED Studio Mask",
         "Lissajous",
         "MetallicGlass",
         "MriVolume",
@@ -12150,6 +12193,8 @@
         "Glitch",
         "HighlightBoost",
         "Kaleidoscope",
+        "LED Beat Rain",
+        "LED Strip Fire",
         "Lantern",
         "Lightning",
         "MetallicGlass",
@@ -12782,7 +12827,8 @@
       "category": "Noise",
       "examples": [
         "DigitalDrift",
-        "FilmGrain"
+        "FilmGrain",
+        "LED Strip Fire"
       ],
       "fusion": "source",
       "inputs": [
@@ -15633,7 +15679,10 @@
         "banding"
       ],
       "category": "Color & Tone",
-      "examples": [],
+      "examples": [
+        "LED Beat Rain",
+        "LED Strobe"
+      ],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -15683,6 +15732,8 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "LED Shaped Pulse",
+        "LED Strip Fire",
         "StarField"
       ],
       "fusion": "pointwise",
@@ -16138,7 +16189,8 @@
       "examples": [
         "DepthOfField",
         "LED Pixel Walk",
-        "LED Step Scan"
+        "LED Step Scan",
+        "LED Studio Mask"
       ],
       "fusion": "source",
       "inputs": [
@@ -18128,9 +18180,15 @@
         "DepthOfField",
         "DigitalDrift",
         "FluidSim2D",
+        "LED Barber Pole",
+        "LED Beat Rain",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
+        "LED Shaped Pulse",
         "LED Step Chase",
+        "LED Strobe",
         "Lightning",
         "MetallicGlass",
         "ParticleText",
@@ -18212,7 +18270,14 @@
         "DigitalPlants",
         "FluidSim2D",
         "FluidSim3D",
+        "LED Barber Pole",
+        "LED Beat Rain",
         "LED Burst",
+        "LED Chase",
+        "LED Chevron",
+        "LED Shaped Pulse",
+        "LED Strobe",
+        "LED Studio Mask",
         "Lightning",
         "MetallicGlass",
         "ParticleText",
@@ -19487,6 +19552,8 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "LED Beat Rain",
+        "LED Shaped Pulse",
         "StarField"
       ],
       "fusion": "multi_input_coincident",
@@ -20031,9 +20098,15 @@
       "examples": [
         "DepthOfField",
         "Glitch",
+        "LED Barber Pole",
+        "LED Beat Rain",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Step Chase",
+        "LED Strip Fire",
+        "LED Strobe",
         "MriVolume",
         "OilyFluid",
         "StarField",
@@ -21051,6 +21124,7 @@
         "Cymatics",
         "DepthOfField",
         "Infrared",
+        "LED Strobe",
         "Lantern",
         "MriVolume",
         "OilyFluid"
@@ -21165,8 +21239,11 @@
         "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
+        "LED Barber Pole",
+        "LED Chase",
         "LED Chase Sweep",
         "LED Cycle",
+        "LED Shaped Pulse",
         "LED Step Chase",
         "Lissajous",
         "MriVolume",
@@ -22991,10 +23068,16 @@
       "category": "Fields & Coordinates",
       "examples": [
         "Cymatics",
+        "LED Barber Pole",
+        "LED Beat Rain",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Step Chase",
-        "LED Strip ID"
+        "LED Strip Fire",
+        "LED Strip ID",
+        "LED Strobe"
       ],
       "fusion": "source",
       "inputs": [],
@@ -23796,9 +23879,14 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "LED Barber Pole",
+        "LED Beat Rain",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
-        "LED Step Chase"
+        "LED Step Chase",
+        "LED Strobe"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -23923,16 +24011,24 @@
         "Infrared",
         "Invert",
         "Kaleidoscope",
+        "LED Barber Pole",
+        "LED Beat Rain",
         "LED Burst",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Fill",
         "LED Pixel Walk",
         "LED Pulse",
+        "LED Shaped Pulse",
         "LED Step Chase",
         "LED Step Scan",
+        "LED Strip Fire",
         "LED Strip ID",
+        "LED Strobe",
         "LED Studio Light",
+        "LED Studio Mask",
         "Lantern",
         "LightOrbit",
         "Lightning",
@@ -24001,16 +24097,24 @@
         "FluidSim2D",
         "FluidSim3D",
         "FogBlast",
+        "LED Barber Pole",
+        "LED Beat Rain",
         "LED Burst",
+        "LED Chase",
         "LED Chase Sweep",
+        "LED Chevron",
         "LED Cycle",
         "LED Fill",
         "LED Pixel Walk",
         "LED Pulse",
+        "LED Shaped Pulse",
         "LED Step Chase",
         "LED Step Scan",
+        "LED Strip Fire",
         "LED Strip ID",
+        "LED Strobe",
         "LED Studio Light",
+        "LED Studio Mask",
         "Lantern",
         "LightOrbit",
         "Lightning",
@@ -24175,7 +24279,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 67,
+  "preset_count": 75,
   "presets": [
     {
       "category": "Geometry",
@@ -27618,6 +27722,108 @@
     },
     {
       "category": "LED",
+      "id": "LED Barber Pole",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Barber Pole",
+      "params": [
+        {
+          "default": "1",
+          "id": "rate",
+          "max": "4",
+          "min": "0.25",
+          "name": "Rate"
+        },
+        {
+          "default": "0.5",
+          "id": "slope",
+          "max": "1",
+          "min": "0",
+          "name": "Slope"
+        },
+        {
+          "default": "0.25",
+          "id": "thickness",
+          "max": "0.5",
+          "min": "0.05",
+          "name": "Thickness"
+        },
+        {
+          "default": "0",
+          "id": "direction",
+          "max": "1",
+          "min": "0",
+          "name": "Direction"
+        },
+        {
+          "default": "140",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "1",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        }
+      ]
+    },
+    {
+      "category": "LED",
+      "id": "LED Beat Rain",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Beat Rain",
+      "params": [
+        {
+          "default": "2",
+          "id": "division",
+          "max": "4",
+          "min": "0",
+          "name": "Division"
+        },
+        {
+          "default": "1",
+          "id": "drops",
+          "max": "4",
+          "min": "1",
+          "name": "Drops"
+        },
+        {
+          "default": "0.5",
+          "id": "tail",
+          "max": "1",
+          "min": "0.1",
+          "name": "Tail"
+        },
+        {
+          "default": "1",
+          "id": "speed",
+          "max": "4",
+          "min": "0.25",
+          "name": "Speed"
+        },
+        {
+          "default": "190",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "0.8",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        }
+      ]
+    },
+    {
+      "category": "LED",
       "id": "LED Burst",
       "is_line_based": false,
       "kind": "generator",
@@ -27643,6 +27849,64 @@
           "max": "60",
           "min": "0.5",
           "name": "Decay"
+        },
+        {
+          "default": "200",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "1",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        }
+      ]
+    },
+    {
+      "category": "LED",
+      "id": "LED Chase",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Chase",
+      "params": [
+        {
+          "default": "0.5",
+          "id": "rate",
+          "max": "16",
+          "min": "0.0625",
+          "name": "Rate"
+        },
+        {
+          "default": "8",
+          "id": "steps",
+          "max": "32",
+          "min": "2",
+          "name": "Steps"
+        },
+        {
+          "default": "0.4",
+          "id": "tail",
+          "max": "1",
+          "min": "0.05",
+          "name": "Tail"
+        },
+        {
+          "default": "1",
+          "id": "heads",
+          "max": "4",
+          "min": "1",
+          "name": "Heads"
+        },
+        {
+          "default": "0",
+          "id": "direction",
+          "max": "2",
+          "min": "0",
+          "name": "Direction"
         },
         {
           "default": "200",
@@ -27690,6 +27954,57 @@
         },
         {
           "default": "200",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "1",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        }
+      ]
+    },
+    {
+      "category": "LED",
+      "id": "LED Chevron",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Chevron",
+      "params": [
+        {
+          "default": "0.5",
+          "id": "rate",
+          "max": "4",
+          "min": "0.25",
+          "name": "Rate"
+        },
+        {
+          "default": "0.5",
+          "id": "width",
+          "max": "1",
+          "min": "0.1",
+          "name": "Width"
+        },
+        {
+          "default": "0.12",
+          "id": "thickness",
+          "max": "0.3",
+          "min": "0.03",
+          "name": "Thickness"
+        },
+        {
+          "default": "1",
+          "id": "count",
+          "max": "4",
+          "min": "1",
+          "name": "Count"
+        },
+        {
+          "default": "45",
           "id": "hue",
           "max": "360",
           "min": "0",
@@ -27798,6 +28113,57 @@
     },
     {
       "category": "LED",
+      "id": "LED Shaped Pulse",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Shaped Pulse",
+      "params": [
+        {
+          "default": "1",
+          "id": "rate",
+          "max": "4",
+          "min": "0.25",
+          "name": "Rate"
+        },
+        {
+          "default": "0",
+          "id": "shape",
+          "max": "2",
+          "min": "0",
+          "name": "Shape"
+        },
+        {
+          "default": "0.35",
+          "id": "decay",
+          "max": "1",
+          "min": "0.05",
+          "name": "Decay"
+        },
+        {
+          "default": "280",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "0.9",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        },
+        {
+          "default": "1",
+          "id": "brightness",
+          "max": "1",
+          "min": "0",
+          "name": "Brightness"
+        }
+      ]
+    },
+    {
+      "category": "LED",
       "id": "LED Step Chase",
       "is_line_based": false,
       "kind": "generator",
@@ -27886,11 +28252,106 @@
     },
     {
       "category": "LED",
+      "id": "LED Strip Fire",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Strip Fire",
+      "params": [
+        {
+          "default": "0.8",
+          "id": "intensity",
+          "max": "1",
+          "min": "0",
+          "name": "Intensity"
+        },
+        {
+          "default": "0.6",
+          "id": "speed",
+          "max": "2",
+          "min": "0.1",
+          "name": "Speed"
+        },
+        {
+          "default": "1.5",
+          "id": "scale",
+          "max": "4",
+          "min": "0.5",
+          "name": "Scale"
+        },
+        {
+          "default": "0.15",
+          "id": "base",
+          "max": "0.5",
+          "min": "0",
+          "name": "Base Glow"
+        },
+        {
+          "default": "1",
+          "id": "brightness",
+          "max": "1",
+          "min": "0",
+          "name": "Brightness"
+        }
+      ]
+    },
+    {
+      "category": "LED",
       "id": "LED Strip ID",
       "is_line_based": false,
       "kind": "generator",
       "name": "LED Strip ID",
       "params": []
+    },
+    {
+      "category": "LED",
+      "id": "LED Strobe",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Strobe",
+      "params": [
+        {
+          "default": "4",
+          "id": "rate",
+          "max": "16",
+          "min": "0.5",
+          "name": "Rate"
+        },
+        {
+          "default": "0.25",
+          "id": "duty",
+          "max": "0.5",
+          "min": "0.05",
+          "name": "Duty"
+        },
+        {
+          "default": "0",
+          "id": "mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "0",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "0",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        },
+        {
+          "default": "1",
+          "id": "brightness",
+          "max": "1",
+          "min": "0",
+          "name": "Brightness"
+        }
+      ]
     },
     {
       "category": "LED",
@@ -27919,6 +28380,71 @@
           "max": "1",
           "min": "0",
           "name": "Saturation"
+        }
+      ]
+    },
+    {
+      "category": "LED",
+      "id": "LED Studio Mask",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "LED Studio Mask",
+      "params": [
+        {
+          "default": "1",
+          "id": "stripStart",
+          "max": "8",
+          "min": "1",
+          "name": "Strip Start"
+        },
+        {
+          "default": "8",
+          "id": "stripCount",
+          "max": "8",
+          "min": "1",
+          "name": "Strip Count"
+        },
+        {
+          "default": "0",
+          "id": "ledStart",
+          "max": "100",
+          "min": "0",
+          "name": "LED Start"
+        },
+        {
+          "default": "100",
+          "id": "ledLength",
+          "max": "100",
+          "min": "0",
+          "name": "LED Length"
+        },
+        {
+          "default": "0.05",
+          "id": "softness",
+          "max": "0.5",
+          "min": "0",
+          "name": "Softness"
+        },
+        {
+          "default": "45",
+          "id": "hue",
+          "max": "360",
+          "min": "0",
+          "name": "Hue"
+        },
+        {
+          "default": "0.25",
+          "id": "saturation",
+          "max": "1",
+          "min": "0",
+          "name": "Saturation"
+        },
+        {
+          "default": "1",
+          "id": "brightness",
+          "max": "1",
+          "min": "0",
+          "name": "Brightness"
         }
       ]
     },

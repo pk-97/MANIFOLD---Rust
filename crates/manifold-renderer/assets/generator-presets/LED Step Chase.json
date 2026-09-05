@@ -7,7 +7,7 @@
     "category": "LED",
   "layerTypes": ["Dmx"],
     "oscPrefix": "ledStepChase",
-    "available": true,
+    "available": false,
     "isLineBased": false,
     "params": [
       {
