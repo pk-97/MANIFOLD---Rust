@@ -5533,6 +5533,15 @@ impl EffectNode for RenderScene {
                     emissive_uv_m: d.uniforms.emissive_uv_m,
                     emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
                     cast_shadows: d.cast_shadows,
+                    // RT_INSTANCING_DESIGN.md D1/D7: instance binding for
+                    // the RT accel. P1 of the design wires these from
+                    // `d.instances` / `d.instance_count` (bindless address
+                    // + capacity); P0 lands the manifold-gpu side with the
+                    // unwired defaults so every existing scene takes the
+                    // byte-identical D7 fast path.
+                    instances_addr: 0,
+                    instances_buffer: None,
+                    instance_slots: 1,
                 })
                 .collect();
 
@@ -5630,11 +5639,21 @@ impl EffectNode for RenderScene {
             // count, same NLL-borrow reason the tracer/masks/params
             // buffers above are ensured before `opaque_draws`'
             // long-lived immutable borrow starts.
+            // RT_INSTANCING_DESIGN.md D3: the GPU table holds one row per
+            // TLAS SLOT (object-major per-slot duplication), so the RT
+            // kernel's `gi_materials[instance_id]` indexing stays direct.
+            // Every object currently carries the D7 default (≤1 slot), so
+            // this equals `objects.len()` until P1 wires instance buffers.
+            let rt_gi_slot_count: usize = objects
+                .iter()
+                .map(|o| if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots as usize } else { 1 })
+                .sum::<usize>()
+                .max(1);
             ensure_rt_gi_materials(
                 &mut self.rt_gi_materials,
                 &mut self.rt_gi_materials_capacity,
                 gpu.device,
-                objects.len(),
+                rt_gi_slot_count,
             );
             // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
             // placement as `ensure_rt_gi_materials` above.
@@ -5974,6 +5993,12 @@ impl EffectNode for RenderScene {
                 );
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
+                // RT_INSTANCING_DESIGN.md D3: the per-object row is
+                // duplicated object-major across the object's TLAS slots
+                // (same slot addressing as `ensure_normal_sources`), so
+                // `gi_materials[instance_id]` reads the hit slot's row.
+                // With every object at ≤ 1 slot this is the historical
+                // single memcpy, byte-identical.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
                 {
                     // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
@@ -5981,17 +6006,25 @@ impl EffectNode for RenderScene {
                     // `bytemuck_bytes` (bytemuck isn't a manifold-gpu
                     // dependency, so this crate can't derive `Pod` on it;
                     // a raw byte view is the same shape without adding one).
-                    let bytes: &[u8] = unsafe {
-                        std::slice::from_raw_parts(
-                            gi_materials_data.as_ptr() as *const u8,
-                            std::mem::size_of_val(gi_materials_data.as_slice()),
-                        )
-                    };
+                    const GI_SIZE: usize =
+                        std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>();
                     let ptr = gi_materials_buffer
                         .mapped_ptr()
                         .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                    let mut row = 0usize;
+                    for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
+                        let slots =
+                            if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots } else { 1 };
+                        for _ in 0..slots {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    mat as *const manifold_gpu::raytrace::GiMaterial as *const u8,
+                                    ptr.add(row * GI_SIZE),
+                                    GI_SIZE,
+                                );
+                            }
+                            row += 1;
+                        }
                     }
                 }
                 // RT-T2-C: per-object world→prev-world motion delta

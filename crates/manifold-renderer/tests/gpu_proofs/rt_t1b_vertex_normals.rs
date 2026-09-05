@@ -110,6 +110,9 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
                     emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                     emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
 
     let mut normal_sources_slot = None;

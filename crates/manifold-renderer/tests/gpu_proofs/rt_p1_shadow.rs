@@ -137,6 +137,9 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
     }];
     let accel = tracer.build_accel(device, &objects, &[]);
 
@@ -385,6 +388,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
         RtObjectGeometry {
             vertex_buffer: &occ_vertex_buffer,
@@ -405,6 +411,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
     ];
     let accel = tracer.build_accel(device, &objects, &[]);

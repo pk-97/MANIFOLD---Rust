@@ -109,7 +109,26 @@ pub struct RtAccel {
     /// Retained here so `refit_accel` can rewrite transforms in place.
     /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
     /// arm 5) declares both BLASes and this buffer.
+    ///
+    /// RT_INSTANCING_DESIGN.md D1: in the INSTANCED mode (any object wired
+    /// with `instance_slots > 1` at build) this is the GPU-private buffer
+    /// the descriptor-build kernel writes and the TLAS build/refit consumes
+    /// — the TLAS descriptor's `instanceDescriptorBuffer` points at it in
+    /// BOTH modes, so encoder.rs's existing declaration covers it.
     pub(crate) instance_buffer: GpuBuffer,
+    /// RT_INSTANCING_DESIGN.md D1/D7: true when the accel was built with
+    /// the GPU descriptor-build path (any object had a wired
+    /// `instance_slots > 1`). Refit then re-dispatches the descriptor
+    /// kernel + TLAS refit in one command buffer instead of rewriting
+    /// `instance_buffer` from the CPU (it is GPU-private in this mode).
+    pub(crate) instanced: bool,
+    /// RT_INSTANCING_DESIGN.md D1: CPU-mapped per-object descriptor-build
+    /// params (model matrix, `instances_addr`, slot base/count, cast mask) —
+    /// rewritten every instanced build/refit from the CURRENT `objects`
+    /// slice (buffer identity deliberately does NOT ride the topo key; D9),
+    /// consumed by the descriptor-build kernel on the GPU. `None` in the
+    /// D7 fast path.
+    pub(crate) instance_obj_params: Option<GpuBuffer>,
     /// Retained handles to every object's vertex (and index) buffers as
     /// built. The trace kernels read these through RAW GPU ADDRESSES
     /// (`RtNormalSource.vertex_base_addr`) — an indirect reach no binding
@@ -162,6 +181,7 @@ impl Drop for RtAccel {
             self.refit_scratch.raw.clone(),
             self.blas.iter().map(|b| b.structure.clone()).collect::<Vec<_>>(),
             self.instance_buffer.raw.clone(),
+            self.instance_obj_params.as_ref().map(|p| p.raw.clone()),
             self.geometry_buffers.clone(),
             self.emissive_table.as_ref().map(|t| (t.triangles.raw.clone(), t.aliases.raw.clone())),
         );
@@ -277,6 +297,26 @@ pub struct RtObjectGeometry<'a> {
     /// it stays hit by every query EXCEPT the shadow/sun-bounce rays that
     /// mask against `RT_MASK_SHADOW_CASTER` alone.
     pub cast_shadows: bool,
+    /// RT_INSTANCING_DESIGN.md D1/D7: bindless GPU address of this object's
+    /// `Array<InstanceTransform>` wire (mesh_common.rs's 32-byte
+    /// `InstanceTransform` layout), or 0 when unwired. Wired with
+    /// `instance_slots > 1` puts the accel on the GPU descriptor-build path
+    /// (one TLAS slot per instance slot, composed `model · T_instance`
+    /// in-kernel per D4); 0 keeps the object at a single identity-slot
+    /// descriptor, exactly as before this field existed.
+    pub instances_addr: u64,
+    /// RT_INSTANCING_DESIGN.md: the buffer backing `instances_addr` — the
+    /// BUG-84fv lifetime handle. The descriptor-build kernel reads instance
+    /// values through the raw address, which no binding declares, so the
+    /// build/refit pins this handle through its async completion exactly
+    /// like `vertex_buffer` above. `Some` iff `instances_addr != 0`;
+    /// `instances_addr` must be this buffer's `gpu_address()`.
+    pub instances_buffer: Option<&'a GpuBuffer>,
+    /// RT_INSTANCING_DESIGN.md D2/D9: per-object instance-slot CAPACITY
+    /// (rigid topology — a change rebuilds the accel). 0 or 1 = unwired /
+    /// identity (the D7 fast path). The raster's live count is in-band
+    /// (`pos_scale.w == 0` = dead slot), so capacity is all the CPU needs.
+    pub instance_slots: u32,
 }
 
 /// RT instance mask bits (`MTLAccelerationStructureInstanceDescriptor::mask`,
@@ -376,6 +416,63 @@ fn to_packed_4x3(m: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
     }
 }
 
+/// RT_INSTANCING_DESIGN.md D1: encode the descriptor-build compute dispatch
+/// onto an already-open command buffer, ahead of the TLAS build/refit on
+/// the SAME buffer (sequential encoders execute in creation order — the
+/// GPU ordering the design requires; INV-RTI6: values move GPU→GPU only,
+/// no CPU readback). Shared by `build_accel` (before the TLAS build) and
+/// `refit_accel` (before the TLAS refit, one command buffer for both).
+///
+/// BUG-jddy discipline: the kernel reads each wired `instances` buffer
+/// through a RAW GPU address (`instances_addr`) no binding declares, so
+/// the dispatch `useResource`-declares every wired source buffer on the
+/// compute encoder (same class as the trace kernels' vertex buffers).
+fn encode_descriptor_build(
+    device: &GpuDevice,
+    cb: &ProtocolObject<dyn MTLCommandBuffer>,
+    objects: &[RtObjectGeometry],
+    descriptor_buffer: &GpuBuffer,
+    obj_params: &GpuBuffer,
+    max_slots: u32,
+) {
+    // INV-RTI4: exactly one line per descriptor-build dispatch, so a
+    // stray per-frame rebuild is visible in MANIFOLD_PROBE_RT_ACCEL logs.
+    if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
+        let total_slots: u32 = objects.iter().map(|o| effective_instance_slots(o)).sum();
+        eprintln!(
+            "MANIFOLD_PROBE_RT_ACCEL: descriptor-build dispatch objects={} total_slots={} max_slots={}",
+            objects.len(), total_slots, max_slots
+        );
+    }
+    let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
+        .computeCommandEncoder()
+        .expect("computeCommandEncoder failed");
+    let pipeline = &device.rt_pipelines().descriptor_build_pipeline;
+    unsafe {
+        enc.setComputePipelineState(&pipeline.state);
+        enc.setBuffer_offset_atIndex(Some(descriptor_buffer.raw()), 0, 0);
+        enc.setBuffer_offset_atIndex(Some(obj_params.raw()), 0, 1);
+        for o in objects {
+            if let Some(src) = o.instances_buffer {
+                let () = msg_send![&*enc, useResource: &*src.raw, usage: MTLResourceUsage::Read];
+            }
+        }
+        enc.dispatchThreadgroups_threadsPerThreadgroup(
+            MTLSize {
+                width: (max_slots as usize).div_ceil(SHADOW_WORKGROUP[0] as usize),
+                height: objects.len().max(1),
+                depth: 1,
+            },
+            MTLSize {
+                width: SHADOW_WORKGROUP[0] as usize,
+                height: 1,
+                depth: 1,
+            },
+        );
+    }
+    enc.endEncoding();
+}
+
 /// Every instance always carries [`RT_MASK_VISIBLE`]; [`RT_MASK_SHADOW_CASTER`]
 /// is added only when the object's `cast_shadows` is on.
 fn instance_mask(cast_shadows: bool) -> u32 {
@@ -430,11 +527,49 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
 /// impl), so a plain swap/drop/teardown is always safe regardless of
 /// caller.
 pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> RtAccel {
+    // RT_INSTANCING_DESIGN.md D7: the GPU descriptor-build path serves ALL
+    // objects uniformly when ANY object is wired with a plural instance
+    // capacity; otherwise today's CPU per-object path, byte-identical.
+    let instanced = objects.iter().any(|o| effective_instance_slots(o) > 1);
+    let total_slots: usize = objects
+        .iter()
+        .map(|o| effective_instance_slots(o) as usize)
+        .sum::<usize>()
+        .max(1);
+    let max_slots: u32 = objects.iter().map(effective_instance_slots).max().unwrap_or(1);
+
     let cb = device
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT accel build");
     unsafe { cb.setLabel(Some(&NSString::from_str("RT accel build"))) };
+
+    // D1: in instanced mode the descriptor-build kernel runs FIRST on this
+    // same command buffer (sequential encoders are GPU-ordered ahead of
+    // the TLAS build below). `instance_buffer` is the buffer the TLAS
+    // descriptor references in BOTH modes — GPU-private here (the CPU
+    // never authors descriptors in instanced mode), CPU-mapped shared on
+    // the fast path.
+    let mut instance_obj_params: Option<GpuBuffer> = None;
+    let instance_buffer = if instanced {
+        let obj_params = device.create_buffer_shared(
+            (objects.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
+        );
+        write_instance_obj_params(
+            obj_params
+                .mapped_ptr()
+                .expect("RT instance build-params buffer must be CPU-mapped"),
+            objects,
+        );
+        let descriptor_buffer =
+            device.create_buffer((total_slots * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>()) as u64);
+        encode_descriptor_build(device, &cb, objects, &descriptor_buffer, &obj_params, max_slots);
+        instance_obj_params = Some(obj_params);
+        descriptor_buffer
+    } else {
+        build_instance_buffer(device, objects)
+    };
+
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -467,15 +602,15 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     }
     let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
         blas.iter().map(|b| b.structure.clone()).collect();
-    let instance_buffer = build_instance_buffer(device, objects);
     // The TLAS build reads the instance buffer through the descriptor —
     // same raw-address class as the geometry buffers above.
     unsafe {
         let () = msg_send![&*enc, useResource: instance_buffer.raw(), usage: MTLResourceUsage::Read];
     }
 
+    let tlas_instance_count = if instanced { total_slots } else { objects.len() };
     let descriptor = MTLInstanceAccelerationStructureDescriptor::descriptor();
-    descriptor.setInstanceCount(objects.len());
+    descriptor.setInstanceCount(tlas_instance_count);
     unsafe {
         descriptor.setInstanceDescriptorBuffer(Some(instance_buffer.raw()));
     }
@@ -487,7 +622,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     if crate::metal::device::alloc_log_enabled() {
         eprintln!(
             "[gpu-alloc] tlas instances={} struct={} build_scratch={} refit_scratch={}",
-            objects.len(), sizes.accelerationStructureSize,
+            tlas_instance_count, sizes.accelerationStructureSize,
             sizes.buildScratchBufferSize, sizes.refitScratchBufferSize
         );
         crate::metal::device::alloc_log_backtrace();
@@ -507,6 +642,14 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     enc.endEncoding();
 
     let ready = Arc::new(AtomicBool::new(false));
+    // BUG-84fv: pin the wired `instances` source buffers (read through raw
+    // addresses by the descriptor-build kernel) until the build completes
+    // — the same lifetime hazard as the geometry buffers above. Empty on
+    // the D7 fast path.
+    let instance_source_pins: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = objects
+        .iter()
+        .filter_map(|o| o.instances_buffer.map(|b| b.raw.clone()))
+        .collect();
     add_ready_completion_handler(
         &cb,
         "RT accel build",
@@ -517,6 +660,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
             geometry_buffers.clone(),
             blas_structures.clone(),
             instance_buffer.raw.clone(),
+            instance_source_pins,
         )),
     );
     cb.commit();
@@ -531,6 +675,8 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         refit_scratch,
         blas,
         instance_buffer,
+        instanced,
+        instance_obj_params,
         geometry_buffers,
         ready,
         queue: device.clone_queue(),
@@ -604,6 +750,82 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         "refit_accel called with a different object COUNT than build_accel built — the BLAS \
          list (and instance buffer) don't match; call build_accel again instead (topology change)"
     );
+
+    // RT_INSTANCING_DESIGN.md D9: instanced refit = descriptor-build
+    // dispatch + TLAS refit in ONE command buffer (GPU-ordered). The
+    // descriptor buffer is GPU-private, so the CPU-mapped-tear discipline
+    // of the fast path (below) does not apply — the params rewrite is the
+    // per-object build-params buffer, not the descriptors themselves.
+    // Transforms, masks, and the wired `instances_addr` are read fresh
+    // from the CURRENT objects each refit (buffer identity rides no key;
+    // the kernel reads whatever buffer is wired this frame).
+    if accel.instanced {
+        let obj_params = accel
+            .instance_obj_params
+            .as_ref()
+            .expect("instanced accel carries instance build params");
+        write_instance_obj_params(
+            obj_params
+                .mapped_ptr()
+                .expect("RT instance build-params buffer must be CPU-mapped"),
+            objects,
+        );
+        let max_slots: u32 = objects.iter().map(effective_instance_slots).max().unwrap_or(1);
+
+        accel.ready.store(false, Ordering::Release);
+        let cb = device
+            .raw_queue()
+            .commandBuffer()
+            .expect("Failed to acquire command buffer for RT TLAS instanced refit");
+        unsafe { cb.setLabel(Some(&NSString::from_str("RT TLAS instanced refit"))) };
+        encode_descriptor_build(device, &cb, objects, &accel.instance_buffer, obj_params, max_slots);
+        let enc = cb
+            .accelerationStructureCommandEncoder()
+            .expect("accelerationStructureCommandEncoder failed");
+        // BUG-84fv hardening: same declaration set as the fast path below,
+        // plus the wired instances sources for the descriptor kernel's
+        // raw-address reads (declared on the compute encoder inside
+        // `encode_descriptor_build`).
+        unsafe {
+            let () = msg_send![&*enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read | MTLResourceUsage::Write];
+            for b in &accel.blas {
+                let () = msg_send![&*enc, useResource: &*b.structure, usage: MTLResourceUsage::Read];
+            }
+            let () = msg_send![&*enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+        }
+        unsafe {
+            enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                &accel.structure,
+                &accel.descriptor,
+                Some(&accel.structure),
+                Some(accel.refit_scratch.raw()),
+                0,
+            );
+        }
+        enc.endEncoding();
+        let blas_keep: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
+            accel.blas.iter().map(|b| b.structure.clone()).collect();
+        let instance_source_pins: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = objects
+            .iter()
+            .filter_map(|o| o.instances_buffer.map(|b| b.raw.clone()))
+            .collect();
+        add_ready_completion_handler(
+            &cb,
+            "RT TLAS instanced refit",
+            Arc::clone(&accel.ready),
+            CompletionPins((
+                blas_keep,
+                accel.instance_buffer.raw.clone(),
+                accel.structure.clone(),
+                accel.refit_scratch.raw.clone(),
+                obj_params.raw.clone(),
+                instance_source_pins,
+            )),
+        );
+        cb.commit();
+        return;
+    }
+
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let mask_offset = std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask);
     let ptr = accel
@@ -922,8 +1144,61 @@ struct RtNormalSource {
     uint   emissive_tex_index;
     float  emissive_uv_m[4];
     float  emissive_uv_t[2];
-    uint   _pad2[2];
+    // RT_INSTANCING_DESIGN.md D6/D3: the owning OBJECT index of this
+    // per-slot row (packed into out_n.w at the primary hit) + the bindless
+    // address of THIS slot's InstanceTransform (0 = unwired). Declared in
+    // this order so the ulong lands 8-aligned at 112 — the Rust mirror
+    // asserts offsets 108/112 and sizeof 120 (the old `_pad2[2]` words,
+    // consumed field-for-field).
+    uint   object_index;
+    ulong  instance_addr;
 };
+
+// RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
+// `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
+// xyz position + w uniform scale, rot_pad = xyz XYZ Euler + w mirror
+// marker) — manifold-gpu cannot import manifold-renderer types, so the
+// layout is mirrored by hand, same manual-sync discipline as every other
+// CPU/GPU mirror in this file (the Rust side ties the size: the
+// descriptor-build kernel strides slots by RT_INSTANCE_TRANSFORM_BYTES=32
+// and the renderer asserts its own copy is 32). std430 discipline: two
+// vec4s, stride 32, align 16.
+struct RtInstanceTransform {
+    float4 pos_scale;
+    float4 rot_pad;
+};
+
+// RT_INSTANCING_DESIGN.md D4: bit-parity copy of the raster's `euler_xyz`
+// (render_scene.wgsl:457, itself bit-for-bit
+// render_instanced_3d_mesh.wgsl's — both named sources per the design's
+// P0 brief). WGSL's mat3x3 constructor takes COLUMN vectors and MSL's
+// float3x3 constructor takes columns in the same order, so the matrices
+// build identically; R = Rz·Ry·Rx.
+static float3x3 rti_euler_xyz(float3 angles) {
+    float cx = cos(angles.x);
+    float sx = sin(angles.x);
+    float cy = cos(angles.y);
+    float sy = sin(angles.y);
+    float cz = cos(angles.z);
+    float sz = sin(angles.z);
+
+    float3x3 rx = float3x3(
+        float3(1.0, 0.0, 0.0),
+        float3(0.0, cx, sx),
+        float3(0.0, -sx, cx)
+    );
+    float3x3 ry = float3x3(
+        float3(cy, 0.0, -sy),
+        float3(0.0, 1.0, 0.0),
+        float3(sy, 0.0, cy)
+    );
+    float3x3 rz = float3x3(
+        float3(cz, sz, 0.0),
+        float3(-sz, cz, 0.0),
+        float3(0.0, 0.0, 1.0)
+    );
+    return rz * ry * rx;
+}
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
 // its bindless GPU address, then transform to world space with `src`'s
@@ -936,6 +1211,25 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     device const packed_float3* n_ptr =
         (device const packed_float3*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.normal_offset);
     float3 n_local = float3(*n_ptr);
+    // RT_INSTANCING_DESIGN.md D3: the vs_main fold (render_scene.wgsl:781-813
+    // bit parity) — when this row is a wired instance slot, load the slot's
+    // InstanceTransform and apply n' = rot·(n·msign) to the LOCAL normal
+    // BEFORE the row's object-level normal_matrix (the model matrix). The
+    // msign marker decode matches the raster exactly: marker = u32(w+0.5),
+    // select per component. Unwired rows (instance_addr == 0) skip this
+    // outright — byte-identical to the pre-instancing fetch.
+    if (src.instance_addr != 0ul) {
+        device const RtInstanceTransform* inst =
+            (device const RtInstanceTransform*)src.instance_addr;
+        float3x3 rot = rti_euler_xyz(inst->rot_pad.xyz);
+        uint marker = uint(inst->rot_pad.w + 0.5);
+        float3 msign = float3(
+            select(1.0, -1.0, marker == 1u),
+            select(1.0, -1.0, marker == 2u),
+            select(1.0, -1.0, marker == 3u)
+        );
+        n_local = rot * (n_local * msign);
+    }
     float3x3 m = float3x3(float3(src.normal_matrix_col0), float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
     return m * n_local;
 }
@@ -1607,7 +1901,11 @@ kernel void trace_shadow_rays(
                 shading_n = perturb_normal_with_map(
                     normal_sources[primary_iid], normal_sources, material_textures,
                     primary_iid, primary_pid, primary_bary, n);
-                obj_id = float(primary_iid);
+                // RT_INSTANCING_DESIGN.md D6: out_n.w carries the owning
+                // OBJECT index (obj_motion stays per-object), NOT the
+                // per-slot instance_id. Unwired scenes: object_index ==
+                // instance_id, byte-identical to the pre-instancing pack.
+                obj_id = float(normal_sources[primary_iid].object_index);
             }
         }
     }
@@ -3683,6 +3981,120 @@ kernel void debug_atrous_post(
     float4 c = atrous_post_center(p, depth_tex, normal_tex, moments_read, src_irr, uint2(1, 1));
     out[0] = packed_float4(c);
 }
+
+// ─── RT instancing: TLAS descriptor-build kernel (RT_INSTANCING_DESIGN.md
+// D1/D3/D4) ─────────────────────────────────────────────────────────────
+//
+// One thread per (object, slot): composes the slot's world matrix
+// `model_obj · (rot·diag(msign·scale) | pos)` EXACTLY as the raster's
+// `vs_main` does (render_scene.wgsl:758-813, D4 bit parity — euler_xyz
+// copy above, msign decode identical) and writes one
+// MTLAccelerationStructureInstanceDescriptor into the GPU-private
+// descriptor buffer the TLAS build/refit consumes. The CPU never reads
+// instance values (D1/INV-RTI6): values move GPU→GPU only.
+//
+// Grid: (max_slots, object_count) threads; a thread beyond its object's
+// slot count returns without writing (the buffer is exactly Σ slots — no
+// dead space, D2). Live-ness is in-band: a wired slot with
+// pos_scale.w == 0 (the scene_array/reflect_array dead-slot contract)
+// gets the identity matrix + mask 0 — every query masks nonzero, so it is
+// provably never intersected (D2).
+
+// Field-for-field mirror of MTLAccelerationStructureInstanceDescriptor
+// (packed transform + four u32s = 64 bytes) — the Rust side
+// `RtAsInstanceDescriptorMirror` ties this layout to the objc2 binding's
+// size/offsets at compile time; per the design's P0 brief the size is
+// asserted against the binding, never hardcoded.
+struct RtAsInstanceDescriptor {
+    packed_float3 t0;
+    packed_float3 t1;
+    packed_float3 t2;
+    packed_float3 t3;
+    uint  options;
+    uint  mask;
+    uint  intersection_function_table_offset;
+    uint  acceleration_structure_index;
+};
+
+// Mirror of the Rust `RtInstanceBuildObj` — see its doc comment for the
+// layout (96-byte stride both sides, asserted on the Rust side).
+struct RtInstanceBuildObj {
+    float4x4 model;
+    ulong    instances_addr;
+    uint     slot_base;
+    uint     slot_count;
+    uint     cast_shadows;
+    float2   _pad;
+};
+
+static void rti_write_identity_descriptor(device RtAsInstanceDescriptor* out, uint asi, uint mask) {
+    out->t0 = packed_float3(1.0, 0.0, 0.0);
+    out->t1 = packed_float3(0.0, 1.0, 0.0);
+    out->t2 = packed_float3(0.0, 0.0, 1.0);
+    out->t3 = packed_float3(0.0, 0.0, 0.0);
+    out->options = 0u; // MTLAccelerationStructureInstanceOptions::None
+    out->mask = mask;
+    out->intersection_function_table_offset = 0u;
+    out->acceleration_structure_index = asi;
+}
+
+kernel void build_instance_descriptors(
+    device RtAsInstanceDescriptor* descriptors [[buffer(0)]],
+    constant RtInstanceBuildObj*   objs        [[buffer(1)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    constant RtInstanceBuildObj& o = objs[tid.y];
+    if (tid.x >= o.slot_count) return;
+    uint slot = o.slot_base + tid.x;
+    device RtAsInstanceDescriptor* out = descriptors + slot;
+    // D5: no instance options in v1 — the trace kernels are two-sided by
+    // default (reset(ray, accel, mask), no cull mode), so mirrored slots
+    // (negative determinant) intersect identically. The P2 mirror proof is
+    // the arbiter per the design's VERIFY-AT-IMPL note.
+    uint mask = RT_MASK_VISIBLE | (o.cast_shadows ? RT_MASK_SHADOW_CASTER : 0u);
+    if (o.instances_addr == 0ul) {
+        // D7: unwired object — one identity slot (slot_count is 1).
+        rti_write_identity_descriptor(out, tid.y, mask);
+        return;
+    }
+    device const RtInstanceTransform* inst = (device const RtInstanceTransform*)
+        (o.instances_addr + (ulong)tid.x * (ulong)sizeof(RtInstanceTransform));
+    if (inst->pos_scale.w == 0.0) {
+        // D2: dead slot — identity + mask 0, never intersected.
+        rti_write_identity_descriptor(out, tid.y, 0u);
+        return;
+    }
+    // D4: A = euler_xyz(rot)·diag(msign·scale), t = pos — the raster's
+    // T_instance (render_scene.wgsl:781-788). msign from the rot_pad.w
+    // mirror marker, decoded exactly as vs_main does.
+    float3x3 rot = rti_euler_xyz(inst->rot_pad.xyz);
+    uint marker = uint(inst->rot_pad.w + 0.5);
+    float3 msign = float3(
+        select(1.0, -1.0, marker == 1u),
+        select(1.0, -1.0, marker == 2u),
+        select(1.0, -1.0, marker == 3u)
+    );
+    float s = inst->pos_scale.w;
+    float3x3 a = rot * float3x3(
+        float3(msign.x * s, 0.0, 0.0),
+        float3(0.0, msign.y * s, 0.0),
+        float3(0.0, 0.0, msign.z * s)
+    );
+    // world 4x3 = model_obj · (A | t): linear part model3x3·A, translation
+    // model3x3·t + model's translation column. MTLPackedFloat4x3 columns
+    // are [linear c0, linear c1, linear c2, translation].
+    float3x3 m3 = float3x3(o.model[0].xyz, o.model[1].xyz, o.model[2].xyz);
+    float3x3 w = m3 * a;
+    float3 t = m3 * inst->pos_scale.xyz + o.model[3].xyz;
+    out->t0 = packed_float3(w[0]);
+    out->t1 = packed_float3(w[1]);
+    out->t2 = packed_float3(w[2]);
+    out->t3 = packed_float3(t);
+    out->options = 0u;
+    out->mask = mask;
+    out->intersection_function_table_offset = 0u;
+    out->acceleration_structure_index = tid.y;
+}
 "#;
 
 /// One shadow-casting light's ray-tracing params — the per-caster payload
@@ -4412,12 +4824,143 @@ pub struct RtNormalSource {
     /// `float4` would 16-align against this offset.
     pub emissive_uv_m: [f32; 4],
     pub emissive_uv_t: [f32; 2],
-    /// Explicit pad to an 8-byte multiple (u64-led struct, same discipline
-    /// as the fields above).
-    pub _pad2: [u32; 2],
+    /// RT_INSTANCING_DESIGN.md D6: the owning OBJECT index of this per-slot
+    /// row — `trace_shadow_rays` packs it into `out_n.w` at the primary hit
+    /// so `accumulate_irradiance`'s `obj_motion` lookup stays per-object.
+    /// For unwired scenes `object_index == instance_id` (one row per
+    /// object), byte-identical to the pre-instancing id.
+    pub object_index: u32,
+    /// RT_INSTANCING_DESIGN.md D3: bindless address of THIS slot's
+    /// `InstanceTransform` (the renderer's 32-byte layout,
+    /// mesh_common.rs:96 — mirrored manually in the MSL; manifold-gpu
+    /// cannot depend on manifold-renderer), or 0 when unwired. When
+    /// nonzero, `fetch_world_normal` applies the D3 fold
+    /// (`rot · (n · msign)`) to the local normal BEFORE the row's
+    /// `normal_matrix`, bit-parity with render_scene.wgsl's `vs_main`.
+    /// Declared AFTER `object_index` so the u64 lands on its natural
+    /// 8-byte alignment at offset 112 — an earlier slot would push the
+    /// struct past 120 bytes (the MSL mirror declares the same order).
+    pub instance_addr: u64,
 }
 
 const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 120);
+// RT_INSTANCING_DESIGN.md D3: the consumed `_pad2` words become
+// object_index (108) + instance_addr (112) — asserted, not hand-counted.
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 108);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 112);
+
+/// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
+/// `generators::mesh_common::InstanceTransform` (32 bytes,
+/// `pos_scale` xyz position + w uniform scale, `rot_pad` xyz XYZ Euler +
+/// w mirror marker) — manifold-gpu cannot depend on manifold-renderer, so
+/// the layout is mirrored by hand and tied to the MSL `RtInstanceTransform`
+/// below by the same manual-sync discipline as every other CPU/GPU mirror
+/// in this file. Only the SIZE is machine-checked (the renderer asserts
+/// its own copy is 32); the descriptor-build kernel addresses slots as
+/// `instances_addr + slot * 32`.
+const RT_INSTANCE_TRANSFORM_BYTES: usize = 32;
+
+/// RT_INSTANCING_DESIGN.md D1/P0: Rust mirror of the embedded-MSL
+/// `RtAsInstanceDescriptor` — itself the field-for-field mirror of
+/// `MTLAccelerationStructureInstanceDescriptor` the descriptor-build kernel
+/// writes. The CPU never authors descriptors in instanced mode (the buffer
+/// is GPU-private), so this struct exists ONLY to tie the two layouts
+/// together at compile time: its size/offsets must equal the objc2
+/// binding's, and the MSL mirror must equal this. Do NOT hardcode 64 —
+/// assert against the binding (per the design's P0 brief) so an
+/// objc2-metal layout change fails loudly here instead of mis-striding the
+/// GPU writes.
+#[repr(C)]
+struct RtAsInstanceDescriptorMirror {
+    transformation_matrix: [[f32; 3]; 4],
+    options: u32,
+    mask: u32,
+    intersection_function_table_offset: u32,
+    acceleration_structure_index: u32,
+}
+
+const _: () = assert!(
+    std::mem::size_of::<RtAsInstanceDescriptorMirror>()
+        == std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>()
+);
+const _: () = assert!(
+    std::mem::offset_of!(RtAsInstanceDescriptorMirror, mask)
+        == std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask)
+);
+const _: () = assert!(
+    std::mem::offset_of!(RtAsInstanceDescriptorMirror, acceleration_structure_index)
+        == std::mem::offset_of!(
+            MTLAccelerationStructureInstanceDescriptor,
+            accelerationStructureIndex
+        )
+);
+
+/// RT_INSTANCING_DESIGN.md D1/P0: Rust mirror of the embedded-MSL
+/// `RtInstanceBuildObj` — one entry per object, rewritten every instanced
+/// build/refit from the current `objects` slice (transforms, wired
+/// instance address, slot base/count, cast mask) and consumed by the
+/// descriptor-build kernel. Layout notes (mirrored field-for-field in the
+/// MSL): `model` fills the first 64 bytes, `instances_addr` lands at 64
+/// (8-aligned), the three `u32`s pack to 84, and the explicit pad brings
+/// the stride to 96 — MSL rounds the same struct to 96 (its `float2` pad
+/// requires 8-byte alignment, landing at 88). Asserted, not hand-counted.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RtInstanceBuildObj {
+    model: [[f32; 4]; 4],
+    instances_addr: u64,
+    slot_base: u32,
+    slot_count: u32,
+    cast_shadows: u32,
+    _pad: [f32; 2],
+}
+
+const _: () = assert!(std::mem::size_of::<RtInstanceBuildObj>() == 96);
+const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, instances_addr) == 64);
+const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_base) == 72);
+const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_count) == 76);
+const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, cast_shadows) == 80);
+
+/// RT_INSTANCING_DESIGN.md D7: an object occupies `instance_slots` TLAS
+/// slots only when it is wired AND capacity is genuinely plural; 0/1 or
+/// unwired collapses to the single identity slot of the D7 fast path.
+/// Unwired objects in an instanced scene contribute exactly one identity
+/// slot ("the GPU path serves ALL objects uniformly").
+fn effective_instance_slots(obj: &RtObjectGeometry) -> u32 {
+    if obj.instances_addr != 0 && obj.instance_slots > 1 {
+        obj.instance_slots
+    } else {
+        1
+    }
+}
+
+/// CPU-side rewrite of the instanced descriptor-build params from the
+/// CURRENT `objects` slice — the same slice discipline as
+/// `build_instance_buffer`/`refit_accel` (slot bases recomputed
+/// object-major; capacity is topology, so a refit's bases always match the
+/// build's). `ptr` is the mapped base of the `instance_obj_params` buffer.
+fn write_instance_obj_params(ptr: *mut u8, objects: &[RtObjectGeometry]) {
+    let stride = std::mem::size_of::<RtInstanceBuildObj>();
+    let mut base = 0u32;
+    for (i, obj) in objects.iter().enumerate() {
+        let slots = effective_instance_slots(obj);
+        let params = RtInstanceBuildObj {
+            model: obj.transform,
+            instances_addr: obj.instances_addr,
+            slot_base: base,
+            slot_count: slots,
+            cast_shadows: obj.cast_shadows as u32,
+            _pad: [0.0; 2],
+        };
+        // SAFETY: `ptr` is the buffer's mapped base, sized
+        // `objects.len() * stride` by the caller; per-element unaligned
+        // writes match the file's other CPU-mirror writes.
+        unsafe {
+            std::ptr::write_unaligned(ptr.add(i * stride) as *mut RtInstanceBuildObj, params);
+        }
+        base += slots;
+    }
+}
 
 /// Fixed texture-argument-table slot count for per-object material textures
 /// (alpha-mask + base-color; roughness/metallic/normals consume this same cap) —
@@ -4450,6 +4993,17 @@ fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
 /// a GPU readback of the actual vertex data itself — the bindless address
 /// does that lookup on the GPU, at ray-hit time.
 ///
+/// RT_INSTANCING_DESIGN.md D3: rows are emitted PER SLOT, object-major —
+/// object i owns rows `[base_i, base_i + cap_i)` where `cap_i` is its
+/// effective slot count and `base_i` the running sum (the SAME slot
+/// addressing the TLAS descriptors use, so `hit.instance_id` indexes this
+/// table directly). Each slot row duplicates the object's fields, with
+/// `object_index` naming the owning object (packed into out_n.w at the
+/// primary hit, D6) and `instance_addr` pointing at THIS slot's
+/// `InstanceTransform` (0 = unwired). When every object has ≤ 1 slot the
+/// expansion is one row per object in `objects` order — byte-identical to
+/// the pre-instancing table (INV-RTI3).
+///
 /// RT-T2-A: also assigns each alpha-masked object a slot in the returned
 /// texture list — `objects[i].base_color_texture` becomes `alpha_textures[k]`
 /// where `k` is that object's position among alpha-masked objects with a
@@ -4465,7 +5019,11 @@ pub fn ensure_normal_sources<'a>(
     device: &GpuDevice,
     objects: &[RtObjectGeometry<'a>],
 ) -> Vec<&'a GpuTexture> {
-    let needed = objects.len().max(1);
+    let needed: usize = objects
+        .iter()
+        .map(|o| effective_instance_slots(o) as usize)
+        .sum::<usize>()
+        .max(1);
     if slot.is_none() || *capacity < needed {
         *slot = Some(device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64));
         *capacity = needed;
@@ -4475,7 +5033,11 @@ pub fn ensure_normal_sources<'a>(
         .mapped_ptr()
         .expect("RT normal-source buffer must be CPU-mapped");
     let mut material_textures: Vec<&'a GpuTexture> = Vec::new();
+    // D3: object-major per-slot row cursor — object i's rows occupy
+    // [base_i, base_i + cap_i), matching the TLAS slot addressing.
+    let mut row = 0usize;
     for (i, obj) in objects.iter().enumerate() {
+        let slots = effective_instance_slots(obj);
         let alpha_tex_index = if obj.alpha_mask {
             match obj.base_color_texture {
                 Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
@@ -4575,25 +5137,35 @@ pub fn ensure_normal_sources<'a>(
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
-        let src = RtNormalSource {
-            vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
-            vertex_stride: obj.vertex_stride,
-            normal_offset: obj.normal_offset,
-            normal_matrix: normal_matrix_from_model(obj.transform),
-            uv_offset: obj.uv_offset,
-            alpha_mask: obj.alpha_mask as u32,
-            alpha_cutoff: obj.alpha_cutoff,
-            alpha_tex_index,
-            base_color_tex_index,
-            mr_tex_index,
-            normal_tex_index,
-            emissive_tex_index,
-            emissive_uv_m: obj.emissive_uv_m,
-            emissive_uv_t: obj.emissive_uv_t,
-            _pad2: [0; 2],
-        };
-        unsafe {
-            std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+        // D3: duplicate the object's row across its slots; only
+        // object_index / instance_addr vary per slot.
+        for s in 0..slots {
+            let src = RtNormalSource {
+                vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
+                vertex_stride: obj.vertex_stride,
+                normal_offset: obj.normal_offset,
+                normal_matrix: normal_matrix_from_model(obj.transform),
+                uv_offset: obj.uv_offset,
+                alpha_mask: obj.alpha_mask as u32,
+                alpha_cutoff: obj.alpha_cutoff,
+                alpha_tex_index,
+                base_color_tex_index,
+                mr_tex_index,
+                normal_tex_index,
+                emissive_tex_index,
+                emissive_uv_m: obj.emissive_uv_m,
+                emissive_uv_t: obj.emissive_uv_t,
+                object_index: i as u32,
+                instance_addr: if obj.instances_addr != 0 {
+                    obj.instances_addr + s as u64 * RT_INSTANCE_TRANSFORM_BYTES as u64
+                } else {
+                    0
+                },
+            };
+            unsafe {
+                std::ptr::write_unaligned(ptr.add(row * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+            }
+            row += 1;
         }
     }
     material_textures
@@ -5311,6 +5883,10 @@ pub struct RtPipelines {
     pub debug_firefly_clamp_pipeline: GpuComputePipeline,
     pub atrous_post_pipeline: GpuComputePipeline,
     pub debug_atrous_post_pipeline: GpuComputePipeline,
+    /// RT_INSTANCING_DESIGN.md D1/P0: the TLAS descriptor-build kernel —
+    /// dispatched ahead of the TLAS build/refit on the same command buffer
+    /// in instanced mode (never on the D7 fast path).
+    pub descriptor_build_pipeline: GpuComputePipeline,
 }
 
 impl RtPipelines {
@@ -5605,6 +6181,20 @@ impl RtPipelines {
             ]),
         );
 
+        // RT_INSTANCING_DESIGN.md D1/P0: descriptor-build kernel —
+        // descriptors out at [[buffer(0)]], per-object build params at
+        // [[buffer(1)]]. Signatures and slot maps change together (the R1
+        // slot-map incident class).
+        let descriptor_build_pipeline = compile_pipeline(
+            device,
+            &library,
+            "build_instance_descriptors",
+            identity_slot_map(&[
+                (0, SlotKind::Buffer),
+                (1, SlotKind::Buffer),
+            ]),
+        );
+
         Self {
             trace_pipeline_binary,
             trace_pipeline_translucent,
@@ -5617,6 +6207,7 @@ impl RtPipelines {
             debug_firefly_clamp_pipeline,
             atrous_post_pipeline,
             debug_atrous_post_pipeline,
+            descriptor_build_pipeline,
         }
     }
 }
