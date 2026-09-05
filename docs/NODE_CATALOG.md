@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 264 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 265 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (62)
+### 3D Geometry (63)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -202,6 +202,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
+| Reflect Array | `node.reflect_array` | Filter | Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset. |
 | Render Copies | `node.render_copies` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
 | Render Mesh | `node.render_mesh` | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
 | Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by any number of shar… |

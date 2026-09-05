@@ -40,6 +40,13 @@ pub struct GroupSplice {
     pub source_doc_id: u32,
     /// The producer's output port (e.g. `out`).
     pub source_port: String,
+    /// Take-over consent (SCENE_MIRROR_DESIGN section 3.5): when true the
+    /// apply drops every other top-level wire feeding (group, inner_port)
+    /// and wires this source in — the loop's scene_array owns `instances`
+    /// this way (D6). When false and the interface input already exists,
+    /// the apply refuses the whole command (INV-MR8, one splice owner) —
+    /// never a silent skip.
+    pub replace_existing: bool,
 }
 
 /// Port take-over with declarative restore (generalizes the loop's

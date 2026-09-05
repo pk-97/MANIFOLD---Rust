@@ -130,6 +130,106 @@ fn splice_interface_port_type(inner_port: &str) -> Option<&'static str> {
     }
 }
 
+/// Apply one group splice to the descended (nodes, wires). Section 3.5 of
+/// SCENE_MIRROR_DESIGN splits the old conflated behaviour:
+///  (a) interface input + group_input boundary wiring: added only when
+///      missing (unchanged);
+///  (b) the top-level wire: with `replace_existing` every other producer of
+///      (group, inner_port) is dropped first, then the source wire lands;
+///      without it the caller's pre-flight already refused (INV-MR8), so
+///      reaching here means the port was free.
+fn apply_group_splice(
+    nodes: &mut [EffectGraphNode],
+    wires: &mut Vec<EffectGraphWire>,
+    splice: &GroupSplice,
+    next_group_input_id: &mut u32,
+) {
+    let Some(port_type) = splice_interface_port_type(splice.inner_port) else {
+        return;
+    };
+    let Some(group_idx) = nodes.iter().position(|n| n.id == splice.group_node_id) else {
+        return;
+    };
+    let Some(body) = nodes[group_idx].group.as_deref_mut() else {
+        return;
+    };
+    if !body.interface.inputs.iter().any(|p| p.name == splice.inner_port) {
+        body.interface.inputs.push(InterfacePortDef {
+            name: splice.inner_port.to_string(),
+            port_type: port_type.to_string(),
+        });
+        // A group_input boundary node carrying the spliced port (object
+        // groups have none today; the AO group's precedent names it after
+        // the group).
+        let group_input_handle = "loop_in".to_string();
+        let group_input_id = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == GROUP_INPUT_TYPE_ID)
+            .map(|n| n.id)
+            .unwrap_or_else(|| {
+                // Reserve a fresh body-local id that can't collide with the
+                // top-level minted ids.
+                let id = *next_group_input_id;
+                *next_group_input_id += 1;
+                body.nodes.push(EffectGraphNode {
+                    id,
+                    node_id: manifold_core::NodeId::new(group_input_handle.clone()),
+                    type_id: GROUP_INPUT_TYPE_ID.to_string(),
+                    handle: Some(group_input_handle),
+                    params: BTreeMap::new(),
+                    exposed_params: Default::default(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    title: None,
+                    output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
+                    group: None,
+                });
+                id
+            });
+        // group_input.<inner_port> → <inner_node>.<inner_port> (inside body).
+        let inner_target = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == splice.inner_node_type)
+            .map(|n| n.id);
+        if let Some(inner) = inner_target {
+            body.wires.push(EffectGraphWire {
+                from_node: group_input_id,
+                from_port: splice.inner_port.to_string(),
+                to_node: inner,
+                to_port: splice.inner_port.to_string(),
+            });
+        }
+    }
+    if splice.replace_existing {
+        // Take-over (D6): drop every other producer of the port. The
+        // source's own wire survives so a re-asserted splice can't
+        // duplicate it.
+        wires.retain(|w| {
+            w.to_node != splice.group_node_id
+                || w.to_port != splice.inner_port
+                || w.from_node == splice.source_doc_id
+        });
+    }
+    // <source>.<source_port> → group.<inner_port> (top level, via the
+    // interface).
+    if !wires.iter().any(|w| {
+        w.from_node == splice.source_doc_id
+            && w.from_port == splice.source_port
+            && w.to_node == splice.group_node_id
+            && w.to_port == splice.inner_port
+    }) {
+        wires.push(EffectGraphWire {
+            from_node: splice.source_doc_id,
+            from_port: splice.source_port.clone(),
+            to_node: splice.group_node_id,
+            to_port: splice.inner_port.to_string(),
+        });
+    }
+}
+
 impl Command for ApplySceneModifierCommand {
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
@@ -187,6 +287,29 @@ impl Command for ApplySceneModifierCommand {
                     return None;
                 }
 
+                // INV-MR8 pre-flight (SCENE_MIRROR_DESIGN section 3.5): a
+                // splice WITHOUT take-over onto an already-spliced port
+                // refuses the WHOLE apply — the old silent skip left the
+                // new kind believing it owned a port it never wired. Runs
+                // before any mutation so a refusal is a true no-op.
+                for splice in plan.group_splices.iter().filter(|s| !s.replace_existing) {
+                    let port_taken = nodes
+                        .iter()
+                        .find(|n| n.id == splice.group_node_id)
+                        .and_then(|n| n.group.as_ref())
+                        .map(|b| b.interface.inputs.iter().any(|p| p.name == splice.inner_port))
+                        .unwrap_or(false);
+                    if port_taken {
+                        eprintln!(
+                            "ApplySceneModifierCommand ({}): group {} port {:?} already has a splice owner — build the plan with replace_existing to take over (INV-MR8)",
+                            plan.kind_id,
+                            splice.group_node_id,
+                            splice.inner_port
+                        );
+                        return None;
+                    }
+                }
+
                 // Add the modifier's nodes (atoms + enable wiring extras)
                 // and wires.
                 nodes.extend(plan.new_nodes.iter().cloned());
@@ -222,74 +345,7 @@ impl Command for ApplySceneModifierCommand {
                 // cross-boundary wire (which the flattener rejects).
                 let mut next_group_input_id = 1_000_000u32;
                 for splice in &plan.group_splices {
-                    let Some(port_type) = splice_interface_port_type(splice.inner_port) else {
-                        continue;
-                    };
-                    let Some(group_idx) = nodes.iter().position(|n| n.id == splice.group_node_id) else {
-                        continue;
-                    };
-                    let group = &mut nodes[group_idx];
-                    let Some(body) = group.group.as_deref_mut() else { continue };
-                    if body.interface.inputs.iter().any(|p| p.name == splice.inner_port) {
-                        continue;
-                    }
-                    body.interface.inputs.push(InterfacePortDef {
-                        name: splice.inner_port.to_string(),
-                        port_type: port_type.to_string(),
-                    });
-                    // A group_input boundary node carrying the spliced port
-                    // (object groups have none today; the AO group's
-                    // precedent names it after the group).
-                    let group_input_handle = "loop_in".to_string();
-                    let group_input_id = body
-                        .nodes
-                        .iter()
-                        .find(|n| n.type_id == GROUP_INPUT_TYPE_ID)
-                        .map(|n| n.id)
-                        .unwrap_or_else(|| {
-                            // Reserve a fresh body-local id that can't
-                            // collide with the top-level minted ids.
-                            let id = next_group_input_id;
-                            next_group_input_id += 1;
-                            body.nodes.push(EffectGraphNode {
-                                id,
-                                node_id: manifold_core::NodeId::new(group_input_handle.clone()),
-                                type_id: GROUP_INPUT_TYPE_ID.to_string(),
-                                handle: Some(group_input_handle),
-                                params: BTreeMap::new(),
-                                exposed_params: Default::default(),
-                                editor_pos: None,
-                                wgsl_source: None,
-                                title: None,
-                                output_formats: BTreeMap::new(),
-                                output_canvas_scales: BTreeMap::new(),
-                                group: None,
-                            });
-                            id
-                        });
-                    // group_input.<inner_port> → <inner_node>.<inner_port>
-                    // (inside body).
-                    let inner_target = body
-                        .nodes
-                        .iter()
-                        .find(|n| n.type_id == splice.inner_node_type)
-                        .map(|n| n.id);
-                    if let Some(inner) = inner_target {
-                        body.wires.push(EffectGraphWire {
-                            from_node: group_input_id,
-                            from_port: splice.inner_port.to_string(),
-                            to_node: inner,
-                            to_port: splice.inner_port.to_string(),
-                        });
-                    }
-                    // <source>.<source_port> → group.<inner_port> (top level,
-                    // via the interface).
-                    wires.push(EffectGraphWire {
-                        from_node: splice.source_doc_id,
-                        from_port: splice.source_port.clone(),
-                        to_node: splice.group_node_id,
-                        to_port: splice.inner_port.to_string(),
-                    });
+                    apply_group_splice(nodes, wires, splice, &mut next_group_input_id);
                 }
 
                 Some((prev_nodes_wires, prev_metadata))

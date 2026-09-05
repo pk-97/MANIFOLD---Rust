@@ -767,8 +767,25 @@ fn vs_main(
     let v = verts[vid];
     let inst = instances[iid];
     let rot = euler_xyz(inst.rot_pad.xyz);
-    let inst_pos = rot * (v.position * inst.pos_scale.w) + inst.pos_scale.xyz;
-    let inst_normal = rot * v.normal;
+    // SCENE_MIRROR (D5, P1-amended): instances minted by node.reflect_array
+    // carry the mirror plane marker in rot_pad.w — 0 = original, k > 0 =
+    // mirrored across the plane perpendicular to component k-1. Stored:
+    // rotation R' = M R M, translation t' = M(t - d a) + d a, scale kept
+    // positive. Exactness (two lines): world' = R'(w M v) + t'
+    //             = (M R M)(M w v) + t' = M R (w v) + M(t - d a) + d a,
+    // the true planar reflection; the normal follows identically,
+    // R'(M n) = M R n — so the flip lands BEFORE the stored rotation
+    // (flipped after, it would be R M n, wrong by the same conjugation).
+    // Unmarked instances take msign = (1,1,1) — byte-identical to the
+    // pre-mirror shader.
+    let marker = u32(inst.rot_pad.w + 0.5);
+    let msign = vec3<f32>(
+        select(1.0, -1.0, marker == 1u),
+        select(1.0, -1.0, marker == 2u),
+        select(1.0, -1.0, marker == 3u),
+    );
+    let inst_pos = rot * ((v.position * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let inst_normal = rot * (v.normal * msign);
 
     var out: VsOut;
     let world = u.model * vec4<f32>(inst_pos, 1.0);
@@ -788,11 +805,12 @@ fn vs_main(
     out.world_normal = normalize((u.model * vec4<f32>(inst_normal, 0.0)).xyz);
     out.uv = v.uv;
     // BUG-wfxe: tangent transforms with the same instance-rotation + model
-    // chain as the normal (a direction). w carries the bitangent sign
+    // chain as the normal (a direction); the mirror marker flips it with
+    // the same sign vector (M R t = R' M t). w carries the bitangent sign
     // through unscaled; w == 0 (no authored tangent) passes the zero
     // sentinel through — normalize() of a zero vector would be NaN, so the
     // direction is selected, not branched (uniform control flow).
-    let t_world = normalize((u.model * vec4<f32>(rot * v.tangent.xyz, 0.0)).xyz);
+    let t_world = normalize((u.model * vec4<f32>(rot * (v.tangent.xyz * msign), 0.0)).xyz);
     out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w);
     return out;
 }
