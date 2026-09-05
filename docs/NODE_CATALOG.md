@@ -460,7 +460,7 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
-| `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
+| `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `TimeScrub` | Time Scrub | generator | Geometry | 77 |
