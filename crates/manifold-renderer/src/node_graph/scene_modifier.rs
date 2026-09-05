@@ -173,6 +173,10 @@ inventory::collect!(SceneModifierDescriptorEntry);
     SceneModifierDescriptorEntry { descriptor: || &scene_modifier_fog::SCENE_FOG_DESCRIPTOR }
 }
 
+::inventory::submit! {
+    SceneModifierDescriptorEntry { descriptor: || &scene_modifier_mirror::SCENE_MIRROR_DESCRIPTOR }
+}
+
 /// All registered kinds in canonical slot order (SLOT_GROUP_ORDER, then
 /// link order within a group).
 pub fn descriptors() -> Vec<&'static SceneModifierDescriptor> {
@@ -381,6 +385,8 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_loop_exposure_rows, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
 
 pub use scene_modifier_fog::{FOG_KIND_ID, SCENE_FOG_DESCRIPTOR};
+
+pub use scene_modifier_mirror::{MIRROR_KIND_ID, SCENE_MIRROR_DESCRIPTOR};
 
 pub mod scene_modifier_loop {
     //! Kind `scene_loop` — the Scene Loop as modifier kind #1 (D6/D8).
@@ -1250,6 +1256,633 @@ pub mod scene_modifier_fog {
                     "{channel} must be pinned at the neutral default"
                 );
             }
+        }
+    }
+}
+
+pub mod scene_modifier_mirror {
+    //! Kind `scene_mirror` — whole-scene reflection as modifier kind #3
+    //! (SCENE_MIRROR_DESIGN section 3.4: the kind-#3 infra hardening the
+    //! fog template was the generality proof for).
+    //!
+    //! Mints `node.reflect_array` ("mirror_reflect") between the scene's
+    //! shared instances producer and every object group: the producer's
+    //! array (the loop's scene_array, a user array, or a minted
+    //! single-identity `mirror_base` when nothing fed instances) reflects
+    //! across the floor plane (D8: axis +Y, plane_offset = scene_bounds
+    //! min-Y) and the reflected copies render through the same
+    //! whole-buffer instance draw as the originals. Take-over is the P0
+    //! `replace_existing` splice (D6): the mirror owns (group, instances)
+    //! while applied; remove restores the displaced producer via the
+    //! repoint's `restore_types`.
+
+    use super::*;
+    use crate::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
+
+    pub const MIRROR_KIND_ID: &str = "scene_mirror";
+
+    /// The applied-state defaults (D8): reflect across +Y (the floor
+    /// plane), offset at the scene's min-Y, gate on.
+    const AXIS_Y: u32 = 2;
+
+    /// Producer types the remove arm may wire back into (group, instances):
+    /// the loop's scene_array, a user-authored scene_array, or an inert
+    /// reflect_array left behind by a hand-removed second mirror (D6).
+    const MIRROR_RESTORE_TYPES: &[&str] = &["node.scene_array", "node.reflect_array"];
+
+    /// The card rows (section 3.4): ONLY the reflect atom's three params
+    /// surface. Everything else — the marker contract, the capacity rule,
+    /// mirror_base's count — is internal: a panel row for it would desync
+    /// the mirror.
+    const MIRROR_ROW_WHITELIST: &[(&str, &str, &str)] = &[
+        ("mirror_reflect", "enabled", "Enabled"),
+        ("mirror_reflect", "axis", "Axis"),
+        ("mirror_reflect", "plane_offset", "Plane Offset"),
+    ];
+
+    pub static SCENE_MIRROR_DESCRIPTOR: SceneModifierDescriptor = SceneModifierDescriptor {
+        kind_id: MIRROR_KIND_ID,
+        display_name: "Scene Mirror",
+        slot_group: SlotGroup::Objects,
+        plan_builder: build_scene_mirror_plan,
+        applicable: scene_mirror_applicable,
+        // mirror_reflect is required (D3 all-or-nothing). mirror_base is
+        // OPTIONAL: it is minted only when no instances producer exists, so
+        // the static trace cannot demand it (loop-then-mirror graphs and
+        // take-over graphs have none). The plan builder re-derives it on
+        // the applied graph so the remove arm drops it by stable node_id.
+        trace: &[
+            TraceNode { type_id: "node.reflect_array", node_id: "mirror_reflect", required: true },
+            TraceNode { type_id: "node.scene_array", node_id: "mirror_base", required: false },
+        ],
+        row_whitelist: Some(MIRROR_ROW_WHITELIST),
+        coupled_writes: &[],
+        // The gate-toggle contract lives on the ATOM: off zeroes only the
+        // mirrored half (INV-MR1, D9), so the enable write is a plain
+        // param write on mirror_reflect.enabled — the plan's ToggleDecl
+        // carries that (on/off 1.0/0.0). The descriptor-level decl only
+        // feeds the VM's enabled-state read and the app-side toggle
+        // target, both of which key off `enabled_node`; the Gate variant's
+        // amount/target fields have no consumers (the atom needs no value
+        // atoms — it gates in-band), so they stay empty rather than
+        // inventing a third variant for one kind.
+        enable: EnableDecl::Gate {
+            enabled_node: "mirror_reflect",
+            amount_node: "",
+            target_node: "",
+            target_param: "",
+        },
+    };
+
+    /// Object groups wired into render_scene's object_k / mesh_k — the
+    /// same detection the loop plan builder uses (the WIRES are the truth,
+    /// not the stale `objects` param).
+    fn object_groups(def: &EffectGraphDef, render_scene_node_id: u32) -> Vec<u32> {
+        let mut groups = Vec::new();
+        for w in &def.wires {
+            if w.to_node != render_scene_node_id {
+                continue;
+            }
+            if !(w.to_port.starts_with("object_") || w.to_port.starts_with("mesh_")) {
+                continue;
+            }
+            if let Some(group) = def.nodes.iter().find(|n| n.id == w.from_node && n.group.is_some()) {
+                groups.push(group.id);
+            }
+        }
+        groups
+    }
+
+    /// The shared top-level instances producer across every object group
+    /// (D6): `Ok(None)` = no group has a producer (fresh scene),
+    /// `Ok(Some(doc))` = every group fed by the same producer,
+    /// `Err(())` = groups disagree or one group carries multiple producers
+    /// (a hand-edited graph the mirror must not pretend to understand).
+    fn shared_instances_producer(
+        def: &EffectGraphDef,
+        groups: &[u32],
+    ) -> Result<Option<u32>, ()> {
+        let mut shared: Option<Option<u32>> = None;
+        for &gid in groups {
+            let mut producers: Vec<u32> = def
+                .wires
+                .iter()
+                .filter(|w| w.to_node == gid && w.to_port == "instances")
+                .map(|w| w.from_node)
+                .collect();
+            producers.sort_unstable();
+            producers.dedup();
+            let one = match producers.as_slice() {
+                [] => None,
+                [p] => Some(*p),
+                _ => return Err(()),
+            };
+            match shared {
+                None => shared = Some(one),
+                Some(prev) if prev == one => {}
+                Some(_) => return Err(()),
+            }
+        }
+        Ok(shared.flatten())
+    }
+
+    /// Picker/dispatch gate (D6): exactly one render_scene, no applied kind
+    /// in the Objects slot group (slot exclusivity — today that IS this
+    /// kind, so the last check also covers "already applied"), and every
+    /// object group's `instances` fed by ONE shared top-level producer or
+    /// none.
+    fn scene_mirror_applicable(def: &EffectGraphDef, render_scene_node_id: u32) -> bool {
+        if def.nodes.iter().filter(|n| n.type_id == RENDER_SCENE_TYPE_ID).count() != 1 {
+            return false;
+        }
+        if !def.nodes.iter().any(|n| n.id == render_scene_node_id) {
+            return false;
+        }
+        if !descriptors()
+            .into_iter()
+            .filter(|d| d.slot_group == SlotGroup::Objects)
+            .all(|d| !trace_modifier(d, &def.nodes).applied(d))
+        {
+            return false;
+        }
+        let groups = object_groups(def, render_scene_node_id);
+        shared_instances_producer(def, &groups).is_ok()
+    }
+
+    /// Build the Scene Mirror apply plan. Succeeds on any graph with a
+    /// well-formed (shared-or-none) instances shape so the remove arm can
+    /// re-derive the plan it inverts; malformed (disagreeing) producer
+    /// shapes return None — the remove arm only ever sees graphs the
+    /// mirror itself shaped.
+    pub fn build_scene_mirror_plan(
+        def: &EffectGraphDef,
+        render_scene_node_id: u32,
+    ) -> Option<SceneModifierPlan> {
+        def.nodes.iter().find(|n| n.id == render_scene_node_id)?;
+
+        let groups = object_groups(def, render_scene_node_id);
+        let producer = shared_instances_producer(def, &groups).ok()?;
+
+        // D8: the floor plane — axis +Y, offset at scene_bounds min-Y,
+        // 0.0 fallback (the loop's apply-time derivation pattern).
+        let bounds = def.preset_metadata.as_ref().and_then(|m| m.scene_bounds);
+        let plane_offset = bounds.map(|(min, _)| min[1]).unwrap_or(0.0);
+
+        // mirror_base rides the plan when the scene has no instances
+        // producer (one identity instance to reflect) — and on
+        // re-derivation over the applied graph it already exists there
+        // (its node feeds the reflect, not the groups), so a placeholder
+        // with the same stable node_id rides the plan and the remove arm
+        // drops the real one (matching is by node_id, never by doc id).
+        let has_base = def.nodes.iter().any(|n| n.node_id.as_str() == "mirror_base");
+
+        let max_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0);
+        let reflect_id = max_id + 1;
+        let base_id = max_id + 2;
+
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("axis".to_string(), SerializedParamValue::Enum { value: AXIS_Y });
+        f32_param(&mut params, "plane_offset", plane_offset);
+        f32_param(&mut params, "enabled", 1.0);
+        let mirror_reflect = mint_node(reflect_id, "mirror_reflect", "node.reflect_array", params);
+
+        let mut new_nodes = vec![mirror_reflect];
+        if producer.is_none() {
+            // One live identity instance at the origin (scene_array
+            // convention), jitter pinned off like the loop's.
+            let mut params = std::collections::BTreeMap::new();
+            f32_param(&mut params, "count", 1.0);
+            params.insert("axis".to_string(), SerializedParamValue::Enum { value: 0 }); // +X
+            f32_param(&mut params, "cell_size", 0.0);
+            f32_param(&mut params, "jitter_seed", 0.0);
+            f32_param(&mut params, "jitter_amount", 0.0);
+            new_nodes.push(mint_node(base_id, "mirror_base", "node.scene_array", params));
+        } else if has_base {
+            new_nodes.push(mint_node(
+                base_id,
+                "mirror_base",
+                "node.scene_array",
+                Default::default(),
+            ));
+        }
+
+        // Wires: the shared producer (or the minted base) feeds the
+        // reflect; the reflect feeds every group's instances.
+        let mut new_wires = Vec::new();
+        let source = producer.unwrap_or(base_id);
+        new_wires.push(wire(source, "out", reflect_id, "in"));
+        for &gid in &groups {
+            new_wires.push(wire(reflect_id, "out", gid, "instances"));
+        }
+
+        let repoints = groups
+            .iter()
+            .map(|&gid| PortRepoint {
+                target_node_id: gid,
+                target_port: "instances".to_string(),
+                new_producer_doc_id: reflect_id,
+                restore_types: MIRROR_RESTORE_TYPES,
+            })
+            .collect();
+
+        // Take-over per group (D6/P0): the repoint restores the displaced
+        // producer on remove (scene_array or reflect_array per
+        // MIRROR_RESTORE_TYPES); the splice guarantees the interface input
+        // + group_input exist and replaces the top-level wire.
+        //
+        // The splices ride the APPLY plan unconditionally. On REMOVE
+        // re-derivation (mirror_reflect already in-graph) they ride ONLY
+        // when this kind's apply created the interface input AND still
+        // owns the port — i.e. the fresh-scene apply (mirror_base minted,
+        // groups fed by the reflect). Otherwise the input predates the
+        // mirror (the loop's splice created it) or a later take-over owns
+        // it (D6 loop-after-mirror): the generic remove must NOT strip it,
+        // or the surviving owner's top-level wires point at a port the
+        // interface no longer declares (the flattener rejects that graph).
+        // The strip is the splice's only remove-time effect, so omission
+        // is the whole truth the remove command needs.
+        let rederive = def
+            .nodes
+            .iter()
+            .any(|n| n.node_id.as_str() == "mirror_reflect");
+        let mirror_owns_port = producer
+            .and_then(|p| def.nodes.iter().find(|n| n.id == p))
+            .is_some_and(|n| n.node_id.as_str() == "mirror_reflect");
+        let group_splices: Vec<GroupSplice> = if rederive && !(has_base && mirror_owns_port) {
+            Vec::new()
+        } else {
+            groups
+                .iter()
+                .map(|&gid| GroupSplice {
+                    group_node_id: gid,
+                    inner_node_type: "node.scene_object",
+                    inner_port: "instances",
+                    source_doc_id: reflect_id,
+                    source_port: "out".to_string(),
+                    replace_existing: true,
+                })
+                .collect()
+        };
+
+        let mut skeleton = plan_skeleton(&SCENE_MIRROR_DESCRIPTOR, &new_nodes, repoints);
+
+        // Row curation. The Enabled row renders as a toggle (D9) — the
+        // atom's `enabled` is Float, so the kind flips the stamped
+        // metadata (the fog pattern: the scene write path is f32
+        // end-to-end). The Plane Offset band is scene-scaled like the
+        // scene_scaled_range position rows (±2·radius, default-widened):
+        // the card never flows through that table (it serves the import
+        // stamping path), so the modifier curates here — the same call
+        // pattern as the loop's framing rows.
+        let radius = bounds.map(manifold_core::scene_exposure::scene_radius_from_bounds);
+        if let Some(exposure) = skeleton
+            .exposures
+            .iter_mut()
+            .find(|e| e.node_id.as_str() == "mirror_reflect")
+        {
+            for m in &mut exposure.metadata {
+                match m.name.as_str() {
+                    "enabled" => m.is_toggle = true,
+                    "plane_offset" => {
+                        if let Some(radius) = radius {
+                            m.min = (-2.0 * radius).min(plane_offset);
+                            m.max = (2.0 * radius).max(plane_offset);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Some(SceneModifierPlan {
+            kind_id: MIRROR_KIND_ID.to_string(),
+            display_name: "Scene Mirror".to_string(),
+            trace: skeleton.trace,
+            new_nodes,
+            new_wires,
+            group_splices,
+            repoints: skeleton.repoints,
+            exposures: skeleton.exposures,
+            // The enable write is a param write on the atom itself (D9 —
+            // off zeroes the mirrored half in-band, INV-MR1), so there are
+            // no enable extras beyond the minted atom.
+            enable: EnablePlan {
+                toggle: ToggleDecl::NodeParam {
+                    node_doc_hint: NodeId::new("mirror_reflect"),
+                    param: "enabled".to_string(),
+                    on: 1.0,
+                    off: 0.0,
+                },
+                extra_nodes: Vec::new(),
+                extra_wires: Vec::new(),
+            },
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use manifold_core::effect_graph_def::{
+            GroupDef, GroupInterface, InterfacePortDef, PresetMetadata, GROUP_TYPE_ID,
+        };
+        use manifold_core::preset_type_id::PresetTypeId;
+
+        fn node(
+            id: u32,
+            node_id: &str,
+            type_id: &str,
+            params: std::collections::BTreeMap<String, SerializedParamValue>,
+        ) -> EffectGraphNode {
+            EffectGraphNode {
+                id,
+                node_id: NodeId::new(node_id),
+                type_id: type_id.to_string(),
+                handle: Some(node_id.to_string()),
+                params,
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: Default::default(),
+                output_canvas_scales: Default::default(),
+                group: None,
+            }
+        }
+
+        fn object_group(id: u32, handle: &str, bind_id: u32) -> EffectGraphNode {
+            let mut g = node(id, handle, GROUP_TYPE_ID, Default::default());
+            let out_id = bind_id + 1000;
+            g.group = Some(Box::new(GroupDef {
+                interface: GroupInterface {
+                    inputs: Vec::new(),
+                    outputs: vec![InterfacePortDef {
+                        name: "object".to_string(),
+                        port_type: "Object".to_string(),
+                    }],
+                    params: Vec::new(),
+                },
+                nodes: vec![
+                    node(bind_id, &format!("{handle}_bind"), "node.scene_object", Default::default()),
+                    node(out_id, &format!("{handle}_out"), "system.group_output", Default::default()),
+                ],
+                wires: vec![wire(bind_id, "object", out_id, "object")],
+                tint: None,
+            }));
+            g
+        }
+
+        /// Two object groups, scene_bounds min-Y = -2.0 (the floor).
+        fn grouped_scene_def() -> EffectGraphDef {
+            EffectGraphDef {
+                version: 1,
+                name: None,
+                description: None,
+                preset_metadata: Some(PresetMetadata {
+                    id: PresetTypeId::from_string("MirrorKindScene".to_string()),
+                    display_name: "Mirror Kind Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
+                    layer_types: None,
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_bounds: Some(([0.0, -2.0, 0.0], [1.0, 1.0, 5.0])),
+                }),
+                nodes: vec![
+                    node(0, "camera", "node.orbit_camera", Default::default()),
+                    node(1, "lens", "node.camera_lens", Default::default()),
+                    node(2, "render", RENDER_SCENE_TYPE_ID, Default::default()),
+                    object_group(10, "object_0", 11),
+                    object_group(20, "object_1", 21),
+                ],
+                wires: vec![
+                    wire(0, "out", 1, "camera"),
+                    wire(1, "out", 2, "camera"),
+                    wire(10, "object", 2, "object_0"),
+                    wire(20, "object", 2, "object_1"),
+                ],
+            }
+        }
+
+        fn reflect_node(plan: &SceneModifierPlan) -> &EffectGraphNode {
+            plan.new_nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == "mirror_reflect")
+                .expect("mirror_reflect minted")
+        }
+
+        /// D8: the stamped defaults derive from scene_bounds — axis +Y,
+        /// plane_offset at min-Y, gate on.
+        #[test]
+        fn plan_stamps_floor_defaults_from_scene_bounds() {
+            let def = grouped_scene_def();
+            let plan = build_scene_mirror_plan(&def, 2).expect("plan builds");
+            let reflect = reflect_node(&plan);
+            assert_eq!(
+                reflect.params.get("axis"),
+                Some(&SerializedParamValue::Enum { value: 2 }),
+                "axis stamps +Y (the floor)"
+            );
+            assert_eq!(
+                reflect.params.get("plane_offset"),
+                Some(&SerializedParamValue::Float { value: -2.0 }),
+                "plane_offset stamps scene_bounds min-Y"
+            );
+            assert_eq!(
+                reflect.params.get("enabled"),
+                Some(&SerializedParamValue::Float { value: 1.0 }),
+                "applied enabled"
+            );
+        }
+
+        /// No scene_bounds → the 0.0 fallback (D8), plan still builds.
+        #[test]
+        fn plan_falls_back_to_zero_offset_without_bounds() {
+            let mut def = grouped_scene_def();
+            def.preset_metadata.as_mut().unwrap().scene_bounds = None;
+            let plan = build_scene_mirror_plan(&def, 2).expect("plan builds");
+            assert_eq!(
+                reflect_node(&plan).params.get("plane_offset"),
+                Some(&SerializedParamValue::Float { value: 0.0 }),
+            );
+        }
+
+        /// Fresh scene (no instances producer) → mirror_base minted as the
+        /// one-identity input; the take-over wires reach every group.
+        #[test]
+        fn fresh_scene_mints_base_and_splices_every_group() {
+            let def = grouped_scene_def();
+            let plan = build_scene_mirror_plan(&def, 2).expect("plan builds");
+
+            let base = plan
+                .new_nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == "mirror_base")
+                .expect("mirror_base minted on the fresh scene");
+            assert_eq!(
+                base.params.get("count"),
+                Some(&SerializedParamValue::Float { value: 1.0 }),
+                "mirror_base carries one identity instance"
+            );
+            let base_id = base.id;
+            let reflect_id = reflect_node(&plan).id;
+            assert!(
+                plan.new_wires
+                    .iter()
+                    .any(|w| w.from_node == base_id && w.to_node == reflect_id && w.to_port == "in"),
+                "mirror_base.out feeds mirror_reflect.in"
+            );
+
+            assert_eq!(plan.repoints.len(), 2, "one repoint per group");
+            assert_eq!(plan.group_splices.len(), 2, "one splice per group");
+            assert!(
+                plan.group_splices.iter().all(|s| s.replace_existing),
+                "the mirror takes the port over (D6/P0)"
+            );
+            assert!(
+                plan.group_splices.iter().all(|s| s.source_doc_id == reflect_id),
+                "every group's splice sources the reflect atom"
+            );
+            for gid in [10u32, 20] {
+                assert!(
+                    plan.new_wires
+                        .iter()
+                        .any(|w| w.from_node == reflect_id && w.to_node == gid && w.to_port == "instances"),
+                    "mirror_reflect.out feeds group {gid}.instances"
+                );
+                let repoint = plan
+                    .repoints
+                    .iter()
+                    .find(|r| r.target_node_id == gid)
+                    .expect("repoint per group");
+                assert_eq!(repoint.target_port, "instances");
+                assert_eq!(repoint.new_producer_doc_id, reflect_id);
+                assert!(
+                    repoint.restore_types.contains(&"node.scene_array")
+                        && repoint.restore_types.contains(&"node.reflect_array"),
+                    "restore covers the loop's scene_array and a displaced reflect (D6)"
+                );
+            }
+        }
+
+        /// A shared producer (the loop's scene_array shape) → NO
+        /// mirror_base; the producer feeds the reflect instead.
+        #[test]
+        fn shared_producer_skips_base_and_feeds_reflect() {
+            let mut def = grouped_scene_def();
+            let mut array_params = std::collections::BTreeMap::new();
+            f32_param(&mut array_params, "count", 3.0);
+            array_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
+            f32_param(&mut array_params, "cell_size", 10.0);
+            def.nodes.push(node(30, "scene_array", "node.scene_array", array_params));
+            for gid in [10u32, 20] {
+                def.wires.push(wire(30, "out", gid, "instances"));
+            }
+
+            let plan = build_scene_mirror_plan(&def, 2).expect("plan builds");
+            assert!(
+                plan.new_nodes.iter().all(|n| n.node_id.as_str() != "mirror_base"),
+                "no mirror_base when a shared producer exists"
+            );
+            let reflect_id = reflect_node(&plan).id;
+            assert!(
+                plan.new_wires
+                    .iter()
+                    .any(|w| w.from_node == 30 && w.to_node == reflect_id && w.to_port == "in"),
+                "the shared producer feeds mirror_reflect.in"
+            );
+        }
+
+        /// Re-derivation on the applied graph (the remove contract): the
+        /// plan rebuilds against the minted stable nodeIds and picks up
+        /// the minted mirror_base.
+        #[test]
+        fn remove_plan_rederives_on_applied_graph() {
+            let def = grouped_scene_def();
+            let apply_plan = build_scene_mirror_plan(&def, 2).expect("apply plan");
+
+            // Simulate the applied graph at the top level (the splice
+            // shapes are exercised in the editing gates).
+            let mut applied = def.clone();
+            applied.nodes.extend(apply_plan.new_nodes.iter().cloned());
+            applied.wires.extend(apply_plan.new_wires.iter().cloned());
+
+            let remove_plan = build_scene_mirror_plan(&applied, 2).expect("remove plan re-derives");
+            let minted = remove_plan.minted_node_ids();
+            let ids: Vec<&str> = minted.iter().map(|n| n.as_str()).collect();
+            assert!(
+                ids.contains(&"mirror_reflect") && ids.contains(&"mirror_base"),
+                "the re-derived plan drops both minted nodes by stable node_id, got {ids:?}"
+            );
+        }
+
+        /// Row curation: the whitelist stamps exactly Enabled/Axis/
+        /// Plane Offset; Enabled is a toggle; the offset band is
+        /// scene-scaled (±2·radius, widened to hold the stamped floor).
+        #[test]
+        fn rows_are_whitelist_exact_with_toggle_and_scene_scaled_offset() {
+            let def = grouped_scene_def();
+            let plan = build_scene_mirror_plan(&def, 2).expect("plan builds");
+            let exposure = plan
+                .exposures
+                .iter()
+                .find(|e| e.node_id.as_str() == "mirror_reflect")
+                .expect("mirror_reflect exposure");
+            let names: std::collections::BTreeSet<&str> =
+                exposure.metadata.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(
+                names,
+                ["enabled", "axis", "plane_offset"].into_iter().collect(),
+                "INV-M3: exactly the whitelist (manifest order)"
+            );
+
+            let enabled = exposure.metadata.iter().find(|m| m.name == "enabled").unwrap();
+            assert!(enabled.is_toggle, "the Enabled row renders as a toggle (D9)");
+            assert_eq!(enabled.label, "Enabled");
+
+            let bounds = ([0.0, -2.0, 0.0], [1.0, 1.0, 5.0]);
+            let radius = manifold_core::scene_exposure::scene_radius_from_bounds(bounds);
+            let offset = exposure.metadata.iter().find(|m| m.name == "plane_offset").unwrap();
+            assert!(
+                (offset.min - (-2.0 * radius).min(-2.0)).abs() < 1e-6,
+                "offset min is the scene-scaled band floor"
+            );
+            assert!(
+                (offset.max - (2.0 * radius).max(-2.0)).abs() < 1e-6,
+                "offset max is the scene-scaled band ceiling"
+            );
+            assert_eq!(offset.label, "Plane Offset");
+        }
+
+        /// Applicability refusals (D6): two render_scenes or disagreeing
+        /// group producers each grey the picker; the applied kind occupies
+        /// the Objects slot.
+        #[test]
+        fn applicability_refusals() {
+            let d = &SCENE_MIRROR_DESCRIPTOR;
+            let def = grouped_scene_def();
+            assert!((d.applicable)(&def, 2), "a fresh single scene offers the mirror");
+
+            let mut multi = def.clone();
+            multi.nodes.push(node(3, "render2", RENDER_SCENE_TYPE_ID, Default::default()));
+            assert!(!(d.applicable)(&multi, 2), "two render_scenes grey the picker");
+
+            // Disagreeing producers: group 10 fed by its own array, group
+            // 20 by another.
+            let mut mixed = def.clone();
+            let mut p = std::collections::BTreeMap::new();
+            f32_param(&mut p, "count", 1.0);
+            mixed.nodes.push(node(30, "arr_a", "node.scene_array", p.clone()));
+            mixed.nodes.push(node(31, "arr_b", "node.scene_array", p));
+            mixed.wires.push(wire(30, "out", 10, "instances"));
+            mixed.wires.push(wire(31, "out", 20, "instances"));
+            assert!(!(d.applicable)(&mixed, 2), "disagreeing group producers grey the picker");
         }
     }
 }

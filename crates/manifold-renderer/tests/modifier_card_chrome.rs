@@ -162,6 +162,184 @@ fn modifier_card_chrome_contact_sheet() {
     eprintln!("modifier chrome contact sheet → {png}");
 }
 
+/// SCENE_MIRROR P2 card-chrome gate: the Scene Mirror card's rows are
+/// built from the REAL plan-stamped exposure metadata (the same
+/// `plan.exposures` the apply stamps into preset_metadata) — Enabled
+/// (toggle chrome), Axis (enum labels), Plane Offset — and render
+/// through the same card widget as the loop card.
+#[test]
+fn mirror_card_chrome_contact_sheet() {
+    use manifold_core::effect_graph_def::{
+        EffectGraphDef, EffectGraphNode, SerializedParamValue,
+    };
+    use manifold_renderer::node_graph::scene_modifier::{MIRROR_KIND_ID, build_plan};
+
+    // The REAL descriptor plan builder against a bare render_scene —
+    // the plan's curated exposures are exactly what the apply stamps.
+    let def = EffectGraphDef {
+        version: 1,
+        name: None,
+        description: None,
+        preset_metadata: None,
+        nodes: vec![EffectGraphNode {
+            id: 1,
+            node_id: manifold_core::NodeId::new("render"),
+            type_id: "node.render_scene".to_string(),
+            handle: Some("render".to_string()),
+            params: std::collections::BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        }],
+        wires: vec![],
+    };
+    let plan = build_plan(MIRROR_KIND_ID, &def, 1).expect("mirror plan builds on a bare scene");
+    let exposure = plan
+        .exposures
+        .iter()
+        .find(|e| e.node_id.as_str() == "mirror_reflect")
+        .expect("mirror_reflect exposure");
+    let rows: Vec<ParamRow> = exposure
+        .metadata
+        .iter()
+        .map(|m| {
+            let default = match &m.default_value {
+                SerializedParamValue::Float { value } => *value,
+                SerializedParamValue::Enum { value } => *value as f32,
+                other => panic!("unexpected default {other:?}"),
+            };
+            ParamRow {
+                id: std::borrow::Cow::Owned(m.name.clone()),
+                spec: RowSpec {
+                    name: m.label.clone(),
+                    min: m.min,
+                    max: m.max,
+                    default,
+                    whole_numbers: m.whole_numbers,
+                    is_angle: m.is_angle,
+                    is_toggle: m.is_toggle,
+                    is_trigger: m.is_trigger,
+                    is_trigger_gate: false,
+                    value_labels: if m.value_labels.is_empty() {
+                        None
+                    } else {
+                        Some(m.value_labels.clone())
+                    },
+                    section: None,
+                },
+                value: RowValue { base: default, effective: default, exposed: true, driven: false },
+                modulation: RowMod::default(),
+                mapping: RowMapping {
+                    osc_address: None,
+                    ableton_display: None,
+                    ableton_range: None,
+                    mappable: false,
+                },
+                scene_addr: None,
+            }
+        })
+        .collect();
+
+    // The card rows are the P2 whitelist (manifest param order — the
+    // whitelist curates labels, not order).
+    let names: std::collections::BTreeSet<&str> =
+        rows.iter().map(|r| r.spec.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Enabled", "Axis", "Plane Offset"].into_iter().collect(),
+        "the card rows are the P2 whitelist"
+    );
+    let by_name = |name: &str| -> &ParamRow {
+        rows.iter().find(|r| r.spec.name == name).unwrap_or_else(|| panic!("{name} row"))
+    };
+    assert!(by_name("Enabled").spec.is_toggle, "the Enabled row renders with toggle chrome (D9)");
+    assert_eq!(
+        by_name("Axis")
+            .spec
+            .value_labels
+            .as_ref()
+            .map(|vs| vs.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some(vec!["+X", "-X", "+Y", "-Y", "+Z", "-Z"]),
+        "the Axis row shows the reflect atom's enum labels"
+    );
+    assert!(!by_name("Plane Offset").spec.is_toggle, "Plane Offset is a slider");
+
+    let surface = ParamSurface {
+        kind: ParamCardKind::Effect,
+        title: "Scene Mirror".into(),
+        effect_index: 0,
+        effect_id: manifold_foundation::EffectId::new("scene_modifier:scene_mirror"),
+        enabled: true,
+        collapsed: false,
+        supports_envelopes: true,
+        has_graph_mod: false,
+        layer_id: None,
+        modifier: Some(ModifierCardInfo {
+            kind_id: "scene_mirror".into(),
+            layer_id: manifold_foundation::LayerId::new("layer-mirror"),
+            show_enable_toggle: false,
+            wrap_debug: None,
+        }),
+        rows,
+        string_params: vec![],
+        audio: Default::default(),
+        relight: Default::default(),
+    };
+
+    let device = GpuDevice::new();
+    let mut renderer = UIRenderer::new(&device, FORMAT);
+    let target = RenderTarget::new(&device, W, H, FORMAT, "mirror-card-chrome");
+
+    let out_dir = std::env::var("MOD_CHROME_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/mirror_card_chrome.png");
+
+    let mut tree = UITree::new();
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        manifold_ui::ZTier::Base,
+        "mirror_card_chrome",
+        manifold_ui::UIFlags::empty(),
+    );
+    let start = tree.count();
+    tree.add_panel(
+        None,
+        0.0,
+        0.0,
+        W as f32,
+        H as f32,
+        manifold_ui::node::UIStyle {
+            bg_color: manifold_ui::color::BG_1,
+            ..Default::default()
+        },
+    );
+
+    let mut modifier = ParamCardPanel::new();
+    modifier.configure(&surface);
+    modifier.build(&mut tree, Rect::new(16.0, 16.0, 288.0, 380.0));
+
+    tree.end_region(region, start);
+
+    renderer.begin_frame();
+    renderer.render_tree(&tree, None);
+    let drew = renderer.prepare(&device, W, H, 1.0);
+    {
+        let mut enc = device.create_encoder("mirror-card-chrome");
+        renderer.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    assert!(drew, "mirror card chrome sheet produced no draw commands");
+
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("mirror card chrome contact sheet → {png}");
+}
+
 fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let bytes_per_row = W * 4;
     let total = u64::from(H * bytes_per_row);

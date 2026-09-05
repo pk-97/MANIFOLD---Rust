@@ -1182,3 +1182,574 @@ fn fog_applicability_refusals() {
         "a fully-applied re-apply must add no nodes"
     );
 }
+
+// ---------------------------------------------------------------------------
+// P2 (SCENE_MIRROR) — the mirror kind (design section 3.4, invariants
+// INV-MR6/7/8 via the generic-command gates below)
+// ---------------------------------------------------------------------------
+
+use manifold_renderer::node_graph::scene_modifier::MIRROR_KIND_ID;
+
+fn mirror_descriptor() -> &'static manifold_renderer::node_graph::scene_modifier::SceneModifierDescriptor {
+    descriptor_for(MIRROR_KIND_ID).expect("scene_mirror registered")
+}
+
+/// Apply loop → mirror to a fresh project carrying `def`.
+fn applied_loop_then_mirror(def: EffectGraphDef) -> (Project, usize) {
+    let (mut project, idx) = applied_kind_project(def, LOOP_KIND_ID);
+    let render_scene_id = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph")
+        .nodes
+        .iter()
+        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
+        .expect("render_scene")
+        .id;
+    let plan = build_plan(
+        MIRROR_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("mirror plan builder succeeds on the looped graph");
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let mut cmd = ApplySceneModifierCommand::new(
+        manifold_core::GraphTarget::Generator(layer_id),
+        Vec::new(),
+        plan,
+        empty_def(),
+    );
+    cmd.execute(&mut project);
+    (project, idx)
+}
+
+/// INV-M1 (mirror): the trace is all-or-nothing — deleting mirror_reflect
+/// reads not-applied AND partial; deleting the OPTIONAL mirror_base reads
+/// still-applied (it exists only on no-producer graphs).
+#[test]
+fn inv_m1_mirror_trace_is_all_or_nothing() {
+    // No-producer graph → mirror_base minted alongside mirror_reflect.
+    let (project, idx) = applied_kind_project(grouped_scene_def(), MIRROR_KIND_ID);
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+    let d = mirror_descriptor();
+    let result = trace_modifier(d, &graph.nodes);
+    assert!(result.applied(d), "fresh apply must trace as applied");
+    assert!(
+        result.doc_ids.contains_key("mirror_base"),
+        "the no-producer apply mints mirror_base"
+    );
+
+    let mut broken = graph.clone();
+    broken.nodes.retain(|n| n.node_id.as_str() != "mirror_reflect");
+    let r = trace_modifier(d, &broken.nodes);
+    assert!(!r.applied(d), "INV-M1: deleting mirror_reflect reads not applied");
+    assert!(
+        !r.partial(d),
+        "INV-M1: the mirror has ONE required node — deleting it is absent, not partial"
+    );
+
+    // mirror_base is optional: dropping it leaves the kind applied.
+    let mut no_base = graph.clone();
+    no_base.nodes.retain(|n| n.node_id.as_str() != "mirror_base");
+    let r = trace_modifier(d, &no_base.nodes);
+    assert!(r.applied(d), "INV-M1: the optional mirror_base is not required");
+    assert!(!r.partial(d), "INV-M1: a missing optional node is not partial");
+}
+
+/// INV-M3 (mirror): the stamped rows are EXACTLY Enabled/Axis/Plane
+/// Offset; Enabled carries the toggle curation (D9).
+#[test]
+fn inv_m3_mirror_stamped_rows_match_whitelist_exactly() {
+    let (project, idx) = applied_kind_project(grouped_scene_def(), MIRROR_KIND_ID);
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+    let meta = graph.preset_metadata.as_ref().expect("metadata stamped");
+    let section_ids: std::collections::BTreeSet<&str> = meta
+        .params
+        .iter()
+        .filter(|p| p.section.as_deref() == Some("Scene Mirror"))
+        .map(|p| p.id.as_str())
+        .collect();
+    assert_eq!(section_ids.len(), 3, "exactly three Scene Mirror rows stamped");
+    let targets: std::collections::BTreeSet<(String, String)> = meta
+        .bindings
+        .iter()
+        .filter(|b| section_ids.contains(b.id.as_str()))
+        .filter_map(|b| match &b.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => {
+                Some((node_id.as_str().to_string(), param.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("mirror_reflect", "enabled"),
+        ("mirror_reflect", "axis"),
+        ("mirror_reflect", "plane_offset"),
+    ]
+    .iter()
+    .map(|(n, p)| (n.to_string(), p.to_string()))
+    .collect();
+    assert_eq!(
+        targets, expected,
+        "INV-M3: Scene Mirror section rows must be exactly the whitelist"
+    );
+
+    let enabled_spec = meta
+        .params
+        .iter()
+        .find(|p| section_ids.contains(p.id.as_str()) && p.name == "Enabled")
+        .expect("Enabled row stamped");
+    assert!(enabled_spec.is_toggle, "the Enabled row must render as a toggle (D9)");
+}
+
+/// INV-M7 (mirror): the enable toggle is exactly one param write on
+/// mirror_reflect.enabled — topology byte-identical before/after, undo
+/// restores the value.
+#[test]
+fn inv_m7_mirror_enable_toggle_is_one_param_write() {
+    let (mut project, idx) = applied_kind_project(grouped_scene_def(), MIRROR_KIND_ID);
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id);
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph").clone();
+    let doc = graph
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "mirror_reflect")
+        .map(|n| n.id)
+        .expect("mirror_reflect minted");
+
+    let mut toggle = SetGraphNodeParamCommand::new(
+        target,
+        doc,
+        "enabled".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+        empty_def(),
+    );
+    toggle.execute(&mut project);
+
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    type Topo = (Vec<(u32, String, String)>, Vec<(u32, String, u32, String)>);
+    let topo = |g: &EffectGraphDef| -> Topo {
+        (
+            g.nodes
+                .iter()
+                .map(|n| (n.id, n.node_id.as_str().to_string(), n.type_id.clone()))
+                .collect(),
+            g.wires
+                .iter()
+                .map(|w| (w.from_node, w.from_port.clone(), w.to_node, w.to_port.clone()))
+                .collect(),
+        )
+    };
+    assert_eq!(topo(after), topo(&graph), "INV-M7: toggle changes no topology");
+    let changed: Vec<_> = after
+        .nodes
+        .iter()
+        .zip(graph.nodes.iter())
+        .filter(|(a, b)| a.params != b.params)
+        .map(|(a, _)| a.node_id.as_str())
+        .collect();
+    assert_eq!(
+        changed,
+        vec!["mirror_reflect"],
+        "INV-M7: one param write, on the reflect atom"
+    );
+    assert_eq!(
+        after
+            .nodes
+            .iter()
+            .find(|n| n.id == doc)
+            .and_then(|n| n.params.get("enabled")),
+        Some(&SerializedParamValue::Float { value: 0.0 }),
+        "toggle wrote enabled = 0"
+    );
+
+    toggle.undo(&mut project);
+    let restored = project.timeline.layers[idx].generator_graph().expect("graph");
+    assert_eq!(
+        restored
+            .nodes
+            .iter()
+            .find(|n| n.id == doc)
+            .and_then(|n| n.params.get("enabled")),
+        Some(&SerializedParamValue::Float { value: 1.0 }),
+        "undo restores enabled = 1"
+    );
+}
+
+/// INV-MR7 (remove restores) on the loop→mirror graph: mirror remove
+/// re-wires the loop's scene_array back into every group's instances;
+/// loop remove afterwards returns the graph to the exact original.
+#[test]
+fn inv_mr7_mirror_remove_restores_loop_wiring_then_loop_remove_golden() {
+    let original = grouped_scene_def();
+    let (mut project, idx) = applied_loop_then_mirror(original.clone());
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+
+    // The applied wiring: every group's instances fed by mirror_reflect,
+    // fed by the loop's scene_array.
+    let applied = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph")
+        .clone();
+    let flat = manifold_core::flatten::flatten_groups(&applied).expect("flat applied");
+    let reflect_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "mirror_reflect")
+        .expect("mirror_reflect minted")
+        .id;
+    let array_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .expect("loop scene_array in-graph")
+        .id;
+    assert!(
+        flat.wires
+            .iter()
+            .any(|w| w.from_node == array_id && w.to_node == reflect_id && w.to_port == "in"),
+        "the loop's scene_array feeds mirror_reflect"
+    );
+    for so in flat.nodes.iter().filter(|n| n.type_id == "node.scene_object") {
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.from_node == reflect_id && w.to_node == so.id && w.to_port == "instances"),
+            "mirror_reflect feeds scene_object {} (take-over, D6/P0)",
+            so.id
+        );
+    }
+
+    // Remove the mirror: the generic command re-derives the plan.
+    let render_scene_id = original
+        .nodes
+        .iter()
+        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
+        .map(|n| n.id)
+        .unwrap();
+    let remove_plan = build_plan(
+        MIRROR_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("mirror remove plan re-derives");
+    let mut remove = RemoveSceneModifierCommand::new(target.clone(), Vec::new(), remove_plan);
+    remove.execute(&mut project);
+
+    // The loop's scene_array is restored as every group's instances
+    // producer; the reflect (and the loop's camera path) are unchanged.
+    let after_mirror_remove = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph")
+        .clone();
+    let flat = manifold_core::flatten::flatten_groups(&after_mirror_remove).expect("flat");
+    // flatten renumbers doc ids — resolve the loop's scene_array inside
+    // THIS flatten.
+    let array_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .map(|n| n.id)
+        .expect("loop scene_array in-graph");
+    assert!(
+        flat.nodes.iter().all(|n| n.node_id.as_str() != "mirror_reflect"),
+        "the minted reflect node is gone"
+    );
+    for so in flat.nodes.iter().filter(|n| n.type_id == "node.scene_object") {
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.from_node == array_id && w.to_node == so.id && w.to_port == "instances"),
+            "INV-MR7: scene_array restored into scene_object {} after mirror remove",
+            so.id
+        );
+    }
+    assert!(
+        after_mirror_remove
+            .nodes
+            .iter()
+            .any(|n| n.node_id.as_str() == "loop_cam_switch"),
+        "the loop's camera path is untouched by the mirror remove (INV-MR6)"
+    );
+    let meta = after_mirror_remove.preset_metadata.as_ref().expect("metadata");
+    assert!(
+        meta.params.iter().all(|p| p.section.as_deref() != Some("Scene Mirror")),
+        "INV-MR7: no preset_metadata params carry the Scene Mirror section after remove"
+    );
+
+    // Remove the loop afterwards (the D6-ordered tear-down): the graph
+    // equals the original.
+    let remove_plan = build_plan(
+        LOOP_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("loop remove plan re-derives");
+    let mut remove = RemoveSceneModifierCommand::new(target, Vec::new(), remove_plan);
+    remove.execute(&mut project);
+
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    let flat_after = manifold_core::flatten::flatten_groups(after).expect("flatten after");
+    let flat_orig = manifold_core::flatten::flatten_groups(&original).expect("flatten original");
+    let wire_set = |g: &EffectGraphDef| -> std::collections::BTreeSet<(u32, String, u32, String)> {
+        g.wires
+            .iter()
+            .map(|w| (w.from_node, w.from_port.clone(), w.to_node, w.to_port.clone()))
+            .collect()
+    };
+    assert_eq!(
+        flat_after.nodes, flat_orig.nodes,
+        "INV-MR7: loop→mirror→remove-mirror→remove-loop restores the original node set"
+    );
+    assert_eq!(
+        wire_set(&flat_after),
+        wire_set(&flat_orig),
+        "INV-MR7: the golden wiring is restored"
+    );
+}
+
+/// INV-MR7 on the no-producer graph: the mirror minted mirror_base;
+/// remove drops both minted nodes and leaves no instances producer
+/// behind (the exact pre-mirror state).
+#[test]
+fn inv_mr7_mirror_remove_on_fresh_scene_drops_base() {
+    let original = grouped_scene_def();
+    let (mut project, idx) = applied_kind_project(original.clone(), MIRROR_KIND_ID);
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id);
+    let render_scene_id = original
+        .nodes
+        .iter()
+        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
+        .map(|n| n.id)
+        .unwrap();
+
+    let remove_plan = build_plan(
+        MIRROR_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("mirror remove plan re-derives");
+    let mut remove = RemoveSceneModifierCommand::new(target, Vec::new(), remove_plan);
+    remove.execute(&mut project);
+
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    let flat_after = manifold_core::flatten::flatten_groups(after).expect("flatten after");
+    let flat_orig = manifold_core::flatten::flatten_groups(&original).expect("flatten original");
+    let wire_set = |g: &EffectGraphDef| -> std::collections::BTreeSet<(u32, String, u32, String)> {
+        g.wires
+            .iter()
+            .map(|w| (w.from_node, w.from_port.clone(), w.to_node, w.to_port.clone()))
+            .collect()
+    };
+    assert_eq!(
+        flat_after.nodes, flat_orig.nodes,
+        "INV-MR7: fresh-scene remove restores the nodes"
+    );
+    assert_eq!(
+        wire_set(&flat_after),
+        wire_set(&flat_orig),
+        "INV-MR7: fresh-scene remove restores the golden wiring (no leftover base wire)"
+    );
+}
+
+/// D6 loop-after-mirror: the loop's splice takes (group, instances) over
+/// from the reflect; the mirror's remove afterwards leaves the loop's
+/// wiring intact (the restore only fires on an unwired port); the loop's
+/// remove then restores the original.
+#[test]
+fn d6_loop_after_mirror_takeover_and_ordered_teardown() {
+    let original = grouped_scene_def();
+    // Mirror FIRST on the fresh scene (mirror_base + mirror_reflect).
+    let (mut project, idx) = applied_kind_project(original.clone(), MIRROR_KIND_ID);
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let render_scene_id = original
+        .nodes
+        .iter()
+        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
+        .map(|n| n.id)
+        .unwrap();
+
+    // The loop applies on top (its replace_existing takes the port).
+    let plan = build_plan(
+        LOOP_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("loop plan builds on the mirrored graph");
+    let mut cmd = ApplySceneModifierCommand::new(target.clone(), Vec::new(), plan, empty_def());
+    cmd.execute(&mut project);
+
+    let both = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph")
+        .clone();
+    let flat = manifold_core::flatten::flatten_groups(&both).expect("flat");
+    let array_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .map(|n| n.id)
+        .expect("loop scene_array minted");
+    for so in flat.nodes.iter().filter(|n| n.type_id == "node.scene_object") {
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.from_node == array_id && w.to_node == so.id && w.to_port == "instances"),
+            "D6: the loop's scene_array owns (group, instances) after loop-after-mirror"
+        );
+    }
+
+    // Mirror remove FIRST (the D6-ordered tear-down): the loop's wiring
+    // must survive — the reflect is dropped inert, the restore is skipped
+    // because the port is still wired to the loop.
+    let remove_plan = build_plan(
+        MIRROR_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("mirror remove plan re-derives");
+    let mut remove = RemoveSceneModifierCommand::new(target.clone(), Vec::new(), remove_plan);
+    remove.execute(&mut project);
+
+    let after = project.timeline.layers[idx]
+        .generator_graph()
+        .expect("graph")
+        .clone();
+    let flat = manifold_core::flatten::flatten_groups(&after).expect("flat");
+    // flatten renumbers doc ids — resolve the loop's scene_array inside
+    // THIS flatten.
+    let array_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .map(|n| n.id)
+        .expect("loop scene_array in-graph");
+    assert!(
+        flat.nodes.iter().all(|n| n.node_id.as_str() != "mirror_reflect"),
+        "the inert reflect node is dropped"
+    );
+    for so in flat.nodes.iter().filter(|n| n.type_id == "node.scene_object") {
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.from_node == array_id && w.to_node == so.id && w.to_port == "instances"),
+            "D6: the loop keeps (group, instances) through the mirror remove"
+        );
+    }
+    assert!(
+        after.nodes.iter().any(|n| n.node_id.as_str() == "loop_cam_switch"),
+        "the loop is fully applied through the mirror remove"
+    );
+
+    // Loop remove afterwards: back to the original.
+    let remove_plan = build_plan(
+        LOOP_KIND_ID,
+        project.timeline.layers[idx].generator_graph().expect("graph"),
+        render_scene_id,
+    )
+    .expect("loop remove plan re-derives");
+    let mut remove = RemoveSceneModifierCommand::new(target, Vec::new(), remove_plan);
+    remove.execute(&mut project);
+
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    let flat_after = manifold_core::flatten::flatten_groups(after).expect("flatten after");
+    let flat_orig = manifold_core::flatten::flatten_groups(&original).expect("flatten original");
+    let wire_set = |g: &EffectGraphDef| -> std::collections::BTreeSet<(u32, String, u32, String)> {
+        g.wires
+            .iter()
+            .map(|w| (w.from_node, w.from_port.clone(), w.to_node, w.to_port.clone()))
+            .collect()
+    };
+    assert_eq!(
+        flat_after.nodes, flat_orig.nodes,
+        "D6 teardown restores the nodes"
+    );
+    assert_eq!(
+        wire_set(&flat_after),
+        wire_set(&flat_orig),
+        "D6 teardown restores the golden wiring"
+    );
+}
+
+/// Applicability (D6): an applied Objects-slot kind occupies the slot —
+/// a dispatched re-apply refuses at the command layer.
+#[test]
+fn mirror_applicability_occupied_slot_refuses_reapply() {
+    let d = mirror_descriptor();
+    let (mut project, idx) = applied_kind_project(grouped_scene_def(), MIRROR_KIND_ID);
+    let applied_graph = project.timeline.layers[idx].generator_graph().expect("graph").clone();
+    assert!(!(d.applicable)(&applied_graph, 2), "an applied Objects kind occupies the slot");
+
+    let render_scene_id = applied_graph
+        .nodes
+        .iter()
+        .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
+        .map(|n| n.id)
+        .unwrap();
+    let plan = build_plan(MIRROR_KIND_ID, &applied_graph, render_scene_id).expect("plan builds");
+    let layer_id = project.timeline.layers[idx].layer_id.clone();
+    let mut cmd = ApplySceneModifierCommand::new(
+        manifold_core::GraphTarget::Generator(layer_id),
+        Vec::new(),
+        plan,
+        empty_def(),
+    );
+    cmd.execute(&mut project);
+    let after = project.timeline.layers[idx].generator_graph().expect("graph");
+    assert_eq!(
+        after.nodes.len(),
+        applied_graph.nodes.len(),
+        "a fully-applied re-apply must add no nodes"
+    );
+}
+
+/// INV-MR6: with the mirror applied the loop's camera path is untouched
+/// (the mirror owns instances ports only). The wrap-purity half of
+/// INV-MR6 lives in `scene_loop_wrap_parity.rs`
+/// (`wrap_parity_with_mirror_applied`).
+#[test]
+fn inv_mr6_mirror_apply_leaves_camera_path_untouched() {
+    let (project, idx) = applied_loop_then_mirror(grouped_scene_def());
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+
+    // The loop's camera chain resolves exactly as the loop-only gate
+    // expects: orbit → switch.a, loop_camera → switch.b, switch → lens.
+    let flat = manifold_core::flatten::flatten_groups(graph).expect("flat");
+    let switch_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "loop_cam_switch")
+        .map(|n| n.id)
+        .expect("loop_cam_switch present");
+    assert!(
+        flat.wires.iter().any(|w| w.from_node == 0 && w.to_node == switch_id && w.to_port == "a"),
+        "the orbit camera still feeds the switch's a input"
+    );
+    assert!(
+        flat.wires.iter().any(|w| w.to_node == switch_id && w.to_port == "b"),
+        "the loop camera still feeds the switch's b input"
+    );
+    assert!(
+        flat.wires
+            .iter()
+            .any(|w| w.from_node == switch_id && w.to_node == 1 && w.to_port == "camera"),
+        "the switch still re-points into the lens"
+    );
+    // No mirror node touches the camera path.
+    let reflect_id = flat
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "mirror_reflect")
+        .map(|n| n.id)
+        .expect("mirror_reflect present");
+    assert!(
+        flat.wires.iter().all(|w| {
+            (w.from_node != reflect_id || w.to_port != "camera")
+                && (w.to_node != reflect_id || w.from_port != "camera")
+        }),
+        "INV-MR6: the mirror touches no camera wire"
+    );
+}

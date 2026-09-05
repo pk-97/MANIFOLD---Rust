@@ -553,3 +553,55 @@ fn fog_density_swings_over_loop() {
     );
 }
 
+/// SCENE_MIRROR INV-MR6: the loop graph with the mirror atom applied
+/// (scene_array → mirror_reflect → scene_object, the plan builder's
+/// take-over shape hand-wired) must stay wrap-pure — the reflect atom is
+/// param-only (no time input), so phase 0 and phase 1 render
+/// pixel-identical WITH the reflected copies present. A non-zero diff
+/// would mean the mirror touched the loop seam (INV-MR6).
+#[test]
+fn wrap_parity_with_mirror_applied() {
+    let mut def = build_loop_graph();
+
+    // Mint mirror_reflect (id 9) between scene_array (2) and the
+    // scene_object (6), stamped like the plan builder stamps it (axis
+    // +Y, enabled 1). The plane sits below the cube (offset -1.2): a
+    // plane through the object z-fights it and the on/off control below
+    // would read zero.
+    let mut params = BTreeMap::new();
+    params.insert("axis".to_string(), SerializedParamValue::Enum { value: 2 }); // +Y
+    params.insert("plane_offset".to_string(), SerializedParamValue::Float { value: -1.2 });
+    params.insert("enabled".to_string(), SerializedParamValue::Float { value: 1.0 });
+    def.nodes.push(node(9, "mirror_reflect", "node.reflect_array", params));
+    def.wires
+        .retain(|w| !(w.from_node == 2 && w.to_node == 6 && w.to_port == "instances"));
+    def.wires.push(wire(2, "out", 9, "in"));
+    def.wires.push(wire(9, "out", 6, "instances"));
+
+    let frame_a = render_frame(&def, 0.0);
+    let frame_b = render_frame(&def, 8.0);
+
+    let diff = max_pixel_diff(&frame_a, &frame_b);
+    assert_eq!(
+        diff, 0,
+        "INV-MR6: the mirror broke wrap purity — phase 0 vs phase 1 (beat=8) max pixel diff = {diff}"
+    );
+
+    // Positive control: the reflected copies are RENDERING (a zero-diff
+    // gate would be vacuous if the mirror silently no-op'd — a mirror-off
+    // frame must differ from the mirror-on frame above).
+    let mut off = def.clone();
+    off.nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "mirror_reflect")
+        .expect("mirror_reflect")
+        .params
+        .insert("enabled".to_string(), SerializedParamValue::Float { value: 0.0 });
+    let off_frame = render_frame(&off, 0.0);
+    let on_off = max_pixel_diff(&frame_a, &off_frame);
+    assert!(
+        on_off > 0,
+        "INV-MR6 gate would be vacuous: mirror on vs off render identically (max diff = 0)"
+    );
+}
+
