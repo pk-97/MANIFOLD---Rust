@@ -593,6 +593,12 @@
         set_param(&mut fb, "amount", 1.0);
         set_param(&mut fb, "rotate", 10.0);
         set_param(&mut fb, "zoom", 0.9);
+        // Pin Ghost (mode 0), the classic feedback this trail premise was
+        // written against. The shipped default is Depth (mode 2, alpha-matte
+        // keying from the stencil work) — on a uniform-alpha gradient input
+        // the matte carries no trail, the donor-less reset matches the
+        // reference, and the sensitivity check below proves nothing.
+        set_param(&mut fb, "mode", 0.0);
         let mut cg = make_default(PresetTypeId::COLOR_GRADE);
         set_param(&mut cg, "amount", 1.0);
         set_param(&mut cg, "gain", 1.1);
