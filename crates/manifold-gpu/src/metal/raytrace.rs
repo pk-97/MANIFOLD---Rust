@@ -111,14 +111,15 @@ pub struct RtAccel {
     /// arm 5) declares both BLASes and this buffer.
     ///
     /// RT_INSTANCING_DESIGN.md D1: in the INSTANCED mode (any object wired
-    /// with `instance_slots > 1` at build) this is the GPU-private buffer
+    /// with `instances_addr != 0` at build — P1.5: 1-capacity included,
+    /// its TRS is GPU-side) this is the GPU-private buffer
     /// the descriptor-build kernel writes and the TLAS build/refit consumes
     /// — the TLAS descriptor's `instanceDescriptorBuffer` points at it in
     /// BOTH modes, so encoder.rs's existing declaration covers it.
     pub(crate) instance_buffer: GpuBuffer,
     /// RT_INSTANCING_DESIGN.md D1/D7: true when the accel was built with
-    /// the GPU descriptor-build path (any object had a wired
-    /// `instance_slots > 1`). Refit then re-dispatches the descriptor
+    /// the GPU descriptor-build path (any object had `instances_addr != 0`
+    /// at build — P1.5: 1-capacity included). Refit then re-dispatches the descriptor
     /// kernel + TLAS refit in one command buffer instead of rewriting
     /// `instance_buffer` from the CPU (it is GPU-private in this mode).
     pub(crate) instanced: bool,
@@ -306,10 +307,13 @@ pub struct RtObjectGeometry<'a> {
     /// RT_INSTANCING_DESIGN.md D1/D7: bindless GPU address of this object's
     /// `Array<InstanceTransform>` wire (mesh_common.rs's 32-byte
     /// `InstanceTransform` layout), or 0 when unwired. Wired with
-    /// `instance_slots > 1` puts the accel on the GPU descriptor-build path
-    /// (one TLAS slot per instance slot, composed `model · T_instance`
-    /// in-kernel per D4); 0 keeps the object at a single identity-slot
-    /// descriptor, exactly as before this field existed.
+    /// wired with `instance_slots > 1` puts the accel on the GPU
+    /// descriptor-build path (one TLAS slot per instance slot, composed
+    /// `model · T_instance` in-kernel per D4; P1.5: any WIRED capacity, 1
+    /// included — a wired 1-capacity buffer's TRS lives GPU-side, which
+    /// the CPU identity-descriptor path can never represent); 0 keeps the
+    /// object at a single identity-slot descriptor, exactly as before this
+    /// field existed.
     pub instances_addr: u64,
     /// RT_INSTANCING_DESIGN.md: the buffer backing `instances_addr` — the
     /// BUG-84fv lifetime handle. The descriptor-build kernel reads instance
@@ -533,10 +537,12 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
 /// impl), so a plain swap/drop/teardown is always safe regardless of
 /// caller.
 pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> RtAccel {
-    // RT_INSTANCING_DESIGN.md D7: the GPU descriptor-build path serves ALL
-    // objects uniformly when ANY object is wired with a plural instance
-    // capacity; otherwise today's CPU per-object path, byte-identical.
-    let instanced = objects.iter().any(|o| effective_instance_slots(o) > 1);
+    // RT_INSTANCING_DESIGN.md D7 + P1.5: the GPU descriptor-build path
+    // serves ALL objects uniformly when ANY object is wired (instances_addr
+    // != 0) — a wired 1-capacity buffer's TRS is GPU-side and the CPU path
+    // can only place an identity descriptor at model. Otherwise today's
+    // CPU per-object path, byte-identical.
+    let instanced = objects.iter().any(|o| o.instances_addr != 0);
     let slot_total_raw: usize = objects
         .iter()
         .map(|o| effective_instance_slots(o) as usize)
@@ -5001,14 +5007,15 @@ const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_base) == 72)
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_count) == 76);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, cast_shadows) == 80);
 
-/// RT_INSTANCING_DESIGN.md D7: an object occupies `instance_slots` TLAS
-/// slots only when it is wired AND capacity is genuinely plural; 0/1 or
-/// unwired collapses to the single identity slot of the D7 fast path.
-/// Unwired objects in an instanced scene contribute exactly one identity
-/// slot ("the GPU path serves ALL objects uniformly").
+/// RT_INSTANCING_DESIGN.md D7 + P1.5: an object occupies `instance_slots`
+/// TLAS slots when wired (its TRS lives GPU-side); an UNWIRED object
+/// collapses to the single identity slot of the D7 fast path. P1.5: the
+/// plural-capacity qualifier is gone — a wired 1-capacity buffer still
+/// carries a GPU-side TRS the CPU identity descriptor can never
+/// represent, so wired-at-all means slot-count = max(1, capacity).
 fn effective_instance_slots(obj: &RtObjectGeometry) -> u32 {
-    if obj.instances_addr != 0 && obj.instance_slots > 1 {
-        obj.instance_slots
+    if obj.instances_addr != 0 {
+        obj.instance_slots.max(1)
     } else {
         1
     }

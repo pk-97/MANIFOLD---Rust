@@ -5612,16 +5612,18 @@ impl EffectNode for RenderScene {
                 // refit — the flag rides the TOPO key (BUG-308's one-frame
                 // defer gives the bounded raster-presenting transition).
                 hasher.write_u8(o.translucent as u8);
-                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5: instance-slot
+                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
                 // CAPACITY is topology — the TLAS slot count is baked at
                 // build time, so a capacity change rebuilds through
-                // BUG-308's one-frame defer. Same effective-slots rule as
-                // manifold-gpu's `effective_instance_slots`. The wired
-                // buffer's IDENTITY deliberately does NOT ride here (D9:
-                // the descriptor kernel reads whatever buffer is wired each
-                // refit); content changes ride the accel key below.
-                hasher.write_u32(if o.instances_addr != 0 && o.instance_slots > 1 {
-                    o.instance_slots
+                // BUG-308's one-frame defer. Same rule as manifold-gpu's
+                // `effective_instance_slots` (P1.5: any WIRED object takes
+                // the GPU path, 1-capacity included — its TRS is GPU-side).
+                // The wired buffer's IDENTITY deliberately does NOT ride
+                // here (D9: the descriptor kernel reads whatever buffer is
+                // wired each refit); content changes ride the accel key
+                // below.
+                hasher.write_u32(if o.instances_addr != 0 {
+                    o.instance_slots.max(1)
                 } else {
                     1
                 });
@@ -5675,7 +5677,7 @@ impl EffectNode for RenderScene {
             // slot.
             let rt_gi_slot_count: usize = objects
                 .iter()
-                .map(|o| if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots as usize } else { 1 })
+                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
                 .sum::<usize>()
                 + objects.len();
             ensure_rt_gi_materials(
@@ -6062,7 +6064,7 @@ impl EffectNode for RenderScene {
                     let mut slot_row = 0usize;
                     for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
                         let slots =
-                            if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots } else { 1 };
+                            if o.instances_addr != 0 { o.instance_slots.max(1) } else { 1 };
                         for _ in 0..slots {
                             unsafe {
                                 std::ptr::copy_nonoverlapping(
