@@ -7,6 +7,13 @@
 //! write, not N. Optional per-instance jitter (rotation + scale from a
 //! deterministic hash of the instance index — no time dependence, trivially
 //! wrap-safe per SCENE_LOOP INV-3). Source atom on the freeze codegen path.
+//!
+//! The `out` buffer is sized for `count`'s FULL range (8), never the current
+//! value: capacity is fixed at plan pre-allocation while `count` is a live
+//! card-row write (the Scene Loop "Copies" row, and the Stride row's coupled
+//! count secondary) — sizing by the value made every live count write inert
+//! until a structural rebuild (BUG-757c). The body masks slots at or beyond
+//! the live count to zero-scale, so surplus capacity draws nothing.
 
 use std::borrow::Cow;
 
@@ -15,7 +22,7 @@ use manifold_gpu::GpuBinding;
 use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
 
 pub const AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
@@ -93,7 +100,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Source atom — no inputs. Output capacity = count (1..8). The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction (SCENE_LOOP_DESIGN D4). The Scene Loop card's Jitter row writes jitter_amount; jitter_seed stays an internal re-roll knob the plan stamps at 0.",
+    composition_notes: "Source atom — no inputs. The out buffer is sized for count's full range (8), never the current value: buffer capacity is fixed at plan pre-allocation, so a value-sized buffer made every live count write inert until a rebuild (BUG-757c — the Scene Loop 'Copies' row and the Stride coupling both write count live). The body masks slots beyond the live count to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction (SCENE_LOOP_DESIGN D4). The Scene Loop card's Jitter row writes jitter_amount; jitter_seed stays an internal re-roll knob the plan stamps at 0.",
     examples: [],
     picker: { label: "Scene Array", category: Atom },
     summary: "Lays out copies in a line along one axis, spacing them evenly for a looping flythrough.",
@@ -109,17 +116,25 @@ impl Primitive for SceneArray {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        _params: &crate::node_graph::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
             return None;
         }
-        let count = params
-            .get("count")
-            .and_then(|v| v.as_u32_clamped(1))
-            .unwrap_or(3);
-        Some(count)
+        // BUG-757c: size for count's FULL range, never the current value.
+        // Buffer capacity is fixed at plan pre-allocation, and count is a
+        // live card-row write (Scene Loop "Copies" / the Stride coupling's
+        // secondary) applied in place with no rebuild — a value-sized buffer
+        // made every live count write inert. The body masks slots at or
+        // beyond the live count to zero-scale, so the surplus capacity
+        // renders nothing.
+        let range_max = SceneArray::PARAMS
+            .iter()
+            .find(|p| p.name == "count")
+            .and_then(|p| p.range)
+            .map(|(_, max)| max as u32)?;
+        Some(range_max)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -218,6 +233,48 @@ mod tests {
             .expect("axis param");
         assert_eq!(axis_param.ty, ParamType::Enum);
         assert_eq!(axis_param.enum_values.len(), 6);
+    }
+
+    /// BUG-757c regression, the capacity layer of "the Copies row does
+    /// nothing": count is a LIVE card-row write (Scene Loop "Copies", and
+    /// the Stride row's coupled secondary), but an Array<T> buffer's
+    /// capacity is fixed at plan pre-allocation — sizing the buffer by the
+    /// count VALUE made every live write inert until a structural rebuild
+    /// (the card showed the new value; the frame never changed). The buffer
+    /// must be sized for count's full range so the live count uniform, not
+    /// the allocation, decides how many instances draw.
+    #[test]
+    fn output_capacity_is_count_range_max_not_current_value() {
+        use crate::node_graph::effect_node::ParamValues;
+        let prim = SceneArray::new();
+        let range_max = SceneArray::PARAMS
+            .iter()
+            .find(|p| p.name == "count")
+            .and_then(|p| p.range)
+            .map(|(_, max)| max as u32)
+            .expect("count declares a range");
+
+        // Any live count value — including the apply-time default — must
+        // resolve to the same capacity.
+        for count in [1.0, 3.0, 8.0] {
+            let mut params = ParamValues::default();
+            params.insert(
+                std::borrow::Cow::Borrowed("count"),
+                ParamValue::Float(count),
+            );
+            assert_eq!(
+                Primitive::array_output_capacity(&prim, "out", &params, &[]),
+                Some(range_max),
+                "capacity must not follow the count value (live count={count})"
+            );
+        }
+
+        let params = ParamValues::default();
+        assert_eq!(
+            Primitive::array_output_capacity(&prim, "bogus", &params, &[]),
+            None,
+            "a nonexistent port carries no capacity"
+        );
     }
 
     #[test]
@@ -356,6 +413,62 @@ mod gpu_tests {
             let gpu_data = dispatch(&device, &pipeline, count, axis, cell_size, 0, 0.0);
             let expected = cpu_scene_array(count, axis, cell_size);
             assert_matches_cpu(&gpu_data, &expected, "axis {axis}");
+        }
+    }
+
+    /// BUG-757c value proof: the buffer is sized for count's full range while
+    /// the live count decides how many instances are real. With an
+    /// 8-capacity buffer and count=3, slots 0..3 match the CPU oracle and
+    /// slots 3..8 are zero-scale collapse-to-a-point elements (invisible in
+    /// render_scene's instance draw) — the pre-fix body wrote a full-strength
+    /// transform into every slot, so a value-sized buffer was the only thing
+    /// keeping surplus slots off screen.
+    #[test]
+    fn scene_array_masks_slots_beyond_live_count() {
+        let device = crate::test_device();
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
+            .expect("scene_array codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
+
+        let capacity = 8u32;
+        let count = 3u32;
+        let out_buf = device.create_buffer_shared(capacity as u64 * 32);
+        let mut enc = device.create_encoder("scene_array_mask_test");
+        let uniforms = SceneArrayUniforms {
+            count: count as i32,
+            axis: 4, // +Z
+            cell_size: 10.0,
+            jitter_seed: 0,
+            jitter_amount: 0.0,
+            dispatch_count: capacity,
+            _pad: 0,
+        };
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
+            ],
+            [capacity.div_ceil(256), 1, 1],
+            "scene_array_mask_test",
+        );
+        enc.commit_and_wait_completed();
+
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let gpu_data =
+            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize) };
+
+        let expected = cpu_scene_array(count, 4, 10.0);
+        assert_matches_cpu(&gpu_data[..count as usize], &expected, "live count slots");
+
+        for (i, t) in gpu_data[count as usize..].iter().enumerate() {
+            assert!(
+                t.pos_scale == [0.0; 4] && t.rot_pad == [0.0; 4],
+                "surplus slot {} (index {}) must be zero-scale, got pos_scale={:?}",
+                i,
+                count as usize + i,
+                t.pos_scale
+            );
         }
     }
 
