@@ -5479,14 +5479,10 @@ impl EffectNode for RenderScene {
         // `ShadowRayParams::new` is well-formed with that (`caster_count
         // = 0`, kernel's `n_casters` loop is zero-iteration, every
         // `shadow_factor` caster-slot lookup already returns fully-lit
-        // for a light with no caster slot). KNOWN LIMITATION: the accel
-        // structure below uses each object's single `model` transform —
-        // instanced objects (`instances_n` wired) get ONE ray-traced copy
-        // at that base transform, not one per instance (photoscanned-
-        // hero-object scenes, this design's whole framing, are not
-        // instanced; a scene that instances RT-shadowed geometry gets
-        // wrong per-instance shadow positions — escalate if this becomes
-        // load-bearing, per the P1 brief's own escalation line). ----
+        // for a light with no caster slot). RT_INSTANCING_DESIGN.md D1/D2:
+        // the accel below is instance-aware — one TLAS slot per wired
+        // instance capacity, composed GPU-side (descriptor-build kernel),
+        // so instanced objects trace one copy per live raster slot. ----
         if rt_enabled {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
@@ -5533,15 +5529,22 @@ impl EffectNode for RenderScene {
                     emissive_uv_m: d.uniforms.emissive_uv_m,
                     emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
                     cast_shadows: d.cast_shadows,
-                    // RT_INSTANCING_DESIGN.md D1/D7: instance binding for
-                    // the RT accel. P1 of the design wires these from
-                    // `d.instances` / `d.instance_count` (bindless address
-                    // + capacity); P0 lands the manifold-gpu side with the
-                    // unwired defaults so every existing scene takes the
-                    // byte-identical D7 fast path.
-                    instances_addr: 0,
-                    instances_buffer: None,
-                    instance_slots: 1,
+                    // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
+                    // instance binding from `d.instances` /
+                    // `d.instance_count` — the buffer's GPU address (the
+                    // same bindless-address accessor `vertex_base_addr`
+                    // uses) plus its CAPACITY. `instance_count` is
+                    // buffer_size / 32 (D2/INV-RTI5, BUG-757c discipline:
+                    // the live count is in-band — dead slots carry
+                    // pos_scale.w == 0 — and a param change never resizes
+                    // the buffer), so a capacity change is topology (topo
+                    // key below) and rebuilds the accel; content changes
+                    // ride the accel key via `instances_generation` (D9).
+                    // Unwired keeps the D7 fast path (single identity-slot
+                    // descriptor per object).
+                    instances_addr: d.instances.map_or(0, |b| b.gpu_address()),
+                    instances_buffer: d.instances,
+                    instance_slots: d.instance_count,
                 })
                 .collect();
 
@@ -5609,16 +5612,39 @@ impl EffectNode for RenderScene {
                 // refit — the flag rides the TOPO key (BUG-308's one-frame
                 // defer gives the bounded raster-presenting transition).
                 hasher.write_u8(o.translucent as u8);
+                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5: instance-slot
+                // CAPACITY is topology — the TLAS slot count is baked at
+                // build time, so a capacity change rebuilds through
+                // BUG-308's one-frame defer. Same effective-slots rule as
+                // manifold-gpu's `effective_instance_slots`. The wired
+                // buffer's IDENTITY deliberately does NOT ride here (D9:
+                // the descriptor kernel reads whatever buffer is wired each
+                // refit); content changes ride the accel key below.
+                hasher.write_u32(if o.instances_addr != 0 && o.instance_slots > 1 {
+                    o.instance_slots
+                } else {
+                    1
+                });
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
-            for o in &objects {
+            for (o, d) in objects.iter().zip(opaque_draws.iter()) {
                 hasher.write(bytemuck::bytes_of(&o.transform));
                 // Per-object cast_shadows toggle rewrites only the instance
                 // mask (see `refit_accel`), same cheap path as a transform
                 // change — folded into the SAME key so a toggle with no
                 // transform change still triggers a refit.
                 hasher.write_u8(o.cast_shadows as u8);
+                // RT_INSTANCING_DESIGN.md D9/INV-RTI4: a wired instances
+                // buffer's CONTENT changes refit (descriptor-build
+                // re-dispatch + TLAS refit in one command buffer). Static
+                // loop/mirror buffers never bump the generation, so the
+                // common case is zero per-frame cost. Deliberately NOT in
+                // the content-settle key: a re-scattering producer bumps
+                // every frame and would never settle, suppressing its
+                // rebuilds. `None` (unwired) hashes as a distinct state,
+                // mirroring the vertices_generation Option discipline.
+                d.instances_generation.hash(&mut hasher);
             }
             let accel_key = hasher.finish();
             // Content key: topo key plus every draw's slot generation, on a
@@ -5644,9 +5670,9 @@ impl EffectNode for RenderScene {
             // `ensure_normal_sources` — object-indexed readers (n4.w
             // roughness, RS-C sampler) use the canonical rows,
             // instance_id-indexed readers add N via params.slot_row_base.
-            // Every object currently carries the D7 default (≤1 slot), so
-            // this equals 2×`objects.len()` until P1 wires instance
-            // buffers.
+            // A wired draw contributes `instance_count` (buffer capacity —
+            // D2) slot rows; unwired draws contribute their one identity
+            // slot.
             let rt_gi_slot_count: usize = objects
                 .iter()
                 .map(|o| if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots as usize } else { 1 })
