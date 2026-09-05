@@ -1,6 +1,6 @@
 # Scene Mirror — whole-scene reflection as modifier kind #3
 
-**Status:** IN PROGRESS — P0 (splice take-over infra) + P1 (reflect_array atom) SHIPPED on wave 2026-09-05, P2 (scene_mirror kind) pending · 2026-09-05 · k3 (lead), design session with Peter
+**Status:** SHIPPED — P0+P1+P2 all on wave 2026-09-05, landing with the scene-mirror wave · 2026-09-05 · k3 (lead), design session with Peter
 **Prerequisites:** SCENE_MODIFIER_FRAMEWORK (P1 loop + fog kinds shipped), SCENE_FX (deformer family + "off is free" pattern shipped), SCENE_LOOP (P4 loop controls shipped).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -153,4 +153,5 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 - **Closed-loop 3D feedback** — tracked as BUG-q4h2 (3d-scene-feedback-and-scene-space-mirror); needs the render_scene-output seam designed separately.
 - **Mirrored shadow-depth silhouettes** (P1-known inconsistency): `shadow_depth.wgsl` reads the raw TRS, so a marked instance casts the UNFLIPPED shape at the mirrored position (stored scale is positive by the D5 amendment). Visible only where mirrored copies cast shadows. Trigger: a shipped look where the silhouette mismatch reads; fix is the same marker conditional in the shadow-depth vertex stage.
 - **Fused-region reflect_array** — the freeze compiler cannot express 2× output capacity or fuse BufferGather-input atoms today; shipped standalone-only with a region-exclusion proof. Tracked: BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity), BUG-x72p (scene-mirror-blocked-gather-input-fusion). Trigger: either compiler gap closes → add the fused numerical proof and retire the exclusion test.
+- **Editing-seam follow-ups from P2** — the generic remove's splice-strip is per-kind-blind (P2 ships a renderer-side workaround in the remove-re-derived plan) and `EnableDecl::Gate` carries unpopulated amount/target fields for gate-by-param kinds. Tracked: BUG-6y91 (scene-modifier-kind3-editing-seam-followups).
 - **Mirrored shadow casting as a toggle** — trigger: a look where mirrored copies must NOT cast.
