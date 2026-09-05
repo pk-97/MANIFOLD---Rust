@@ -2873,7 +2873,8 @@
         "DigitalDrift",
         "ParticleText",
         "StarField",
-        "StrangeAttractor"
+        "StrangeAttractor",
+        "StylizedFeedback"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -10043,7 +10044,8 @@
         "LED Strip Fire",
         "LED Strobe",
         "MriVolume",
-        "StrangeAttractor"
+        "StrangeAttractor",
+        "StylizedFeedback"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -11613,6 +11615,7 @@
         "DigitalDrift",
         "Glitch",
         "LED Strobe",
+        "StylizedFeedback",
         "Watercolor"
       ],
       "fusion": "multi_input_coincident",
@@ -21127,7 +21130,8 @@
         "LED Strobe",
         "Lantern",
         "MriVolume",
-        "OilyFluid"
+        "OilyFluid",
+        "StylizedFeedback"
       ],
       "fusion": "boundary:blocked",
       "inputs": [
@@ -33840,6 +33844,13 @@
           "max": "10",
           "min": "-10",
           "name": "Rotate"
+        },
+        {
+          "default": "2",
+          "id": "mode",
+          "max": "2",
+          "min": "0",
+          "name": "Mode"
         }
       ]
     },
