@@ -1,12 +1,14 @@
 //! SCENE_LOOP_DESIGN P4 round-trip gate (D6-migrated to the generic
-//! scene-modifier pair; D6 whitelist + D11 stamping idempotence):
+//! scene-modifier pair; D6 whitelist + D11 stamping idempotence + BUG-gsql
+//! framing rows):
 //! apply (REAL descriptor plan builder + REAL generic command) → save V1 →
 //! reload → run the load-time migration the app runs (scene-object wires +
 //! scene exposures + the pre-switch loop migration) → reconcile param
 //! manifests → assert the "Scene Loop" section rows are EXACTLY the
-//! performer whitelist (Bars, Copies, Height, Lateral), values intact, zero
-//! duplicate binding targets, every binding resolves to a live node, and a
-//! performer-edited row value survives the round trip.
+//! performer whitelist (Bars, Copies, the loop_camera framing + movement
+//! rows, Spacing, Jitter), values intact, zero duplicate binding targets,
+//! every binding resolves to a live node, and a performer-edited row value
+//! survives the round trip.
 //!
 //! Fails on the pre-P4 code: the apply stamped EVERY param of EVERY loop
 //! node, so the section carried duplicate Axis / Cell Size rows (one set
@@ -173,16 +175,23 @@ fn scene_loop_targets(graph: &EffectGraphDef) -> Vec<(String, String)> {
         .collect()
 }
 
-/// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment — the ONLY
-/// binding targets the Scene Loop section may carry. (The Bars row targets
-/// the beat_ramp's bars param: with bars > 0 the ramp runs at 1/bars
-/// cycles/beat, so the row reads and writes bars directly — rate = 1/bars
-/// by construction, no panel-side transform.)
+/// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment + BUG-gsql
+/// framing rows — the ONLY binding targets the Scene Loop section may
+/// carry. (The Bars row targets the beat_ramp's bars param: with bars > 0
+/// the ramp runs at 1/bars cycles/beat, so the row reads and writes bars
+/// directly — rate = 1/bars by construction.)
 const WHITELIST: &[(&str, &str)] = &[
     ("loop_phase", "bars"),
     ("scene_array", "count"),
     ("loop_camera", "height"),
     ("loop_camera", "lateral"),
+    ("loop_camera", "near"),
+    ("loop_camera", "far"),
+    ("loop_camera", "fov_y"),
+    ("loop_camera", "home"),
+    ("loop_camera", "roll"),
+    ("loop_camera", "pitch"),
+    ("loop_camera", "yaw"),
     ("loop_camera", "flow"),
     ("loop_camera", "stride"),
     ("loop_camera", "sway_amp"),
@@ -285,6 +294,52 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
         "Spacing range curated to auto×0.25..4.0"
     );
     assert_eq!(spacing_spec.default_value, expected_cell);
+
+    // BUG-gsql framing rows: Near/Far/Home stamped with the cell-scaled
+    // bands (not the manifests' room-scale generics), defaults at the
+    // plan-minted values (home = −cell/2, near = 0.002·cell, far = 4·cell).
+    // The Roll/Pitch/Yaw angle rows carry the manifest band (±3.2) and
+    // default 0 — the primitive's rotate_local no-op.
+    let section_spec = |graph: &EffectGraphDef, name: &str| {
+        graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .find(|p| p.section.as_deref() == Some("Scene Loop") && p.name == name)
+            .unwrap_or_else(|| panic!("{name} row stamped"))
+            .clone()
+    };
+    let near_spec = section_spec(&graph, "Near");
+    assert_eq!(
+        (near_spec.min, near_spec.max),
+        (0.001, expected_cell * 2.0),
+        "Near range curated to the cell band"
+    );
+    assert_eq!(near_spec.default_value, expected_cell * 0.002);
+    let far_spec = section_spec(&graph, "Far");
+    assert_eq!(
+        (far_spec.min, far_spec.max),
+        (1.0, (expected_cell * 20.0).min(10_000.0)),
+        "Far range curated to the cell band"
+    );
+    assert_eq!(far_spec.default_value, expected_cell * 4.0);
+    let home_spec = section_spec(&graph, "Home");
+    assert_eq!(
+        (home_spec.min, home_spec.max),
+        (-expected_cell * 2.0, expected_cell * 2.0),
+        "Home range curated to ±2 cells"
+    );
+    assert_eq!(home_spec.default_value, -expected_cell * 0.5);
+    for angle in ["Roll", "Pitch", "Yaw"] {
+        let spec = section_spec(&graph, angle);
+        assert_eq!(
+            (spec.min, spec.max, spec.default_value),
+            (-3.2, 3.2, 0.0),
+            "{angle} row carries the manifest angle band"
+        );
+    }
 
     // Simulate a performer edit: Copies 3 → 5 through the instance manifest
     // (the bound-row write path), as the panel's row would.

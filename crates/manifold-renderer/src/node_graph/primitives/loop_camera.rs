@@ -106,6 +106,36 @@ crate::primitive! {
             range: Some((1.0, 10000.0)),
             enum_values: &[],
         },
+        // ── Framing offsets (BUG-gsql): static rotation constants applied
+        // after the look_at basis is built, in camera-local space via
+        // Camera::rotate_local (yaw → pitch → roll). STATIC is what keeps
+        // INV-3: they read no phase, so phase 0 and phase 1 frames stay
+        // identical by construction — the wrap purity proof only has to
+        // cover the time-varying terms above.
+        ParamDef {
+            name: Cow::Borrowed("roll"),
+            label: "Roll",
+            ty: ParamType::Angle,
+            default: ParamValue::Float(0.0),
+            range: Some((-3.2, 3.2)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("pitch"),
+            label: "Pitch",
+            ty: ParamType::Angle,
+            default: ParamValue::Float(0.0),
+            range: Some((-3.2, 3.2)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("yaw"),
+            label: "Yaw",
+            ty: ParamType::Angle,
+            default: ParamValue::Float(0.0),
+            range: Some((-3.2, 3.2)),
+            enum_values: &[],
+        },
         // ── SCENE_MODIFIER_FRAMEWORK P4 loop controls. Every time-varying
         // term below is a function of the loop PHASE alone (INV-3): the
         // frame at phase 0 equals the frame at phase 1 by construction.
@@ -239,6 +269,12 @@ impl Primitive for LoopCamera {
             ctx.scalar_or_param("look_sweep_cycles", 1.0).round().clamp(1.0, 8.0);
         let zoom_pulse_amp = ctx.scalar_or_param("zoom_pulse_amp", 0.0).clamp(0.0, 0.5);
 
+        // Framing offsets — static constants (BUG-gsql). No phase read, so
+        // INV-3 (phase 0 frame == phase 1 frame) survives by construction.
+        let roll = ctx.scalar_or_param("roll", 0.0);
+        let pitch = ctx.scalar_or_param("pitch", 0.0);
+        let yaw = ctx.scalar_or_param("yaw", 0.0);
+
         // Phase: wired beat_ramp or fallback to fract(beats).
         let phase = match ctx.inputs.scalar("phase") {
             Some(ParamValue::Float(f)) => f.fract().clamp(0.0, 1.0),
@@ -293,7 +329,8 @@ impl Primitive for LoopCamera {
         // Zoom pulse: sin(π·phase) is zero at both seams — the fov breathes
         // once per loop and lands back on the base fov at the wrap.
         let fov = (fov_y + zoom_pulse_amp * (std::f32::consts::PI * phase).sin()).max(0.01);
-        let cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
+        let mut cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
+        cam.rotate_local(yaw, pitch, roll);
 
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
@@ -327,14 +364,14 @@ mod tests {
     }
 
     #[test]
-    fn loop_camera_has_fifteen_params() {
+    fn loop_camera_has_eighteen_params() {
         let names: Vec<&str> = LoopCamera::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![
                 "cell_size", "axis", "lateral", "height", "home", "fov_y", "near", "far",
-                "flow", "stride", "sway_amp", "sway_cycles", "look_sweep_amp",
-                "look_sweep_cycles", "zoom_pulse_amp",
+                "roll", "pitch", "yaw", "flow", "stride", "sway_amp", "sway_cycles",
+                "look_sweep_amp", "look_sweep_cycles", "zoom_pulse_amp",
             ]
         );
     }
@@ -403,5 +440,166 @@ mod tests {
         let prim = LoopCamera::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.loop_camera");
+    }
+
+    // The run() tests below build a real EffectNodeContext over a MockBackend
+    // (same harness as transform_shake's tests): the phase is wired as a
+    // scalar input so both the fract()'d seam path and the movement terms
+    // are exercised end to end.
+
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
+    use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{MockBackend, ports::ScalarType};
+    use manifold_core::{Beats, Seconds};
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    /// Run the primitive once with `phase` wired to the given value and the
+    /// named params overridden (everything else at the manifest default).
+    fn run_camera(phase: f32, overrides: &[(&'static str, f32)]) -> Camera {
+        let defaults: &[(&str, f32)] = &[
+            ("cell_size", 10.0),
+            ("lateral", 0.0),
+            ("height", 1.5),
+            ("home", 0.0),
+            ("fov_y", 0.9),
+            ("flow", 0.0),
+            ("stride", 1.0),
+            ("sway_amp", 0.0),
+            ("sway_cycles", 1.0),
+            ("look_sweep_amp", 0.0),
+            ("look_sweep_cycles", 1.0),
+            ("zoom_pulse_amp", 0.0),
+            ("roll", 0.0),
+            ("pitch", 0.0),
+            ("yaw", 0.0),
+        ];
+
+        let mut backend = MockBackend::new();
+        let phase_slot = backend.acquire(
+            ResourceId(0),
+            crate::node_graph::ports::PortType::Scalar(ScalarType::F32),
+            None,
+            (0, 0),
+        );
+        backend.set_scalar(phase_slot, ParamValue::Float(phase));
+        let out_slot = backend.acquire(ResourceId(1), crate::node_graph::ports::PortType::Camera, None, (0, 0));
+
+        let mut params = ParamValues::default();
+        for &(name, default) in defaults {
+            let value = overrides
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| *v)
+                .unwrap_or(default);
+            params.insert(Cow::Owned(name.to_string()), ParamValue::Float(value));
+        }
+        // axis is an Enum param; the test harness only overrides floats, so
+        // +Z (the standalone default) applies unless a test wires otherwise.
+        params.insert(Cow::Borrowed("axis"), ParamValue::Enum(4)); // +Z
+
+        let wire_slots: &[(&'static str, crate::node_graph::bindings::Slot)] =
+            &[("phase", phase_slot)];
+        let outputs_bindings: &[(&'static str, crate::node_graph::bindings::Slot)] =
+            &[("out", out_slot)];
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        let inputs = NodeInputs::new(wire_slots, &backend, &[]);
+        let outputs = NodeOutputs::new(
+            outputs_bindings,
+            &backend,
+            &mut scalar_scratch,
+            &mut camera_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+            &mut object_scratch,
+        );
+        let time = frame_time();
+        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+        let mut prim = LoopCamera::new();
+        Primitive::run(&mut prim, &mut ctx);
+
+        for (slot, value) in camera_scratch.drain(..) {
+            backend.set_camera(slot, value);
+        }
+        backend.camera(out_slot).expect("camera output should be set")
+    }
+
+    /// INV-3 with the framing offsets live: nonzero roll/pitch/yaw plus every
+    /// movement control at a nonzero phase-varying value, and the frame at
+    /// wired phase 1.0 (fract()'d to exactly 0.0) must equal the phase-0
+    /// frame BIT FOR BIT — the offsets are static, so nothing about the wrap
+    /// can depend on them.
+    #[test]
+    fn framing_offsets_keep_the_wrap_bit_exact() {
+        let overrides: &[(&'static str, f32)] = &[
+            ("roll", 0.7),
+            ("pitch", -0.4),
+            ("yaw", 1.1),
+            ("flow", 0.8),
+            ("stride", 3.0),
+            ("sway_amp", 0.5),
+            ("sway_cycles", 2.0),
+            ("look_sweep_amp", 0.5),
+            ("zoom_pulse_amp", 0.25),
+        ];
+        let at_zero = run_camera(0.0, overrides);
+        let at_wrap = run_camera(1.0, overrides);
+        assert_eq!(
+            at_zero, at_wrap,
+            "phase 1.0 fract()'s to 0.0 — with static framing offsets the frames must be bit-identical"
+        );
+        // Sanity: the offsets actually changed the frame (a zero-angle bug
+        // would pass the equality above trivially).
+        let unrotated = run_camera(0.0, &[]);
+        assert_ne!(
+            at_zero.fwd, unrotated.fwd,
+            "nonzero roll/pitch/yaw must rotate the basis away from the unrotated frame"
+        );
+    }
+
+    /// Concrete numeric case: +Z travel with yaw = π/2 looks down +X — the
+    /// camera-local positive-yaw convention (left about camera Y) applied to
+    /// the look_at basis (fwd +Z, up +Y).
+    #[test]
+    fn yaw_quarter_turn_on_z_travel_faces_positive_x() {
+        let cam = run_camera(0.0, &[("yaw", std::f32::consts::FRAC_PI_2)]);
+        assert!(
+            (cam.fwd[0] - 1.0).abs() < 1e-5,
+            "yaw π/2 must face +X, got fwd {:?}",
+            cam.fwd
+        );
+        assert!(cam.fwd[1].abs() < 1e-5 && cam.fwd[2].abs() < 1e-5, "fwd {:?}", cam.fwd);
+    }
+
+    /// Zero offsets are byte-identical to the pre-offset camera: existing
+    /// saved loops render exactly as before (the rotate_local no-op).
+    #[test]
+    fn zero_framing_offsets_match_the_unrotated_camera() {
+        let base = run_camera(0.25, &[]);
+        // Reference basis straight from look_at (no rotate_local).
+        let cell = 10.0;
+        let phase = 0.25f32;
+        let travel = phase * cell;
+        let pos = [0.0f32, 1.5, travel];
+        let target = [pos[0], pos[1], pos[2] + 1.0];
+        let expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        assert_eq!(base, expected, "zero roll/pitch/yaw must not perturb the camera at all");
     }
 }

@@ -271,6 +271,13 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         ("scene_array", "count"),
         ("loop_camera", "height"),
         ("loop_camera", "lateral"),
+        ("loop_camera", "near"),
+        ("loop_camera", "far"),
+        ("loop_camera", "fov_y"),
+        ("loop_camera", "home"),
+        ("loop_camera", "roll"),
+        ("loop_camera", "pitch"),
+        ("loop_camera", "yaw"),
         ("loop_camera", "flow"),
         ("loop_camera", "stride"),
         ("loop_camera", "sway_amp"),
@@ -332,7 +339,8 @@ fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
     let old_param_count = meta.params.len();
     assert_eq!(old_param_count, 4, "fixture starts from the four D6 rows");
 
-    // One migration: the eight new rows land.
+    // One migration: the fifteen new rows land (eight P4 controls +
+    // Spacing/Jitter + the five BUG-gsql framing rows).
     assert!(
         migrate_loop_exposure_rows(&mut def),
         "the first migration must stamp the new rows"
@@ -343,7 +351,7 @@ fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
         .iter()
         .filter(|p| p.section.as_deref() == Some("Scene Loop"))
         .count();
-    assert_eq!(section_rows, 12, "4 old + 8 new rows after migration");
+    assert_eq!(section_rows, 19, "4 old + 15 new rows after migration");
 
     // The old four ids are untouched (no re-stamp churn).
     for id in &keep_ids {
@@ -400,7 +408,7 @@ fn inv_m2_apply_remove_exact_inverse_three_layers() {
             .map(|b| b.id.clone())
             .collect()
     };
-    assert_eq!(stamped_ids.len(), 12, "twelve whitelist rows stamped");
+    assert_eq!(stamped_ids.len(), 19, "nineteen whitelist rows stamped");
     project
         .with_preset_graph_mut(&target, |inst| {
             inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {
