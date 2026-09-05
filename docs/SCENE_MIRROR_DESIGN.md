@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P0+P1+P2 all on wave 2026-09-05, landing with the scene-mirror wave · 2026-09-05 · k3 (lead), design session with Peter
 **Prerequisites:** SCENE_MODIFIER_FRAMEWORK (P1 loop + fog kinds shipped), SCENE_FX (deformer family + "off is free" pattern shipped), SCENE_LOOP (P4 loop controls shipped).
-**Lifecycle:** contract — `node.reflect_array` (atom docs + gpu_tests) and the `scene_mirror` kind (scene_modifier.rs) cite this doc's D-numbers and invariants as their spec; future scene-modifier kinds build on its take-over infra (section 3.5).
+**Lifecycle: contract** — `node.reflect_array` (atom docs + gpu_tests) and the `scene_mirror` kind (scene_modifier.rs) cite this doc's D-numbers and invariants as their spec; future scene-modifier kinds build on its take-over infra (section 3.5).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Peter, 2026-09-05, the ask: 3D scene stylisation on top of Scene Loop — *"3D scene mirrors, twists, pulses, explosions, steps"* — with the infra ready so further scene modifier kinds are easy to add. Twist/explode/step live already (SCENE_FX per-object rack); the mirror is the first genuinely scene-wide item and the vehicle for the kind-#3 infra hardening. On stage: DamagedHelmet loops down a corridor; Scene Mirror drops a reflected helmet under the floor plane; Plane Offset rides the kick and the reflection answers.
