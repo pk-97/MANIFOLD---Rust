@@ -1,6 +1,6 @@
 # Scene Mirror — whole-scene reflection as modifier kind #3
 
-**Status:** IN PROGRESS — design approved 2026-09-05, P0–P2 not started · 2026-09-05 · k3 (lead), design session with Peter
+**Status:** IN PROGRESS — P0 (splice take-over infra) SHIPPED on wave 2026-09-05, P1/P2 pending · 2026-09-05 · k3 (lead), design session with Peter
 **Prerequisites:** SCENE_MODIFIER_FRAMEWORK (P1 loop + fog kinds shipped), SCENE_FX (deformer family + "off is free" pattern shipped), SCENE_LOOP (P4 loop controls shipped).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
