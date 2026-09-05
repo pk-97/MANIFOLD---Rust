@@ -5874,6 +5874,16 @@ impl EffectNode for RenderScene {
                     .and_then(|a| a.emissive_table.as_ref())
                     .map(|t| t.mean_power)
                     .unwrap_or(0.0);
+                // RT_INSTANCING_DESIGN.md D8: the kernel composes emissive
+                // entries from the TLAS descriptor buffer when the table is
+                // local-space (instanced mode); the D7 fast path uploads
+                // world entries (flag 0, byte-identical data path).
+                let emissive_entries_are_local = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.entries_are_local)
+                    .unwrap_or(false);
                 let emissive_table_entry_count = self
                     .rt_accel
                     .as_ref()
@@ -5997,7 +6007,8 @@ impl EffectNode for RenderScene {
                 )
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
-                .with_slot_row_base(objects.len() as u32);
+                .with_slot_row_base(objects.len() as u32)
+                .with_emissive_entries_local(emissive_entries_are_local);
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
@@ -6040,7 +6051,8 @@ impl EffectNode for RenderScene {
                 )
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
-                .with_slot_row_base(objects.len() as u32);
+                .with_slot_row_base(objects.len() as u32)
+                .with_emissive_entries_local(emissive_entries_are_local);
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
                 // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at

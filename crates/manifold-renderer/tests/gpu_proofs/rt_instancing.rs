@@ -203,7 +203,6 @@ struct Probe {
 /// exactly through it. Fixture x positions: ±0.45 and ±0.2 (columns 0/7
 /// and 2/5); the miss target sits at column 4, whose ray clears every
 /// quad at the fixture depths.
-const PROBE_Z: f32 = 0.5;
 ///
 /// Runs the probe suite: builds an instanced accel over the fixture quad
 /// with `slots` wired, then one primary ray per [`Probe`] and returns the

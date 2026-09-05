@@ -982,8 +982,17 @@ struct EmissiveTriangle {
     float2 uv0;
     float2 uv1;
     float2 uv2;
+    // Owning object — gi_materials/normal_sources canonical-row lookups
+    // (RS-C), unchanged by RT_INSTANCING_DESIGN.md D8.
     uint   object_index;
-    uint   _pad_obj;
+    // D8: the TLAS descriptor slot of THIS entry's copy (CPU knows the slot
+    // bases — it computes them for the descriptor-build params). The
+    // kernel composes the entry's world triangle from
+    // emissive_descriptors[descriptor_index] when entries are local
+    // (instanced mode); the D7 fast path sets it to the object index
+    // (descriptor_index == object_index there, one descriptor per object)
+    // and never reads it. Replaces the old `_pad_obj` (size stays 80 B).
+    uint   descriptor_index;
 };
 
 // RS-B: alias-table entry — `prob` (probability of selecting self) and
@@ -1066,7 +1075,15 @@ struct ShadowRayParams {
     // and slot rows are identical). Object-indexed sites (n4.w readers,
     // the RS-C emissive sampler) read through the un-offset pointers.
     uint   slot_row_base;
-    uint   _pad_slot[3];
+    // RT_INSTANCING_DESIGN.md D8: non-zero when emissive_table entries are
+    // LOCAL-space (instanced mode) — the kernel composes each entry's
+    // world triangle from emissive_descriptors[entry.descriptor_index]
+    // (the SAME buffer the TLAS references — no second source of truth) and
+    // weights by the entry's true world area. 0 = the D7 fast path:
+    // entries are world-space (CPU-composed at build/refit), byte-identical
+    // to the pre-instancing data path.
+    uint   emissive_entries_are_local;
+    uint   _pad_slot[2];
 };
 
 // RT-P3: one entry per RT object (SAME order as `RtObjectGeometry`'s
@@ -1253,6 +1270,25 @@ static float3 rti_apply_instance_dir(device RtNormalSource& src, float3 d) {
     );
     return rot * (d * msign);
 }
+
+// RT_INSTANCING_DESIGN.md D8: field-for-field mirror of
+// MTLAccelerationStructureInstanceDescriptor (packed transform + four u32s
+// = 64 bytes) — used by BOTH the trace kernel (emissive world composition
+// from `emissive_descriptors`, buffer(6)) and the descriptor-build kernel
+// (its output). The Rust side `RtAsInstanceDescriptorMirror` ties this
+// layout to the objc2 binding's size/offsets at compile time; per the
+// design's P0 brief the size is asserted against the binding, never
+// hardcoded. Declared before both kernels (MSL declaration order).
+struct RtAsInstanceDescriptor {
+    packed_float3 t0;
+    packed_float3 t1;
+    packed_float3 t2;
+    packed_float3 t3;
+    uint  options;
+    uint  mask;
+    uint  intersection_function_table_offset;
+    uint  acceleration_structure_index;
+};
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
 // its bindless GPU address, then transform to world space with `src`'s
@@ -1811,6 +1847,12 @@ kernel void trace_shadow_rays(
     // are free buffer slots (buffers 0-3 are accel/params/gi/normal).
     device const EmissiveTriangle* emissive_table  [[buffer(4)]],
     device const EmissiveAliasEntry* emissive_aliases [[buffer(5)]],
+    // RT_INSTANCING_DESIGN.md D8: the TLAS instance-descriptor buffer (the
+    // same buffer the accel structure references — the composed world
+    // transform of EVERY slot, refreshed by every instanced refit). Read
+    // only when `emissive_entries_are_local`; bound always (ABI-stub
+    // discipline — the D7 fast path never reads it).
+    device const RtAsInstanceDescriptor* emissive_descriptors [[buffer(6)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
@@ -2291,9 +2333,42 @@ kernel void trace_shadow_rays(
             float su = sqrt(u2.x);
             float a = 1.0f - su;
             float b = u2.y * su;
-            float3 q = float3(emissive_table[i].v0) * a
-                     + float3(emissive_table[i].v1) * b
-                     + float3(emissive_table[i].v2) * (1.0f - a - b);
+            // D8 world composition: instanced entries are LOCAL-space — the
+            // world triangle is composed per entry from the slot's TLAS
+            // descriptor (the same buffer the TLAS traverses, so a refit
+            // that moves the instances moves the light table with it, no
+            // CPU rewrite). Fast path: entries are world-space already
+            // (today's bytes).
+            device const EmissiveTriangle& tri = emissive_table[i];
+            float3 w0 = float3(0.0f);
+            float3 w1 = float3(0.0f);
+            float3 w2 = float3(0.0f);
+            float entry_world_area = 0.0f;
+            if (p.emissive_entries_are_local != 0u) {
+                device const RtAsInstanceDescriptor& desc =
+                    emissive_descriptors[tri.descriptor_index];
+                if (desc.mask != 0u) {
+                    // Live slot: the descriptor transform IS the composed
+                    // model·T_instance (D4) — this is the entry's true
+                    // world triangle, exact under any per-slot scale.
+                    w0 = float3(desc.t0) * tri.v0.x + float3(desc.t1) * tri.v0.y
+                       + float3(desc.t2) * tri.v0.z + float3(desc.t3);
+                    w1 = float3(desc.t0) * tri.v1.x + float3(desc.t1) * tri.v1.y
+                       + float3(desc.t2) * tri.v1.z + float3(desc.t3);
+                    w2 = float3(desc.t0) * tri.v2.x + float3(desc.t1) * tri.v2.y
+                       + float3(desc.t2) * tri.v2.z + float3(desc.t3);
+                    entry_world_area = 0.5f * length(cross(w1 - w0, w2 - w0));
+                }
+                // D2/D8 dead-slot guard: a dead slot's descriptor is
+                // identity + mask 0 — entry_world_area stays 0 and the
+                // `entry_world_area > 0` gate below skips it (zero
+                // contribution, no 0/0 in the weight).
+            } else {
+                w0 = float3(tri.v0);
+                w1 = float3(tri.v1);
+                w2 = float3(tri.v2);
+            }
+            float3 q = w0 * a + w1 * b + w2 * (1.0f - a - b);
             float3 l = q - sec_origin;
             float l_len = length(l);
             float3 l_hat = l / max(l_len, bias_eps);
@@ -2307,8 +2382,8 @@ kernel void trace_shadow_rays(
             // non-finite rays outright (NaN rays are the same UB class;
             // rt_finite — fast math can compile away isfinite).
             if (cos_theta > 0.0f && rt_finite(l_len) && l_len > 2.0f * bias_eps) {
-                float3 e1 = float3(emissive_table[i].v1) - float3(emissive_table[i].v0);
-                float3 e2 = float3(emissive_table[i].v2) - float3(emissive_table[i].v0);
+                float3 e1 = w1 - w0;
+                float3 e2 = w2 - w0;
                 float3 n_t = cross(e1, e2);
                 float n_len2 = length_squared(n_t);
                 if (n_len2 > 1e-12f) {
@@ -2321,7 +2396,14 @@ kernel void trace_shadow_rays(
                     // (rt_p3_emissive_texture: ground under an up-facing
                     // quad read 0.06% vs main's 1.60%).
                     float cos_emit = abs(dot(n_t, -l_hat));
-                    if (cos_emit > 0.0f) {
+                    // D8: `entry_world_area > 0` is the explicit dead-slot
+                    // skip (instanced mode); the fast path never computes
+                    // per-entry area, so gate it on the flag to keep that
+                    // path byte-identical.
+                    bool area_ok = (p.emissive_entries_are_local != 0u)
+                        ? (entry_world_area > 0.0f)
+                        : true;
+                    if (cos_emit > 0.0f && area_ok) {
                         ray em_r;
                         em_r.origin = sec_origin;
                         em_r.min_distance = bias_eps;
@@ -2331,14 +2413,13 @@ kernel void trace_shadow_rays(
                         em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
                         bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true);
                         if (!blocked) {
-                            float3 em_factor = float3(gi_materials[emissive_table[i].object_index].emissive);
-                            float2 uv0 = emissive_table[i].uv0;
-                            float2 uv1 = emissive_table[i].uv1;
-                            float2 uv2 = emissive_table[i].uv2;
+                            float3 em_factor = float3(gi_materials[tri.object_index].emissive);
+                            float2 uv0 = tri.uv0;
+                            float2 uv1 = tri.uv1;
+                            float2 uv2 = tri.uv2;
                             float2 uv = uv0 * a + uv1 * b + uv2 * (1.0f - a - b);
                             float3 em_tex = float3(1.0);
-                            uint em_oi = emissive_table[i].object_index;
-                            device RtNormalSource& em_src = normal_sources[em_oi];
+                            device RtNormalSource& em_src = normal_sources[tri.object_index];
                             if (em_src.emissive_tex_index < MAX_RT_MATERIAL_TEXTURES) {
                                 uv = float2(em_src.emissive_uv_m[0] * uv.x + em_src.emissive_uv_m[1] * uv.y + em_src.emissive_uv_t[0],
                                             em_src.emissive_uv_m[2] * uv.x + em_src.emissive_uv_m[3] * uv.y + em_src.emissive_uv_t[1]);
@@ -2346,7 +2427,15 @@ kernel void trace_shadow_rays(
                                 em_tex = material_textures[em_src.emissive_tex_index].sample(em_sampler_direct, uv).rgb;
                             }
                             float3 em_contrib = em_factor * em_tex;
-                            float geom_weight = cos_theta * cos_emit * max(p.emissive_table_total_area, 1e-12f) / (l_len * l_len);
+                            // D8 RIS weight: instanced mode uses THIS entry's
+                            // true world area (exact under per-slot scales —
+                            // the area the estimator must see); the D7 fast
+                            // path keeps the historical global total_area
+                            // scalar (INV-RTI3 byte-identical).
+                            float area_term = (p.emissive_entries_are_local != 0u)
+                                ? entry_world_area
+                                : max(p.emissive_table_total_area, 1e-12f);
+                            float geom_weight = cos_theta * cos_emit * area_term / (l_len * l_len);
                             emissive_direct = em_contrib * geom_weight;
                             float em_l = luma(emissive_direct);
                             float em_cap = RT_EMISSIVE_FIREFLY_GAIN * p.emissive_table_mean_power;
@@ -4060,24 +4149,9 @@ kernel void debug_atrous_post(
 // gets the identity matrix + mask 0 — every query masks nonzero, so it is
 // provably never intersected (D2).
 
-// Field-for-field mirror of MTLAccelerationStructureInstanceDescriptor
-// (packed transform + four u32s = 64 bytes) — the Rust side
-// `RtAsInstanceDescriptorMirror` ties this layout to the objc2 binding's
-// size/offsets at compile time; per the design's P0 brief the size is
-// asserted against the binding, never hardcoded.
-struct RtAsInstanceDescriptor {
-    packed_float3 t0;
-    packed_float3 t1;
-    packed_float3 t2;
-    packed_float3 t3;
-    uint  options;
-    uint  mask;
-    uint  intersection_function_table_offset;
-    uint  acceleration_structure_index;
-};
-
-// Mirror of the Rust `RtInstanceBuildObj` — see its doc comment for the
-// layout (96-byte stride both sides, asserted on the Rust side).
+// Field-for-field mirror of the Rust `RtInstanceBuildObj` — see its doc
+// comment for the layout (96-byte stride both sides, asserted on the Rust
+// side).
 struct RtInstanceBuildObj {
     float4x4 model;
     ulong    instances_addr;
@@ -4087,11 +4161,19 @@ struct RtInstanceBuildObj {
     float2   _pad;
 };
 
-static void rti_write_identity_descriptor(device RtAsInstanceDescriptor* out, uint asi, uint mask) {
-    out->t0 = packed_float3(1.0, 0.0, 0.0);
-    out->t1 = packed_float3(0.0, 1.0, 0.0);
-    out->t2 = packed_float3(0.0, 0.0, 1.0);
-    out->t3 = packed_float3(0.0, 0.0, 0.0);
+static void rti_write_descriptor(
+    device RtAsInstanceDescriptor* out,
+    uint asi,
+    uint mask,
+    float3 c0,
+    float3 c1,
+    float3 c2,
+    float3 c3
+) {
+    out->t0 = packed_float3(c0);
+    out->t1 = packed_float3(c1);
+    out->t2 = packed_float3(c2);
+    out->t3 = packed_float3(c3);
     out->options = 0u; // MTLAccelerationStructureInstanceOptions::None
     out->mask = mask;
     out->intersection_function_table_offset = 0u;
@@ -4113,15 +4195,24 @@ kernel void build_instance_descriptors(
     // the arbiter per the design's VERIFY-AT-IMPL note.
     uint mask = RT_MASK_VISIBLE | (o.cast_shadows ? RT_MASK_SHADOW_CASTER : 0u);
     if (o.instances_addr == 0ul) {
-        // D7: unwired object — one identity slot (slot_count is 1).
-        rti_write_identity_descriptor(out, tid.y, mask);
+        // D7: unwired object — one slot at the object's MODEL transform (an
+        // identity INSTANCE: world = model·I = model, exactly where the
+        // raster draws it). NOT the identity matrix — the model matrix.
+        rti_write_descriptor(
+            out, tid.y, mask,
+            o.model[0].xyz, o.model[1].xyz, o.model[2].xyz, o.model[3].xyz
+        );
         return;
     }
     device const RtInstanceTransform* inst = (device const RtInstanceTransform*)
         (o.instances_addr + (ulong)tid.x * (ulong)sizeof(RtInstanceTransform));
     if (inst->pos_scale.w == 0.0) {
         // D2: dead slot — identity + mask 0, never intersected.
-        rti_write_identity_descriptor(out, tid.y, 0u);
+        rti_write_descriptor(
+            out, tid.y, 0u,
+            float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0),
+            float3(0.0, 0.0, 1.0), float3(0.0, 0.0, 0.0)
+        );
         return;
     }
     // D4: A = euler_xyz(rot)·diag(msign·scale), t = pos — the raster's
@@ -4285,9 +4376,16 @@ pub struct ShadowRayParams {
     /// identical copies); production sets it to the object count via
     /// [`ShadowRayParams::with_slot_row_base`].
     pub slot_row_base: u32,
+    /// RT_INSTANCING_DESIGN.md D8: non-zero when the emissive table
+    /// entries are LOCAL-space (instanced mode — the kernel composes each
+    /// entry's world triangle from the TLAS descriptor buffer and weights
+    /// by per-entry true world area). Zero = the D7 fast path (entries
+    /// world-space, the pre-instancing data path). `new()` defaults 0;
+    /// production sets it from `EmissiveLightTable::entries_are_local`.
+    pub emissive_entries_are_local: u32,
     /// Alignment pad to the 16-byte multiple the MSL mirror rounds to
-    /// (float4x4 member): 400 + 4 + 12 = 416.
-    pub _pad_slot: [u32; 3],
+    /// (float4x4 member): 400 + 4 + 4 + 8 = 416.
+    pub _pad_slot: [u32; 2],
 }
 
 /// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
@@ -4350,7 +4448,8 @@ impl ShadowRayParams {
             svt_slot,
             inv_view_proj,
             slot_row_base: 0,
-            _pad_slot: [0; 3],
+            emissive_entries_are_local: 0,
+            _pad_slot: [0; 2],
         }
     }
 
@@ -4360,6 +4459,15 @@ impl ShadowRayParams {
     /// discipline as `AccumulateParams`' flag setters.
     pub fn with_slot_row_base(mut self, base: u32) -> Self {
         self.slot_row_base = base;
+        self
+    }
+
+    /// RT_INSTANCING_DESIGN.md D8: set when the emissive table entries are
+    /// local-space (instanced mode) — the kernel composes world positions
+    /// from the TLAS descriptor buffer instead of reading them from the
+    /// entries.
+    pub fn with_emissive_entries_local(mut self, local: bool) -> Self {
+        self.emissive_entries_are_local = local as u32;
         self
     }
 }
@@ -4428,7 +4536,13 @@ pub struct EmissiveTriangleGpu {
     pub uv1: [f32; 2],
     pub uv2: [f32; 2],
     pub object_index: u32,
-    _pad_obj: u32,
+    /// RT_INSTANCING_DESIGN.md D8: the TLAS descriptor slot of THIS entry's
+    /// copy. In instanced mode the entries stay LOCAL-space and the kernel
+    /// composes world positions from `emissive_descriptors[descriptor_index]`;
+    /// the D7 fast path sets this to the object index (descriptor_index ==
+    /// object_index there) and never reads it. Replaces the old `_pad_obj`
+    /// word — size stays 80 bytes.
+    pub descriptor_index: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 80);
@@ -4469,7 +4583,9 @@ struct EmissiveTriangleCpu {
 /// (D17 async discipline applies — table lands with the accel-ready flag);
 /// refit re-transforms positions when object transforms change.
 pub struct EmissiveLightTable {
-    /// GPU buffer of [`EmissiveTriangleGpu`] entries (world-space positions).
+    /// GPU buffer of [`EmissiveTriangleGpu`] entries (world-space positions
+    /// in the D7 fast path, LOCAL-space in instanced mode — see
+    /// [`Self::entries_are_local`]).
     pub triangles: GpuBuffer,
     /// GPU buffer of [`EmissiveAliasEntry`] entries.
     pub aliases: GpuBuffer,
@@ -4478,11 +4594,24 @@ pub struct EmissiveLightTable {
     /// Arithmetic mean of per-entry power (area × build-time emissive luma)
     /// — the firefly cap anchor in [`ShadowRayParams::emissive_table_mean_power`].
     pub mean_power: f32,
-    /// RS-C: total world-space area (in world units²) of all table entries.
-    /// The kernel uses this as the RIS geometry-weight factor for unbiased
-    /// area-light sampling.
+    /// RS-C: total area of all table entries. D8 derivation: in instanced
+    /// mode the RIS weight uses each entry's TRUE world area computed
+    /// in-kernel (exact under per-slot scales), so this aggregate is NOT
+    /// consumed by the weight — it carries the LOCAL-space aggregate
+    /// (Σ entry local areas, per-slot duplication included) for ABI
+    /// stability and diagnostics. Fast path: Σ world areas (the weight
+    /// normalizer, unchanged).
     pub total_area: f32,
+    /// RT_INSTANCING_DESIGN.md D8: true when entries are LOCAL-space and
+    /// the kernel composes world positions from the TLAS descriptor
+    /// buffer (instanced mode). False = the D7 fast path (world entries).
+    pub entries_are_local: bool,
     /// CPU-side local-space vertices for refit (one per entry, same order).
+    /// Fast path only: `refit_emissive_table` re-transforms them into
+    /// world space. Instanced mode: never consumed (local entries never
+    /// change under transform animation — the kernel reads the composed
+    /// world matrix from the descriptor buffer, which `refit_accel`
+    /// refreshes), kept so the fast path shape stays one code path.
     local_triangles: Vec<EmissiveTriangleCpu>,
 }
 
@@ -4492,9 +4621,34 @@ pub struct EmissiveLightTable {
 ///
 /// Algorithm: for each object whose `gi_materials[i].emissive` luma > 0,
 /// iterate its indexed/non-indexed triangles via the CPU-mapped vertex
-/// buffer; compute local-space area and power (area × emissive luma); build
-/// an alias table from the power distribution; keep the top [`MAX_RT_EMISSIVE_TRIANGLES`]
-/// entries by power rank.
+/// buffer; compute local-space area and power (area × emissive luma).
+/// RT_INSTANCING_DESIGN.md D8: the candidate set spans (object, SLOT)
+/// pairs — each emissive triangle is duplicated per effective instance
+/// slot (same local power; the alias is a LOCAL-power proposal), and every
+/// entry carries its slot's TLAS descriptor index. The entry cap spans the
+/// expanded set: power-rank truncated to [`MAX_RT_EMISSIVE_TRIANGLES`].
+///
+/// D8 upload: instanced mode (any object wired — the SAME rule as the
+/// accel's mode trigger) keeps entries LOCAL-space; the kernel composes
+/// world positions from the TLAS descriptor buffer, so transform animation
+/// reaches the light table through the accel's own refit, with no CPU
+/// rewrite. The D7 fast path uploads world-space entries (today's bytes).
+///
+/// D8 RIS-weighting derivation (the kernel side is the arbiter proof's
+/// oracle): the alias proposal is p(entry) ∝ local_power, duplicated per
+/// slot, so the proposal mass of an object's triangles scales with its
+/// slot count — a copy is proposed as often as it emits. The weight must
+/// then carry the sampled entry's TRUE world area: for a uniform scene
+/// (one luma, rigid slots) E[contrib] = Σ_slots Σ_tris (A_local·lum/W)·lum·
+/// cosθ·cos_emit·A_world(t,s)/dist², which equals the true direct light
+/// only with the per-entry world area in the weight — a global scalar
+/// normalizer would bake the slot scale into the bias. Hence the kernel
+/// computes ½|(w1−w0)×(w2−w0)| from the composed world edges per sample.
+/// `total_area` accordingly keeps its fast-path meaning (Σ world areas,
+/// the global weight normalizer) and becomes the LOCAL aggregate in
+/// instanced mode, where the weight no longer consumes it. `mean_power`
+/// stays the mean over the FINAL expanded candidate set — the firefly
+/// anchor.
 ///
 /// The caller owns the returned table (pass to `refit_emissive_table` on
 /// transform change; keep alive as long as the accel lives).
@@ -4503,7 +4657,14 @@ pub fn build_emissive_table(
     objects: &[RtObjectGeometry],
     gi_materials: &[GiMaterial],
 ) -> Option<EmissiveLightTable> {
-    // Phase 1: collect per-triangle (local-space vertices, object index, power).
+    // D8: same mode rule as `build_accel` (any WIRED object, P1.5: a wired
+    // 1-capacity buffer is GPU-path too) — the table's slot set must equal
+    // the accel's slot set exactly, or entries would name descriptors that
+    // don't exist.
+    let instanced = objects.iter().any(|o| o.instances_addr != 0);
+
+    // Phase 1: collect per-(triangle, slot) candidates (local vertices,
+    // object index, descriptor slot index, local power).
     struct Candidate {
         v0: [f32; 3],
         v1: [f32; 3],
@@ -4512,16 +4673,25 @@ pub fn build_emissive_table(
         uv1: [f32; 2],
         uv2: [f32; 2],
         obj_index: u32,
+        /// D8: the TLAS descriptor slot of this entry's copy (the kernel's
+        /// world-composition index). Fast path: equals the object index.
+        desc_index: u32,
         power: f32,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
 
+    // Slot bases under the SAME object-major addressing the descriptor
+    // kernel and `write_instance_obj_params` use — one running sum.
+    let mut slot_base = 0u32;
+
     for (oi, obj) in objects.iter().enumerate() {
+        let obj_slots = effective_instance_slots(obj);
         if oi >= gi_materials.len() {
             break;
         }
         let emissive_luma = luma(gi_materials[oi].emissive);
         if emissive_luma <= 0.0 {
+            slot_base += obj_slots;
             continue;
         }
         let Some(ptr) = obj.vertex_buffer.mapped_ptr() else {
@@ -4580,17 +4750,24 @@ pub fn build_emissive_table(
             let uv0 = uv_at(i0);
             let uv1 = uv_at(i1);
             let uv2 = uv_at(i2);
-            candidates.push(Candidate {
-                v0,
-                v1,
-                v2,
-                uv0,
-                uv1,
-                uv2,
-                obj_index: oi as u32,
-                power,
-            });
+            // D8: one candidate per (triangle, slot) — the local power is
+            // identical across an object's slots (rigid copies), so the
+            // duplication lives in the proposal mass, not the power value.
+            for s in 0..obj_slots {
+                candidates.push(Candidate {
+                    v0,
+                    v1,
+                    v2,
+                    uv0,
+                    uv1,
+                    uv2,
+                    obj_index: oi as u32,
+                    desc_index: slot_base + s,
+                    power,
+                });
+            }
         }
+        slot_base += obj_slots;
     }
 
     if candidates.is_empty() {
@@ -4641,12 +4818,20 @@ pub fn build_emissive_table(
         };
 
         for (i, c) in candidates.iter().enumerate() {
-            // Transform local-space vertices to world space for the GPU entry.
-            let m = model(c.obj_index);
-            let w0 = transform_point(&m, c.v0);
-            let w1 = transform_point(&m, c.v1);
-            let w2 = transform_point(&m, c.v2);
-            total_area += triangle_area(w0, w1, w2);
+            // D8: instanced entries stay LOCAL-space (the kernel composes
+            // world from the descriptor buffer); the fast path uploads
+            // world-space positions exactly as before.
+            let (e0, e1, e2) = if instanced {
+                total_area += triangle_area(c.v0, c.v1, c.v2);
+                (c.v0, c.v1, c.v2)
+            } else {
+                let m = model(c.obj_index);
+                let w0 = transform_point(&m, c.v0);
+                let w1 = transform_point(&m, c.v1);
+                let w2 = transform_point(&m, c.v2);
+                total_area += triangle_area(w0, w1, w2);
+                (w0, w1, w2)
+            };
 
             unsafe {
                 let tri_dst = tri_ptr.add(i * std::mem::size_of::<EmissiveTriangleGpu>())
@@ -4654,17 +4839,17 @@ pub fn build_emissive_table(
                 std::ptr::write_unaligned(
                     tri_dst,
                     EmissiveTriangleGpu {
-                        v0: w0,
+                        v0: e0,
                         _pad0: 0.0,
-                        v1: w1,
+                        v1: e1,
                         _pad1: 0.0,
-                        v2: w2,
+                        v2: e2,
                         _pad2: 0.0,
                         uv0: c.uv0,
                         uv1: c.uv1,
                         uv2: c.uv2,
                         object_index: c.obj_index,
-                        _pad_obj: 0,
+                        descriptor_index: c.desc_index,
                     },
                 );
 
@@ -4696,6 +4881,7 @@ pub fn build_emissive_table(
             entry_count,
             mean_power,
             total_area,
+            entries_are_local: instanced,
             local_triangles,
         })
     }
@@ -4705,7 +4891,17 @@ pub fn build_emissive_table(
 /// local-space vertices and the objects' current transforms. Same call-site
 /// discipline as [`refit_accel`] — called when topology is stable and
 /// transforms changed.
+///
+/// RT_INSTANCING_DESIGN.md D8: INSTANCED MODE IS A NO-OP — the entries stay
+/// LOCAL-space forever, and the kernel composes their world positions from
+/// the TLAS descriptor buffer, which `refit_accel` refreshes on the same
+/// cadence. A transform animation therefore reaches the light table
+/// through the accel's own refit with no CPU rewrite here. (This CPU
+/// re-transform stays for the D7 fast path, whose entries are world-space.)
 pub fn refit_emissive_table(table: &EmissiveLightTable, objects: &[RtObjectGeometry]) {
+    if table.entries_are_local {
+        return;
+    }
     let Some(ptr) = table.triangles.mapped_ptr() else {
         return;
     };
@@ -4836,8 +5032,10 @@ fn build_alias_table(weights: &[f32]) -> (Vec<f32>, Vec<u32>) {
 // RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
 // (offset 400) with 12 bytes of pad — 416 total, a 16-byte multiple on the
 // MSL side (float4x4 member alignment) matching this side's 416 exactly.
+// D8: the first pad word became emissive_entries_are_local (offset 404).
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, emissive_entries_are_local) == 404);
 const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
@@ -6022,6 +6220,7 @@ impl RtPipelines {
             (3, SlotKind::Buffer), // RT-T1-B: normal_sources, MSL [[buffer(3)]]
             (4, SlotKind::Buffer), // RS-C: emissive_triangles, MSL [[buffer(4)]]
             (5, SlotKind::Buffer), // RS-C: emissive_aliases, MSL [[buffer(5)]]
+            (6, SlotKind::Buffer), // D8: instance descriptors, MSL [[buffer(6)]]
             (0, SlotKind::Texture),
             (1, SlotKind::Texture),
             (2, SlotKind::Texture),
@@ -6775,6 +6974,16 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             GpuBinding::Buffer {
                 binding: 5,
                 buffer: emissive_aliases,
+                offset: 0,
+            },
+            // RT_INSTANCING_DESIGN.md D8: the TLAS instance-descriptor
+            // buffer — the kernel composes local-space emissive entries to
+            // world through it in instanced mode. Always bound (the D7 fast
+            // path never reads it; encoder.rs's accel dispatch already
+            // declares useResource on this buffer).
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: &accel.instance_buffer,
                 offset: 0,
             },
             GpuBinding::Texture {
