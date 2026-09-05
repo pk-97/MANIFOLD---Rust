@@ -11372,6 +11372,36 @@
         },
         {
           "default": "0",
+          "label": "Roll",
+          "name": "roll",
+          "range": [
+            "-3.2",
+            "3.2"
+          ],
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Pitch",
+          "name": "pitch",
+          "range": [
+            "-3.2",
+            "3.2"
+          ],
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Yaw",
+          "name": "yaw",
+          "range": [
+            "-3.2",
+            "3.2"
+          ],
+          "type": "angle"
+        },
+        {
+          "default": "0",
           "label": "Flow",
           "name": "flow",
           "range": [
