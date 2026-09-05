@@ -1,0 +1,360 @@
+{
+  "version": 2,
+  "name": "LED Chevron",
+  "presetMetadata": {
+    "id": "LED Chevron",
+    "displayName": "LED Chevron",
+    "category": "LED",
+    "layerTypes": ["Dmx"],
+    "oscPrefix": "ledChevron",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.25,
+        "max": 4.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "rate"
+      },
+      {
+        "id": "width",
+        "name": "Width",
+        "min": 0.1,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "width"
+      },
+      {
+        "id": "thickness",
+        "name": "Thickness",
+        "min": 0.03,
+        "max": 0.3,
+        "defaultValue": 0.12,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "thickness"
+      },
+      {
+        "id": "count",
+        "name": "Count",
+        "min": 1.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "count"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 45.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "sweep_phase",
+          "param": "rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "width",
+        "label": "Width",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "fold_weight",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "thickness",
+        "label": "Thickness",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "half_width",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "thickness",
+        "label": "Thickness",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "band_inner",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "count",
+        "label": "Count",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stack",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 45.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 3,
+      "typeId": "node.scale_offset_image",
+      "handle": "centre_fold",
+      "nodeId": "centre_fold",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": -0.5 }
+      },
+      "title": "Centre Fold"
+    },
+    {
+      "id": 4,
+      "typeId": "node.absolute_value",
+      "handle": "fold_distance",
+      "nodeId": "fold_distance",
+      "params": {},
+      "title": "Fold Distance"
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_value",
+      "handle": "fold_weight",
+      "nodeId": "fold_weight",
+      "params": {
+        "a": { "type": "Float", "value": 0.5 },
+        "scale": { "type": "Float", "value": -1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "V Weight"
+    },
+    {
+      "id": 6,
+      "typeId": "node.field_combine",
+      "handle": "chevron_field",
+      "nodeId": "chevron_field",
+      "params": {
+        "a": { "type": "Float", "value": -0.5 },
+        "b": { "type": "Float", "value": 1.0 },
+        "c": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Chevron Field"
+    },
+    {
+      "id": 7,
+      "typeId": "node.beat_ramp",
+      "handle": "sweep_phase",
+      "nodeId": "sweep_phase",
+      "params": {
+        "rate": { "type": "Float", "value": 0.5 },
+        "bars": { "type": "Int", "value": 0 },
+        "attack": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Sweep Phase"
+    },
+    {
+      "id": 8,
+      "typeId": "node.wrap",
+      "handle": "stack",
+      "nodeId": "stack",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Stack"
+    },
+    {
+      "id": 9,
+      "typeId": "node.scale_offset_image",
+      "handle": "band_centre",
+      "nodeId": "band_centre",
+      "params": {
+        "scale": { "type": "Float", "value": -1.0 },
+        "offset": { "type": "Float", "value": 0.5 }
+      },
+      "title": "Band Centre"
+    },
+    {
+      "id": 10,
+      "typeId": "node.absolute_value",
+      "handle": "band_distance",
+      "nodeId": "band_distance",
+      "params": {},
+      "title": "Band Distance"
+    },
+    {
+      "id": 11,
+      "typeId": "node.scale_offset_value",
+      "handle": "half_width",
+      "nodeId": "half_width",
+      "params": {
+        "a": { "type": "Float", "value": 0.12 },
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Half Width"
+    },
+    {
+      "id": 12,
+      "typeId": "node.scale_offset_value",
+      "handle": "band_inner",
+      "nodeId": "band_inner",
+      "params": {
+        "a": { "type": "Float", "value": 0.12 },
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": -0.02 }
+      },
+      "title": "Band Inner"
+    },
+    {
+      "id": 13,
+      "typeId": "node.smoothstep",
+      "handle": "band_edge",
+      "nodeId": "band_edge",
+      "params": {
+        "low": { "type": "Float", "value": 0.04 },
+        "high": { "type": "Float", "value": 0.06 }
+      },
+      "title": "Band Edge"
+    },
+    {
+      "id": 14,
+      "typeId": "node.invert",
+      "handle": "chevrons",
+      "nodeId": "chevrons",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Chevrons"
+    },
+    {
+      "id": 15,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 45.0 },
+        "saturation": { "type": "Float", "value": 1.0 },
+        "focus": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Tint"
+    }
+  ],
+  "wires": [
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "a" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 6, "toPort": "c" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "in" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 13, "toPort": "in" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "low" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "high" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

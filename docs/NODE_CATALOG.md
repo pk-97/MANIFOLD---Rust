@@ -389,7 +389,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (67)
+### Effect & generator presets (75)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -422,16 +422,24 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `Infrared` | Infrared | effect | Filmic | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
+| `LED Barber Pole` | LED Barber Pole | generator | LED | 6 |
+| `LED Beat Rain` | LED Beat Rain | generator | LED | 6 |
 | `LED Burst` | LED Burst | generator | LED | 5 |
+| `LED Chase` | LED Chase | generator | LED | 7 |
 | `LED Chase Sweep` | LED Chase Sweep | generator | LED | 5 |
+| `LED Chevron` | LED Chevron | generator | LED | 6 |
 | `LED Cycle` | LED Cycle | generator | LED | 1 |
 | `LED Fill` | LED Fill | generator | LED | 2 |
 | `LED Pixel Walk` | LED Pixel Walk | generator | LED | 2 |
 | `LED Pulse` | LED Pulse | generator | LED | 3 |
+| `LED Shaped Pulse` | LED Shaped Pulse | generator | LED | 6 |
 | `LED Step Chase` | LED Step Chase | generator | LED | 6 |
 | `LED Step Scan` | LED Step Scan | generator | LED | 4 |
+| `LED Strip Fire` | LED Strip Fire | generator | LED | 5 |
 | `LED Strip ID` | LED Strip ID | generator | LED | 0 |
+| `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
+| `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
 | `Lantern` | Lantern | generator | Geometry | 157 |
 | `LightOrbit` | Light Orbit | generator | Geometry | 77 |
 | `Lightning` | Lightning | generator | Pattern | 7 |

@@ -1,0 +1,497 @@
+{
+  "version": 2,
+  "name": "LED Shaped Pulse",
+  "presetMetadata": {
+    "id": "LED Shaped Pulse",
+    "displayName": "LED Shaped Pulse",
+    "category": "LED",
+    "layerTypes": ["Dmx"],
+    "oscPrefix": "ledShapedPulse",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.25,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "rate"
+      },
+      {
+        "id": "shape",
+        "name": "Shape",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Sine",
+          "Snap",
+          "Heartbeat"
+        ],
+        "formatString": "F0",
+        "oscSuffix": "shape"
+      },
+      {
+        "id": "decay",
+        "name": "Decay",
+        "min": 0.05,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "decay"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 280.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.9,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      },
+      {
+        "id": "brightness",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "brightness"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "snap_trigger_scale",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "dub_trigger_scale",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "shape",
+        "label": "Shape",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "shape_select",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "decay",
+        "label": "Decay",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "snap_decay_rate",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "decay",
+        "label": "Decay",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "dub_decay_rate",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "decay",
+        "label": "Decay",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "sine_fall_exponent",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 280.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 0.9,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "brightness",
+        "label": "Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "brightness",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.circle_mask",
+      "handle": "white_field",
+      "nodeId": "white_field",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      },
+      "title": "White Field"
+    },
+    {
+      "id": 3,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 280.0 },
+        "saturation": { "type": "Float", "value": 0.9 },
+        "focus": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Tint"
+    },
+    {
+      "id": 4,
+      "typeId": "node.exposure",
+      "handle": "brightness",
+      "nodeId": "brightness",
+      "params": {
+        "gain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Brightness"
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_image",
+      "handle": "envelope_field",
+      "nodeId": "envelope_field",
+      "params": {
+        "scale": { "type": "Float", "value": 0.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Envelope Field"
+    },
+    {
+      "id": 6,
+      "typeId": "node.sine_cosine",
+      "handle": "sine_wave",
+      "nodeId": "sine_wave",
+      "params": {
+        "freq": { "type": "Float", "value": 6.283185307179586 },
+        "phase": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      },
+      "title": "Sine Swell"
+    },
+    {
+      "id": 7,
+      "typeId": "node.scale_offset_image",
+      "handle": "sine_unipolar",
+      "nodeId": "sine_unipolar",
+      "params": {
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": 0.5 }
+      },
+      "title": "Swell 0-1"
+    },
+    {
+      "id": 8,
+      "typeId": "node.power",
+      "handle": "sine_fall",
+      "nodeId": "sine_fall",
+      "params": {
+        "exponent": { "type": "Float", "value": 2.05 }
+      },
+      "title": "Fall Shape"
+    },
+    {
+      "id": 9,
+      "typeId": "node.scale_offset_value",
+      "handle": "sine_fall_exponent",
+      "nodeId": "sine_fall_exponent",
+      "params": {
+        "a": { "type": "Float", "value": 0.35 },
+        "scale": { "type": "Float", "value": 3.0 },
+        "offset": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Fall Exponent"
+    },
+    {
+      "id": 10,
+      "typeId": "node.scale_offset_value",
+      "handle": "sine_phase_scale",
+      "nodeId": "sine_phase_scale",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "scale": { "type": "Float", "value": 6.283185307179586 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Sine Phase"
+    },
+    {
+      "id": 11,
+      "typeId": "node.math",
+      "handle": "snap_trigger_scale",
+      "nodeId": "snap_trigger_scale",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Beat x Rate"
+    },
+    {
+      "id": 12,
+      "typeId": "node.math",
+      "handle": "snap_trigger_floor",
+      "nodeId": "snap_trigger_floor",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 10 }
+      },
+      "title": "Snap Trigger"
+    },
+    {
+      "id": 13,
+      "typeId": "node.envelope_decay",
+      "handle": "snap_envelope",
+      "nodeId": "snap_envelope",
+      "params": {
+        "decay_rate": { "type": "Float", "value": 39.0 }
+      },
+      "title": "Snap Envelope"
+    },
+    {
+      "id": 14,
+      "typeId": "node.scale_offset_value",
+      "handle": "snap_decay_rate",
+      "nodeId": "snap_decay_rate",
+      "params": {
+        "a": { "type": "Float", "value": 0.35 },
+        "scale": { "type": "Float", "value": -60.0 },
+        "offset": { "type": "Float", "value": 60.0 }
+      },
+      "title": "Snap Decay Rate"
+    },
+    {
+      "id": 15,
+      "typeId": "node.math",
+      "handle": "dub_trigger_scale",
+      "nodeId": "dub_trigger_scale",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Dub Beat x Rate"
+    },
+    {
+      "id": 16,
+      "typeId": "node.scale_offset_value",
+      "handle": "dub_trigger_shift",
+      "nodeId": "dub_trigger_shift",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.7 }
+      },
+      "title": "Dub Offset"
+    },
+    {
+      "id": 17,
+      "typeId": "node.math",
+      "handle": "dub_trigger_floor",
+      "nodeId": "dub_trigger_floor",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 10 }
+      },
+      "title": "Dub Trigger"
+    },
+    {
+      "id": 18,
+      "typeId": "node.envelope_decay",
+      "handle": "dub_envelope",
+      "nodeId": "dub_envelope",
+      "params": {
+        "decay_rate": { "type": "Float", "value": 39.0 }
+      },
+      "title": "Dub Envelope"
+    },
+    {
+      "id": 19,
+      "typeId": "node.scale_offset_value",
+      "handle": "dub_decay_rate",
+      "nodeId": "dub_decay_rate",
+      "params": {
+        "a": { "type": "Float", "value": 0.35 },
+        "scale": { "type": "Float", "value": -60.0 },
+        "offset": { "type": "Float", "value": 60.0 }
+      },
+      "title": "Dub Decay Rate"
+    },
+    {
+      "id": 20,
+      "typeId": "node.math",
+      "handle": "heartbeat_sum",
+      "nodeId": "heartbeat_sum",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 0 }
+      },
+      "title": "Lub-Dub Mix"
+    },
+    {
+      "id": 21,
+      "typeId": "node.switch_value",
+      "handle": "shape_select",
+      "nodeId": "shape_select",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0": { "type": "Float", "value": 0.0 },
+        "in_1": { "type": "Float", "value": 0.0 },
+        "in_2": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Shape"
+    },
+    {
+      "id": 22,
+      "typeId": "node.luminance",
+      "handle": "swell_level",
+      "nodeId": "swell_level",
+      "params": {},
+      "title": "Swell Level"
+    }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "beat", "toNode": 11, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 5, "toPort": "offset" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 8, "toPort": "exponent" },
+    { "fromNode": 0, "fromPort": "beat", "toNode": 11, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "a" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "trigger" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 13, "toPort": "decay_rate" },
+    { "fromNode": 0, "fromPort": "beat", "toNode": 15, "toPort": "a" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "a" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "a" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 18, "toPort": "trigger" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 18, "toPort": "decay_rate" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 20, "toPort": "a" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 20, "toPort": "b" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 22, "toPort": "in" },
+    { "fromNode": 22, "fromPort": "out", "toNode": 21, "toPort": "in_0" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 21, "toPort": "in_1" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "in_2" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 4, "toPort": "gain" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}
