@@ -111,7 +111,7 @@
         }
       },
       "check": {
-        "TextEquals": "32"
+        "TextEquals": "44"
       }
     }
   },
