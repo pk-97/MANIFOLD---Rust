@@ -33846,9 +33846,9 @@
           "name": "Rotate"
         },
         {
-          "default": "1",
+          "default": "2",
           "id": "mode",
-          "max": "1",
+          "max": "2",
           "min": "0",
           "name": "Mode"
         }
