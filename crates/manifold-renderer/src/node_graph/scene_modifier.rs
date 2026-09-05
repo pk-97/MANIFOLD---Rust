@@ -386,7 +386,7 @@ pub mod scene_modifier_loop {
     //! Kind `scene_loop` — the Scene Loop as modifier kind #1 (D6/D8).
     //!
     //! Same three atoms, same params, same `"Scene Loop"` section string,
-    //! same whitelist (Bars/Copies/Height/Lateral), same cell_size D4 gap
+    //! same row whitelist, same cell_size D4 gap
     //! rule — byte-identical behavior through the generic plan/command pair.
     //! What changes is the camera path: the apply additionally mints a
     //! `node.camera_switch` (`loop_cam_switch`: previous camera producer →
@@ -406,20 +406,29 @@ pub mod scene_modifier_loop {
         "node.look_at_camera",
     ];
 
-    /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment: the ONLY
-    /// params stamped as "Scene Loop" rows, as
+    /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment + BUG-gsql
+    /// framing rows: the ONLY params stamped as "Scene Loop" rows, as
     /// `(stable node_id, param) → row label`. Everything else on the loop
-    /// nodes — axis, home, near, far, fov_y, attack, jitter_seed,
-    /// look_sweep_cycles — is internal: the plan builder computes it once
-    /// and a panel row for it would desync the loop. Spacing rides
-    /// loop_camera.cell_size (its stamped range is curated to
-    /// auto×0.25..4.0 at apply time); look_sweep_cycles stays internal at
+    /// nodes — axis, attack, jitter_seed, look_sweep_cycles — is internal:
+    /// the plan builder computes it once and a panel row for it would
+    /// desync the loop. Spacing rides loop_camera.cell_size (its stamped
+    /// range is curated to auto×0.25..4.0 at apply time); Near/Far/Home
+    /// ranges are curated to the cell too (the manifest bands are
+    /// room-scale generics, unusable on a minted flythrough camera — same
+    /// defect Spacing curation fixed); look_sweep_cycles stays internal at
     /// 1 (integer cycles are a wrap-safety requirement, INV-3).
     const LOOP_ROW_WHITELIST: &[(&str, &str, &str)] = &[
         ("loop_phase", "bars", "Bars"),
         ("scene_array", "count", "Copies"),
         ("loop_camera", "height", "Height"),
         ("loop_camera", "lateral", "Lateral"),
+        ("loop_camera", "near", "Near"),
+        ("loop_camera", "far", "Far"),
+        ("loop_camera", "fov_y", "FOV"),
+        ("loop_camera", "home", "Home"),
+        ("loop_camera", "roll", "Roll"),
+        ("loop_camera", "pitch", "Pitch"),
+        ("loop_camera", "yaw", "Yaw"),
         ("loop_camera", "flow", "Flow"),
         ("loop_camera", "stride", "Stride"),
         ("loop_camera", "sway_amp", "Sway"),
@@ -478,16 +487,41 @@ pub mod scene_modifier_loop {
         -cell * 0.5
     }
 
-    /// Curate the Spacing row (the loop_camera.cell_size exposure): narrow
-    /// the stamped spec range from the manifest's generic 0.01..1000 to
-    /// auto×0.25..4.0 (the P4-pinned band) so the slider is usable. Applied
-    /// by BOTH the plan builder and the load migration — one fn, two
-    /// call sites, no drift.
-    fn curate_spacing_row(exposure: &mut NodeExposure, cell_size: f32) {
+    /// Curate the loop_camera rows whose manifest ranges are room-scale
+    /// generics, unusable on a minted flythrough camera:
+    /// - Spacing (cell_size): 0.01..1000 → auto×0.25..4.0 (the P4-pinned
+    ///   band).
+    /// - Near/Far/Home: scale with the cell, mirroring the orbit_camera
+    ///   radius rules in `scene_scaled_range` (the card never flows through
+    ///   that table — it serves the import stamping path — so the modifier
+    ///   curates here, at the same two call sites as Spacing).
+    ///   Every edit keeps the stamped default inside the band (the stamper's
+    ///   own widen rule). Applied by BOTH the plan builder and the load
+    ///   migration — one fn, two call sites, no drift.
+    fn curate_loop_camera_rows(exposure: &mut NodeExposure, cell: f32) {
         for m in &mut exposure.metadata {
-            if m.name == "cell_size" {
-                m.min = cell_size * 0.25;
-                m.max = cell_size * 4.0;
+            let default = match &m.default_value {
+                SerializedParamValue::Float { value } => *value,
+                _ => continue,
+            };
+            match m.name.as_str() {
+                "cell_size" => {
+                    m.min = cell * 0.25;
+                    m.max = cell * 4.0;
+                }
+                "home" => {
+                    m.min = (-2.0 * cell).min(default);
+                    m.max = (2.0 * cell).max(default);
+                }
+                "near" => {
+                    m.min = 0.001_f32.min(default);
+                    m.max = (2.0 * cell).max(default);
+                }
+                "far" => {
+                    m.min = 1.0_f32.min(default);
+                    m.max = (20.0 * cell).min(10_000.0).max(default);
+                }
+                _ => {}
             }
         }
     }
@@ -672,12 +706,12 @@ pub mod scene_modifier_loop {
         }];
 
         let mut skeleton = plan_skeleton(&SCENE_LOOP_DESCRIPTOR, &new_nodes, repoints);
-        // Spacing row range curation: the stamped cell_size spec spans the
-        // manifest's generic 0.01..1000 — unusable. Narrow it to the
-        // P4-pinned auto×0.25..4.0 band (the plan's cell IS the auto cell).
+        // Framing row range curation: the stamped specs span the manifests'
+        // generic room-scale bands — unusable. Narrow them to the cell-scaled
+        // bands (the plan's cell IS the auto cell).
         for exposure in &mut skeleton.exposures {
             if exposure.node_id.as_str() == "loop_camera" {
-                curate_spacing_row(exposure, cell_size);
+                curate_loop_camera_rows(exposure, cell_size);
             }
         }
 
@@ -768,9 +802,10 @@ pub mod scene_modifier_loop {
     /// carries only the four D6 rows. Re-stamp the loop nodes' curated
     /// exposures through the CURRENT whitelist — the stamper is idempotent
     /// by (node_id, param), so existing rows are untouched and only the new
-    /// P4 rows (Flow/Stride/Sway/…/Spacing/Jitter) land. The Spacing row's
-    /// range is curated against the node's CURRENT cell_size (the auto cell
-    /// for every pre-P4 project — none have Spacing-written cells yet).
+    /// rows (P4 controls, Spacing/Jitter, and the BUG-gsql framing rows)
+    /// land. The framing rows' ranges are curated against the node's
+    /// CURRENT cell_size (the auto cell for every pre-P4 project — none
+    /// have Spacing-written cells yet).
     /// Runs in the same per-layer load loop as `migrate_scene_exposures`.
     /// Returns true when any new row was stamped.
     pub fn migrate_loop_exposure_rows(def: &mut EffectGraphDef) -> bool {
@@ -794,7 +829,7 @@ pub mod scene_modifier_loop {
                         _ => None,
                     })
                     .unwrap_or(10.0);
-                curate_spacing_row(&mut exposure, cell);
+                curate_loop_camera_rows(&mut exposure, cell);
             }
             if manifold_core::scene_exposure::stamp_scene_node_exposures(
                 def,

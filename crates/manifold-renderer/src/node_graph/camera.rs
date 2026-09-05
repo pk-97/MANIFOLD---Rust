@@ -292,6 +292,58 @@ impl Camera {
         }
     }
 
+    /// Rotate the basis by camera-local Euler angles (radians), applied in
+    /// yaw → pitch → roll order, each about the evolving camera-local axis:
+    /// yaw about `up`, pitch about `right`, roll about `fwd`. Signs follow
+    /// the rest of this file: positive yaw looks left, positive pitch looks
+    /// up (both match `from_pos_euler`), positive roll is `orbit_perspective`
+    /// clockwise-looking-along-`fwd` banking. The convention works because
+    /// every builder here keeps `right × fwd = up`: Rodrigues' formula moves
+    /// `v` toward `axis × v`, so rotating `fwd` about `up` heads it toward
+    /// `up × fwd = -right` (left) and about `right` toward `right × fwd =
+    /// +up`. Position and near/far/lens are untouched; `view` is rebuilt
+    /// from the rotated basis. A zero triple is an exact no-op, so existing
+    /// camera sources are byte-identical without opting in.
+    pub fn rotate_local(&mut self, yaw: f32, pitch: f32, roll: f32) {
+        if yaw == 0.0 && pitch == 0.0 && roll == 0.0 {
+            return;
+        }
+        // Rodrigues rotation of `v` about a unit axis, shared by all three
+        // steps below.
+        fn rot(v: [f32; 3], axis: [f32; 3], a: f32) -> [f32; 3] {
+            let (s, c) = a.sin_cos();
+            let kxv = cross3(axis, v);
+            let kdv = dot3(axis, v);
+            let m = 1.0 - c;
+            [
+                v[0] * c + kxv[0] * s + axis[0] * kdv * m,
+                v[1] * c + kxv[1] * s + axis[1] * kdv * m,
+                v[2] * c + kxv[2] * s + axis[2] * kdv * m,
+            ]
+        }
+        // Yaw about camera Y, pitch about the yawed right axis, roll about
+        // the final `fwd` (the negative angle reproduces `orbit_perspective`
+        // roll exactly — `rot(right, fwd, -a) = right·c + up·s`).
+        let fwd = rot(self.fwd, self.up, yaw);
+        let right = rot(self.right, self.up, yaw);
+        let fwd = rot(fwd, right, pitch);
+        let up = rot(self.up, right, pitch);
+        let right = rot(right, fwd, -roll);
+        let up = rot(up, fwd, -roll);
+        self.fwd = normalize3(fwd);
+        self.right = normalize3(right);
+        self.up = normalize3(up);
+        self.view = look_at_rh(
+            self.pos,
+            [
+                self.pos[0] + self.fwd[0],
+                self.pos[1] + self.fwd[1],
+                self.pos[2] + self.fwd[2],
+            ],
+            self.up,
+        );
+    }
+
     /// Projection matrix for the given consumer-supplied aspect ratio
     /// (`width / height` of the consumer's render target). Aspect lives here
     /// rather than on the struct because the camera primitive doesn't know
@@ -603,6 +655,63 @@ mod tests {
         assert!(dot(cam.fwd, cam.right).abs() < 1e-5);
         assert!(dot(cam.fwd, cam.up).abs() < 1e-5);
         assert!(dot(cam.right, cam.up).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rotate_local_zero_angles_is_an_exact_noop() {
+        let mut cam = Camera::look_at([2.0, 1.0, 0.0], [2.0, 1.0, 5.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let before = cam;
+        cam.rotate_local(0.0, 0.0, 0.0);
+        assert_eq!(cam, before, "zero angles must not touch a single field");
+    }
+
+    #[test]
+    fn rotate_local_yaw_quarter_turn_faces_positive_x_on_z_travel() {
+        // look_at down +Z gives fwd +Z, right -X, up +Y. A quarter-turn yaw
+        // about up must face +X (positive yaw looks left — the
+        // from_pos_euler turn direction).
+        let mut cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        cam.rotate_local(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        assert!((cam.fwd[0] - 1.0).abs() < 1e-5, "fwd.x = {}", cam.fwd[0]);
+        assert!(cam.fwd[1].abs() < 1e-5 && cam.fwd[2].abs() < 1e-5, "fwd = {:?}", cam.fwd);
+        // Position and projection params are rotation-invariant.
+        assert_eq!(cam.pos, [0.0, 0.0, 0.0]);
+        assert!(matches!(cam.mode, CameraMode::Perspective { fov_y } if (fov_y - 0.9).abs() < 1e-6));
+    }
+
+    #[test]
+    fn rotate_local_pitch_looks_up_and_roll_banks_around_fwd() {
+        let mut cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        cam.rotate_local(0.0, 0.5, 0.0);
+        assert!(cam.fwd[1] > 0.4, "positive pitch must tilt fwd up: {:?}", cam.fwd);
+
+        // Roll alone must leave pos and fwd bit-identical and rotate right
+        // toward up — the orbit_perspective roll convention.
+        let mut rolled = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        rolled.rotate_local(0.0, 0.0, 1.5);
+        assert_eq!(rolled.pos, [0.0, 0.0, 0.0]);
+        assert!(rolled.fwd[2] > 0.99, "roll must not move fwd: {:?}", rolled.fwd);
+        assert!(rolled.right[1] > 0.9, "right must bank toward up: {:?}", rolled.right);
+    }
+
+    #[test]
+    fn rotate_local_basis_stays_orthonormal_for_extreme_angles() {
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        for (yaw, pitch, roll) in [
+            (1.0_f32, 1.0, 1.0),
+            (-3.1, 3.1, -3.1),
+            (3.1, -3.1, 3.1),
+            (0.0, 3.1, 0.0),
+        ] {
+            let mut cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
+            cam.rotate_local(yaw, pitch, roll);
+            assert!((dot(cam.fwd, cam.fwd) - 1.0).abs() < 1e-4, "unit fwd at {yaw},{pitch},{roll}");
+            assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-4, "unit right at {yaw},{pitch},{roll}");
+            assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-4, "unit up at {yaw},{pitch},{roll}");
+            assert!(dot(cam.fwd, cam.right).abs() < 1e-4, "fwd⊥right at {yaw},{pitch},{roll}");
+            assert!(dot(cam.fwd, cam.up).abs() < 1e-4, "fwd⊥up at {yaw},{pitch},{roll}");
+            assert!(dot(cam.right, cam.up).abs() < 1e-4, "right⊥up at {yaw},{pitch},{roll}");
+        }
     }
 
     #[test]
