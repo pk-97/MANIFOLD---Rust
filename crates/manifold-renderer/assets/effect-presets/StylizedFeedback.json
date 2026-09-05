@@ -49,14 +49,15 @@
         "id": "mode",
         "name": "Mode",
         "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 1.0,
+        "max": 2.0,
+        "defaultValue": 2.0,
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F0",
         "valueLabels": [
           "Ghost",
+          "Stencil",
           "Depth"
         ]
       }
@@ -104,7 +105,7 @@
       {
         "id": "mode",
         "label": "Mode",
-        "defaultValue": 1.0,
+        "defaultValue": 2.0,
         "target": {
           "kind": "node",
           "nodeId": "mode",
@@ -211,6 +212,32 @@
       "title": "Output"
     },
     {
+      "id": 7,
+      "nodeId": "matte_inverse",
+      "typeId": "node.invert",
+      "handle": "matte_inverse",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Inverse Matte"
+    },
+    {
+      "id": 8,
+      "nodeId": "mix_stencil",
+      "typeId": "node.masked_mix",
+      "handle": "mix_stencil",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Stencil"
+    },
+    {
       "id": 10,
       "nodeId": "matte",
       "typeId": "node.channel_mixer",
@@ -256,11 +283,11 @@
       "params": {
         "selector": {
           "type": "Float",
-          "value": 1.0
+          "value": 2.0
         },
         "num_inputs": {
           "type": "Int",
-          "value": 2
+          "value": 3
         }
       },
       "title": "Mode"
@@ -320,6 +347,36 @@
       "fromPort": "out",
       "toNode": 11,
       "toPort": "mask"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in_2"
     },
     {
       "fromNode": 5,
