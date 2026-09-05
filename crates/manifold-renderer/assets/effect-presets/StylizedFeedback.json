@@ -49,15 +49,14 @@
         "id": "mode",
         "name": "Mode",
         "min": 0.0,
-        "max": 2.0,
-        "defaultValue": 2.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F0",
         "valueLabels": [
           "Ghost",
-          "Stencil",
           "Depth"
         ]
       }
@@ -105,7 +104,7 @@
       {
         "id": "mode",
         "label": "Mode",
-        "defaultValue": 2.0,
+        "defaultValue": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "mode",
@@ -212,67 +211,29 @@
       "title": "Output"
     },
     {
-      "id": 7,
-      "nodeId": "key",
-      "typeId": "node.chroma_key",
-      "handle": "key",
-      "params": {
-        "key_color": {
-          "type": "Vec3",
-          "value": [0.0, 0.0, 0.0]
-        },
-        "tolerance": {
-          "type": "Float",
-          "value": 0.12
-        },
-        "softness": {
-          "type": "Float",
-          "value": 0.03
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 0
-        }
-      },
-      "title": "Stencil Key"
-    },
-    {
-      "id": 8,
-      "nodeId": "stack",
-      "typeId": "node.masked_mix",
-      "handle": "stack",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        }
-      },
-      "title": "Stencil"
-    },
-    {
       "id": 10,
-      "nodeId": "key_depth",
-      "typeId": "node.chroma_key",
-      "handle": "key_depth",
+      "nodeId": "matte",
+      "typeId": "node.channel_mixer",
+      "handle": "matte",
       "params": {
-        "key_color": {
-          "type": "Vec3",
-          "value": [0.0, 0.0, 0.0]
+        "row0": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
         },
-        "tolerance": {
-          "type": "Float",
-          "value": 0.12
+        "row1": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
         },
-        "softness": {
-          "type": "Float",
-          "value": 0.03
+        "row2": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
         },
-        "mode": {
-          "type": "Enum",
-          "value": 1
+        "row3": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
         }
       },
-      "title": "Depth Key"
+      "title": "Alpha Matte"
     },
     {
       "id": 11,
@@ -295,11 +256,11 @@
       "params": {
         "selector": {
           "type": "Float",
-          "value": 2.0
+          "value": 1.0
         },
         "num_inputs": {
           "type": "Int",
-          "value": 3
+          "value": 2
         }
       },
       "title": "Mode"
@@ -315,14 +276,8 @@
     {
       "fromNode": 0,
       "fromPort": "out",
-      "toNode": 7,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 8,
-      "toPort": "b"
+      "toNode": 10,
+      "toPort": "source"
     },
     {
       "fromNode": 1,
@@ -351,18 +306,6 @@
     {
       "fromNode": 4,
       "fromPort": "out",
-      "toNode": 8,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 7,
-      "fromPort": "out",
-      "toNode": 8,
-      "toPort": "mask"
-    },
-    {
-      "fromNode": 4,
-      "fromPort": "out",
       "toNode": 11,
       "toPort": "a"
     },
@@ -373,22 +316,10 @@
       "toPort": "b"
     },
     {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 10,
-      "toPort": "in"
-    },
-    {
       "fromNode": 10,
       "fromPort": "out",
       "toNode": 11,
       "toPort": "mask"
-    },
-    {
-      "fromNode": 11,
-      "fromPort": "out",
-      "toNode": 9,
-      "toPort": "in_2"
     },
     {
       "fromNode": 5,
@@ -397,7 +328,7 @@
       "toPort": "in_0"
     },
     {
-      "fromNode": 8,
+      "fromNode": 11,
       "fromPort": "out",
       "toNode": 9,
       "toPort": "in_1"
