@@ -409,7 +409,8 @@ pub mod scene_modifier_loop {
     /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment + BUG-gsql
     /// framing rows: the ONLY params stamped as "Scene Loop" rows, as
     /// `(stable node_id, param) → row label`. Everything else on the loop
-    /// nodes — axis, attack, jitter_seed, look_sweep_cycles — is internal:
+    /// nodes — axis, attack, jitter_seed, jitter_period, look_sweep_cycles —
+    /// is internal:
     /// the plan builder computes it once and a panel row for it would
     /// desync the loop. Spacing rides loop_camera.cell_size (its stamped
     /// range is curated to auto×0.25..4.0 at apply time); Near/Far/Home
@@ -449,11 +450,23 @@ pub mod scene_modifier_loop {
     const LOOP_COULED_WRITES: &[CoupledWrite] = &[
         CoupledWrite {
             primary: ("loop_camera", "stride"),
-            secondaries: &[CoupledSecondary {
-                node_id: "scene_array",
-                param: "count",
-                value: stride_to_count,
-            }],
+            secondaries: &[
+                // count = K+2 (behind + current + ahead), clamped at 8.
+                CoupledSecondary {
+                    node_id: "scene_array",
+                    param: "count",
+                    value: stride_to_count,
+                },
+                // BUG-jvlq: the jitter hash is keyed on index % period, and
+                // wrap purity needs the pattern to repeat with a period
+                // dividing stride — the copy sliding into a screen slot at
+                // the wrap must carry the leaving copy's exact jitter.
+                CoupledSecondary {
+                    node_id: "scene_array",
+                    param: "jitter_period",
+                    value: identity_value,
+                },
+            ],
         },
         CoupledWrite {
             primary: ("loop_camera", "cell_size"),
@@ -641,13 +654,18 @@ pub mod scene_modifier_loop {
 
         // scene_array: the shared copy array — count 3, axis +Z default.
         // jitter_seed/jitter_amount pinned off: the loop's copies repeat
-        // exactly until the performer dials the Jitter row.
+        // exactly until the performer dials the Jitter row. jitter_period
+        // stamped at 1 (uniform jitter — wrap-pure at any stride, BUG-jvlq);
+        // the Stride row's coupled write raises it to the stride. The stamp
+        // is also what lets the coupling fire: a secondary with no def value
+        // is skipped at resolve time.
         let mut params = std::collections::BTreeMap::new();
         f32_param(&mut params, "count", 3.0);
         params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z
         f32_param(&mut params, "cell_size", cell_size);
         f32_param(&mut params, "jitter_seed", 0.0);
         f32_param(&mut params, "jitter_amount", 0.0);
+        f32_param(&mut params, "jitter_period", 1.0);
         new_nodes.push(mint_node(scene_array_id, "scene_array", "node.scene_array", params));
 
         // loop_camera: flies one cell per loop. home = -cell/2 = mid-gap
@@ -814,6 +832,40 @@ pub mod scene_modifier_loop {
             return false;
         }
         let mut changed = false;
+
+        // BUG-jvlq: pre-fix loops carry no jitter_period. Stamp it from the
+        // camera's current stride so the pattern period matches the travel
+        // (variety survives where stride > 1; stride 1 gets uniform jitter —
+        // the wrap-snap fix). Also unblocks the Stride coupling, which skips
+        // a secondary whose def param is absent.
+        if let (Some(&array_doc), Some(&camera_doc)) =
+            (result.doc_ids.get("scene_array"), result.doc_ids.get("loop_camera"))
+        {
+            let stride = def
+                .nodes
+                .iter()
+                .find(|n| n.id == camera_doc)
+                .and_then(|n| n.params.get("stride"))
+                .and_then(|v| match v {
+                    SerializedParamValue::Float { value } => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or(1.0)
+                .round()
+                .clamp(1.0, 8.0);
+            if let Some(array) = def
+                .nodes
+                .iter_mut()
+                .find(|n| n.id == array_doc && !n.params.contains_key("jitter_period"))
+            {
+                array.params.insert(
+                    "jitter_period".to_string(),
+                    SerializedParamValue::Float { value: stride },
+                );
+                changed = true;
+            }
+        }
+
         for t in SCENE_LOOP_DESCRIPTOR.trace {
             let Some(&doc_id) = result.doc_ids.get(t.node_id) else { continue };
             let Some(node) = def.nodes.iter().find(|n| n.id == doc_id) else { continue };

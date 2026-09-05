@@ -434,13 +434,15 @@ fn wrap_parity_with_movement_controls() {
 /// phase control contributes exactly 0; a clock-keyed driver explodes it).
 /// The number is printed for the report.
 ///
-/// JITTER is deliberately excluded here and lives only in the exact-seam
-/// gate: jitter is index-deterministic (the array is bit-identical every
-/// frame — asserted below), but the copies are visually DISTINCT, so at the
-/// seam the nearest visible copy swaps index (copy 1 replaces copy 0 in the
-/// same screen slot) and the orientation pops. Position-continuous,
-/// deterministic, and inherent to per-instance variation — measured here
-/// and reported, not hidden.
+/// JITTER runs at the same far-clipped shape (the unclipped graph has the
+/// finite-array far-edge hole — one copy present at phase 0, absent at
+/// phase ~1 — which is a separate, documented wrap artifact tracked by the
+/// scene-loop-far-edge-hole decision, not jitter's). BUG-jvlq cure test:
+/// before the fix the hash was keyed on the raw index, so at the seam the
+/// nearest copy swapped to its neighbor's orientation (the "reset" Peter
+/// reported); with the hash keyed on index % period and period = stride,
+/// the copy sliding into each screen slot carries the leaving copy's exact
+/// jitter and the near-seam diff is 0 WITH jitter live.
 #[test]
 fn wrap_parity_near_seam_measurement() {
     let def = build_loop_graph_phase_controls_farclipped();
@@ -455,16 +457,52 @@ fn wrap_parity_near_seam_measurement() {
         "near-seam purity violated — a phase control is not phase-periodic (max diff = {diff})"
     );
 
-    // Jitter near-seam artifact, measured and reported: the orientation
-    // swap of the nearest copy at the seam.
-    let jittered = build_loop_graph_with_controls();
+    // BUG-jvlq cure: jitter on (amount 0.5, seed 7), period at the default 1
+    // — the seam must NOT swap orientations any more.
+    let mut jittered = build_loop_graph_phase_controls_farclipped();
+    let array = jittered
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .expect("scene_array");
+    array.params.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: 0.5 });
+    array.params.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
+    array.params.insert("jitter_period".to_string(), SerializedParamValue::Float { value: 1.0 });
+
     let j_a = render_frame(&jittered, 0.0);
     let j_b = render_frame(&jittered, 8.0 * 0.99999);
     let j_diff = max_pixel_diff(&j_a, &j_b);
-    println!("P4 near-seam with jitter (orientation-swap artifact) max pixel diff = {j_diff}");
+    println!("near-seam with jitter (BUG-jvlq cure) max pixel diff = {j_diff}");
+
+    // BUG-jvlq cure: with the hash keyed on index % period the seam must not
+    // swap orientations. The demand is a BOUND, not exact 0: uniform jitter
+    // rotates every copy, and a rotated silhouette rasterizes at sub-pixel
+    // precision — a 2e-5-unit camera shift (this near-seam beat) can flip the
+    // coverage of ONE edge pixel. The pre-fix snap changed whole-silhouette
+    // regions (hundreds of pixels, deltas ≫ 50). Few pixels at small deltas
+    // is the quantization floor, not a snap.
+    let mut differing_pixels = 0usize;
+    for px in 0..(j_a.len() / 4) {
+        let i = px * 4;
+        if j_a[i..i + 4]
+            .iter()
+            .zip(j_b[i..i + 4].iter())
+            .any(|(a, b)| a.abs_diff(*b) > 0)
+        {
+            differing_pixels += 1;
+        }
+    }
     assert!(
-        j_diff > 0,
-        "jittered copies are visually distinct — the seam must swap the nearest copy's orientation"
+        differing_pixels <= 8 && j_diff <= 48,
+        "BUG-jvlq: jitter snaps at the seam — {differing_pixels} pixels, max delta {j_diff} \
+         (pre-fix snap is hundreds of pixels at deltas ≫ 50)"
+    );
+    // Sanity: the jitter is live — the jittered frame differs from the
+    // unjittered one at the same beat (a zero-amount bug would pass the
+    // purity assert above trivially).
+    assert!(
+        max_pixel_diff(&j_a, &frame_a) > 0,
+        "jitter amount 0.5 must change the frame"
     );
 
     // Jitter determinism: the SAME beat renders bit-identical frames (the
