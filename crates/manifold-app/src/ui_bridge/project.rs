@@ -1148,10 +1148,14 @@ fn apply_scene_param_write(
 
 /// One resolved secondary write of a coupled row. `binding` is `Some` when
 /// the secondary param is itself stamped (the Copies binding for
-/// scene_array.count) — that write lands on the instance manifest; `None`
-/// writes the def node param directly (cell_size, home — internal params).
-/// `value_fn` derives the secondary value from the primary's new value;
-/// `live` tracks the latest applied value across scrub Moves.
+/// scene_array.count, the Home binding for loop_camera.home) — the write
+/// lands on the instance manifest AND mirrors the def node param: the
+/// stamped binding owns the live value (it shadows the def param at eval),
+/// but the def is the durable record the card-path contract reads, so the
+/// two must not drift. `None` writes the def node param directly
+/// (cell_size — internal params). `value_fn` derives the secondary value
+/// from the primary's new value; `live` tracks the latest applied value
+/// across scrub Moves.
 #[derive(Debug, Clone)]
 pub(crate) struct CoupledWriteTarget {
     pub binding: Option<manifold_core::effects::ParamId>,
@@ -1159,6 +1163,11 @@ pub(crate) struct CoupledWriteTarget {
     pub param: String,
     pub value_fn: fn(f32) -> f32,
     pub baseline: f32,
+    /// The def node's current value for `param` — the undo seed for the def
+    /// mirror of a bound write (the card slot and the def can diverge when
+    /// the performer edits the stamped row manually). `None` when the def
+    /// has no value for the param — then there is nothing to mirror.
+    pub def_baseline: Option<f32>,
     pub live: f32,
 }
 
@@ -1205,6 +1214,17 @@ pub(crate) fn coupled_write_targets(
                     if n.as_str() == sec_node_id && p == sec_param
             )
         });
+        let def_value = def
+            .nodes
+            .iter()
+            .find(|n| n.id == sec_doc_id)
+            .and_then(|n| n.params.get(sec_param))
+            .and_then(|v| match v {
+                manifold_core::effect_graph_def::SerializedParamValue::Float { value } => {
+                    Some(*value)
+                }
+                _ => None,
+            });
         let (binding, old_value) = if let Some(sb) = sec_binding {
             let pid = manifold_core::effects::ParamId::from(sb.id.clone());
             let old = project
@@ -1216,18 +1236,7 @@ pub(crate) fn coupled_write_targets(
                 .flatten();
             (Some(pid), old)
         } else {
-            let old = def
-                .nodes
-                .iter()
-                .find(|n| n.id == sec_doc_id)
-                .and_then(|n| n.params.get(sec_param))
-                .and_then(|v| match v {
-                    manifold_core::effect_graph_def::SerializedParamValue::Float { value } => {
-                        Some(*value)
-                    }
-                    _ => None,
-                });
-            (None, old)
+            (None, def_value)
         };
         let Some(baseline) = old_value else { continue };
         out.push(CoupledWriteTarget {
@@ -1236,6 +1245,7 @@ pub(crate) fn coupled_write_targets(
             param: sec_param.to_string(),
             value_fn,
             baseline,
+            def_baseline: def_value,
             live: baseline,
         });
     }
@@ -1280,7 +1290,12 @@ pub(crate) fn coupled_write_targets_for_binding(
 }
 
 /// Apply one coupled secondary live (the same local write the scrub Move
-/// uses): the instance manifest when bound, the layer's graph def otherwise.
+/// uses). A bound secondary writes its card slot AND mirrors the def node
+/// param — the slot owns the live value (the stamped binding shadows the
+/// def param at eval, so a def-only write would be a no-op), but the def
+/// is the durable record the card-path contract reads (home = −cell/2 must
+/// be observable in the def's node params). An unbound secondary writes the
+/// def only.
 pub(crate) fn apply_coupled_write_live(
     project: &mut manifold_core::project::Project,
     target: &manifold_core::GraphTarget,
@@ -1292,8 +1307,22 @@ pub(crate) fn apply_coupled_write_live(
         project.with_preset_graph_mut(target, |inst| {
             inst.set_base_param(pid.as_ref(), value);
         });
-        return;
     }
+    if t.def_baseline.is_some() {
+        write_coupled_def_param(project, target, t.node_doc_id, &t.param, value);
+    }
+}
+
+/// Write one coupled secondary straight into the layer's graph def — no
+/// card-slot redirect (that redirect exists for lone writes to card-owned
+/// params; a coupled secondary dual-writes slot + def on purpose).
+fn write_coupled_def_param(
+    project: &mut manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    node_doc_id: u32,
+    param: &str,
+    value: f32,
+) {
     let manifold_core::GraphTarget::Generator(layer_id) = target else {
         return;
     };
@@ -1303,18 +1332,21 @@ pub(crate) fn apply_coupled_write_live(
     let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) else {
         return;
     };
-    if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == t.node_doc_id) {
+    if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == node_doc_id) {
         node.params.insert(
-            t.param.clone(),
+            param.to_string(),
             manifold_core::effect_graph_def::SerializedParamValue::Float { value },
         );
     }
 }
 
 /// Build the undo-tracked command for one coupled secondary at its final
-/// value. Bound → ChangeGraphParamCommand on the binding; unbound →
-/// SetGraphNodeParamCommand with the pre-gesture value seeded (drag-cadence
-/// commit — self-capture would record new == new, BUG-1l7f's shape).
+/// value. Bound → the card-slot write (ChangeGraphParamCommand) plus the
+/// def mirror (a forced-def SetGraphNodeParamCommand) batched into one
+/// composite, so undo restores both stores — the live value and the
+/// durable def record move together. Unbound → SetGraphNodeParamCommand
+/// with the pre-gesture value seeded (drag-cadence commit — self-capture
+/// would record new == new, BUG-1l7f's shape).
 pub(crate) fn coupled_write_command(
     target: &manifold_core::GraphTarget,
     t: &CoupledWriteTarget,
@@ -1322,14 +1354,33 @@ pub(crate) fn coupled_write_command(
     catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
     if let Some(pid) = &t.binding {
-        return Box::new(
-            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                target.clone(),
-                pid.clone(),
-                t.baseline,
-                value,
-            ),
+        let slot_write = manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+            target.clone(),
+            pid.clone(),
+            t.baseline,
+            value,
         );
+        let Some(def_baseline) = t.def_baseline else {
+            return Box::new(slot_write);
+        };
+        let def_write = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+            target.clone(),
+            t.node_doc_id,
+            t.param.clone(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+            catalog_default,
+        )
+        .with_previous(Some(
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: def_baseline },
+        ))
+        .with_forced_def_write();
+        return Box::new(manifold_editing::command::CompositeCommand::new(
+            vec![
+                Box::new(slot_write) as Box<dyn manifold_editing::command::Command>,
+                Box::new(def_write) as Box<dyn manifold_editing::command::Command>,
+            ],
+            format!("Coupled write {} (card slot + def)", t.param),
+        ));
     }
     Box::new(
         manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
