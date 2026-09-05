@@ -33,6 +33,15 @@ impl ParamCardPanel {
                 // SCENE_MODIFIER_FRAMEWORK section 3.7 modifier chrome — the
                 // kind-specific buttons precede the shared effect shell.
                 if let Some(m) = &self.modifier {
+                    // Graph-editor navigation — the same destination the
+                    // generator card's cog emits: a modifier's nodes live in
+                    // the layer's generator graph, so that is where the cog
+                    // goes. Must precede the shared Effect arm below, which
+                    // would emit OpenGraphEditor(0) — modifier surfaces are
+                    // Effect-kind with a placeholder index.
+                    if self.cog_btn_id == Some(id) {
+                        return vec![PanelAction::Root(RootAction::OpenGeneratorGraphEditor)];
+                    }
                     if self.toggle_btn_id == Some(id) {
                         // Switch-kind enable toggle: ONE param write on the
                         // kind's enable target (INV-M7), resolved app-side.

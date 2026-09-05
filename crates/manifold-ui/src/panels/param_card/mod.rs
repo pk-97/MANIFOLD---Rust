@@ -2994,6 +2994,66 @@ mod tests {
         assert!(close(cog, Rect::new(cog_x, elem_y, COG_W, 16.0)), "cog {cog:?}");
     }
 
+    // ── Modifier-card chrome (SCENE_MODIFIER_FRAMEWORK section 3.7) ──
+
+    fn modifier_config() -> ParamSurface {
+        let mut c = effect_config();
+        c.title = "Scene Loop".into();
+        c.modifier = Some(crate::param_surface::ModifierCardInfo {
+            kind_id: "scene_loop".into(),
+            layer_id: manifold_foundation::LayerId::new("layer-a"),
+            show_enable_toggle: true,
+            wrap_debug: None,
+        });
+        c
+    }
+
+    #[test]
+    fn modifier_header_carries_cog_navigating_to_generator_graph() {
+        // BUG-oe99: the modifier shell omitted the cog entirely. It must carry
+        // the same cog as every other card species, navigating to the layer's
+        // generator graph — the modifier's nodes live there.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // Perform context
+        panel.configure(&modifier_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let cog = panel.cog_btn_id.expect("modifier card builds the cog");
+        let actions = panel.handle_click(cog, &tree);
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [PanelAction::Root(RootAction::OpenGeneratorGraphEditor)]
+            ),
+            "modifier cog navigates to the generator graph, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn modifier_header_layout_places_remove_left_of_cog() {
+        // Trailing order: chevron (rightmost), cog, remove ×, [DBG], [toggle].
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&modifier_config());
+        let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
+        panel.build(&mut tree, rect);
+
+        let inner_x = rect.x + BORDER_W;
+        let inner_w = rect.width - BORDER_W * 2.0;
+        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
+        let cog_x = chevron_x - GAP - COG_W;
+        let remove_x = cog_x - GAP - CHEVRON_W;
+        let elem_y = rect.y + BORDER_W + (HEADER_HEIGHT - 16.0) * 0.5;
+
+        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
+        assert!((chevron.x - chevron_x).abs() < 0.01, "chevron stays rightmost: {chevron:?}");
+        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
+        assert!((cog.x - cog_x).abs() < 0.01, "cog left of chevron: {cog:?}");
+        let remove = tree
+            .get_bounds(panel.modifier_remove_btn_id.expect("remove × built"));
+        assert!((remove.x - remove_x).abs() < 0.01, "remove × left of cog: {remove:?}");
+    }
+
     #[test]
     fn param_label_column_aligns_to_section_inset() {
         // section 14.2 rule 1 / section 14.5 C — one inset. The effect card and generator card

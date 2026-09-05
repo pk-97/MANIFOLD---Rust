@@ -566,9 +566,10 @@ impl ParamCardPanel {
     ///
     /// A MODIFIER card (SCENE_MODIFIER_FRAMEWORK section 3.7) is the same
     /// shell minus the editor furniture — no drag handle (fixed slots, D2), no
-    /// cog, no relight chip — plus the remove × and (loop kinds) the
-    /// wrap-debug button. These are permanent chrome differences between card
-    /// species, not state-conditional visibility.
+    /// relight chip — plus the remove × and (loop kinds) the wrap-debug
+    /// button. The cog stays, navigating to the layer's generator graph where
+    /// the modifier's nodes live. These are permanent chrome differences
+    /// between card species, not state-conditional visibility.
     fn effect_header_row(&self, header_bg: Color32) -> View {
         let author = self.context == CardContext::Author;
         let modifier = self.modifier.is_some();
@@ -668,8 +669,9 @@ impl ParamCardPanel {
         }
         // Cog (or a reserved slot in Author) sits LEFT of the chevron so the
         // expand chevron is always the rightmost control — same trailing order as
-        // the generator header (… · cog · ▾). Modifier cards have no cog (no
-        // graph-editor navigation — the card IS the surface).
+        // the generator header (… · cog · ▾), and the same destination the
+        // generator cog navigates to: the layer's generator graph, where a
+        // modifier's nodes actually live.
         // P2 "caret rotate": one down-pointing glyph (▼), rotated to ▶ via
         // `chevron_angle()`/`UIStyle.transform` instead of swapping glyphs —
         // see `chevron_angle`'s doc comment.
@@ -684,7 +686,7 @@ impl ParamCardPanel {
             })
             .inert()
             .key(KEY_CHEVRON);
-        if !author && !modifier {
+        if !author {
             row.child(
                 View::button("")
                     .fixed(COG_W, 16.0)
@@ -775,13 +777,15 @@ impl ParamCardPanel {
         // as wide as possible and a lone badge never floats mid-header.
         // Trailing order (right→left): chevron (always rightmost), cog, toggle —
         // matches the host View child order in `effect_header_row`. A MODIFIER
-        // card replaces the cog with the remove × (and gains the wrap-debug
-        // button left of it): chevron, ×, [DBG], [toggle] — badges pack left
-        // of the leftmost control.
+        // card keeps the cog (same generator-graph destination) and packs the
+        // remove × left of it (plus the wrap-debug button left of that):
+        // chevron, cog, ×, [DBG], [toggle] — badges pack left of the leftmost
+        // control.
         let chevron_x = x + w - PADDING - CHEVRON_W;
         let modifier = self.modifier.is_some();
         let (badge_right, content_left) = if modifier {
-            let remove_x = chevron_x - GAP - CHEVRON_W;
+            let cog_x = chevron_x - GAP - COG_W;
+            let remove_x = cog_x - GAP - CHEVRON_W;
             let mut chrome_left = remove_x;
             if self.modifier.as_ref().is_some_and(|m| m.wrap_debug.is_some()) {
                 chrome_left = chrome_left - GAP - TOGGLE_W;
@@ -1036,8 +1040,8 @@ impl ParamCardPanel {
         self.cached_has_graph_mod = show_mod;
         self.cached_enabled = self.enabled;
 
-        // Cog dots (three in a triangle) into the host cog button. Modifier
-        // cards have no cog — the branch is skipped (`cog_btn_id` is None).
+        // Cog dots (three in a triangle) into the host cog button — effect,
+        // generator, and modifier cards all carry the cog.
         if let Some(cog_btn_id) = self.cog_btn_id {
             let dot: f32 = 3.0;
             let dot_style = UIStyle {
