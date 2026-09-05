@@ -5487,7 +5487,10 @@ impl EffectNode for RenderScene {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
                 .iter()
-                .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
+                .map(|d| {
+                    let rt_instances_wired =
+                        matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
+                    manifold_gpu::raytrace::RtObjectGeometry {
                     vertex_buffer: d.vertices,
                     vertex_stride: vsize,
                     vertex_offset: 0,
@@ -5540,11 +5543,21 @@ impl EffectNode for RenderScene {
                     // the buffer), so a capacity change is topology (topo
                     // key below) and rebuilds the accel; content changes
                     // ride the accel key via `instances_generation` (D9).
-                    // Unwired keeps the D7 fast path (single identity-slot
-                    // descriptor per object).
-                    instances_addr: d.instances.map_or(0, |b| b.gpu_address()),
-                    instances_buffer: d.instances,
-                    instance_slots: d.instance_count,
+                    // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
+                    // buffer (instance_count == 0 is a legal raster no-op)
+                    // normalizes to UNWIRED — the descriptor kernel would
+                    // otherwise read slot 0 of a zero-byte allocation (OOB
+                    // GPU read) and trace a ghost copy the raster never
+                    // draws. Unwired keeps the D7 fast path (single
+                    // identity-slot descriptor per object).
+                    instances_addr: if rt_instances_wired {
+                        d.instances.map_or(0, |b| b.gpu_address())
+                    } else {
+                        0
+                    },
+                    instances_buffer: if rt_instances_wired { d.instances } else { None },
+                    instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
+                }
                 })
                 .collect();
 
