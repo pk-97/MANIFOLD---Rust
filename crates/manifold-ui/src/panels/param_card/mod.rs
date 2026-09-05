@@ -3047,11 +3047,14 @@ mod tests {
 
         let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
         assert!((chevron.x - chevron_x).abs() < 0.01, "chevron stays rightmost: {chevron:?}");
+        assert!((chevron.y - elem_y).abs() < 0.01, "chevron y: {chevron:?}");
         let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
         assert!((cog.x - cog_x).abs() < 0.01, "cog left of chevron: {cog:?}");
+        assert!((cog.y - elem_y).abs() < 0.01, "cog y: {cog:?}");
         let remove = tree
             .get_bounds(panel.modifier_remove_btn_id.expect("remove × built"));
         assert!((remove.x - remove_x).abs() < 0.01, "remove × left of cog: {remove:?}");
+        assert!((remove.y - elem_y).abs() < 0.01, "remove × y: {remove:?}");
     }
 
     #[test]
