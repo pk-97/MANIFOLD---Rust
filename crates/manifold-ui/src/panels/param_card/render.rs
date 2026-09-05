@@ -1508,25 +1508,26 @@ impl ParamCardPanel {
 
     // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24) ──
 
-    /// Transpose the 8×120 readback into the 120×8 band bitmap.
+    /// Copy the 8×120 readback into the native-orientation band bitmap
+    /// (8 wide × 120 tall — one column per strip, no transpose).
     ///
     /// Orientation — pinned against the send path's known mappings, not
     /// guessed (`led_composite_pixel_tests`' ground truth): the LED sample
     /// texture is `strip_count` wide × `leds_per_strip` tall (`manifold-led`
     /// blit.rs), and `dmx.rs::sample_strip_to_universes` walks `led` 0..119 in
     /// DMX address order reading column `strip_index` — so the readback bytes
-    /// are `[led * 8 + strip]` in RGBA. The band mapping is a direct
-    /// transpose with NO flips:
-    ///   band(row = strip s, col = LED l) = readback[(l * 8 + s) * 4 .. +4]
+    /// are `[led * 8 + strip]` in RGBA. The band is the rig stood upright:
+    ///   band(row y top→bottom, col x = strip 0..7 left→right)
+    ///     = readback[(led * 8 + strip) * 4 .. +4]   with y = 119 − led
     /// LED 0 (the strip's first DMX channel — which the edge-extend shader's
-    /// v-flip maps to the composite BOTTOM) reads left-to-right; strip 0 sits
-    /// at the top. The readback/byte truth is authoritative, not the shader
-    /// comment.
-    fn transpose_led_band(src: &[u8], dst: &mut [Color32], leds: usize, strips: usize) {
-        for strip in 0..strips {
-            for led in 0..leds {
+    /// v-flip maps to the composite BOTTOM) sits at the band bottom; strip 0
+    /// is the leftmost column. The readback/byte truth is authoritative, not
+    /// the shader comment.
+    fn blit_led_band(src: &[u8], dst: &mut [Color32], leds: usize, strips: usize) {
+        for led in 0..leds {
+            for strip in 0..strips {
                 let o = (led * strips + strip) * 4;
-                dst[strip * leds + led] = if o + 2 < src.len() {
+                dst[(leds - 1 - led) * strips + strip] = if o + 2 < src.len() {
                     Color32::new(src[o], src[o + 1], src[o + 2], 255) // design-token-exempt: readback RGBA bytes → bitmap pixel, data conversion not UI chrome
                 } else {
                     Color32::TRANSPARENT
@@ -1561,8 +1562,8 @@ impl ParamCardPanel {
     }
 
     fn ensure_led_band_buffer(&mut self) {
-        let w = LED_BAND_LEDS;
-        let h = LED_BAND_STRIPS;
+        let w = LED_BAND_STRIPS;
+        let h = LED_BAND_LEDS;
         if self.led_band_bitmap.len() != w * h {
             self.led_band_bitmap.clear();
             self.led_band_bitmap.resize(w * h, Color32::TRANSPARENT);
@@ -1576,7 +1577,7 @@ impl ParamCardPanel {
         self.ensure_led_band_buffer();
         let (w, h) = (self.led_band_tex_w, self.led_band_tex_h);
         let (iw, ih) = (self.led_band_interior_w, self.led_band_interior_h);
-        Self::transpose_led_band(pixels, &mut self.led_band_bitmap, w, h);
+        Self::blit_led_band(pixels, &mut self.led_band_bitmap, h, w);
         Self::round_led_band_corners(&mut self.led_band_bitmap, w, h, iw, ih);
         self.led_band_dirty = true;
     }
@@ -1629,21 +1630,26 @@ impl ParamCardPanel {
         let inner_w = rect.width - BORDER_W * 2.0;
 
         // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24): the
-        // framed transposed readback at the top of the card body. Absent on
-        // non-DMX cards (the app never pushes a payload for them) and on
-        // collapsed cards — no chrome, no gap. The 1px frame uses the card's
-        // own border colour + radius tokens so the band reads as card chrome. ──
+        // framed native-orientation readback (8 vertical strips, LED 0 at the
+        // bottom) centred at the top of the card body. Absent on non-DMX cards
+        // (the app never pushes a payload for them) and on collapsed cards —
+        // no chrome, no gap. The 1px frame uses the card's own border colour +
+        // radius tokens so the band reads as card chrome. ──
         self.led_band_id = None;
         let band_h = self.led_band_height();
         if band_h > 0.0 {
             let band_frame_h = band_h - HEADER_BODY_GAP;
-            let band_w = (inner_w - PADDING * 2.0).max(0.0);
+            let interior_h = (band_frame_h - BORDER_W * 2.0).max(0.0);
+            // Native 8:120 ratio — a centred vertical strip, integer-scaled.
+            let interior_w = interior_h * (LED_BAND_STRIPS as f32 / LED_BAND_LEDS as f32);
+            let content_w = (inner_w - PADDING * 2.0).max(0.0);
+            let band_x = inner_x + PADDING + ((content_w - interior_w) * 0.5).max(0.0);
             let id = tree.add_node(
                 None,
                 Rect::new(
-                    inner_x + PADDING,
+                    band_x,
                     inner_y + HEADER_HEIGHT + HEADER_BODY_GAP,
-                    band_w,
+                    interior_w + BORDER_W * 2.0,
                     band_frame_h,
                 ),
                 UINodeType::Panel,
@@ -1657,8 +1663,8 @@ impl ParamCardPanel {
             );
             tree.set_name(id, LED_BAND_NODE_NAME);
             self.led_band_id = Some(id);
-            self.led_band_interior_w = (band_w - BORDER_W * 2.0).max(0.0);
-            self.led_band_interior_h = (band_frame_h - BORDER_W * 2.0).max(0.0);
+            self.led_band_interior_w = interior_w;
+            self.led_band_interior_h = interior_h;
         }
 
         // ── Params (if not collapsed) — the relight rows below always draw
@@ -2254,23 +2260,23 @@ impl ParamCardPanel {
 
 #[cfg(test)]
 mod led_band_tests {
-    //! LED_STRIPS_DESIGN MVP-P4 (D24): orientation proof for the transposed
-    //! band. The renderer's `led_composite_pixel_tests` +
+    //! LED_STRIPS_DESIGN MVP-P4 (D24): orientation proof for the
+    //! native-orientation band. The renderer's `led_composite_pixel_tests` +
     //! `led_preset_value_tests` pin the readback's ground truth — texture x =
     //! strip index, y = LED position (blit.rs), and `dmx.rs::
     //! sample_strip_to_universes` walks `led` 0..119 in DMX address order
     //! reading column `strip_index`. These tests pin the BAND's mapping
-    //! against that same truth: a direct transpose, no flips.
+    //! against that same truth: a direct copy with a vertical flip only.
     //!
     //! Chosen mapping (documented where it lands in the UI):
-    //!   band(row = strip s top→bottom 0..7, col = LED l left→right 0..119)
-    //!     = readback[(l * 8 + s) * 4 .. +4]
+    //!   band(row y top→bottom = LED 119..0, col x = strip 0..7 left→right)
+    //!     = readback[(led * 8 + strip) * 4 .. +4]   with y = 119 − led
     //! LED 0 — the strip's first DMX channel, which the edge-extend shader's
-    //! v-flip maps to the composite BOTTOM — reads left-to-right; strip 0 is
-    //! the top row. If the renderer's mappings and the blit shader's comment
-    //! ever disagree about which readback row is composite top, the
-    //! readback/byte truth wins (the brief's rule) — the band shows what the
-    //! strips are sent, not what the shader comment claims.
+    //! v-flip maps to the composite BOTTOM — sits at the band bottom; strip 0
+    //! is the leftmost column. If the renderer's mappings and the blit
+    //! shader's comment ever disagree about which readback row is composite
+    //! top, the readback/byte truth wins (the brief's rule) — the band shows
+    //! what the strips are sent, not what the shader comment claims.
 
     use super::*;
 
@@ -2291,24 +2297,57 @@ mod led_band_tests {
         buf[o + 3] = 255;
     }
 
+    /// Band bitmap pixel at (strip column, led position) under the chosen
+    /// mapping: strip s is column s, LED l lands at row 119 − l (LED 0 bottom).
     fn band_px(band: &[Color32], strip: usize, led: usize) -> Color32 {
-        band[strip * LEDS + led]
+        band[(LEDS - 1 - led) * STRIPS + strip]
     }
 
-    /// The brief's worked example: strip 3 fully lit (red) at LED 10, plus
-    /// sentinels at all four corners, transposed — each must land at the
-    /// band row/col the chosen mapping dictates, and nothing else may light.
-    #[test]
-    fn transpose_maps_known_strip_led_pattern_with_no_flips() {
-        let mut readback = vec![0u8; STRIPS * LEDS * 4];
-        set_px(&mut readback, 3, 10, [255, 0, 0]); // strip 3, LED 10 → band (3, 10)
-        set_px(&mut readback, 0, 0, [0, 255, 0]); // strip 0, LED 0 → band (0, 0)
-        set_px(&mut readback, 7, 119, [0, 0, 255]); // strip 7, LED 119 → band (7, 119)
-        set_px(&mut readback, 0, 119, [255, 255, 0]); // strip 0, LED 119 → band (0, 119)
-        set_px(&mut readback, 7, 0, [0, 255, 255]); // strip 7, LED 0 → band (7, 0)
-
+    fn bake(readback: &[u8]) -> Vec<Color32> {
         let mut band = vec![Color32::TRANSPARENT; STRIPS * LEDS];
-        ParamCardPanel::transpose_led_band(&readback, &mut band, LEDS, STRIPS);
+        ParamCardPanel::blit_led_band(readback, &mut band, LEDS, STRIPS);
+        band
+    }
+
+    /// The decisive asymmetric case: a single lit pixel at (strip 6, LED 100)
+    /// must land at exactly column 6, row 19 — and nothing else may light.
+    /// A swapped or flipped copy lights the wrong cell or smears the sentinel
+    /// across cells, so this test cannot pass under a wrong mapping (the
+    /// symmetric corner patterns below pin the full frame; this one pins the
+    /// interior where a swap and a flip both would hide).
+    #[test]
+    fn single_interior_pixel_lands_at_exact_band_cell() {
+        let mut readback = vec![0u8; STRIPS * LEDS * 4];
+        set_px(&mut readback, 6, 100, [255, 255, 255]);
+        let band = bake(&readback);
+
+        assert_eq!(band_px(&band, 6, 100), rgb(255, 255, 255));
+        // Row 19 is LED 100's row (119 − 100); the cell above (row 18) and
+        // below (row 20) on the same column must be black — a vertical flip
+        // error lands the sentinel on one of them.
+        assert_eq!(band[18 * STRIPS + 6], rgb(0, 0, 0));
+        assert_eq!(band[20 * STRIPS + 6], rgb(0, 0, 0));
+        // A strip/LED swap would light a cell on column ≠ 6 — count lit px.
+        let lit = band
+            .iter()
+            .filter(|p| p.r != 0 || p.g != 0 || p.b != 0)
+            .count();
+        assert_eq!(lit, 1, "exactly one lit cell, a swap/flip leaks or loses it");
+    }
+
+    /// All four corners plus one interior sentinel, copied — each must land
+    /// at the band cell the chosen mapping dictates, and nothing else may
+    /// light.
+    #[test]
+    fn copy_maps_known_strip_led_pattern_with_v_flip_only() {
+        let mut readback = vec![0u8; STRIPS * LEDS * 4];
+        set_px(&mut readback, 3, 10, [255, 0, 0]); // strip 3, LED 10 → band col 3, row 109
+        set_px(&mut readback, 0, 0, [0, 255, 0]); // strip 0, LED 0 → band col 0, row 119 (bottom-left)
+        set_px(&mut readback, 7, 119, [0, 0, 255]); // strip 7, LED 119 → band col 7, row 0 (top-right)
+        set_px(&mut readback, 0, 119, [255, 255, 0]); // strip 0, LED 119 → band col 0, row 0 (top-left)
+        set_px(&mut readback, 7, 0, [0, 255, 255]); // strip 7, LED 0 → band col 7, row 119 (bottom-right)
+
+        let band = bake(&readback);
 
         assert_eq!(band_px(&band, 3, 10), rgb(255, 0, 0));
         assert_eq!(band_px(&band, 0, 0), rgb(0, 255, 0));
@@ -2321,7 +2360,7 @@ mod led_band_tests {
         assert_eq!(band_px(&band, 1, 1), rgb(0, 0, 0));
         assert_eq!(band_px(&band, 4, 60), rgb(0, 0, 0));
         // No pixel may carry a sentinel color away from its mapped cell — a
-        // mirrored or rotated transpose would light the wrong corners above.
+        // mirrored or rotated copy would light the wrong corners above.
         let stray = band
             .iter()
             .enumerate()
@@ -2329,9 +2368,10 @@ mod led_band_tests {
                 p.a == 255
                     && (p.r != 0 || p.g != 0 || p.b != 0)
                     && !matches!(*i, i if {
-                        let (s, l) = (i / LEDS, i % LEDS);
-                        (s == 3 && l == 10) || (s == 0 && l == 0) || (s == 7 && l == 119)
-                            || (s == 0 && l == 119) || (s == 7 && l == 0)
+                        let (row, col) = (i / STRIPS, i % STRIPS);
+                        let led = LEDS - 1 - row;
+                        (col == 3 && led == 10) || (col == 0 && led == 0) || (col == 7 && led == 119)
+                            || (col == 0 && led == 119) || (col == 7 && led == 0)
                     })
             })
             .count();
@@ -2339,25 +2379,24 @@ mod led_band_tests {
     }
 
     /// The band reads like the rig: LED 0 (the strip's DMX start, bottom of
-    /// the composited picture through the edge-extend v-flip) at the LEFT,
-    /// strip 0 at the TOP. A walk down LED positions must move left→right.
+    /// the composited picture through the edge-extend v-flip) at the BOTTOM,
+    /// strip 0 at the LEFT. A walk UP the band must walk UP the LED index.
     #[test]
-    fn led_walk_runs_left_to_right_strip_rows_top_to_bottom() {
+    fn led_walk_runs_bottom_to_top_strip_columns_left_to_right() {
         let mut readback = vec![0u8; STRIPS * LEDS * 4];
         // One lit pixel per strip, at LED index == strip index, distinct color.
         for s in 0..STRIPS {
             set_px(&mut readback, s, s, [(s as u8) * 30 + 10, 0, 0]);
         }
-        let mut band = vec![Color32::TRANSPARENT; STRIPS * LEDS];
-        ParamCardPanel::transpose_led_band(&readback, &mut band, LEDS, STRIPS);
+        let band = bake(&readback);
 
         for s in 0..STRIPS {
-            // Row s must carry its pixel at column s (LED position == column),
-            // and each row's distinct red value lands on its OWN row — a
-            // strip-order flip (strip 0 at bottom) would put row s's pixel at
-            // row 7-s, failing the value check.
+            // Column s must carry its pixel at LED s → row 119 − s, and each
+            // column's distinct red value lands on its OWN column — a
+            // strip-order flip (strip 0 at right) would put column s's pixel
+            // at column 7−s, failing the value check.
             let px = band_px(&band, s, s);
-            assert_eq!(px.r, (s as u8) * 30 + 10, "strip {s}'s pixel on row {s}");
+            assert_eq!(px.r, (s as u8) * 30 + 10, "strip {s}'s pixel on column {s}");
             assert_eq!(px.g, 0);
             assert_eq!(px.b, 0);
         }

@@ -156,14 +156,16 @@ const CHANGE_BTN_H: f32 = 16.0;
 
 // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D22-D24) ──
 // The send path's own 8×120 readback (row = LED position, col = strip index)
-// displayed as a 120-wide × 8-tall transposed band at the top of the DMX
-// lane's generator card. The bitmap rides the viewport bitmap GPU path
-// (dirty CPU buffer → upload → layer-bitmap quad), never a second readback.
+// displayed at the top of the DMX lane's generator card in the rig's physical
+// orientation: 8 vertical strips, native 8×120 bitmap (no transpose), LED 0 at
+// the bottom. The bitmap rides the viewport bitmap GPU path (dirty CPU buffer →
+// upload → layer-bitmap quad), never a second readback.
 pub const LED_BAND_STRIPS: usize = 8;
 pub const LED_BAND_LEDS: usize = 120;
-/// Band interior height — one 2px row per strip. The frame adds `BORDER_W`
-/// on each side, so the chrome's total height is `LED_BAND_H + 2 * BORDER_W`.
-pub(crate) const LED_BAND_H: f32 = 16.0;
+/// Band interior height target. Width derives at the native 8:120 ratio
+/// (1:15), so the band is a centred vertical strip, integer-scaled by the
+/// nearest sampler. The frame adds `BORDER_W` on each side.
+pub(crate) const LED_BAND_MAX_H: f32 = 240.0;
 /// The band quad's layer-bitmap texture index (panels use 1000+; 1002 is the
 /// overview strip, 2000+ collapsed groups).
 pub const LED_BAND_BITMAP_INDEX: usize = 1003;
@@ -867,7 +869,7 @@ impl ParamCardPanel {
     /// Zero when absent (non-DMX card, no controller) or collapsed.
     fn led_band_height(&self) -> f32 {
         if self.led_preview.is_some() && !self.is_collapsed {
-            BORDER_W * 2.0 + LED_BAND_H + HEADER_BODY_GAP
+            BORDER_W * 2.0 + LED_BAND_MAX_H + HEADER_BODY_GAP
         } else {
             0.0
         }
