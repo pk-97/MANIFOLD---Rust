@@ -1736,6 +1736,8 @@ impl GpuEncoder {
             }
         }
 
+        declare_render_resource_usage(&enc, bindings);
+
         if pipeline.needs_sizes_buffer {
             bind_sizes_buffer_render(
                 &enc,
@@ -2576,6 +2578,8 @@ fn apply_bindings_draw_fullscreen(
         }
     }
 
+    declare_render_resource_usage(enc, bindings);
+
     if pipeline.needs_sizes_buffer {
         bind_sizes_buffer_render(
             enc,
@@ -2668,6 +2672,8 @@ fn apply_bindings_draw_both_stages(
         }
     }
 
+    declare_render_resource_usage(enc, bindings);
+
     if pipeline.needs_sizes_buffer {
         bind_sizes_buffer_render(
             enc,
@@ -2676,6 +2682,29 @@ fn apply_bindings_draw_both_stages(
             buffer_sizes_len,
             RenderStages::Both,
         );
+    }
+}
+
+/// Declare resource usage for a render pass (mirrors the dispatch path's
+/// belt-and-suspenders coherence declaration). The render-pass binding path
+/// never called `useResource`, so a bound texture/buffer had no declared
+/// usage on this pass — one half of the BUG-l7t4 sub-question (does
+/// retention-via-render-path matter?). Cheap no-op-ish Metal calls; kept
+/// regardless of the answer because the declaration is correct.
+fn declare_render_resource_usage(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    bindings: &[GpuBinding],
+) {
+    for binding in bindings {
+        match binding {
+            GpuBinding::Buffer { buffer, .. } => unsafe {
+                let () = msg_send![enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+            },
+            GpuBinding::Texture { texture, .. } => unsafe {
+                let () = msg_send![enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+            },
+            GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
+        }
     }
 }
 

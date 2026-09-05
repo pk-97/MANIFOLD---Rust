@@ -20,10 +20,10 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLResource, MTLTexture};
 
-struct SendTexture(Retained<ProtocolObject<dyn MTLTexture>>);
+pub(crate) struct SendTexture(pub(crate) Retained<ProtocolObject<dyn MTLTexture>>);
 unsafe impl Send for SendTexture {}
 
-struct SendBuffer(Retained<ProtocolObject<dyn MTLBuffer>>);
+pub(crate) struct SendBuffer(pub(crate) Retained<ProtocolObject<dyn MTLBuffer>>);
 unsafe impl Send for SendBuffer {}
 
 static DEFER_FRAMES: OnceLock<Option<usize>> = OnceLock::new();
@@ -39,6 +39,16 @@ fn defer_kind() -> Option<String> {
         .clone()
 }
 
+/// No-op mode (lead's discriminator): same probe path — label read, kind /
+/// label match, mutex push, per-frame pump loop — but with a 0-frame hold,
+/// so drops release on the first pump after enqueue. Distinguishes "the
+/// held resource class is real" (fault returns) from "pure timing
+/// perturbation hides the race" (stays clean). Default off.
+fn noop_mode() -> bool {
+    static NOOP: OnceLock<bool> = OnceLock::new();
+    *NOOP.get_or_init(|| std::env::var("MANIFOLD_DEFER_DROP_NOOP").is_ok())
+}
+
 fn kind_matches(is_buffer: bool) -> bool {
     match defer_kind() {
         None => true, // defer both classes
@@ -49,6 +59,9 @@ fn kind_matches(is_buffer: bool) -> bool {
 
 fn defer_frames() -> Option<usize> {
     *DEFER_FRAMES.get_or_init(|| {
+        if noop_mode() {
+            return Some(0);
+        }
         std::env::var("MANIFOLD_DEFER_DROP_FRAMES")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -69,7 +82,7 @@ fn label_matches(label: Option<&str>) -> bool {
     }
 }
 
-fn backtrace_enabled() -> bool {
+pub(crate) fn backtrace_enabled() -> bool {
     static BT: OnceLock<bool> = OnceLock::new();
     *BT.get_or_init(|| std::env::var("MANIFOLD_DEFER_DROP_BACKTRACE").is_ok())
 }
