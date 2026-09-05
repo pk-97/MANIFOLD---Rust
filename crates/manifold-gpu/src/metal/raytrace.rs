@@ -122,6 +122,12 @@ pub struct RtAccel {
     /// kernel + TLAS refit in one command buffer instead of rewriting
     /// `instance_buffer` from the CPU (it is GPU-private in this mode).
     pub(crate) instanced: bool,
+    /// RT_INSTANCING_DESIGN.md D9/P0.5: Σ effective instance slots at
+    /// BUILD time. Refit asserts the running Σ equals this — a capacity
+    /// shrink with an unchanged object count would otherwise leave stale
+    /// descriptors beyond the rewritten range (the count assert alone
+    /// can't see it). Rigid topology: a real change rebuilds instead.
+    pub(crate) instance_slot_total: u32,
     /// RT_INSTANCING_DESIGN.md D1: CPU-mapped per-object descriptor-build
     /// params (model matrix, `instances_addr`, slot base/count, cast mask) —
     /// rewritten every instanced build/refit from the CURRENT `objects`
@@ -531,11 +537,11 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     // objects uniformly when ANY object is wired with a plural instance
     // capacity; otherwise today's CPU per-object path, byte-identical.
     let instanced = objects.iter().any(|o| effective_instance_slots(o) > 1);
-    let total_slots: usize = objects
+    let slot_total_raw: usize = objects
         .iter()
         .map(|o| effective_instance_slots(o) as usize)
-        .sum::<usize>()
-        .max(1);
+        .sum();
+    let total_slots = slot_total_raw.max(1);
     let max_slots: u32 = objects.iter().map(effective_instance_slots).max().unwrap_or(1);
 
     let cb = device
@@ -676,6 +682,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         blas,
         instance_buffer,
         instanced,
+        instance_slot_total: slot_total_raw as u32,
         instance_obj_params,
         geometry_buffers,
         ready,
@@ -749,6 +756,17 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         accel.blas.len(),
         "refit_accel called with a different object COUNT than build_accel built — the BLAS \
          list (and instance buffer) don't match; call build_accel again instead (topology change)"
+    );
+    // RT_INSTANCING_DESIGN.md P0.5: the count assert above can't see a
+    // per-object CAPACITY shrink (Σ slots changes, count doesn't) — a
+    // stale tail of descriptors would survive the refit. Capacity is
+    // rigid topology; a real change must rebuild.
+    let refit_slot_total: u32 = objects.iter().map(effective_instance_slots).sum();
+    debug_assert_eq!(
+        refit_slot_total,
+        accel.instance_slot_total,
+        "refit_accel called with a different Σ instance slots than build_accel built — \
+         capacity change is a topology change; call build_accel again"
     );
 
     // RT_INSTANCING_DESIGN.md D9: instanced refit = descriptor-build
@@ -1034,6 +1052,15 @@ struct ShadowRayParams {
     // multiple) with no extra alignment padding needed — see the Rust
     // mirror's offset assert.
     float4x4 inv_view_proj;
+    // RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows —
+    // the tables are ONE buffer with canonical per-object rows at [0, N)
+    // and per-slot rows at [N, N+Σ); every instance_id-indexed read adds
+    // this base (production passes the object count). 0 reads the
+    // canonical rows directly (valid for unwired scenes, where canonical
+    // and slot rows are identical). Object-indexed sites (n4.w readers,
+    // the RS-C emissive sampler) read through the un-offset pointers.
+    uint   slot_row_base;
+    uint   _pad_slot[3];
 };
 
 // RT-P3: one entry per RT object (SAME order as `RtObjectGeometry`'s
@@ -1200,6 +1227,27 @@ static float3x3 rti_euler_xyz(float3 angles) {
     return rz * ry * rx;
 }
 
+// RT_INSTANCING_DESIGN.md D3/D12: the vs_main instance fold for DIRECTIONS
+// (render_scene.wgsl:781-813 bit parity) — load the slot's
+// InstanceTransform (0 = unwired, identity) and apply rot·(d·msign). Shared
+// by the vertex-normal fetch (D3) and the tangent-frame edge directions
+// (D12): both are directions under the same rigid+mirror transform family,
+// and the msign fold IS the inverse-transpose for it (D4's two-line
+// exactness argument covers normals; edges follow identically).
+static float3 rti_apply_instance_dir(device RtNormalSource& src, float3 d) {
+    if (src.instance_addr == 0ul) return d;
+    device const RtInstanceTransform* inst =
+        (device const RtInstanceTransform*)src.instance_addr;
+    float3x3 rot = rti_euler_xyz(inst->rot_pad.xyz);
+    uint marker = uint(inst->rot_pad.w + 0.5);
+    float3 msign = float3(
+        select(1.0, -1.0, marker == 1u),
+        select(1.0, -1.0, marker == 2u),
+        select(1.0, -1.0, marker == 3u)
+    );
+    return rot * (d * msign);
+}
+
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
 // its bindless GPU address, then transform to world space with `src`'s
 // normal matrix. `vi` is a flat, non-indexed triangle-list vertex index
@@ -1211,25 +1259,11 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     device const packed_float3* n_ptr =
         (device const packed_float3*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.normal_offset);
     float3 n_local = float3(*n_ptr);
-    // RT_INSTANCING_DESIGN.md D3: the vs_main fold (render_scene.wgsl:781-813
-    // bit parity) — when this row is a wired instance slot, load the slot's
-    // InstanceTransform and apply n' = rot·(n·msign) to the LOCAL normal
-    // BEFORE the row's object-level normal_matrix (the model matrix). The
-    // msign marker decode matches the raster exactly: marker = u32(w+0.5),
-    // select per component. Unwired rows (instance_addr == 0) skip this
-    // outright — byte-identical to the pre-instancing fetch.
-    if (src.instance_addr != 0ul) {
-        device const RtInstanceTransform* inst =
-            (device const RtInstanceTransform*)src.instance_addr;
-        float3x3 rot = rti_euler_xyz(inst->rot_pad.xyz);
-        uint marker = uint(inst->rot_pad.w + 0.5);
-        float3 msign = float3(
-            select(1.0, -1.0, marker == 1u),
-            select(1.0, -1.0, marker == 2u),
-            select(1.0, -1.0, marker == 3u)
-        );
-        n_local = rot * (n_local * msign);
-    }
+    // RT_INSTANCING_DESIGN.md D3: a wired instance slot folds the LOCAL
+    // normal with rot·(n·msign) BEFORE the row's object-level normal_matrix
+    // (the model matrix). Unwired rows pass through unchanged —
+    // byte-identical to the pre-instancing fetch.
+    n_local = rti_apply_instance_dir(src, n_local);
     float3x3 m = float3x3(float3(src.normal_matrix_col0), float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
     return m * n_local;
 }
@@ -1311,8 +1345,14 @@ static float3 perturb_normal_with_map(
     device const packed_float3* p2_ptr =
         (device const packed_float3*)(base + (ulong)v2 * (ulong)src.vertex_stride);
     float3x3 m = float3x3(float3(src.normal_matrix_col0), float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
-    float3 edge1 = m * (float3(*p1_ptr) - float3(*p0_ptr));
-    float3 edge2 = m * (float3(*p2_ptr) - float3(*p0_ptr));
+    // RT_INSTANCING_DESIGN.md D12: edge directions take the SAME instance
+    // fold as the normal (rot·(d·msign), D3's helper) before the model
+    // matrix — edges are directions, and a frame derived from unfoldered
+    // edges on an instanced (especially mirrored) surface is off by the
+    // instance rotation/reflection. Degrades to the pre-instancing edges
+    // exactly when the row is unwired.
+    float3 edge1 = m * rti_apply_instance_dir(src, float3(*p1_ptr) - float3(*p0_ptr));
+    float3 edge2 = m * rti_apply_instance_dir(src, float3(*p2_ptr) - float3(*p0_ptr));
     float2 uv0 = fetch_uv(src, v0);
     float2 uv1 = fetch_uv(src, v1);
     float2 uv2 = fetch_uv(src, v2);
@@ -1798,6 +1838,16 @@ kernel void trace_shadow_rays(
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
+    // RT_INSTANCING_DESIGN.md D11: the material/normal tables are ONE
+    // buffer — canonical per-object rows at [0, N), per-slot rows at
+    // [N, N+Σ). Every read indexed by a committed instance_id (a SLOT)
+    // goes through these base-offset pointers; object-indexed sites (the
+    // n4.w readers in this kernel's reflection-primary block and the RS-C
+    // emissive sampler) keep the un-offset pointers and land on canonical
+    // rows. slot_row_base == 0 (unwired scenes) makes the offset pointers
+    // identical to the base pointers — byte-identical reads.
+    device RtNormalSource* slot_sources = normal_sources + p.slot_row_base;
+    device GiMaterial*     slot_materials = gi_materials + p.slot_row_base;
     uint2 gpix = min(uint2((float2(tid) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
 
     bool valid;
@@ -1891,21 +1941,21 @@ kernel void trace_shadow_rays(
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
             primary_q.reset(pr, accel, RT_MASK_VISIBLE);
-            if (walk_with_alpha_test(primary_q, normal_sources, material_textures, false)) {
+            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 primary_pid = primary_q.get_committed_primitive_id();
                 primary_bary = primary_q.get_committed_triangle_barycentric_coord();
-                n = fetch_interpolated_normal(normal_sources, primary_iid, primary_pid, primary_bary);
+                n = fetch_interpolated_normal(slot_sources, primary_iid, primary_pid, primary_bary);
                 // BUG-wytp: perturb the shading normal from the primary hit's
                 // normal map. Degrades to `n` exactly when no map is bound.
                 shading_n = perturb_normal_with_map(
-                    normal_sources[primary_iid], normal_sources, material_textures,
+                    slot_sources[primary_iid], slot_sources, material_textures,
                     primary_iid, primary_pid, primary_bary, n);
                 // RT_INSTANCING_DESIGN.md D6: out_n.w carries the owning
                 // OBJECT index (obj_motion stays per-object), NOT the
                 // per-slot instance_id. Unwired scenes: object_index ==
                 // instance_id, byte-identical to the pre-instancing pack.
-                obj_id = float(normal_sources[primary_iid].object_index);
+                obj_id = float(slot_sources[primary_iid].object_index);
             }
         }
     }
@@ -2032,9 +2082,9 @@ kernel void trace_shadow_rays(
                 // when HAS_TRANSLUCENCY is true. Binary scenes keep the pre-TL-B
                 // walk_with_alpha_test codegen byte-for-byte.
                 if (HAS_TRANSLUCENCY) {
-                    vis_rgb += walk_with_transmission(shadow_q, normal_sources, gi_materials, material_textures);
+                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures);
                 } else {
-                    bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
+                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true);
                     if (!blocked) vis += 1.0;
                 }
             }
@@ -2077,7 +2127,7 @@ kernel void trace_shadow_rays(
             ao_r.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
             ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
-            if (!walk_with_alpha_test(ao_q, normal_sources, material_textures, true)) ao += 1.0;
+            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -2170,7 +2220,7 @@ kernel void trace_shadow_rays(
             for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
                 intersection_query<triangle_data, instancing> gi_q;
                 gi_q.reset(gr, accel, RT_MASK_VISIBLE);
-                if (!walk_with_alpha_test(gi_q, normal_sources, material_textures, false)) {
+                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
                     float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
@@ -2186,13 +2236,13 @@ kernel void trace_shadow_rays(
                 // BUG-1gqt: factor × emissive-map sample at the hit (was:
                 // flat factor only — a black emissive map still lit GI).
                 float3 hit_emissive = emissive_at_hit(
-                    float3(gi_materials[oi].emissive), normal_sources[oi],
-                    normal_sources, material_textures, oi, gi_pid, gi_bary);
-                float3 hit_albedo = float3(gi_materials[oi].albedo);
+                    float3(slot_materials[oi].emissive), slot_sources[oi],
+                    slot_sources, material_textures, oi, gi_pid, gi_bary);
+                float3 hit_albedo = float3(slot_materials[oi].albedo);
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
-                float3 hit_n = fetch_interpolated_normal(normal_sources, oi, gi_pid, gi_bary);
+                float3 hit_n = fetch_interpolated_normal(slot_sources, oi, gi_pid, gi_bary);
                 float3 bounce_term = sun_bounce_at_hit(
-                    accel, normal_sources, gi_materials, material_textures, p, n_casters,
+                    accel, slot_sources, slot_materials, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid,
                     400u + s * MAX_RT_CASTERS);
                 // RS7: the bounce-0 direct-emissive term is owned by the
@@ -2273,7 +2323,7 @@ kernel void trace_shadow_rays(
                         em_r.direction = l_hat;
                         intersection_query<triangle_data, instancing> em_q;
                         em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
-                        bool blocked = walk_with_alpha_test(em_q, normal_sources, material_textures, true);
+                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true);
                         if (!blocked) {
                             float3 em_factor = float3(gi_materials[emissive_table[i].object_index].emissive);
                             float2 uv0 = emissive_table[i].uv0;
@@ -2382,7 +2432,7 @@ kernel void trace_shadow_rays(
             refl_q.reset(rr, accel, RT_MASK_VISIBLE);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
-            if (walk_with_alpha_test(refl_q, normal_sources, material_textures, false)) {
+            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false)) {
                 // Raster-parity reflections (RAYTRACING_DESIGN.md section 9.6): hit
                 // shading now includes the hit surface's own environment
                 // contribution (diffuse irradiance + one-bounce specular), so
@@ -2394,26 +2444,26 @@ kernel void trace_shadow_rays(
                 uint hpid = refl_q.get_committed_primitive_id();
                 float2 hbary = refl_q.get_committed_triangle_barycentric_coord();
                 hit_dist = refl_q.get_committed_distance();
-                device RtNormalSource& hsrc = normal_sources[hoi];
+                device RtNormalSource& hsrc = slot_sources[hoi];
                 // BUG-1gqt: factor × emissive-map sample at the hit (was:
                 // flat factor only — a black emissive map still lit
                 // reflections).
                 float3 hit_emissive = emissive_at_hit(
-                    float3(gi_materials[hoi].emissive), hsrc,
-                    normal_sources, material_textures, hoi, hpid, hbary);
+                    float3(slot_materials[hoi].emissive), hsrc,
+                    slot_sources, material_textures, hoi, hpid, hbary);
                 // Sample base-color texture if bound (RtNormalSource.base_color_tex_index),
                 // otherwise flat gi_materials albedo is the fallback.
-                float3 hit_albedo = float3(gi_materials[hoi].albedo);
+                float3 hit_albedo = float3(slot_materials[hoi].albedo);
                 if (hsrc.base_color_tex_index < MAX_RT_MATERIAL_TEXTURES) {
-                    float2 hit_uv = fetch_interpolated_uv(normal_sources, hoi, hpid, hbary);
+                    float2 hit_uv = fetch_interpolated_uv(slot_sources, hoi, hpid, hbary);
                     constexpr sampler bc_sampler(coord::normalized, address::repeat, filter::linear);
                     hit_albedo = material_textures[hsrc.base_color_tex_index].sample(bc_sampler, hit_uv).rgb;
                 }
-                float4 mr = gi_materials[hoi].metallic_roughness;
+                float4 mr = slot_materials[hoi].metallic_roughness;
                 float hit_metallic = mr.x;
                 float hit_roughness = mr.y;
                 float3 hit_pos = rr.origin + rr.direction * hit_dist;
-                float3 hit_n = fetch_interpolated_normal(normal_sources, hoi, hpid, hbary);
+                float3 hit_n = fetch_interpolated_normal(slot_sources, hoi, hpid, hbary);
                 // Raster-parity diffuse term (irradiance approximation): sample
                 // roughest mip for near-isotropic diffuse contribution.
                 const float RT_REFL_HIT_ENV_DIFFUSE_ROUGHNESS = 1.0;
@@ -2428,7 +2478,7 @@ kernel void trace_shadow_rays(
                 // Sun-bounce term — multi-caster fix: sums every sun caster
                 // (kind==0), same discipline as the GI gather's bounce above.
                 float3 sun_bounce_term = sun_bounce_at_hit(
-                    accel, normal_sources, gi_materials, material_textures, p, n_casters,
+                    accel, slot_sources, slot_materials, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid, 500u);
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
                 traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
@@ -3783,6 +3833,10 @@ struct DebugFetchNormalParams {
     uint instance_id;
     uint primitive_id;
     packed_float2 bary;
+    // RT_INSTANCING_DESIGN.md D11: same slot-row base the production
+    // kernel's params carry — the debug surface must exercise the SAME
+    // indexing as `trace_shadow_rays`, not the canonical rows.
+    uint slot_row_base;
 };
 
 kernel void debug_fetch_interpolated_normal(
@@ -3792,7 +3846,7 @@ kernel void debug_fetch_interpolated_normal(
     uint tid [[thread_position_in_grid]])
 {
     if (tid != 0u) return;
-    float3 n = fetch_interpolated_normal(normal_sources, p.instance_id, p.primitive_id, float2(p.bary));
+    float3 n = fetch_interpolated_normal(normal_sources + p.slot_row_base, p.instance_id, p.primitive_id, float2(p.bary));
     out_normal[0] = packed_float3(n);
 }
 
@@ -4217,6 +4271,17 @@ pub struct ShadowRayParams {
     pub svt_slot: u32,
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
+    /// RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows in
+    /// the shared `normal_sources`/`gi_materials` buffers — canonical
+    /// per-object rows at `[0, N)`, per-slot rows at `[N, N+Σ)`. The kernel
+    /// adds this to every `instance_id`-indexed read. `new()` defaults 0
+    /// (canonical rows — valid for unwired scenes, where slot rows are
+    /// identical copies); production sets it to the object count via
+    /// [`ShadowRayParams::with_slot_row_base`].
+    pub slot_row_base: u32,
+    /// Alignment pad to the 16-byte multiple the MSL mirror rounds to
+    /// (float4x4 member): 400 + 4 + 12 = 416.
+    pub _pad_slot: [u32; 3],
 }
 
 /// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
@@ -4278,7 +4343,18 @@ impl ShadowRayParams {
             emissive_table_total_area,
             svt_slot,
             inv_view_proj,
+            slot_row_base: 0,
+            _pad_slot: [0; 3],
         }
+    }
+
+    /// RT_INSTANCING_DESIGN.md D11: production passes the object count N so
+    /// `instance_id`-indexed table reads land in the per-slot rows
+    /// `[N, N+Σ)`. Rides the params (not a new binding) — the SAME
+    /// discipline as `AccumulateParams`' flag setters.
+    pub fn with_slot_row_base(mut self, base: u32) -> Self {
+        self.slot_row_base = base;
+        self
     }
 }
 
@@ -4751,8 +4827,12 @@ fn build_alias_table(weights: &[f32]) -> (Vec<f32>, Vec<u32>) {
 // compile time instead of silently reading garbage on the GPU.
 // RS-A (caster cap 4 -> 8): casters grew from 4×32=128B to 8×32=256B;
 // inv_view_proj offset and total size recomputed. 336 % 16 == 0.
+// RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
+// (offset 400) with 12 bytes of pad — 416 total, a 16-byte multiple on the
+// MSL side (float4x4 member alignment) matching this side's 416 exactly.
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 400);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel
@@ -4984,25 +5064,28 @@ fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
     ]
 }
 
-/// (Re)allocate-if-needed + rewrite in place the per-object
-/// [`RtNormalSource`] indirection table from the SAME `objects` slice
-/// `build_accel`/`refit_accel` use — same "grow, never shrink-then-
-/// reallocate every frame" idiom as `render_scene.rs`'s `ensure_rt_gi_
-/// materials`; rewritten every RT-ready frame (cheap: N small POD structs,
-/// same cadence as that file's `gi_materials_data` rebuild). Never requires
-/// a GPU readback of the actual vertex data itself — the bindless address
-/// does that lookup on the GPU, at ray-hit time.
+/// (Re)allocate-if-needed + rewrite in place the [`RtNormalSource`]
+/// indirection table from the SAME `objects` slice `build_accel`/
+/// `refit_accel` use — same "grow, never shrink-then-reallocate every
+/// frame" idiom as `render_scene.rs`'s `ensure_rt_gi_materials`; rewritten
+/// every RT-ready frame (cheap: N small POD structs, same cadence as that
+/// file's `gi_materials_data` rebuild). Never requires a GPU readback of
+/// the actual vertex data itself — the bindless address does that lookup
+/// on the GPU, at ray-hit time.
 ///
-/// RT_INSTANCING_DESIGN.md D3: rows are emitted PER SLOT, object-major —
-/// object i owns rows `[base_i, base_i + cap_i)` where `cap_i` is its
-/// effective slot count and `base_i` the running sum (the SAME slot
-/// addressing the TLAS descriptors use, so `hit.instance_id` indexes this
-/// table directly). Each slot row duplicates the object's fields, with
-/// `object_index` naming the owning object (packed into out_n.w at the
-/// primary hit, D6) and `instance_addr` pointing at THIS slot's
-/// `InstanceTransform` (0 = unwired). When every object has ≤ 1 slot the
-/// expansion is one row per object in `objects` order — byte-identical to
-/// the pre-instancing table (INV-RTI3).
+/// RT_INSTANCING_DESIGN.md D11 (supersedes D3's object-major duplication):
+/// ONE table — canonical per-object rows at `[0, N)`, per-slot rows at
+/// `[N, N + Σ)`. Object-indexed kernel readers (the `n4.w` roughness
+/// lookups in `atrous_filter`/`accumulate_irradiance`, the RS-C emissive
+/// sampler) read canonical rows through the un-offset pointer, UNCHANGED;
+/// `instance_id`-indexed readers add `N` via
+/// `ShadowRayParams::slot_row_base` (the kernel's offset pointers). Slot
+/// rows duplicate the object's fields with `object_index` naming the owner
+/// (packed into out_n.w at the primary hit, D6) and `instance_addr`
+/// pointing at THIS slot's `InstanceTransform` (0 = unwired, so unwired
+/// slot rows are identical to their canonical row). When every object has
+/// ≤ 1 slot the slot region is a verbatim copy of the canonical region —
+/// byte-identical values whichever region a reader lands in (INV-RTI3).
 ///
 /// RT-T2-A: also assigns each alpha-masked object a slot in the returned
 /// texture list — `objects[i].base_color_texture` becomes `alpha_textures[k]`
@@ -5019,11 +5102,13 @@ pub fn ensure_normal_sources<'a>(
     device: &GpuDevice,
     objects: &[RtObjectGeometry<'a>],
 ) -> Vec<&'a GpuTexture> {
-    let needed: usize = objects
+    let object_count = objects.len();
+    let slot_total: usize = objects
         .iter()
         .map(|o| effective_instance_slots(o) as usize)
-        .sum::<usize>()
-        .max(1);
+        .sum();
+    // D11: canonical rows [0, N) + slot rows [N, N+Σ) in one buffer.
+    let needed = (object_count + slot_total).max(1);
     if slot.is_none() || *capacity < needed {
         *slot = Some(device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64));
         *capacity = needed;
@@ -5033,9 +5118,9 @@ pub fn ensure_normal_sources<'a>(
         .mapped_ptr()
         .expect("RT normal-source buffer must be CPU-mapped");
     let mut material_textures: Vec<&'a GpuTexture> = Vec::new();
-    // D3: object-major per-slot row cursor — object i's rows occupy
-    // [base_i, base_i + cap_i), matching the TLAS slot addressing.
-    let mut row = 0usize;
+    // D11: slot-region cursor — object i's slots occupy [base_i, base_i +
+    // cap_i) within [N, N+Σ), matching the TLAS slot addressing.
+    let mut slot_row = 0usize;
     for (i, obj) in objects.iter().enumerate() {
         let slots = effective_instance_slots(obj);
         let alpha_tex_index = if obj.alpha_mask {
@@ -5137,35 +5222,42 @@ pub fn ensure_normal_sources<'a>(
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
-        // D3: duplicate the object's row across its slots; only
-        // object_index / instance_addr vary per slot.
+        let mut src = RtNormalSource {
+            vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
+            vertex_stride: obj.vertex_stride,
+            normal_offset: obj.normal_offset,
+            normal_matrix: normal_matrix_from_model(obj.transform),
+            uv_offset: obj.uv_offset,
+            alpha_mask: obj.alpha_mask as u32,
+            alpha_cutoff: obj.alpha_cutoff,
+            alpha_tex_index,
+            base_color_tex_index,
+            mr_tex_index,
+            normal_tex_index,
+            emissive_tex_index,
+            emissive_uv_m: obj.emissive_uv_m,
+            emissive_uv_t: obj.emissive_uv_t,
+            object_index: i as u32,
+            // Canonical row: unwired by definition — object-indexed readers
+            // must never see an instance fold.
+            instance_addr: 0,
+        };
+        // D11: canonical row at [0, N).
+        unsafe {
+            std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+        }
+        // D11: slot rows at [N, N+Σ) duplicate the row; only instance_addr
+        // varies (object_index already names this object).
         for s in 0..slots {
-            let src = RtNormalSource {
-                vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
-                vertex_stride: obj.vertex_stride,
-                normal_offset: obj.normal_offset,
-                normal_matrix: normal_matrix_from_model(obj.transform),
-                uv_offset: obj.uv_offset,
-                alpha_mask: obj.alpha_mask as u32,
-                alpha_cutoff: obj.alpha_cutoff,
-                alpha_tex_index,
-                base_color_tex_index,
-                mr_tex_index,
-                normal_tex_index,
-                emissive_tex_index,
-                emissive_uv_m: obj.emissive_uv_m,
-                emissive_uv_t: obj.emissive_uv_t,
-                object_index: i as u32,
-                instance_addr: if obj.instances_addr != 0 {
-                    obj.instances_addr + s as u64 * RT_INSTANCE_TRANSFORM_BYTES as u64
-                } else {
-                    0
-                },
+            src.instance_addr = if obj.instances_addr != 0 {
+                obj.instances_addr + s as u64 * RT_INSTANCE_TRANSFORM_BYTES as u64
+            } else {
+                0
             };
             unsafe {
-                std::ptr::write_unaligned(ptr.add(row * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+                std::ptr::write_unaligned(ptr.add((object_count + slot_row) * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
             }
-            row += 1;
+            slot_row += 1;
         }
     }
     material_textures
@@ -6255,6 +6347,11 @@ impl MetalShadowRayTracer {
         instance_id: u32,
         primitive_id: u32,
         bary: [f32; 2],
+        // RT_INSTANCING_DESIGN.md D11: the SAME slot-row base the
+        // production kernel's params carry (object count N) — the debug
+        // surface must exercise the production slot-row indexing, not the
+        // canonical rows.
+        slot_row_base: u32,
     ) -> [f32; 3] {
         #[repr(C)]
         #[derive(Clone, Copy)]
@@ -6262,11 +6359,14 @@ impl MetalShadowRayTracer {
             instance_id: u32,
             primitive_id: u32,
             bary: [f32; 2],
+            slot_row_base: u32,
         }
+        const _: () = assert!(std::mem::size_of::<DebugFetchNormalParams>() == 20);
         let params = DebugFetchNormalParams {
             instance_id,
             primitive_id,
             bary,
+            slot_row_base,
         };
         let params_buffer = device.create_buffer_shared(std::mem::size_of::<DebugFetchNormalParams>() as u64);
         let params_ptr = params_buffer

@@ -5639,16 +5639,19 @@ impl EffectNode for RenderScene {
             // count, same NLL-borrow reason the tracer/masks/params
             // buffers above are ensured before `opaque_draws`'
             // long-lived immutable borrow starts.
-            // RT_INSTANCING_DESIGN.md D3: the GPU table holds one row per
-            // TLAS SLOT (object-major per-slot duplication), so the RT
-            // kernel's `gi_materials[instance_id]` indexing stays direct.
+            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
+            // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
+            // `ensure_normal_sources` — object-indexed readers (n4.w
+            // roughness, RS-C sampler) use the canonical rows,
+            // instance_id-indexed readers add N via params.slot_row_base.
             // Every object currently carries the D7 default (≤1 slot), so
-            // this equals `objects.len()` until P1 wires instance buffers.
+            // this equals 2×`objects.len()` until P1 wires instance
+            // buffers.
             let rt_gi_slot_count: usize = objects
                 .iter()
                 .map(|o| if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots as usize } else { 1 })
                 .sum::<usize>()
-                .max(1);
+                + objects.len();
             ensure_rt_gi_materials(
                 &mut self.rt_gi_materials,
                 &mut self.rt_gi_materials_capacity,
@@ -5950,7 +5953,10 @@ impl EffectNode for RenderScene {
                     emissive_table_entry_count,
                     emissive_table_total_area,
                     svt_slot,
-                );
+                )
+                // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+                // normal/gi-material reads land in the slot rows [N, N+Σ).
+                .with_slot_row_base(objects.len() as u32);
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
@@ -5990,15 +5996,20 @@ impl EffectNode for RenderScene {
                     emissive_table_entry_count,
                     emissive_table_total_area,
                     svt_slot,
-                );
+                )
+                // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+                // normal/gi-material reads land in the slot rows [N, N+Σ).
+                .with_slot_row_base(objects.len() as u32);
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
-                // RT_INSTANCING_DESIGN.md D3: the per-object row is
-                // duplicated object-major across the object's TLAS slots
+                // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
+                // [0, N) (the built block, one memcpy) + per-slot rows at
+                // [N, N+Σ) duplicating each object's row object-major
                 // (same slot addressing as `ensure_normal_sources`), so
-                // `gi_materials[instance_id]` reads the hit slot's row.
-                // With every object at ≤ 1 slot this is the historical
-                // single memcpy, byte-identical.
+                // instance_id-indexed kernel reads via params.slot_row_base
+                // land on the slot rows while object-indexed readers use
+                // the canonical block. With every object at ≤ 1 slot the
+                // slot region is a verbatim copy of the canonical block.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
                 {
                     // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
@@ -6011,7 +6022,18 @@ impl EffectNode for RenderScene {
                     let ptr = gi_materials_buffer
                         .mapped_ptr()
                         .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
-                    let mut row = 0usize;
+                    // Canonical block [0, N).
+                    let canonical_bytes: &[u8] = unsafe {
+                        std::slice::from_raw_parts(
+                            gi_materials_data.as_ptr() as *const u8,
+                            std::mem::size_of_val(gi_materials_data.as_slice()),
+                        )
+                    };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(canonical_bytes.as_ptr(), ptr, canonical_bytes.len());
+                    }
+                    // Slot region [N, N+Σ): per-slot duplicates.
+                    let mut slot_row = 0usize;
                     for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
                         let slots =
                             if o.instances_addr != 0 && o.instance_slots > 1 { o.instance_slots } else { 1 };
@@ -6019,11 +6041,11 @@ impl EffectNode for RenderScene {
                             unsafe {
                                 std::ptr::copy_nonoverlapping(
                                     mat as *const manifold_gpu::raytrace::GiMaterial as *const u8,
-                                    ptr.add(row * GI_SIZE),
+                                    ptr.add((objects.len() + slot_row) * GI_SIZE),
                                     GI_SIZE,
                                 );
                             }
-                            row += 1;
+                            slot_row += 1;
                         }
                     }
                 }
