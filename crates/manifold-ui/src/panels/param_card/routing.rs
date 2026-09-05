@@ -458,13 +458,15 @@ impl ParamCardPanel {
         }
     }
 
-    /// Drag-move dispatch. The state mutation + tree repositioning is identical
-    /// for both kinds; only the emitted [`PanelAction`] variant differs, so the
-    /// body is shared and branches on `kind` at each emission point.
-    /// `fine` is Shift-held, sampled per move (not just at grab) so pressing/
-    /// releasing Shift mid-drag re-scales sensitivity live (D8).
+    /// Drag-move dispatch. The state mutation + tree repositioning and the
+    /// emitted [`PanelAction`]s are identical for both kinds — every emission
+    /// rides `param_target()` (BUG-3jpj: a modifier card's kind is Effect with
+    /// effect_index 0, so deriving the target from `self.kind` here re-addresses
+    /// mid-gesture moves to effect 0 and the drag dies). `fine` is Shift-held,
+    /// sampled per move (not just at grab) so pressing/releasing Shift mid-drag
+    /// re-scales sensitivity live (D8).
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree, fine: bool) -> Vec<PanelAction> {
-        let ei = self.effect_index;
+        let target = self.param_target();
 
         // Envelope target handle drag — update depth, reposition the orange bar
         // along the parameter's own track, dispatch the Target change.
@@ -482,10 +484,7 @@ impl ParamCardPanel {
                 tree.set_bounds(t.target_bar_id, target_bar_rect(track_rect, norm));
             }
             let pid = self.rows[pi].id.clone();
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))],
-                ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))],
-            };
+            return vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))];
         }
 
         // Envelope decay slider drag — update the drawer slider's fill + value,
@@ -505,10 +504,7 @@ impl ParamCardPanel {
             }
             BitmapSlider::update_value(tree, ds, norm, &format!("{decay:.2}"));
             let pid = self.rows[pi].id.clone();
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],
-                ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],
-            };
+            return vec![PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))];
         }
 
         // Audio shaping slider drag — update fill + value, dispatch live edit.
@@ -555,16 +551,10 @@ impl ParamCardPanel {
                     BitmapSlider::update_value(tree, sl, norm, &text);
                 }
                 let pid = self.rows[pi].id.clone();
-                return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Scrub(
-                        ValueRef::AudioModShape(GraphParamTarget::Effect(ei), pid, which),
-                        ScrubPhase::Move(ScrubValue::Scalar(value)),
-                    )],
-                    ParamCardKind::Generator => vec![PanelAction::Scrub(
-                        ValueRef::AudioModShape(GraphParamTarget::Generator, pid, which),
-                        ScrubPhase::Move(ScrubValue::Scalar(value)),
-                    )],
-                };
+                return vec![PanelAction::Scrub(
+                    ValueRef::AudioModShape(target, pid, which),
+                    ScrubPhase::Move(ScrubValue::Scalar(value)),
+                )];
             }
         }
 
@@ -600,15 +590,7 @@ impl ParamCardPanel {
                     BitmapSlider::update_value(tree, sl, display_norm, &text);
                 }
                 let pid = self.rows[pi].id.clone();
-                return match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(value)))]
-                    }
-                    ParamCardKind::Generator => vec![PanelAction::Scrub(
-                        ValueRef::AudioModStepAmount(GraphParamTarget::Generator, pid),
-                        ScrubPhase::Move(ScrubValue::Scalar(value)),
-                    )],
-                };
+                return vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(target, pid), ScrubPhase::Move(ScrubValue::Scalar(value)))];
             }
         }
 
@@ -647,14 +629,7 @@ impl ParamCardPanel {
             }
 
             let pid = self.rows[pi].id.clone();
-            return match self.kind {
-                ParamCardKind::Effect => {
-                    vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))]
-                }
-                ParamCardKind::Generator => {
-                    vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))]
-                }
-            };
+            return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))];
         }
 
         // Param slider drag
@@ -686,16 +661,10 @@ impl ParamCardPanel {
             BitmapSlider::update_value(tree, ids, display_norm, &text);
             self.param_cache[pi] = val;
             let pid = self.rows[pi].id.clone();
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Scrub(
-                    ValueRef::Param(GraphParamTarget::Effect(ei), pid),
-                    ScrubPhase::Move(ScrubValue::Scalar(val)),
-                )],
-                ParamCardKind::Generator => vec![PanelAction::Scrub(
-                    ValueRef::Param(GraphParamTarget::Generator, pid),
-                    ScrubPhase::Move(ScrubValue::Scalar(val)),
-                )],
-            };
+            return vec![PanelAction::Scrub(
+                ValueRef::Param(target, pid),
+                ScrubPhase::Move(ScrubValue::Scalar(val)),
+            )];
         }
 
         // D3 relight-knob drag (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — mirrors
@@ -718,66 +687,38 @@ impl ParamCardPanel {
     }
 
     /// Drag-end dispatch — commit the active drag. Identical bookkeeping for
-    /// both kinds; only the emitted [`PanelAction`] variant differs.
+    /// both kinds; every emission rides `param_target()` (BUG-3jpj — see
+    /// `handle_drag`).
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
-        let ei = self.effect_index;
+        let target = self.param_target();
 
         match self.drag.end() {
             Some(ParamDragTarget::EnvTarget { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
-                match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
-                    ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
-                }
+                vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, pid), ScrubPhase::Commit)]
             }
             Some(ParamDragTarget::EnvDecay { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
-                match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
-                    ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
-                }
+                vec![PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Commit)]
             }
             Some(ParamDragTarget::AudioShape { index: pi, param: which }) => {
                 let pid = self.rows[pi].id.clone();
-                match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(ei), pid, which), ScrubPhase::Commit)],
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Generator, pid, which), ScrubPhase::Commit)]
-                    }
-                }
+                vec![PanelAction::Scrub(ValueRef::AudioModShape(target, pid, which), ScrubPhase::Commit)]
             }
             Some(ParamDragTarget::StepAmount { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
-                match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)]
-                    }
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Generator, pid), ScrubPhase::Commit)]
-                    }
-                }
+                vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(target, pid), ScrubPhase::Commit)]
             }
             Some(ParamDragTarget::Trim { kind, index: pi, .. }) => {
                 let pid = self.rows[pi].id.clone();
-                match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Generator, pid), ScrubPhase::Commit)]
-                    }
-                }
+                vec![PanelAction::Scrub(ValueRef::Trim(kind, target, pid), ScrubPhase::Commit)]
             }
             Some(ParamDragTarget::Param { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
-                match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Scrub(
-                        ValueRef::Param(GraphParamTarget::Effect(ei), pid),
-                        ScrubPhase::Commit,
-                    )],
-                    ParamCardKind::Generator => vec![PanelAction::Scrub(
-                        ValueRef::Param(GraphParamTarget::Generator, pid),
-                        ScrubPhase::Commit,
-                    )],
-                }
+                vec![PanelAction::Scrub(
+                    ValueRef::Param(target, pid),
+                    ScrubPhase::Commit,
+                )]
             }
             Some(ParamDragTarget::Relight { field }) => {
                 vec![PanelAction::Scrub(ValueRef::RelightParam(self.param_target(), field), ScrubPhase::Commit)]
@@ -799,10 +740,9 @@ impl ParamCardPanel {
         }
         use crate::intent::Gesture::RightClick;
 
-        let target = match self.kind {
-            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
-            ParamCardKind::Generator => GraphParamTarget::Generator,
-        };
+        // Every emission rides param_target() — a modifier card must address
+        // its owning layer here too (BUG-3jpj), not effect_index 0.
+        let target = self.param_target();
 
         // Card root: claim the whole area + the context-menu action. Any
         // descendant without a more specific intent folds here.

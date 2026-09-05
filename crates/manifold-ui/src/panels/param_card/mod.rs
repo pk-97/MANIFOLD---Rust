@@ -2170,6 +2170,59 @@ mod tests {
         assert!(!panel.is_dragging(), "drag slot cleared after end");
     }
 
+    /// BUG-3jpj (scene-modifier-card-drag-clunky): a modifier card's kind is
+    /// Effect with effect_index 0, but its rows address `GeneratorOf(owning
+    /// layer)` (param_target(), INV-M4). Every wire of a slider drag — begin,
+    /// mid-gesture moves, commit — must carry that target; a site that
+    /// re-derives the target from `self.kind` mid-gesture flips the address to
+    /// effect 0 of the active layer, the write lands nowhere, and the slider
+    /// snaps back on the next value sync.
+    #[test]
+    fn modifier_card_drag_addresses_owning_layer_for_whole_gesture() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut config = effect_config();
+        config.modifier = Some(crate::param_surface::ModifierCardInfo {
+            kind_id: "scene_loop".into(),
+            layer_id: LayerId::new("layer-1"),
+            show_enable_toggle: true,
+            wrap_debug: None,
+        });
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let want = GraphParamTarget::GeneratorOf(LayerId::new("layer-1"));
+
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let track_rect = tree.get_bounds(track);
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
+        assert!(
+            matches!(down.as_slice(),
+                [PanelAction::Scrub(ValueRef::Param(t1, _), ScrubPhase::Begin),
+                 PanelAction::Scrub(ValueRef::Param(t2, _), ScrubPhase::Move(..))]
+                if *t1 == want && *t2 == want),
+            "begin + first value address the owning layer: {down:?}"
+        );
+
+        let quarter_x = track_rect.x + track_rect.width * 0.25;
+        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree, false);
+        assert!(
+            matches!(moved.as_slice(),
+                [PanelAction::Scrub(ValueRef::Param(t, pid), ScrubPhase::Move(ScrubValue::Scalar(val)))]
+                if *t == want && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
+            "mid-gesture moves address the owning layer: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(),
+                [PanelAction::Scrub(ValueRef::Param(t, pid), ScrubPhase::Commit)] if *t == want && pid.as_ref() == "radius"),
+            "commit addresses the owning layer: {ended:?}"
+        );
+    }
+
     /// D8: Shift during a param drag scales the applied pointer delta by 0.1,
     /// sampled per move (not just at grab). Drags the "radius" row (0..100,
     /// whole numbers) 20 px from mid-track, coarse then fine, and asserts the
