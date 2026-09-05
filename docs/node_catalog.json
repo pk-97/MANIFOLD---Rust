@@ -2996,7 +2996,9 @@
         "Color Key"
       ],
       "category": "Mask",
-      "examples": [],
+      "examples": [
+        "StylizedFeedback"
+      ],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -11613,6 +11615,7 @@
         "DigitalDrift",
         "Glitch",
         "LED Strobe",
+        "StylizedFeedback",
         "Watercolor"
       ],
       "fusion": "multi_input_coincident",
@@ -21127,7 +21130,8 @@
         "LED Strobe",
         "Lantern",
         "MriVolume",
-        "OilyFluid"
+        "OilyFluid",
+        "StylizedFeedback"
       ],
       "fusion": "boundary:blocked",
       "inputs": [
@@ -33840,6 +33844,13 @@
           "max": "10",
           "min": "-10",
           "name": "Rotate"
+        },
+        {
+          "default": "1",
+          "id": "mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
         }
       ]
     },

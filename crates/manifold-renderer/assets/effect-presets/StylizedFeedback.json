@@ -44,6 +44,21 @@
         "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Rotate"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "valueLabels": [
+          "Ghost",
+          "Stack"
+        ]
       }
     ],
     "bindings": [
@@ -81,6 +96,19 @@
           "kind": "node",
           "nodeId": "affine",
           "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode",
+          "param": "selector"
         },
         "convert": {
           "type": "Float"
@@ -134,23 +162,6 @@
       "title": "Amount"
     },
     {
-      "id": 7,
-      "nodeId": "crush",
-      "typeId": "node.smoothstep",
-      "handle": "crush",
-      "params": {
-        "low": {
-          "type": "Float",
-          "value": 0.08
-        },
-        "high": {
-          "type": "Float",
-          "value": 0.5
-        }
-      },
-      "title": "Opaque Hold"
-    },
-    {
       "id": 4,
       "nodeId": "vignette",
       "typeId": "node.vignette",
@@ -190,7 +201,7 @@
           "value": 3
         }
       },
-      "title": "Max Blend"
+      "title": "Ghost Blend"
     },
     {
       "id": 6,
@@ -198,6 +209,61 @@
       "typeId": "system.final_output",
       "handle": "final_output",
       "title": "Output"
+    },
+    {
+      "id": 7,
+      "nodeId": "key",
+      "typeId": "node.chroma_key",
+      "handle": "key",
+      "params": {
+        "key_color": {
+          "type": "Vec3",
+          "value": [0.0, 0.0, 0.0]
+        },
+        "tolerance": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Foreground Key"
+    },
+    {
+      "id": 8,
+      "nodeId": "stack",
+      "typeId": "node.masked_mix",
+      "handle": "stack",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Stack"
+    },
+    {
+      "id": 9,
+      "nodeId": "mode",
+      "typeId": "node.switch_texture",
+      "handle": "mode",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "num_inputs": {
+          "type": "Int",
+          "value": 2
+        }
+      },
+      "title": "Mode"
     }
   ],
   "wires": [
@@ -206,6 +272,18 @@
       "fromPort": "out",
       "toNode": 5,
       "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "b"
     },
     {
       "fromNode": 1,
@@ -222,12 +300,6 @@
     {
       "fromNode": 3,
       "fromPort": "out",
-      "toNode": 7,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 7,
-      "fromPort": "out",
       "toNode": 4,
       "toPort": "in"
     },
@@ -238,13 +310,37 @@
       "toPort": "b"
     },
     {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "mask"
+    },
+    {
       "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 9,
       "fromPort": "out",
       "toNode": 1,
       "toPort": "in"
     },
     {
-      "fromNode": 5,
+      "fromNode": 9,
       "fromPort": "out",
       "toNode": 6,
       "toPort": "in"
