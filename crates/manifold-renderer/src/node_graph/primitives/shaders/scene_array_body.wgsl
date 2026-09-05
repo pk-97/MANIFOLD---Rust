@@ -23,6 +23,16 @@ fn body(
     jitter_seed: i32,
     jitter_amount: f32,
 ) -> Element {
+    // Slots at or beyond the live count are surplus capacity: the buffer is
+    // sized for count's FULL range (never its current value) so a live count
+    // write — the Scene Loop "Copies" card row, or the Stride row's coupled
+    // count secondary — never needs a rebuild (BUG-757c). Zero scale collapses
+    // the instance's vertices to a point; degenerate triangles rasterize
+    // nothing, in the main pass and the shadow passes alike.
+    if idx >= u32(max(count_param, 0)) {
+        return Element(vec4<f32>(0.0, 0.0, 0.0, 0.0), vec4<f32>(0.0));
+    }
+
     let t = f32(idx) * cell_size;
     var pos = vec3<f32>(0.0, 0.0, 0.0);
     if axis == 0u { pos.x = t; }
