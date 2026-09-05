@@ -18691,9 +18691,19 @@
             "1"
           ],
           "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Jitter Period",
+          "name": "jitter_period",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Optional per-instance jitter (rotation ±jitter_amount rad per axis, scale 1 ± jitter_amount/2) from a deterministic hash of the instance index mixed with jitter_seed — no time dependence, trivially wrap-safe. Source atom on the freeze codegen path.",
+      "purpose": "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Optional per-instance jitter (rotation ±jitter_amount rad per axis, scale 1 ± jitter_amount/2) from a deterministic hash of (index % jitter_period) mixed with jitter_seed — no time dependence; the period is the wrap-safety mechanism (the camera travels stride cells per loop, so purity needs the pattern to repeat with a period dividing stride — the Stride card row couples jitter_period = stride). Source atom on the freeze codegen path.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Lays out copies in a line along one axis, spacing them evenly for a looping flythrough.",
