@@ -2873,7 +2873,8 @@
         "DigitalDrift",
         "ParticleText",
         "StarField",
-        "StrangeAttractor"
+        "StrangeAttractor",
+        "StylizedFeedback"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -2996,9 +2997,7 @@
         "Color Key"
       ],
       "category": "Mask",
-      "examples": [
-        "StylizedFeedback"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -33846,9 +33845,9 @@
           "name": "Rotate"
         },
         {
-          "default": "2",
+          "default": "1",
           "id": "mode",
-          "max": "2",
+          "max": "1",
           "min": "0",
           "name": "Mode"
         }
