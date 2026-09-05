@@ -34,8 +34,11 @@ mod imp {
     use crate::render_target::RenderTarget;
 
     /// GPU temporal upscaler: MetalFX Temporal. Created once per
-    /// (src_dims, dst_dims); call `resize()` on dimension change — same
-    /// lifecycle contract as `MetalFxFullFrameUpscaler`.
+    /// (src_dims, dst_dims); on a dimension change the caller retires the
+    /// whole object (BUG-rnnr — an in-place resize would drop the old
+    /// scaler and its output target while in-flight frames still sample
+    /// the scaler-owned temporal-history textures) and constructs a new
+    /// one. Same lifecycle contract as `MetalFxFullFrameUpscaler`.
     ///
     /// Internally prefers `Metal4FxTemporalScaler` (MTL4, GPU-side sync)
     /// and falls back to `MetalFxTemporalScaler` (classic MTLFX) when
@@ -157,65 +160,6 @@ mod imp {
                 jitter_offset_y,
                 reset,
             );
-            true
-        }
-
-        /// Resize both the scaler and the internal output texture when
-        /// dimensions change. Returns `false` if no scaler could be created
-        /// for the new dimensions (MetalFX Temporal unavailable).
-        pub fn resize(
-            &mut self,
-            device: &manifold_gpu::GpuDevice,
-            src_w: u32,
-            src_h: u32,
-            dst_w: u32,
-            dst_h: u32,
-        ) -> bool {
-            let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
-            // Same preference as `new`: rebuild whichever generation was
-            // live; if the MTL4 build fails for the new dims, fall back to
-            // classic rather than dropping the upscaler entirely.
-            if self.m4.is_some() {
-                let bridge = device.mtl4_bridge();
-                self.m4 = bridge.and_then(|b| {
-                    manifold_gpu::metalfx_m4::Metal4FxTemporalScaler::new(
-                        device.raw_device(),
-                        b,
-                        src_w,
-                        src_h,
-                        dst_w,
-                        dst_h,
-                        fmt,
-                    )
-                });
-                if self.m4.is_none() {
-                    self.classic = manifold_gpu::metalfx::MetalFxTemporalScaler::new(
-                        device.raw_device(),
-                        src_w,
-                        src_h,
-                        dst_w,
-                        dst_h,
-                        fmt,
-                    );
-                }
-            } else {
-                self.classic = manifold_gpu::metalfx::MetalFxTemporalScaler::new(
-                    device.raw_device(),
-                    src_w,
-                    src_h,
-                    dst_w,
-                    dst_h,
-                    fmt,
-                );
-            }
-            if self.m4.is_none() && self.classic.is_none() {
-                return false;
-            }
-            self.src_w = src_w;
-            self.src_h = src_h;
-            self.dst_w = dst_w;
-            self.dst_h = dst_h;
-            self.output.resize(device, dst_w, dst_h);
             true
         }
     }

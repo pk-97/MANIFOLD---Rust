@@ -528,6 +528,8 @@ fn main() {
             frame_count,
             anim_progress: 1.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = device.create_encoder("anim-frame");
         {
@@ -630,6 +632,8 @@ fn render_single_frame(
             frame_count: frame as i64,
             anim_progress: 1.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = device.create_encoder("render-import-frame");
         {

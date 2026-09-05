@@ -184,6 +184,8 @@ fn main() {
             } else {
                 0
             },
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = device.create_encoder("look-dev-frame");
         {

@@ -139,6 +139,8 @@ impl LedUtilityFixture {
             frame_count: self.frame_count as i64,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let manifest = ParamManifest::from_params(
             self.specs
@@ -204,6 +206,8 @@ impl LedUtilityFixture {
             output_height: COMP_H,
             occluded_layers: &[0],
             render_skip: &[],
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = self.device.create_encoder("led-utility-composite");
         {

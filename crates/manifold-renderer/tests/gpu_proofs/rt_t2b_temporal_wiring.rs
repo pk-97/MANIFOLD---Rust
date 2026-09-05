@@ -133,6 +133,8 @@ fn ctx(owner_key: i64, frame_count: i64) -> PresetContext {
         frame_count,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     }
 }
 
@@ -460,6 +462,8 @@ fn dump_side_by_side_pngs_for_peter() {
             frame_count: 2,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-t2b-png-orbit");
         {

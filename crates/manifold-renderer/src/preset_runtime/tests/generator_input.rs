@@ -156,6 +156,8 @@
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
 
         cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx);
@@ -234,6 +236,8 @@
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 7,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
 
         cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx);
@@ -311,6 +315,8 @@
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
 
             // Watch combine_gate's scalar I/O — `preview_scalar_io` only
@@ -417,6 +423,8 @@
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut native_enc = device.create_encoder("cg-fused-run");
         {

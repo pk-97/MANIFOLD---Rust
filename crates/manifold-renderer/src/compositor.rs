@@ -89,6 +89,13 @@ pub struct CompositorFrame<'a> {
     /// guarantees a skipped layer resumes rendering before it can become
     /// visible again. Empty when the optimization is off or a preview is open.
     pub render_skip: &'a [i32],
+    /// BUG-rnnr: completion-event signal value of the last content commit
+    /// before this frame. Stamping source for retire-before-reuse of GPU
+    /// resources switched mid-frame (see `preset_context.rs`).
+    pub gpu_signal_committed: u64,
+    /// BUG-rnnr: the event's current `signaled_value()` — drain oracle for
+    /// retire-before-reuse. `0` where no fence is plumbed (tests, warmup).
+    pub gpu_signaled: u64,
 }
 
 impl<'a> CompositorFrame<'a> {

@@ -171,6 +171,8 @@ fn make_ctx(h: &harness::ParityHarness, time: f64, frame_count: i64, dt: f32) ->
         frame_count,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     }
 }
 

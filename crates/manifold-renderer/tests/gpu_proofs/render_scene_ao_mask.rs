@@ -244,6 +244,8 @@ fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("render-scene-ao-mask-enc");
         {
@@ -365,6 +367,8 @@ fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("render-scene-ao-mask-rt-enc");
         {
@@ -668,6 +672,8 @@ fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("render-scene-ao-group-enc");
         {
@@ -781,6 +787,8 @@ fn rt_ready_makes_ao_group_identity_on_color() {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("ao-group-rt-identity-enc");
         {

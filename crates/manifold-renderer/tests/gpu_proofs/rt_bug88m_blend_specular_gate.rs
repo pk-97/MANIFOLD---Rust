@@ -137,6 +137,8 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-bug88m-enc");
         {

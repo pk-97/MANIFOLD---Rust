@@ -123,6 +123,16 @@ pub struct Executor {
     /// thread guarantees the pointer is valid for the frame. `None` when no
     /// registry is available (mock-backend tests, standalone validation).
     layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
+    /// BUG-rnnr: completion-event signal value of the last content commit
+    /// before this frame — the stamping source for retire-before-reuse of
+    /// GPU resources switched mid-frame. Set each frame before
+    /// `execute_frame_*` via [`set_gpu_frame_fence`]; `0` when no fence is
+    /// plumbed (retires immediately, the pre-fix behavior).
+    gpu_signal_committed: u64,
+    /// BUG-rnnr: the event's current `signaled_value()` — the drain oracle
+    /// for retire-before-reuse. Set each frame alongside
+    /// [`gpu_signal_committed`](Self::gpu_signal_committed).
+    gpu_signaled: u64,
     /// The Texture2D output resource of `preview_target`, recorded during the
     /// step loop. After `execute_frame_*`, the integration layer reads its
     /// texture via [`Backend::slot_for`] + [`Backend::texture_2d`] and
@@ -431,6 +441,8 @@ impl Executor {
             empty_resources_prev: ahash::AHashSet::default(),
             live_scalar_inputs: Vec::new(),
             layer_skin_registry: None,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         }
     }
 
@@ -587,6 +599,15 @@ impl Executor {
     /// clears the pointer.
     pub fn set_layer_skin_registry(&mut self, registry: Option<&LayerSkinRegistry>) {
         self.layer_skin_registry = registry.map(crate::layer_skin::LayerSkinPtr::new);
+    }
+
+    /// BUG-rnnr — set the per-frame GPU fence scalars for retire-before-reuse.
+    /// Call once per frame before `execute_frame_*`. Cheap — stores two
+    /// values, no allocation. `0`/`0` means no fence: resources switched this
+    /// frame retire immediately (correct only on synchronous hosts).
+    pub fn set_gpu_frame_fence(&mut self, committed: u64, signaled: u64) {
+        self.gpu_signal_committed = committed;
+        self.gpu_signaled = signaled;
     }
 
     /// The preview target's Texture2D output resource from the last frame, if
@@ -1345,6 +1366,8 @@ impl Executor {
                             self.rebuild_epoch,
                             self.rt_quality,
                             layer_skin_registry,
+                            self.gpu_signal_committed,
+                            self.gpu_signaled,
                         )
                         .with_errors(&mut self.error_scratch);
                         let has_gpu_binding = ctx.gpu.is_some();
@@ -1716,6 +1739,8 @@ impl Executor {
                     self.rebuild_epoch,
                     self.rt_quality,
                     layer_skin_registry,
+                    self.gpu_signal_committed,
+                    self.gpu_signaled,
                 )
                 .with_errors(&mut self.error_scratch);
                 inst.node.late_capture(&mut ctx);

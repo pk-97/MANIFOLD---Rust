@@ -114,6 +114,8 @@ fn render_fixture(json: &str) -> Vec<u8> {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-t38-multibounce-enc");
         {

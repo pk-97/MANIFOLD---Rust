@@ -220,6 +220,8 @@ fn render_two_layer_frame(
         frame_count: frame as i64,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     // Generators first, one committed encoder.
@@ -325,6 +327,8 @@ fn render_two_layer_frame(
             output_height: H,
             occluded_layers: &[],
             render_skip: &[],
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         compositor.render(&mut gpu, &frame_ctx);
     }

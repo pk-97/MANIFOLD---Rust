@@ -13,6 +13,7 @@ pub mod generator_renderer;
 pub mod generators;
 pub mod gpu;
 pub mod gpu_encoder;
+pub(crate) mod gpu_frame_retire;
 pub mod gpu_readback;
 pub mod gpu_types;
 pub mod headless_readback;

@@ -2573,6 +2573,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             output_height: self.output_h,
             occluded_layers: &self.occluded_layers_scratch,
             render_skip: &self.render_skip_scratch,
+            // BUG-rnnr: fence scalars for retire-before-reuse. The stamp is
+            // the previous commit's signal value (this frame's commit has
+            // not signaled yet); the drain oracle is how far the GPU has
+            // actually retired.
+            gpu_signal_committed: self.native_signal_value,
+            gpu_signaled: self
+                .native_event
+                .as_ref()
+                .map_or(0, |e| e.signaled_value()),
         };
         let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
         rtrace.mark("descriptors");
@@ -3248,6 +3257,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // D16: the tap owner's current trigger_count is
                     // forwarded; no audio-modulation simulation.
                     trigger_count: audition_tap_trigger,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
                 let budget_ok = self.audition_last_frame_wall_ms <= self.audition_budget_ms;
                 let audition_changed = {

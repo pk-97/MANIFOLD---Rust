@@ -308,6 +308,8 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
             frame_count: frame as i64,
             anim_progress: 1.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = device.create_encoder("conformance-frame");
         {

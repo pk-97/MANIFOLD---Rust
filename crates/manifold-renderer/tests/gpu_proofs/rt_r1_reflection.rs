@@ -187,6 +187,8 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-r1-reflection-enc");
         {
@@ -437,6 +439,8 @@ fn rt_reflections_dispatch_never_stalls_past_20ms() {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let start = std::time::Instant::now();
         let mut enc = h.device.create_encoder("rt-r1-frame-time-enc");

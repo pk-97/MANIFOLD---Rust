@@ -1376,6 +1376,8 @@ fn wireframe_generator_background_is_black() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     let mut generator = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
@@ -2213,6 +2215,8 @@ fn every_fused_generator_executes_one_frame() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut failures: Vec<String> = Vec::new();
     let mut fused_count = 0usize;
@@ -2315,6 +2319,8 @@ fn fused_generator_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g =
@@ -2418,6 +2424,8 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g =
@@ -2978,6 +2986,8 @@ fn flow_field_noise_fused_region_animates_over_time() {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = device.create_encoder("flow-time");
         {
@@ -3046,6 +3056,8 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     // Warm up a few frames (instance/particle buffers populate), then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
@@ -3235,6 +3247,8 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
@@ -3331,6 +3345,8 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
@@ -3409,6 +3425,8 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     // Warm the feedback loop a handful of frames so any frame-0 divergence has
     // time to amplify through the density→force→position loop, then capture.
@@ -3471,6 +3489,8 @@ fn render_generator_8_frames(
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut g = PresetRuntime::from_def_with_device(def, registry, std::sync::Arc::clone(device), w, h, FMT, None)
         .expect("preset builds");
@@ -4173,6 +4193,8 @@ fn particletext_production_region_diag() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let frames: u32 = std::env::var("PT_FRAMES")
         .ok()

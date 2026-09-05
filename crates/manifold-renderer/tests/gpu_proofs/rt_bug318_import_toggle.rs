@@ -33,6 +33,8 @@ fn ctx(frame_count: i64) -> PresetContext {
         frame_count,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     }
 }
 

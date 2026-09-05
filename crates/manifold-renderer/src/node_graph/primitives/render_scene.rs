@@ -114,6 +114,21 @@ pub static RT_CAPTURE_QUEUE: std::sync::LazyLock<Mutex<Vec<RtCaptureSlot>>> =
 
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
+/// BUG-rnnr: move the outgoing texture of an ensure-slot into the
+/// fence-stamped retiring set instead of dropping it. A mode/dimension
+/// switch frees a target an in-flight command buffer may still sample —
+/// freeing early page-faults the GPU and blacklists the queue. `stamp` is
+/// the last commit's signal value (the outgoing texture's final GPU use).
+fn retire_tex(
+    retiring: &mut crate::gpu_frame_retire::GpuRetiring,
+    slot: &mut Option<manifold_gpu::GpuTexture>,
+    stamp: u64,
+) {
+    if let Some(old) = slot.take() {
+        retiring.retire(old, stamp);
+    }
+}
+
 /// 4x MSAA for the scene pass. On Apple Silicon TBDR the multisample
 /// color + depth live in tile memory (memoryless) and resolve on-chip —
 /// no extra VRAM, one resolve at pass end. Paired with alpha-to-coverage
@@ -800,18 +815,20 @@ pub struct RenderScene {
     /// separate from the other params buffers (same non-clobbering reason).
     rt_atrous_post_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// D22: the live MetalFX Temporal scaler — created lazily on this
-    /// node's first `temporal_upscale` frame, resized on dimension change
-    /// (same lifecycle contract as `crate::metalfx_temporal_upscaler`'s own
-    /// doc comment specifies). `None` on a device where MetalFX Temporal is
+    /// node's first `temporal_upscale` frame; on a dimension change the old
+    /// object is retired (BUG-rnnr) and a new one created (same lifecycle
+    /// contract as `crate::metalfx_temporal_upscaler`'s own doc comment
+    /// specifies). `None` on a device where MetalFX Temporal is
     /// unavailable — that frame's `temporal_upscale` request degrades to a
     /// native direct render (logged once), never a silent black/garbage
     /// output.
     /// RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: MetalFX Temporal
     /// Denoised Scaler — fused temporal denoise + upscale, the ML denoiser
     /// path. Created lazily on the first frame rt_enabled + rt_denoise_feed
-    /// are both true, resized on dimension change. `None` when unavailable
-    /// or not yet created; denoise-inactive frames degrade to the temporal
-    /// scaler or native path (DN1 fallback).
+    /// are both true; on a dimension change the old denoiser is retired
+    /// (BUG-rnnr) and a new one created. `None` when unavailable or not yet
+    /// created; denoise-inactive frames degrade to the temporal scaler or
+    /// native path (DN1 fallback).
     denoiser: Option<crate::denoiser::Denoiser>,
     /// Once-logged flag for "denoiser is unavailable" degradation, same
     /// pattern as `rt_temporal_unavailable_logged`.
@@ -861,6 +878,13 @@ pub struct RenderScene {
     /// invalidate the jitter phase the way `prev_model`/`prev_view_proj`
     /// history does.
     jitter_frame_index: u32,
+    /// BUG-rnnr: outgoing GPU resources (switched targets + the MetalFX
+    /// wrapper objects, whose scaler-owned temporal-history textures free
+    /// when the object drops) held until the frame that last used them
+    /// retires on the GPU. Stamped with the last commit's signal value,
+    /// drained by the current `signaled_value()` at the top of the ensure
+    /// block each frame. `gpu_frame_retire.rs` has the contract.
+    gpu_retiring: crate::gpu_frame_retire::GpuRetiring,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     /// RS-C: 1-byte shared buffer bound as a dummy emissive-triangle/alias
     /// buffer when no emissive table exists (entry_count=0 in ShadowRayParams
@@ -1544,6 +1568,7 @@ impl RenderScene {
             rt_temporal_color_scratch: None,
             rt_temporal_color_scratch_width: 0,
             rt_temporal_color_scratch_height: 0,
+            gpu_retiring: crate::gpu_frame_retire::GpuRetiring::new(),
             rt_firefly_scratch: None,
             rt_firefly_scratch_width: 0,
             rt_firefly_scratch_height: 0,
@@ -2208,13 +2233,18 @@ impl RenderScene {
     /// recreating it if the caster's requested resolution changed.
     /// `RENDER_TARGET | SHADER_READ`: rendered as a depth target, then sampled
     /// as a shadow map — both usages at creation (AGX 0x78 guard).
-    fn ensure_shadow_map(&mut self, device: &manifold_gpu::GpuDevice, slot: usize, resolution: u32) {
+    fn ensure_shadow_map(&mut self, device: &manifold_gpu::GpuDevice, slot: usize, resolution: u32, retire_stamp: u64) {
         let res = resolution.clamp(256, 4096);
         let needs = match &self.shadow_maps[slot] {
             Some((cached, _)) => *cached != res,
             None => true,
         };
         if needs {
+            // BUG-rnnr: a resolution switch frees a map in-flight shadow
+            // sampling is still reading.
+            if let Some((_, old)) = self.shadow_maps[slot].take() {
+                self.gpu_retiring.retire(old, retire_stamp);
+            }
             let tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: res,
                 height: res,
@@ -2235,7 +2265,7 @@ impl RenderScene {
     /// textures match `half_w x half_h`, recreating on resize. Same
     /// `ensure_shadow_map` lazy pattern — called ONLY when [`wants_shafts`]
     /// is true this frame.
-    fn ensure_shaft_half_res(&mut self, device: &manifold_gpu::GpuDevice, half_w: u32, half_h: u32) {
+    fn ensure_shaft_half_res(&mut self, device: &manifold_gpu::GpuDevice, half_w: u32, half_h: u32, retire_stamp: u64) {
         if self.shaft_half_width == half_w
             && self.shaft_half_height == half_h
             && self.shaft_inscatter.is_some()
@@ -2243,6 +2273,10 @@ impl RenderScene {
         {
             return;
         }
+        // BUG-rnnr: hold both outgoing shaft targets until the GPU retires
+        // the frame that last marched/composited with them.
+        retire_tex(&mut self.gpu_retiring, &mut self.shaft_inscatter, retire_stamp);
+        retire_tex(&mut self.gpu_retiring, &mut self.shaft_depth_half, retire_stamp);
         self.shaft_inscatter = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: half_w,
             height: half_h,
@@ -2275,13 +2309,18 @@ impl RenderScene {
     /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
     /// `RENDER_TARGET` because it is a resolve target of the MSAA depth
     /// pass; `SHADER_READ` because the downsample kernel reads it.
-    fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32, retire_stamp: u64) {
         if self.shaft_depth_internal_width == width
             && self.shaft_depth_internal_height == height
             && self.shaft_depth_internal.is_some()
         {
             return;
         }
+        retire_tex(
+            &mut self.gpu_retiring,
+            &mut self.shaft_depth_internal,
+            retire_stamp,
+        );
         self.shaft_depth_internal = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
@@ -2316,6 +2355,7 @@ impl RenderScene {
         width: u32,
         height: u32,
         format: manifold_gpu::GpuTextureFormat,
+        retire_stamp: u64,
     ) {
         if self.opaque_scene_color_width == width
             && self.opaque_scene_color_height == height
@@ -2324,6 +2364,13 @@ impl RenderScene {
         {
             return;
         }
+        // BUG-rnnr: the outgoing snapshot stays alive until the GPU retires
+        // the frame that last sampled it.
+        retire_tex(
+            &mut self.gpu_retiring,
+            &mut self.opaque_scene_color,
+            retire_stamp,
+        );
         self.opaque_scene_color = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
@@ -2347,13 +2394,18 @@ impl RenderScene {
     /// (the resolve write) + `SHADER_READ` (MetalFX Temporal samples it as
     /// the `color` input) usage — same idiom as every other scratch target
     /// in this file (`ensure_opaque_scene_color` above).
-    fn ensure_rt_temporal_color_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_rt_temporal_color_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32, retire_stamp: u64) {
         if self.rt_temporal_color_scratch_width == width
             && self.rt_temporal_color_scratch_height == height
             && self.rt_temporal_color_scratch.is_some()
         {
             return;
         }
+        retire_tex(
+            &mut self.gpu_retiring,
+            &mut self.rt_temporal_color_scratch,
+            retire_stamp,
+        );
         self.rt_temporal_color_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
@@ -2382,13 +2434,18 @@ impl RenderScene {
     /// SHADER_READ` usage as the temporal scratch — a legal MSAA resolve
     /// destination read back by the clamp's `texture2d<float>` (the clamp
     /// writes `target`, not this texture, so no `SHADER_WRITE` here).
-    fn ensure_rt_firefly_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_rt_firefly_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32, retire_stamp: u64) {
         if self.rt_firefly_scratch_width == width
             && self.rt_firefly_scratch_height == height
             && self.rt_firefly_scratch.is_some()
         {
             return;
         }
+        retire_tex(
+            &mut self.gpu_retiring,
+            &mut self.rt_firefly_scratch,
+            retire_stamp,
+        );
         self.rt_firefly_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
@@ -2418,6 +2475,7 @@ impl RenderScene {
         render_h: u32,
         native_w: u32,
         native_h: u32,
+        retire_stamp: u64,
     ) -> bool {
         if let Some(u) = self.rt_temporal_upscaler.as_ref()
             && u.src_w == render_w
@@ -2427,11 +2485,14 @@ impl RenderScene {
         {
             return true;
         }
-        if let Some(u) = self.rt_temporal_upscaler.as_mut() {
-            if u.resize(device, render_w, render_h, native_w, native_h) {
-                return true;
-            }
-            self.rt_temporal_upscaler = None;
+        // BUG-rnnr: a dimension switch retires the WHOLE old upscaler
+        // instead of resizing it in place — `resize` would drop the old
+        // scaler object and its output target while in-flight frames still
+        // sample the scaler-owned temporal-history textures. Retired as a
+        // unit, the object (and everything it owns) stays alive until the
+        // GPU passes `retire_stamp`.
+        if let Some(old) = self.rt_temporal_upscaler.take() {
+            self.gpu_retiring.retire(Box::new(old), retire_stamp);
         }
         match crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler::new(
             device, render_w, render_h, native_w, native_h,
@@ -2465,14 +2526,19 @@ impl RenderScene {
         render_h: u32,
         native_w: u32,
         native_h: u32,
+        retire_stamp: u64,
     ) -> bool {
         if let Some(d) = self.denoiser.as_ref()
             && d.matches(render_w, render_h, native_w, native_h)
         {
             return true;
         }
-        // Dimensions changed or first creation — replace.
-        self.denoiser = None;
+        // BUG-rnnr: retire the whole old denoiser (BUG-rnnr's crash site —
+        // the classic MetalFX denoiser recreated twice in consecutive
+        // frames freed aux/history textures under in-flight frames).
+        if let Some(old) = self.denoiser.take() {
+            self.gpu_retiring.retire(Box::new(old), retire_stamp);
+        }
         match crate::denoiser::Denoiser::new(
             device, render_w, render_h, native_w, native_h, false,
         ) {
@@ -2498,13 +2564,20 @@ impl RenderScene {
     /// written by a depth-only render pass and never sampled (E2a proves
     /// only the depth-test plumbing; nothing reads this texture in a
     /// shader this phase).
-    fn ensure_opaque_depth_snapshot(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_opaque_depth_snapshot(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32, retire_stamp: u64) {
         if self.opaque_depth_snapshot_width == width
             && self.opaque_depth_snapshot_height == height
             && self.opaque_depth_snapshot.is_some()
         {
             return;
         }
+        // BUG-rnnr: hold the outgoing snapshot until the GPU retires the
+        // frame that last depth-tested against it.
+        retire_tex(
+            &mut self.gpu_retiring,
+            &mut self.opaque_depth_snapshot,
+            retire_stamp,
+        );
         self.opaque_depth_snapshot = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
@@ -2600,7 +2673,7 @@ impl RenderScene {
     /// undefined until the caller's next `accumulate_irradiance` call,
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
-    fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) -> bool {
+    fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32, retire_stamp: u64) -> bool {
         if self.rt_irr_width == full_w
             && self.rt_irr_height == full_h
             && self.rt_irr_trace_w == trace_w
@@ -2624,6 +2697,43 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
+        // BUG-rnnr: a dimension switch re-creates ~20 history/scratch
+        // targets the temporal-accumulation path runs multiple frames deep
+        // against — retire every outgoing target (stamped with the last
+        // commit) instead of freeing it under in-flight frames.
+        let r = &mut self.gpu_retiring;
+        retire_tex(r, &mut self.rt_irr_half, retire_stamp);
+        retire_tex(r, &mut self.rt_irr_full, retire_stamp);
+        retire_tex(r, &mut self.rt_refl_half, retire_stamp);
+        retire_tex(r, &mut self.rt_refl_full, retire_stamp);
+        retire_tex(r, &mut self.rt_refl_full_b, retire_stamp);
+        retire_tex(r, &mut self.rt_normal_half, retire_stamp);
+        retire_tex(r, &mut self.rt_normal_full, retire_stamp);
+        retire_tex(r, &mut self.rt_irr_full_b, retire_stamp);
+        retire_tex(r, &mut self.rt_normal_full_b, retire_stamp);
+        for slot in self.rt_irr_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        for slot in self.rt_refl_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        for slot in self.rt_sv2_hold_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        for slot in self.rt_svt_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        for slot in self.rt_depth_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        for slot in self.rt_normal_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        for slot in self.rt_moments_history.iter_mut() {
+            retire_tex(r, slot, retire_stamp);
+        }
+        retire_tex(r, &mut self.rt_irr_filtered, retire_stamp);
+        retire_tex(r, &mut self.rt_irr_filtered_b, retire_stamp);
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         // Lighting textures (irradiance, reflection, normal) at trace resolution.
         self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
@@ -4996,9 +5106,19 @@ impl EffectNode for RenderScene {
             has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
 
         // ---- Ensure cached GPU resources (mutable phase). ----
+        // BUG-rnnr fence scalars — read before the gpu_encoder borrow takes
+        // `ctx`. `committed` stamps resources switched this frame (the
+        // previous commit is their last possible GPU use); `signaled` drains
+        // the retiring set by actual GPU retirement.
+        let gpu_signal_committed = ctx.gpu_signal_committed;
+        let gpu_signaled = ctx.gpu_signaled;
         let has_casters = !casters.is_empty();
         {
             let gpu = ctx.gpu_encoder();
+            // BUG-rnnr: release outgoing resources whose last-using frame
+            // the GPU has retired, before this frame's switch reallocs push
+            // new ones (keeps the fixed-capacity set bounded under churn).
+            self.gpu_retiring.drain(gpu_signaled);
             if self.depth_stencil.is_none() {
                 self.depth_stencil = Some(gpu.device.create_depth_stencil_state(
                     &manifold_gpu::GpuDepthStencilDesc {
@@ -5053,9 +5173,9 @@ impl EffectNode for RenderScene {
             // once by the ensure call) rather than crashing on a dims
             // mismatch.
             if temporal_upscale {
-                self.ensure_rt_temporal_color_scratch(gpu.device, width, height);
+                self.ensure_rt_temporal_color_scratch(gpu.device, width, height, gpu_signal_committed);
                 temporal_upscale_active =
-                    self.ensure_rt_temporal_upscaler(gpu.device, width, height, native_width, native_height);
+                    self.ensure_rt_temporal_upscaler(gpu.device, width, height, native_width, native_height, gpu_signal_committed);
             }
             // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: denoiser takes
             // priority over the plain temporal scaler on RT scenes (DN2).
@@ -5085,10 +5205,10 @@ impl EffectNode for RenderScene {
                     // 1:1 denoise: need a scratch at native res so the
                     // denoiser can read the forward-pass output and write
                     // to native_color without aliasing.
-                    self.ensure_rt_temporal_color_scratch(gpu.device, native_width, native_height);
+                    self.ensure_rt_temporal_color_scratch(gpu.device, native_width, native_height, gpu_signal_committed);
                 }
                 denoise_active =
-                    self.ensure_denoiser(gpu.device, width, height, native_width, native_height);
+                    self.ensure_denoiser(gpu.device, width, height, native_width, native_height, gpu_signal_committed);
                 if denoise_active {
                     // DN2: the denoiser REPLACES the plain temporal
                     // scaler — fused denoise+upscale is the one path
@@ -5125,7 +5245,7 @@ impl EffectNode for RenderScene {
             if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
                 self.ensure_shadow_pass(gpu.device);
                 for (slot, l) in casters.iter().enumerate() {
-                    self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
+                    self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution, gpu_signal_committed);
                 }
             } else if has_transmission || rt_enabled {
                 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the transmissive
@@ -5147,12 +5267,12 @@ impl EffectNode for RenderScene {
             // deferred to right before Pass 2 fetches `target` (the natural
             // place otherwise) would conflict with those borrows under NLL.
             if has_transmission || rt_enabled {
-                self.ensure_opaque_depth_snapshot(gpu.device, width, height);
+                self.ensure_opaque_depth_snapshot(gpu.device, width, height, gpu_signal_committed);
             }
             if has_transmission
                 && let Some(format) = opaque_scene_color_target_format
             {
-                self.ensure_opaque_scene_color(gpu.device, width, height, format);
+                self.ensure_opaque_scene_color(gpu.device, width, height, format, gpu_signal_committed);
             }
             // BUG-310: the tracer's 3 raw-MSL pipeline compiles (~30ms)
             // must land in the node's first-evaluate warmup window (the
@@ -5167,7 +5287,7 @@ impl EffectNode for RenderScene {
             if rt_enabled {
                 self.ensure_rt_masks(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
-                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
+                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height, gpu_signal_committed);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
                 // RT-Stage-3 P1 (BUG-mkgh): firefly-clamp params buffer +
@@ -5181,9 +5301,9 @@ impl EffectNode for RenderScene {
                 self.ensure_rt_atrous_post_params_buffer(gpu.device);
                 if rt_firefly_clamp_enabled {
                     if temporal_upscale {
-                        self.ensure_rt_firefly_scratch(gpu.device, width, height);
+                        self.ensure_rt_firefly_scratch(gpu.device, width, height, gpu_signal_committed);
                     } else {
-                        self.ensure_rt_firefly_scratch(gpu.device, native_width, native_height);
+                        self.ensure_rt_firefly_scratch(gpu.device, native_width, native_height, gpu_signal_committed);
                     }
                 }
                 self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
@@ -5197,9 +5317,9 @@ impl EffectNode for RenderScene {
                 self.ensure_shaft_pipelines(gpu.device);
                 let half_w = width.div_ceil(2).max(1);
                 let half_h = height.div_ceil(2).max(1);
-                self.ensure_shaft_half_res(gpu.device, half_w, half_h);
+                self.ensure_shaft_half_res(gpu.device, half_w, half_h, gpu_signal_committed);
                 if !depth_wired {
-                    self.ensure_shaft_depth_internal(gpu.device, width, height);
+                    self.ensure_shaft_depth_internal(gpu.device, width, height, gpu_signal_committed);
                 }
             }
             // Rotate + (re)size the light ring buffer, then write this
@@ -9364,17 +9484,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut s = RenderScene::new();
 
         // First allocation resets.
-        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256, 0));
         s.ensure_rt_masks(&device, 128, 128, 256, 256);
         // Same dims: no realloc, no reset.
-        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256, 0));
         // Tier flip (Half → Native at fixed canvas): trace dims change.
-        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256, 0));
         assert_eq!(s.rt_irr_trace_w, 256);
         // The truncation hole: canvas 256 → 257 at Quarter (trace 64 → 64).
         // Full-class textures (history included) must still realloc.
-        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
-        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256, 0));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257, 0));
         assert_eq!(s.rt_irr_width, 257);
         // Masks guard follows the same dual-pair discipline.
         s.ensure_rt_masks(&device, 64, 64, 256, 256);

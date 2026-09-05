@@ -171,6 +171,8 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("gbuffer-depth-enc");
         {
@@ -346,6 +348,8 @@ fn gbuffer_depth_unwired_scene_bundled_smoke_stays_finite() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut enc = h.device.create_encoder("gbuffer-depth-unwired-enc");
     {

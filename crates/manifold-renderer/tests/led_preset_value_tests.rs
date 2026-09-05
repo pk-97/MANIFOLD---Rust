@@ -123,6 +123,8 @@ impl LedPresetFixture {
             frame_count: self.frame_count as i64,
             anim_progress: 0.0,
             trigger_count,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = self.device.create_encoder("led-preset-gen");
         {
@@ -175,6 +177,8 @@ impl LedPresetFixture {
             output_height: COMP_H,
             occluded_layers: &[0],
             render_skip: &[],
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = self.device.create_encoder("led-preset-composite");
         {

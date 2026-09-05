@@ -232,6 +232,8 @@ fn render_sequence(
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-r2-accum-gate-warmup");
         {
@@ -263,6 +265,8 @@ fn render_sequence(
             frame_count: WARMUP_FRAMES + frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-r2-accum-gate-baseline");
         {
@@ -298,6 +302,8 @@ fn render_sequence(
             frame_count: WARMUP_FRAMES + STEP_PLUS_ONE,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-r2-accum-gate-step");
         {
@@ -595,6 +601,8 @@ fn rt_r2_sweep_dump() {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-r2-sweep-warmup");
         {
@@ -626,6 +634,8 @@ fn rt_r2_sweep_dump() {
             frame_count: SWEEP_WARMUP_FRAMES + frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("rt-r2-sweep-frame");
         {

@@ -1312,6 +1312,8 @@ impl Application {
             frame_count: (self.time_since_start as f64 * 60.0) as i64,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         if let Some(def) = viewport_def.as_ref() {
             // `viewport_def` is only `Some` when `viewport_is_scene_node` held,

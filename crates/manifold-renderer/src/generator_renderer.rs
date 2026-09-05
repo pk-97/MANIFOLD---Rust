@@ -750,6 +750,8 @@ impl GeneratorRenderer {
                 frame_count: 0,
                 anim_progress,
                 trigger_count,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
 
             // Split borrows: use layers[layer_index].layer_id (from the external
@@ -1181,6 +1183,8 @@ impl GeneratorRenderer {
                 frame_count: f as i64,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params);
         }
@@ -1455,6 +1459,8 @@ impl ClipRenderer for GeneratorRenderer {
                         frame_count: frame as i64,
                         anim_progress: 0.0,
                         trigger_count: 0,
+                        gpu_signal_committed: 0,
+                        gpu_signaled: 0,
                     };
                     gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
                     ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);

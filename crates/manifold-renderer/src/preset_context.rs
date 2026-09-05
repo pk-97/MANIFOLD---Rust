@@ -44,4 +44,19 @@ pub struct PresetContext {
     pub frame_count: i64,
     pub anim_progress: f32,
     pub trigger_count: u32,
+    /// BUG-rnnr: the content command buffer's completion-event signal value
+    /// as of the last commit BEFORE this frame (the frame this evaluation
+    /// is about to encode has not signaled yet). Stamping source for
+    /// retire-before-reuse: a GPU resource switched out mid-frame was last
+    /// referenced by that commit's command buffer, so it is safe to free
+    /// once the GPU passes this value.
+    pub gpu_signal_committed: u64,
+    /// BUG-rnnr: the event's current `signaled_value()` — how far the GPU
+    /// has actually retired. Drain oracle for retire-before-reuse: a
+    /// resource stamped `release_signal` frees once
+    /// `gpu_signaled >= release_signal`.
+    /// Both fields are `0` on hosts with no fence plumbed (tests,
+    /// thumbnails, export) — a `0` stamp drains immediately, the previous
+    /// instant-free behavior, correct on synchronous hosts.
+    pub gpu_signaled: u64,
 }

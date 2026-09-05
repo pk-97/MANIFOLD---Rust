@@ -46,6 +46,8 @@ fn ctx(frame_count: i64) -> PresetContext {
         frame_count,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     }
 }
 
@@ -393,6 +395,8 @@ fn measure_tail(
                 frame_count: frame as i64,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             harness::retry_on_gpu_commit_error(|| {
                 let mut enc = h.device.create_encoder("cinematic-tail-I4-frame");

@@ -202,6 +202,8 @@ fn render_and_dump<'a>(
         frame_count,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut enc = h.device.create_encoder("rt-w0-gbuffer-enc");
     {
@@ -267,6 +269,8 @@ fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
                     frame_count: frame,
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
                 runtime.render(
                     &mut gpu,
@@ -428,6 +432,8 @@ fn rt_w0_default_scene_stays_lazy_no_forced_gbuffer() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut enc = h.device.create_encoder("rt-w0-default-lazy-enc");
     {

@@ -296,6 +296,15 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// `node.layer_source` primitive emits the fallback when this is
     /// absent or when the requested layer id is missing.
     pub layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
+    /// BUG-rnnr: completion-event signal value of the last content commit
+    /// before this frame — the stamping source for retire-before-reuse of
+    /// GPU resources switched mid-frame. `0` when no fence is plumbed
+    /// (tests, thumbnails), which retires immediately.
+    pub gpu_signal_committed: u64,
+    /// BUG-rnnr: the event's current `signaled_value()` — the drain oracle
+    /// for retire-before-reuse (a resource stamped `release_signal` frees
+    /// once `gpu_signaled >= release_signal`). `0` when no fence is plumbed.
+    pub gpu_signaled: u64,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -322,6 +331,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
             layer_skin_registry: None,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         }
     }
 
@@ -340,6 +351,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         rebuild_epoch: u64,
         rt_quality: RtQuality,
         layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
+        gpu_signal_committed: u64,
+        gpu_signaled: u64,
     ) -> Self {
         Self {
             time,
@@ -357,6 +370,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch,
             rt_quality,
             layer_skin_registry,
+            gpu_signal_committed,
+            gpu_signaled,
         }
     }
 

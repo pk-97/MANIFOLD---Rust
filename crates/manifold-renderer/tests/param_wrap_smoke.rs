@@ -82,6 +82,8 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut enc = device.create_encoder("wrap-smoke-frame");
     {

@@ -83,6 +83,8 @@ fn mk_ctx(frame: u32, width: u32, height: u32) -> PresetContext {
         frame_count: frame as i64,
         anim_progress: (frame as f32 / 60.0).min(1.0),
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     }
 }
 

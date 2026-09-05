@@ -1780,6 +1780,10 @@ impl PresetRuntime {
         // SCENE_FX P4a: forward the layer-skin registry to the executor.
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
+        // BUG-rnnr: forward the per-frame GPU fence scalars for
+        // retire-before-reuse (0 when no fence is plumbed).
+        self.executor
+            .set_gpu_frame_fence(ctx.gpu_signal_committed, ctx.gpu_signaled);
         // Use the StateStore-aware execute path so stateful primitives
         // that key per-owner state off `(node_id, owner_key)` — today
         // only `temporal::Feedback`, but any future primitive using the
@@ -2065,6 +2069,10 @@ impl PresetRuntime {
         // SCENE_FX P4a: forward the layer-skin registry to the executor.
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
+        // BUG-rnnr: forward the per-frame GPU fence scalars for
+        // retire-before-reuse (0 when no fence is plumbed).
+        self.executor
+            .set_gpu_frame_fence(ctx.gpu_signal_committed, ctx.gpu_signaled);
         self.refresh_plan_if_forced_outputs_changed();
         self.executor.execute_frame_with_state(
             &mut self.graph,

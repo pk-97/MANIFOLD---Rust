@@ -3927,6 +3927,8 @@ fn imported_azalea_renders_faithfully_to_png() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     // BUG-100 (see docs/BUG_BACKLOG.md): `fraction > 0.02` alone is NOT
@@ -4116,6 +4118,8 @@ fn imported_azalea_renders_through_create_with_override_to_png() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     // BUG-100: same premature-convergence fix as
@@ -4488,6 +4492,8 @@ fn render_import_def_at_progress(
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     const STABLE_STREAK: u32 = 3;
@@ -4873,6 +4879,8 @@ fn skinned_import_hot_path_stays_under_20ms_per_frame() {
                 frame_count: frame as i64,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             let start = std::time::Instant::now();
             {
@@ -5195,6 +5203,8 @@ fn material_maps_repeat_out_of_range_uvs() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     // Poll until the background mesh+texture decodes land (byte-stable,
@@ -5338,6 +5348,8 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     // Same convergence-polling loop as `imported_azalea_renders_faithfully_to_png`
@@ -5511,6 +5523,8 @@ fn amg_gt3_glb_imports_and_renders_without_error_if_present() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut enc = device.create_encoder("amg-gt3-sanity-render");
     {
@@ -5646,6 +5660,8 @@ fn rosetta_stone_import_renders_gpu_proof() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
 
     // Same convergence-polling loop as the DamagedHelmet/AMG proofs
@@ -5764,6 +5780,8 @@ fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     };
     let mut rgba = Vec::new();
     // A few frames for background texture decodes to land (no

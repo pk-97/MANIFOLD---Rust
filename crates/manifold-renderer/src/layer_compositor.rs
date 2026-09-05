@@ -952,6 +952,8 @@ impl LayerCompositor {
                     frame_count: frame as i64,
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
                 let scope = fx_scope(&group_id);
                 let chain = self
@@ -1088,6 +1090,8 @@ impl LayerCompositor {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             let scope = fx_scope(&t.layer_id);
             let outcome = Self::pump_chain_warmup(
@@ -1249,6 +1253,8 @@ impl LayerCompositor {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let outcome = Self::pump_chain_warmup(
             &mut self.uniform_arena,
@@ -1296,6 +1302,8 @@ impl LayerCompositor {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let led_outcome = Self::pump_chain_warmup(
             &mut self.uniform_arena,
@@ -1374,6 +1382,8 @@ impl LayerCompositor {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             let scope = fx_scope(&group.layer_id);
             let outcome = Self::pump_chain_warmup(
@@ -1421,6 +1431,8 @@ impl LayerCompositor {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             let led_scope = led_scope(&group.layer_id);
             let led_outcome = Self::pump_chain_warmup(
@@ -1941,6 +1953,8 @@ impl LayerCompositor {
                         frame_count: frame.frame_count as i64,
                         anim_progress: 0.0,
                         trigger_count: ld.trigger_count,
+                        gpu_signal_committed: frame.gpu_signal_committed,
+                        gpu_signaled: frame.gpu_signaled,
                     };
                     Self::apply_effects(
                         effect_chain,
@@ -2279,6 +2293,8 @@ impl LayerCompositor {
                                 frame_count: frame.frame_count as i64,
                                 anim_progress: 0.0,
                                 trigger_count: 0,
+                                gpu_signal_committed: frame.gpu_signal_committed,
+                                gpu_signaled: frame.gpu_signaled,
                             };
                             match Self::apply_effects(
                                 group_ec,
@@ -2511,6 +2527,8 @@ impl LayerCompositor {
                     frame_count: frame.frame_count as i64,
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: frame.gpu_signal_committed,
+                    gpu_signaled: frame.gpu_signaled,
                 };
                 let result = Self::apply_effects(
                     effect_chain,
@@ -2971,6 +2989,8 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
                 anim_progress: 0.0,
                 trigger_count: frame.master_trigger_count,
+                gpu_signal_committed: frame.gpu_signal_committed,
+                gpu_signaled: frame.gpu_signaled,
             };
 
             // Master effects use a dedicated `EffectChain` instance,
@@ -3044,6 +3064,8 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
                 anim_progress: 0.0,
                 trigger_count: frame.master_trigger_count,
+                gpu_signal_committed: frame.gpu_signal_committed,
+                gpu_signaled: frame.gpu_signaled,
             };
 
             // Run master FX directly on raw HDR `led_main`, copy result back
@@ -3667,6 +3689,8 @@ mod chain_pool_tests {
             output_height: 64,
             occluded_layers: &[],
             render_skip: &[],
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
 
         // One render to ensure the cached chain is exercised, then reset and
@@ -3909,6 +3933,8 @@ mod muted_clip_output_tests {
             output_height: 64,
             occluded_layers: &[],
             render_skip: &[],
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut native_enc = device.create_encoder("muted-clip-output-test");
         {
@@ -4104,6 +4130,8 @@ mod led_composite_pixel_tests {
             output_height: COMP_H,
             occluded_layers: occluded,
             render_skip: &[],
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = device.create_encoder("led-composite-test");
         {

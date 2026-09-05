@@ -151,6 +151,8 @@ fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
             frame_count,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         harness::retry_on_gpu_commit_error(|| {
             let mut enc = h.device.create_encoder("motion-blur-visibility-enc");

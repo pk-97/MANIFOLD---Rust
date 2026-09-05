@@ -202,6 +202,8 @@ fn make_ctx_with_dt(h: &harness::ParityHarness, time: f64, frame_count: i64, dt:
         frame_count,
         anim_progress: 0.0,
         trigger_count: 0,
+        gpu_signal_committed: 0,
+        gpu_signaled: 0,
     }
 }
 

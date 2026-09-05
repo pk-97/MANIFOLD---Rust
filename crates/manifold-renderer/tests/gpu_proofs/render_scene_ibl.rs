@@ -106,6 +106,8 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
             frame_count: frame,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         let mut enc = h.device.create_encoder("render-scene-ibl-enc");
         {
@@ -184,6 +186,8 @@ mod gating_gpu_tests {
             frame_count,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         }
     }
 
@@ -455,6 +459,8 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         {
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-warm");
@@ -466,7 +472,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
-            let ctx = PresetContext { frame_count: frame as i64, ..warm_ctx };
+            let ctx = PresetContext { gpu_signal_committed: 0, gpu_signaled: 0, frame_count: frame as i64, ..warm_ctx };
             let mut enc = h.device.create_encoder("render-scene-ibl-cost");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -552,6 +558,8 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         {
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-4096-warm");
@@ -563,7 +571,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
-            let ctx = PresetContext { frame_count: frame as i64, ..warm_ctx };
+            let ctx = PresetContext { gpu_signal_committed: 0, gpu_signaled: 0, frame_count: frame as i64, ..warm_ctx };
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-4096");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -644,6 +652,8 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_stays_under_10ms()
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
         {
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-2048-warm");
@@ -655,7 +665,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_stays_under_10ms()
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
-            let ctx = PresetContext { frame_count: frame as i64, ..warm_ctx };
+            let ctx = PresetContext { gpu_signal_committed: 0, gpu_signaled: 0, frame_count: frame as i64, ..warm_ctx };
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-2048");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);

@@ -415,6 +415,8 @@ mod tests {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         };
 
         // Warm up so the 800k-particle sim populates the disk (particles
@@ -567,6 +569,8 @@ mod tests {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
             for i in 0..90 {
                 let mut enc = device.create_encoder("sweep");

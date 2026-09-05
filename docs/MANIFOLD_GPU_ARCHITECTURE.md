@@ -75,7 +75,7 @@ manifold-gpu/
 
 ## Key Constraints
 
-- **Resource lifetime:** No wgpu refcounting on native Metal. Must manually ensure textures/buffers survive in-flight command buffers (2-3 frames with triple buffering).
+- **Resource lifetime:** No wgpu refcounting on native Metal. Must manually ensure textures/buffers survive in-flight command buffers (2-3 frames with triple buffering). Pool-backed textures retire by the fence-aware `TexturePool` (stamped with the frame commit's signal value, recycled only once `signaled_value()` passes it); direct-owned targets switched on a mode/dimension change (render_scene's RT/denoise targets and MetalFX wrapper objects) retire through `gpu_frame_retire::GpuRetiring` on the same stamp/drain contract (BUG-rnnr — RT denoiser mode-switch realloc).
 - **Ring buffer overflow:** Uniform ring buffers need either generous sizing or fence-based wraparound protection.
 - **MetalFX Temporal:** Needs depth + motion vectors. MANIFOLD is 2D — only available when WireframeDepth effect is active (provides depth + flow). Spatial Scaler works unconditionally.
 - **Current performance:** 5-7ms GPU frame times (~140-200 FPS GPU throughput) after native Metal migration. Zero "(wgpu internal) Signal" overhead on content thread. Profile after each remaining phase to verify gains.

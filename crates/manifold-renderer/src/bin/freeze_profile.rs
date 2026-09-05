@@ -316,7 +316,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
     {
         let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, std::sync::Arc::clone(device), w, h, FORMAT, None).unwrap();
         let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
-        let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0 };
+        let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0, gpu_signal_committed: 0, gpu_signaled: 0 };
         let params = ParamManifest::default();
         for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0), &params); } enc.commit_and_wait_completed(); }
         let mut secs = 0.0;
@@ -712,6 +712,8 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                     frame_count: 0,
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
                 generator.render(&mut gpu, &target.texture, &ctx, params);
             }
@@ -793,6 +795,8 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
 
             // Warm until the scene actually renders content (async texture
@@ -1565,6 +1569,8 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                     frame_count: 0,
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
 
                 for i in 0..GEN_WARMUP {
@@ -1686,6 +1692,8 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::s
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
+                gpu_signal_committed: 0,
+                gpu_signaled: 0,
             };
 
             for i in 0..GEN_WARMUP {

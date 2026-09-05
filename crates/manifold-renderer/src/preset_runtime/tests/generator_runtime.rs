@@ -1179,6 +1179,8 @@
                     frame_count: i64::from(base + f),
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
                 let mut enc = device.create_encoder("cymatics-resize-frame");
                 {
@@ -1263,6 +1265,8 @@
                     frame_count: i64::from(base + f),
                     anim_progress: 0.0,
                     trigger_count: 0,
+                    gpu_signal_committed: 0,
+                    gpu_signaled: 0,
                 };
                 let mut enc = device.create_encoder("fluid-resize-frame");
                 {

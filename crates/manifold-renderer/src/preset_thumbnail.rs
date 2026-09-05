@@ -186,6 +186,8 @@ fn render_generator(
             // Sweep 0→1 across the warm-up so loop-driven anims land developed.
             anim_progress: (frame as f32 / WARMUP_FRAMES as f32).min(1.0),
             trigger_count: 0,
+            gpu_signal_committed: 0,
+            gpu_signaled: 0,
         }
     };
 

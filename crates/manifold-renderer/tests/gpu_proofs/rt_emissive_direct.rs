@@ -74,7 +74,7 @@ fn render(json: &str) -> (f64, f64) {
     let tgt=h.make_target("rs-c");
     let mut f0: Option<f64> = None;
     for fr in 0..ACCUM_FRAMES{
-        let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr,anim_progress:0.0,trigger_count:0};
+        let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr,anim_progress:0.0,trigger_count:0,gpu_signal_committed:0,gpu_signaled:0};
         let mut enc=h.device.create_encoder("rs-c");
         {let mut gpu=RendererGpuEncoder::new(&mut enc,&h.device);rt.render(&mut gpu,&tgt.texture,&ctx,&manifold_core::params::ParamManifest::default());}
         enc.commit_and_wait_completed();
@@ -153,7 +153,7 @@ fn ms(json:&str,label:&str,n:usize)->(f64,f64){
     let h=harness::shared();let reg=PrimitiveRegistry::with_builtin();
     let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("tms");
     let tgt=h.make_target("tms");let mut ts=Vec::with_capacity(n);
-    for fr in 0..n{let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr as i64,anim_progress:0.0,trigger_count:0};
+    for fr in 0..n{let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr as i64,anim_progress:0.0,trigger_count:0,gpu_signal_committed:0,gpu_signaled:0};
         let mut enc=h.device.create_encoder("tms");let t0=Instant::now();
         {let mut gpu=RendererGpuEncoder::new(&mut enc,&h.device);rt.render(&mut gpu,&tgt.texture,&ctx,&manifold_core::params::ParamManifest::default());}
         enc.commit_and_wait_completed();ts.push(t0.elapsed().as_secs_f64()*1000.0);
