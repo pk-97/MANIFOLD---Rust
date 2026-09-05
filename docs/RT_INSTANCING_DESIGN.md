@@ -1,7 +1,7 @@
 # RT Instancing Design — ray-traced Scene Loop / Scene Mirror copies
 
-**Status:** APPROVED — design complete 2026-09-05, P0–P3 briefed · k3 (lead)
-**Lifecycle: contract** — the RT instancing path (`RtObjectGeometry` instance binding, the TLAS descriptor-build kernel, per-slot material rows) cites this doc's D-numbers and invariants as its spec.
+**Status:** SHIPPED — P0–P3 all landed on wave/rt-instancing 2026-09-05 (gpu_proofs_gate fully green, rt_noise_gate green on unchanged ceilings); landing with the RT-instancing wave · k3 (lead), k27-rtaccel-descriptors (lanes)
+**Lifecycle: contract** — the RT instancing path (`RtObjectGeometry` instance binding, the TLAS descriptor-build kernel, per-slot material rows) cites this doc's D-numbers and invariants as its spec. Owed: nothing open; deferred items in section 5.
 
 Peter, 2026-09-05: *"if RT does not work with instances it will look horrible and janky."* Scene Loop and Scene Mirror (both landed 2026-09-05) render copies through `Array<InstanceTransform>` buffers consumed by the raster path only; the RT accel structure instances each object once at its base `model` transform, so loop copies and mirrored copies are invisible to RT shadows, AO, GI, and reflections. This wave removes that limitation — the deferred trigger of SCENE_MIRROR_DESIGN.md D7 (rt-inherits-instancing-limitation), pulled forward.
 
