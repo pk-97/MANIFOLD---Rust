@@ -1,7 +1,14 @@
 // node.scene_array — fusable BUFFER body (freeze section 12, buffer domain), SOURCE.
 // Fill an Array<InstanceTransform> with identity TRS translated i * cell_size along axis,
 // plus deterministic per-instance jitter (rotation + scale from a hash of the
-// INSTANCE INDEX — no time dependence, trivially wrap-safe per SCENE_LOOP INV-3).
+// instance index MOD jitter_period, mixed with the seed). The period is the
+// wrap-safety mechanism (SCENE_LOOP INV-3, BUG-jvlq): the loop camera travels
+// stride cells per loop, so at the wrap instance i takes over the screen slot
+// of instance i-stride — purity needs jitter(i) == jitter(i-stride), i.e. the
+// pattern period must divide stride. The Stride card row's coupled write sets
+// jitter_period = stride; the standalone default 1 gives every copy the SAME
+// jitter (uniform, always pure). Raw-index keying was the wrap snap: at the
+// seam every visible copy popped to its neighbor's orientation at once.
 //
 // ABI (buffer standalone codegen): no array inputs, so the body takes
 // (idx, count, <params...>) and returns the output element written to
@@ -22,6 +29,7 @@ fn body(
     cell_size: f32,
     jitter_seed: i32,
     jitter_amount: f32,
+    jitter_period: i32,
 ) -> Element {
     // Slots at or beyond the live count are surplus capacity: the buffer is
     // sized for count's FULL range (never its current value) so a live count
@@ -43,14 +51,16 @@ fn body(
     else { pos.z = -t; }
 
     // Per-instance jitter: rotation (radians, ±jitter_amount per axis) and
-    // scale (1 ± jitter_amount/2) from hash_u32 keyed by the instance index
-    // mixed with the seed. Deterministic per (idx, seed) — the same array
-    // every frame, and identical at both wrap seams by construction.
+    // scale (1 ± jitter_amount/2) from hash_u32 keyed by (idx % period) mixed
+    // with the seed. The mod is the wrap mechanism: with period = stride the
+    // pattern repeats every stride cells, so the copy sliding into a screen
+    // slot at the loop wrap carries the SAME jitter as the copy leaving it.
     var rot = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var scl = 1.0;
     if jitter_amount > 0.0 {
         let s = u32(jitter_seed);
-        let k = idx * 3u + s * 7919u;
+        let j = idx % u32(max(jitter_period, 1));
+        let k = j * 3u + s * 7919u;
         rot = vec4<f32>(
             (hash_u32(k)      - 0.5) * 2.0 * jitter_amount,
             (hash_u32(k + 1u) - 0.5) * 2.0 * jitter_amount,

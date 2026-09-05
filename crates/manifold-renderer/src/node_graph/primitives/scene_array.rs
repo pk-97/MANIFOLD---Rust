@@ -5,8 +5,12 @@
 //! One instance per copy, translated `i * cell_size` along the chosen axis.
 //! The same node feeds ALL object groups — copy count changes are one param
 //! write, not N. Optional per-instance jitter (rotation + scale from a
-//! deterministic hash of the instance index — no time dependence, trivially
-//! wrap-safe per SCENE_LOOP INV-3). Source atom on the freeze codegen path.
+//! deterministic hash of `index % jitter_period` — no time dependence; the
+//! period is what makes it wrap-safe per SCENE_LOOP INV-3, see BUG-jvlq:
+//! the camera travels stride cells per loop, so purity needs
+//! jitter(i) == jitter(i-stride), i.e. period dividing stride. The Stride
+//! card row's coupled write sets jitter_period = stride; the default 1 gives
+//! every copy the same jitter). Source atom on the freeze codegen path.
 //!
 //! The `out` buffer is sized for `count`'s FULL range (8), never the current
 //! value: capacity is fixed at plan pre-allocation while `count` is a live
@@ -30,7 +34,8 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 
 /// Generated-codegen uniform layout. Params in PARAMS order:
 /// count (Int→i32), axis (Enum→u32), cell_size (f32), jitter_seed (Int→i32),
-/// jitter_amount (f32), then dispatch_count (u32), padded to 16 bytes.
+/// jitter_amount (f32), jitter_period (Int→i32), then dispatch_count (u32),
+/// padded to 16 bytes.
 /// 8 words = 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,6 +45,7 @@ struct SceneArrayUniforms {
     cell_size: f32,
     jitter_seed: i32,
     jitter_amount: f32,
+    jitter_period: i32,
     dispatch_count: u32,
     _pad: u32,
 }
@@ -66,7 +72,7 @@ pub struct SceneArrayStasisKey {
 crate::primitive! {
     name: SceneArray,
     type_id: "node.scene_array",
-    purpose: "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Optional per-instance jitter (rotation ±jitter_amount rad per axis, scale 1 ± jitter_amount/2) from a deterministic hash of the instance index mixed with jitter_seed — no time dependence, trivially wrap-safe. Source atom on the freeze codegen path.",
+    purpose: "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Optional per-instance jitter (rotation ±jitter_amount rad per axis, scale 1 ± jitter_amount/2) from a deterministic hash of (index % jitter_period) mixed with jitter_seed — no time dependence; the period is the wrap-safety mechanism (the camera travels stride cells per loop, so purity needs the pattern to repeat with a period dividing stride — the Stride card row couples jitter_period = stride). Source atom on the freeze codegen path.",
     inputs: {},
     outputs: {
         out: Array(InstanceTransform),
@@ -97,10 +103,15 @@ crate::primitive! {
             enum_values: &[],
         },
         // ── SCENE_MODIFIER_FRAMEWORK P4 jitter. Deterministic per-instance
-        // rotation/scale from a hash of the INSTANCE INDEX mixed with the
-        // seed (WGSL body) — no time dependence, so the array is identical
-        // every frame and trivially wrap-safe (SCENE_LOOP INV-3). Zero
-        // amount keeps the identity-TRS behaviour byte-identical to P3.
+        // rotation/scale from a hash of (index % jitter_period) mixed with
+        // the seed (WGSL body) — no time dependence. The period is the
+        // wrap-safety half (INV-3, BUG-jvlq): the loop camera travels stride
+        // cells per loop, so at the wrap instance i inherits instance
+        // i-stride's screen slot — purity requires jitter(i) ==
+        // jitter(i-stride), i.e. a pattern period dividing stride. The
+        // Stride row's coupled write sets period = stride; the default 1
+        // gives every copy the same jitter (uniform, pure at any stride).
+        // Zero amount keeps the identity-TRS behaviour byte-identical to P3.
         ParamDef {
             name: Cow::Borrowed("jitter_seed"),
             label: "Jitter Seed",
@@ -117,9 +128,21 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
+        // Internal (never a card row): the jitter pattern period in cells.
+        // Written by the Stride coupled write (period = stride); absent on
+        // pre-fix projects reads as the default 1 — uniform jitter, which is
+        // wrap-pure at any stride (the BUG-jvlq fix for saved loops).
+        ParamDef {
+            name: Cow::Borrowed("jitter_period"),
+            label: "Jitter Period",
+            ty: ParamType::Int,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 8.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Source atom — no inputs. The out buffer is sized for count's full range (8), never the current value: buffer capacity is fixed at plan pre-allocation, so a value-sized buffer made every live count write inert until a rebuild (BUG-757c — the Scene Loop 'Copies' row and the Stride coupling both write count live). The body masks slots beyond the live count to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction (SCENE_LOOP_DESIGN D4). The Scene Loop card's Jitter row writes jitter_amount; jitter_seed stays an internal re-roll knob the plan stamps at 0.",
+    composition_notes: "Source atom — no inputs. The out buffer is sized for count's full range (8), never the current value: buffer capacity is fixed at plan pre-allocation, so a value-sized buffer made every live count write inert until a rebuild (BUG-757c — the Scene Loop 'Copies' row and the Stride coupling both write count live). The body masks slots beyond the live count to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction (SCENE_LOOP_DESIGN D4). The Scene Loop card's Jitter row writes jitter_amount; jitter_seed stays an internal re-roll knob the plan stamps at 0, and jitter_period is internal too — the Stride row's coupled write sets it to the stride so the jitter pattern repeats once per loop's travel (BUG-jvlq wrap purity).",
     examples: [],
     picker: { label: "Scene Array", category: Atom },
     summary: "Lays out copies in a line along one axis, spacing them evenly for a looping flythrough.",
@@ -175,6 +198,12 @@ impl Primitive for SceneArray {
         };
         let jitter_seed = ctx.params.get("jitter_seed").and_then(|v| v.as_u32_clamped(0)).unwrap_or(0);
         let jitter_amount = ctx.scalar_or_param("jitter_amount", 0.0).clamp(0.0, 1.0);
+        let jitter_period = ctx
+            .params
+            .get("jitter_period")
+            .and_then(|v| v.as_u32_clamped(1))
+            .unwrap_or(1)
+            .clamp(1, 8);
 
         let Some(out_buf) = ctx.outputs.array("out") else {
             return;
@@ -217,6 +246,7 @@ impl Primitive for SceneArray {
             cell_size,
             jitter_seed: jitter_seed as i32,
             jitter_amount,
+            jitter_period: jitter_period as i32,
             dispatch_count: capacity,
             _pad: 0,
         };
@@ -259,11 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn scene_array_has_five_params() {
+    fn scene_array_has_six_params() {
         let names: Vec<&str> = SceneArray::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["count", "axis", "cell_size", "jitter_seed", "jitter_amount"]
+            vec!["count", "axis", "cell_size", "jitter_seed", "jitter_amount", "jitter_period"]
         );
     }
 
@@ -346,9 +376,10 @@ mod gpu_tests {
 
     /// CPU oracle: compute the expected InstanceTransform array for given
     /// params. Mirrors scene_array_body.wgsl exactly — axis translation,
-    /// then the index-hash jitter branch (identity TRS when amount == 0).
+    /// then the (index % period)-hash jitter branch (identity TRS when
+    /// amount == 0).
     fn cpu_scene_array(count: u32, axis: u32, cell_size: f32) -> Vec<InstanceTransform> {
-        cpu_scene_array_jitter(count, axis, cell_size, 0, 0.0)
+        cpu_scene_array_jitter(count, axis, cell_size, 0, 0.0, 1)
     }
 
     fn cpu_scene_array_jitter(
@@ -357,6 +388,7 @@ mod gpu_tests {
         cell_size: f32,
         jitter_seed: u32,
         jitter_amount: f32,
+        jitter_period: u32,
     ) -> Vec<InstanceTransform> {
         (0..count)
             .map(|i| {
@@ -374,7 +406,8 @@ mod gpu_tests {
                     _ => pos_scale[2] = t,
                 }
                 if jitter_amount > 0.0 {
-                    let k = i.wrapping_mul(3).wrapping_add(jitter_seed.wrapping_mul(7919));
+                    let j = i % jitter_period.max(1);
+                    let k = j.wrapping_mul(3).wrapping_add(jitter_seed.wrapping_mul(7919));
                     rot_pad[0] = (hash_u32(k) - 0.5) * 2.0 * jitter_amount;
                     rot_pad[1] = (hash_u32(k + 1) - 0.5) * 2.0 * jitter_amount;
                     rot_pad[2] = (hash_u32(k + 2) - 0.5) * 2.0 * jitter_amount;
@@ -393,6 +426,7 @@ mod gpu_tests {
         cell_size: f32,
         jitter_seed: u32,
         jitter_amount: f32,
+        jitter_period: u32,
     ) -> Vec<InstanceTransform> {
         let capacity = count;
         let out_buf = device.create_buffer_shared(capacity as u64 * 32);
@@ -403,6 +437,7 @@ mod gpu_tests {
             cell_size,
             jitter_seed: jitter_seed as i32,
             jitter_amount,
+            jitter_period: jitter_period as i32,
             dispatch_count: capacity,
             _pad: 0,
         };
@@ -452,7 +487,7 @@ mod gpu_tests {
         for axis in 0u32..6u32 {
             let count = 5u32;
             let cell_size = 7.5f32;
-            let gpu_data = dispatch(&device, &pipeline, count, axis, cell_size, 0, 0.0);
+            let gpu_data = dispatch(&device, &pipeline, count, axis, cell_size, 0, 0.0, 1);
             let expected = cpu_scene_array(count, axis, cell_size);
             assert_matches_cpu(&gpu_data, &expected, "axis {axis}");
         }
@@ -482,6 +517,7 @@ mod gpu_tests {
             cell_size: 10.0,
             jitter_seed: 0,
             jitter_amount: 0.0,
+            jitter_period: 1,
             dispatch_count: capacity,
             _pad: 0,
         };
@@ -516,8 +552,10 @@ mod gpu_tests {
 
     /// P4 jitter value proof: with jitter_amount > 0, the GPU array matches
     /// the CPU-computed hash oracle exactly — rotation ±amount rad per axis,
-    /// scale 1 ± amount/2, keyed by (index, seed). Two seeds must disagree
-    /// (the seed re-rolls), and amount 0 must stay identity TRS.
+    /// scale 1 ± amount/2, keyed by (index % period, seed). Two seeds must
+    /// disagree (the seed re-rolls), and amount 0 must stay identity TRS.
+    /// Period 8 (= the count ceiling) gives every slot its own hash — the
+    /// full-variety case.
     #[test]
     fn scene_array_jitter_matches_cpu_hash_oracle() {
         let device = crate::test_device();
@@ -527,8 +565,8 @@ mod gpu_tests {
 
         for (seed, amount) in [(0u32, 0.6f32), (7, 1.0), (1234, 0.25)] {
             let count = 8u32;
-            let gpu_data = dispatch(&device, &pipeline, count, 4, 10.0, seed, amount);
-            let expected = cpu_scene_array_jitter(count, 4, 10.0, seed, amount);
+            let gpu_data = dispatch(&device, &pipeline, count, 4, 10.0, seed, amount, 8);
+            let expected = cpu_scene_array_jitter(count, 4, 10.0, seed, amount, 8);
             assert_matches_cpu(&gpu_data, &expected, "seed {seed} amount {amount}");
 
             // Jitter is live: rotation is nonzero at full amount.
@@ -549,9 +587,9 @@ mod gpu_tests {
                     x.pos_scale == y.pos_scale && x.rot_pad == y.rot_pad
                 })
         };
-        let a = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0);
-        let b = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0);
-        let c = cpu_scene_array_jitter(4, 4, 10.0, 1, 1.0);
+        let a = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0, 8);
+        let b = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0, 8);
+        let c = cpu_scene_array_jitter(4, 4, 10.0, 1, 1.0, 8);
         assert!(same(&a, &b), "same seed must re-roll identically");
         assert!(
             !same(&a, &c),
@@ -559,8 +597,48 @@ mod gpu_tests {
         );
 
         // Zero amount is byte-identical to the no-jitter oracle.
-        let zero = cpu_scene_array_jitter(4, 4, 10.0, 99, 0.0);
+        let zero = cpu_scene_array_jitter(4, 4, 10.0, 99, 0.0, 8);
         let plain = cpu_scene_array(4, 4, 10.0);
         assert!(same(&zero, &plain), "amount 0 must keep identity TRS");
+    }
+
+    /// BUG-jvlq wrap-purity proof: the loop camera travels stride cells per
+    /// loop, so at the wrap instance i inherits instance i-stride's screen
+    /// slot — the rendered frame is pure only when jitter(i) ==
+    /// jitter(i-stride). Keying the hash on (index % period) with period =
+    /// stride (the Stride row's coupled write) makes that hold by
+    /// construction. GPU-dispatched: with period = 2, slots 2k and 2k+2 carry
+    /// identical rotation/scale; adjacent slots differ (the variety is real).
+    #[test]
+    fn scene_array_jitter_period_repeats_with_stride() {
+        let device = crate::test_device();
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
+            .expect("scene_array codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
+
+        let period = 2u32;
+        let gpu_data = dispatch(&device, &pipeline, 8, 4, 10.0, 7, 0.8, period);
+        let expected = cpu_scene_array_jitter(8, 4, 10.0, 7, 0.8, period);
+        assert_matches_cpu(&gpu_data, &expected, "period 2");
+
+        // Wrap purity: instance i+period carries i's rotation/scale exactly.
+        for i in 0..(8 - period) as usize {
+            assert_eq!(
+                gpu_data[i].rot_pad,
+                gpu_data[i + period as usize].rot_pad,
+                "jitter rotation must repeat every period cells (slot {i} vs {})",
+                i + period as usize
+            );
+            assert_eq!(
+                gpu_data[i].pos_scale[3],
+                gpu_data[i + period as usize].pos_scale[3],
+                "jitter scale must repeat every period cells"
+            );
+        }
+        // Variety inside the period: adjacent slots differ.
+        assert_ne!(
+            gpu_data[0].rot_pad, gpu_data[1].rot_pad,
+            "slots inside one period must jitter differently"
+        );
     }
 }
