@@ -71,7 +71,6 @@ fn gap_start_black_frame_probe() {
     ct.handle_command(crate::content_command::ContentCommand::SeekToBeat(
         Beats::ZERO,
     ));
-    ct.handle_command(crate::content_command::ContentCommand::Play);
     let layer = &ct
         .engine
         .project()
@@ -86,6 +85,17 @@ fn gap_start_black_frame_probe() {
             .any(|e| e.effect_type() == &PresetTypeId::STYLIZED_FEEDBACK)),
         "generated layer must carry StylizedFeedback"
     );
+    // Match the warmed-pipeline scope of the original probe: initialize
+    // generator and feedback/fusion state while stopped before testing gaps.
+    for _ in 0..8 {
+        ct.tick_frame(&state_tx);
+    }
+    assert_eq!(
+        ct.engine.current_beat_f64(),
+        0.0,
+        "warm-up must not consume the test clips"
+    );
+    ct.handle_command(crate::content_command::ContentCommand::Play);
     let mut transitions = 0;
     let mut was_active = false;
     let mut saw_gap = false;
