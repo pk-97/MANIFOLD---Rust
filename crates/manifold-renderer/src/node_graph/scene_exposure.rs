@@ -105,6 +105,9 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 max,
                 default_value,
                 is_angle,
+                // Periodicity is authored by the exposure kind, not inferred
+                // from every angle (FOV and tilt are intentionally bounded).
+                wraps: false,
                 whole_numbers,
                 is_toggle,
                 is_trigger,

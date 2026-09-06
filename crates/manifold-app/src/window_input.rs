@@ -1520,6 +1520,7 @@ impl Application {
                             scale,
                             offset,
                             range,
+                            is_angle,
                             section,
                         )) = crate::app_render::resolve_canvas_binding(
                             self.content_state.active_graph_snapshot.as_deref(),
@@ -1533,7 +1534,7 @@ impl Application {
                             crate::editing_host::to_ui_graph_target(self.watched_graph_target.as_ref().expect("resolved binding has a graph target")),
                             viewport, node_id, pi, binding_id, label, min, max, invert,
                             crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
-                            section,
+                            is_angle, section,
                         );
                     }
                 }

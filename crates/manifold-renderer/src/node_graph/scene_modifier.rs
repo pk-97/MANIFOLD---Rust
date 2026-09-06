@@ -537,9 +537,56 @@ pub mod scene_modifier_loop {
                     m.min = 1.0_f32.min(default);
                     m.max = (20.0 * cell).min(10_000.0).max(default);
                 }
+                "roll" | "pitch" | "yaw" => {
+                    // These are signed periodic framing offsets. Keep the
+                    // authored radians range, but let the outer card's
+                    // modulation wrap continuously across ±180°.
+                    m.wraps = true;
+                }
                 _ => {}
             }
         }
+    }
+
+    /// Repair the P4 framing rows in already-saved loops. The original
+    /// framing release used a rounded ±3.2-radian band and omitted the
+    /// periodic flag. Preserve any performer-customized mapping bounds, but
+    /// replace that exact shipped band with ±π and always repair the semantic
+    /// angle/wrap flags.
+    fn repair_loop_rotation_specs(meta: &mut manifold_core::effect_graph_def::PresetMetadata) -> bool {
+        let rotation_ids: std::collections::BTreeSet<String> = meta
+            .bindings
+            .iter()
+            .filter_map(|binding| match &binding.target {
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                    if node_id.as_str() == "loop_camera"
+                        && matches!(param.as_str(), "roll" | "pitch" | "yaw") =>
+                {
+                    Some(binding.id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let mut changed = false;
+        for spec in &mut meta.params {
+            if !rotation_ids.contains(&spec.id) {
+                continue;
+            }
+            if (spec.min + 3.2).abs() < 1e-4 && (spec.max - 3.2).abs() < 1e-4 {
+                spec.min = -std::f32::consts::PI;
+                spec.max = std::f32::consts::PI;
+                changed = true;
+            }
+            if !spec.is_angle {
+                spec.is_angle = true;
+                changed = true;
+            }
+            if !spec.wraps {
+                spec.wraps = true;
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub static SCENE_LOOP_DESCRIPTOR: SceneModifierDescriptor = SceneModifierDescriptor {
@@ -1094,6 +1141,7 @@ pub mod scene_modifier_loop {
             changed |= manifold_core::scene_modifier::install_shared_param_bindings(
                 &mut meta.bindings, &shared_loop_params(),
             );
+            changed |= repair_loop_rotation_specs(meta);
         }
         changed
     }
