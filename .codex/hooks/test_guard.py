@@ -50,15 +50,8 @@ class Guards(unittest.TestCase):
 
     def event(self, tool, args, worker=False, cwd=None):
         return {"hook_event_name": "PreToolUse", "session_id": "test",
-                "model": guard.LUNA if worker else "gpt-6-astra", "cwd": str(cwd or self.root),
+                "model": "gpt-5.6-luna" if worker else "gpt-6-astra", "cwd": str(cwd or self.root),
                 "tool_name": tool, "tool_input": args}
-
-    def spawn(self, files=None, **overrides):
-        scope = {"worktree": str(self.slot), "files": files if files is not None else ["src/a.rs"]}
-        args = {"model": guard.LUNA, "reasoning_effort": "low",
-                "message": "Implement the decided fix.\nMANIFOLD_SCOPE: " + json.dumps(scope)}
-        args.update(overrides)
-        return guard.evaluate(self.event("spawn_agent", args))
 
     def shell_call(self, command, worker=False, cwd=None):
         return guard.evaluate(self.event("Bash", {"command": command}, worker, cwd))
@@ -67,94 +60,37 @@ class Guards(unittest.TestCase):
         command = "*** Begin Patch\n" + "\n".join(paths) + "\n*** End Patch"
         return guard.evaluate(self.event("apply_patch", {"command": command}, worker))
 
-    def test_spawn_requires_model_effort_and_scope(self):
-        self.assertIsNone(self.spawn())
-        self.assertTrue(self.spawn(model=None))
-        self.assertTrue(self.spawn(reasoning_effort="high"))
-        with self.assertRaises(ValueError):
-            self.spawn(message="unscoped")
-        self.assertTrue(guard.evaluate(self.event("spawn_agent", {}, True)))
-
-    def test_native_dispatch_registers_read_only_scope(self):
-        config = json.loads((REAL_ROOT / ".codex/hooks.json").read_text())
-        matcher = config["hooks"]["PreToolUse"][0]["matcher"]
+    def test_dispatch_requires_no_registration(self):
         for tool in ("spawn_agent", "collaborationspawn_agent", "Agent"):
-            with self.subTest(tool=tool):
-                self.assertIsNotNone(re.search(matcher, tool))
-                state = self.root / "scope.json"
-                state.unlink(missing_ok=True)
-                args = {"model": guard.LUNA, "reasoning_effort": "low",
-                        "message": "MANIFOLD_SCOPE: " + json.dumps(
-                            {"worktree": str(self.root), "files": []})}
-                if tool == "collaborationspawn_agent":
-                    guard.prepare_lane("test", "readonly", str(self.root), [])
-                    args.update(task_name="readonly", message="gAAAA_encrypted_brief")
-                self.assertIsNone(guard.evaluate(self.event(tool, args)))
-                self.assertEqual(json.loads(state.read_text()),
-                                 {"worktree": str(self.root), "files": []})
-                for command in ("pwd", "git rev-parse --short HEAD", "cat .codex/README.md"):
-                    self.assertIsNone(self.shell_call(command, True))
-                self.assertTrue(self.patch_call(["*** Add File: forbidden.rs"], True))
-                self.assertTrue(self.shell_call("cargo test", True))
-                self.assertTrue(guard.evaluate(self.event(tool, args, True)))
+            for worker in (False, True):
+                self.assertIsNone(guard.evaluate(self.event(tool, {}, worker)))
+        self.assertFalse((self.root / "scope.json").exists())
 
-    def test_native_scope_is_required_bound_expiring_and_single_use(self):
-        args = {"model": guard.LUNA, "reasoning_effort": "low",
-                "task_name": "readonly", "message": "gAAAA_encrypted_brief"}
-        event = self.event("collaborationspawn_agent", args)
-        with self.assertRaisesRegex(ValueError, "Prepare this lane"):
-            guard.evaluate(event)
-        guard.prepare_lane("test", "different_task", str(self.root), [])
-        with self.assertRaisesRegex(ValueError, "task name"):
-            guard.evaluate(event)
-        with patch.object(guard.time, "time", return_value=100):
-            guard.prepare_lane("test", "readonly", str(self.root), [])
-        with patch.object(guard.time, "time", return_value=701):
-            with self.assertRaisesRegex(ValueError, "expired"):
-                guard.evaluate(event)
-        guard.prepare_lane("test", "readonly", str(self.root), [])
-        self.assertIsNone(guard.evaluate(event))
-        with self.assertRaisesRegex(ValueError, "Prepare this lane"):
-            guard.evaluate(event)
+    def test_luna_without_registration_uses_normal_tools(self):
+        for command in ("pwd", "git status", "python3 -c 'print(1)'",
+                        "sed -n '1p' AGENTS.md", "cat a > b", "cargo run",
+                        "git add -- AGENTS.md", "git commit -m fix -- AGENTS.md",
+                        "git push origin main", "scripts/land_branch.py lane/test"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.shell_call(command, True))
+        for tool in ("exec_command", "Bash"):
+            self.assertIsNone(guard.evaluate(self.event(tool, {"cmd": "pwd"}, True)))
+        self.assertIsNone(self.patch_call([f"*** Add File: {self.slot / 'src/a.rs'}"], True))
+        self.assertFalse((self.root / "scope.json").exists())
 
-    def test_native_scope_revalidates_lease_at_dispatch(self):
-        guard.prepare_lane("test", "write_lane", str(self.slot), ["src/a.rs"])
-        (self.slot / ".worktree-lease.json").unlink()
-        args = {"model": guard.LUNA, "reasoning_effort": "low",
-                "task_name": "write_lane", "message": "gAAAA_encrypted_brief"}
-        with self.assertRaisesRegex(ValueError, "Acquire the slot"):
-            guard.evaluate(self.event("collaborationspawn_agent", args))
-
-    def test_scope_rejects_escape_and_unleased_slot(self):
-        for name in ("../a.rs", "/tmp/a.rs", "src/*.rs", ".codex/config.toml"):
-            with self.subTest(name=name), self.assertRaises(ValueError):
-                self.spawn([name])
-        (self.slot / "outside").symlink_to(self.root, target_is_directory=True)
-        with self.assertRaises(ValueError):
-            self.spawn(["outside/AGENTS.md"])
-        (self.slot / ".worktree-lease.json").unlink()
-        with self.assertRaises(ValueError):
-            self.spawn()
+    def test_luna_retains_shared_protections(self):
+        for command in ("git reset --hard", "git add .", "git push --force origin main", "cargo test"):
+            self.assertTrue(self.shell_call(command, True))
+        for name in ("crates/app.rs", "CLAUDE.md", ".claude/settings.json"):
+            self.assertTrue(self.patch_call([f"*** Update File: {name}"], True))
+        self.assertTrue(self.patch_call([f"*** Update File: {self.slot / 'src/a.rs'}",
+                                         "*** Move to: crates/app.rs"], True))
 
     def test_main_and_cc_protection(self):
         for name in ("crates/app.rs", "CLAUDE.md", ".claude/settings.json"):
             self.assertTrue(self.patch_call([f"*** Update File: {name}"]))
         for name in ("AGENTS.md", ".codex/config.toml", "docs/TEST.md"):
             self.assertIsNone(self.patch_call([f"*** Update File: {name}"]))
-
-    def test_lane_scope_includes_rename_destination(self):
-        self.spawn()
-        src = self.slot / "src/a.rs"
-        self.assertIsNone(self.patch_call([f"*** Add File: {src}"], True))
-        self.assertTrue(self.patch_call([f"*** Update File: {src}", "*** Move to: /tmp/escape.rs"], True))
-        self.assertTrue(self.patch_call(["*** Delete File: AGENTS.md"], True))
-        self.spawn([])
-        self.assertTrue(self.patch_call([f"*** Add File: {src}"], True))
-
-    def test_symlink_changed_after_dispatch(self):
-        self.spawn()
-        (self.slot / "src").symlink_to(self.root, target_is_directory=True)
-        self.assertTrue(self.patch_call([f"*** Add File: {self.slot / 'src/a.rs'}"], True))
 
     def test_git_unsafe_forms_and_compounds(self):
         for command in ("git reset --hard", "git clean -fd", "git push --force origin main",
@@ -174,17 +110,6 @@ class Guards(unittest.TestCase):
         self.assertTrue(self.shell_call("git commit -m fix -- crates/app.rs"))
         self.assertTrue(self.shell_call("scripts/land_branch.py lane/test --named-red BUG-x --reason skip"))
         self.assertTrue(self.shell_call("git push origin main", cwd=self.slot))
-
-    def test_worker_shell(self):
-        self.spawn()
-        for command in ("git commit -m fix -- src/a.rs", "git push origin main", "rm src/a.rs",
-                        "python3 -c 'print(1)'", "cat a > b", "bash", "cargo run",
-                        "scripts/land_branch.py lane/test"):
-            with self.subTest(command=command):
-                self.assertTrue(self.shell_call(command, True, self.slot))
-        self.assertIsNone(self.shell_call("cargo clippy -p manifold-core -- -D warnings", True, self.slot))
-        self.assertIsNone(self.shell_call("rg 'test' src", True, self.slot))
-        self.assertTrue(self.shell_call("cargo test", True))
 
     def test_focused_attempt_budget_and_read_only_calls(self):
         command = "cargo test -p manifold-ui mapping"

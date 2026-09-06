@@ -6,9 +6,9 @@ A visual DAW and live performance instrument. Rust is authoritative; do not cons
 
 Be concise. Lead with the outcome; explain what a change means for the instrument. No routine action logs, mandatory planning ceremony, or documentation of every edit. Act within the agreed scope. State failures and unverified behaviour plainly.
 
-Astra owns design, diagnosis, review, and landing. Use native Luna subagents (`gpt-5.6-luna`, low effort) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Start with one Luna lane at a time; handle tiny fixes directly. The lead leaves the lane’s files alone until it returns. Stop repeated failures and return evidence to the lead.
+The lead task owns design, diagnosis, review, and landing regardless of model. Use native Luna subagents (`gpt-5.6-luna`, low effort) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Start with one Luna lane at a time; handle tiny fixes directly. The lead leaves the lane’s files alone until it returns. Stop repeated failures and return evidence to the lead.
 
-CC and `k3m` are separate setups. Do not change `CLAUDE.md`, `.claude/`, Claude settings, shell aliases, or provider configuration unless explicitly requested. Existing shared scripts may be used. Codex guards live in `.codex/hooks.json`; trust them before using lanes. Read `.codex/README.md` for the brief scope line and enforcement limits. Claude hook registration stays separate.
+CC and `k3m` are separate setups. Do not change `CLAUDE.md`, `.claude/`, Claude settings, shell aliases, or provider configuration unless explicitly requested. Existing shared scripts may be used. Codex guards live in `.codex/hooks.json` and apply equally to all models; no lane registration is required. Read `.codex/README.md` for enforcement limits. Claude hook registration stays separate.
 
 ## Engineering essentials
 

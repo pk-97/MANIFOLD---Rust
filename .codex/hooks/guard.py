@@ -2,8 +2,8 @@
 """Codex-only workflow checks. Hooks are guardrails, not a shell sandbox.
 
 Reuses CC's read-only path/git inspection helpers, never its permission allows.
-One Luna lane per session: its brief supplies an exact writable file list.
-Arbitrary scripts/MCP tools and interactive stdin are outside scope enforcement.
+Rules are model-independent; no worker registration is required.
+Arbitrary scripts/MCP tools and interactive stdin are outside enforcement.
 """
 import hashlib
 import fcntl
@@ -20,7 +20,6 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
-LUNA = "gpt-5.6-luna"
 
 
 def load(name, path):
@@ -42,66 +41,6 @@ def state_path(event):
     return directory / (key + ".json")
 
 
-def scope_from_brief(message):
-    match = re.search(r"^MANIFOLD_SCOPE: (.+)$", message, re.MULTILINE)
-    if not match:
-        raise ValueError('Lane brief needs MANIFOLD_SCOPE: {"worktree":"absolute path","files":["relative/file"]}. Use [] for read-only.')
-    scope = json.loads(match[1])
-    worktree = Path(scope["worktree"])
-    if not worktree.is_absolute() or not worktree.is_dir():
-        raise ValueError("Scope worktree must be an existing absolute directory.")
-    worktree = worktree.resolve()
-    files = scope["files"]
-    if not isinstance(files, list) or not all(isinstance(p, str) for p in files):
-        raise ValueError("Scope files must be a list of exact relative paths.")
-    if files:
-        pool = ROOT / ".claude/worktrees"
-        if worktree.parent != pool or not re.fullmatch(r"slot-\d+", worktree.name):
-            raise ValueError("Write lanes require an acquired slot-ring worktree.")
-        if not (worktree / ".worktree-lease.json").is_file():
-            raise ValueError("Acquire the slot before launching a write lane.")
-        if Path(git(worktree, "rev-parse", "--show-toplevel")).resolve() != worktree:
-            raise ValueError("Scope must name the worktree root.")
-    for name in files:
-        path = Path(name)
-        if path.is_absolute() or ".." in path.parts or any(c in name for c in "*?["):
-            raise ValueError("Scope files must be exact relative paths, without traversal or globs.")
-        if not (worktree / path).resolve().is_relative_to(worktree):
-            raise ValueError("Scope file escapes its worktree through a symlink.")
-        if path.parts and path.parts[0] in {".git", ".claude", ".codex", "CLAUDE.md", "AGENTS.md"}:
-            raise ValueError("Mechanical lanes cannot change harness configuration.")
-    return {"worktree": str(worktree), "files": files}
-
-
-def prepare_lane(session_id, task_name, worktree, files):
-    if not session_id or not re.fullmatch(r"[a-z0-9_]+", task_name):
-        raise ValueError("Lane preparation requires a session ID and a lowercase task name.")
-    scope = scope_from_brief("MANIFOLD_SCOPE: " + json.dumps(
-        {"worktree": worktree, "files": files}))
-    path = state_path({"session_id": session_id}).with_suffix(".pending.json")
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"task_name": task_name, "scope": scope,
-                               "created_at": time.time()}))
-    tmp.replace(path)
-
-
-def dispatch_scope(event, args, tool):
-    # Native desktop hook events encrypt message; task_name remains plaintext.
-    # Bind the lead's explicit, one-shot preparation to this session and task.
-    if tool == "collaborationspawn_agent":
-        path = state_path(event).with_suffix(".pending.json")
-        if not path.is_file():
-            raise ValueError("Prepare this lane with .codex/hooks/guard.py prepare-lane before native dispatch.")
-        pending = json.loads(path.read_text())
-        if pending["task_name"] != args.get("task_name"):
-            raise ValueError("Prepared lane task name does not match native dispatch.")
-        if not 0 <= time.time() - pending["created_at"] <= 600:
-            raise ValueError("Prepared lane scope expired; prepare it again before dispatch.")
-        scope = scope_from_brief("MANIFOLD_SCOPE: " + json.dumps(pending["scope"]))
-        return scope, path
-    return scope_from_brief(args.get("message", args.get("prompt", ""))), None
-
-
 def patch_paths(command, cwd):
     paths = []
     for line in command.splitlines():
@@ -115,13 +54,6 @@ def patch_paths(command, cwd):
 
 def check_patch(event, command, cwd, paths_guard):
     paths = patch_paths(command, cwd)
-    if event.get("model") == LUNA:
-        scope = json.loads(state_path(event).read_text())
-        allowed = {(Path(scope["worktree"]) / p).resolve() for p in scope["files"]}
-        if any(not p.is_relative_to(Path(scope["worktree"])) for p in allowed):
-            return "Lane scope now escapes its worktree through a symlink."
-        if any(p not in allowed for p in paths):
-            return "Lane edit is outside its exact file scope. Return the proposed scope change to the lead."
     for path in paths:
         # Slot contents are app work, not a licence to change CC tooling.
         if path.name == "CLAUDE.md" or (path.is_relative_to(ROOT / ".claude")
@@ -163,28 +95,10 @@ def check_shell(event, command, cwd, shell_guard):
     for check in (shell_guard.worktree_add_guard, shell_guard.destructive_outward_guard):
         if check(command, cwd):
             return "Destructive/outward git action or raw worktree operation blocked. Use the slot ring and normal landing workflow."
-    worker = event.get("model") == LUNA
-    if worker:
-        scope = json.loads(state_path(event).read_text())
-        # Shell programs are not parsed for file writes. Keep worker execution
-        # to read tools and established validation commands; edits use patches.
-        if re.search(r"[<>`]|\$\(|\b(?:eval|exec|xargs)\b", command):
-            return "Lane shell redirection/substitution is outside the scope guard; use native patches and simple checks."
     for tokens in segments(command):
         exe = Path(tokens[0]).name
-        if worker and exe != "git":
-            reads = {"rg", "ls", "cat", "head", "tail", "wc", "pwd", "stat"}
-            checks = {"cargo", "gpu_proofs_gate.py"}
-            if exe not in reads | checks:
-                return "Lane shell is limited to read tools and cargo/GPU checks. Use apply_patch for scoped edits."
-            if exe == "cargo" and (len(tokens) < 2 or tokens[1] not in {"check", "clippy", "test", "nextest", "build"}):
-                return "Lane cargo commands are limited to build and validation."
-            if exe in checks and (not scope["files"] or Path(cwd).resolve() != Path(scope["worktree"])):
-                return "Run lane validation from its assigned writable worktree."
         if exe == "land_branch.py" or (exe in {"python3", "python"} and len(tokens) > 1
                                         and Path(tokens[1]).name == "land_branch.py"):
-            if worker:
-                return "Only the lead may land. Return the diff and check results."
             if any(t.startswith("--named-red") for t in tokens):
                 return "Codex landing requires a green gate; report failures to Peter."
         if exe != "git":
@@ -201,8 +115,6 @@ def check_shell(event, command, cwd, shell_guard):
         if sub == "commit":
             if "--" not in args or any(a in {"-a", "--all", "--amend"} for a in args):
                 return "Commit exact paths with git commit -m '...' -- <paths>."
-            if worker:
-                return "Luna returns edits and test results; the lead reviews and commits."
             selected = args[args.index("--") + 1:]
             if not selected or any(a in {".", ":/"} or any(c in a for c in "*?[") for a in selected):
                 return "Commit needs an exact nonempty path list."
@@ -210,8 +122,6 @@ def check_shell(event, command, cwd, shell_guard):
                 if any(not (p == "AGENTS.md" or p.startswith(".codex/") or
                             (p.startswith("docs/") and p.endswith(".md"))) for p in selected):
                     return "App changes must be committed in their slot worktree."
-        if worker and sub not in {"status", "diff", "log", "show", "rev-parse", "ls-files", "grep", "blame", "merge-base"}:
-            return "Lane git access is read-only; the lead owns commits and landing."
         if sub == "merge" and Path(target).resolve() == ROOT:
             if not any(a in {"--abort", "--continue"} for a in args):
                 return "Land through scripts/land_branch.py so the existing validation gate runs before merge/push."
@@ -228,23 +138,6 @@ def check_shell(event, command, cwd, shell_guard):
 def evaluate(event):
     tool = event.get("tool_name", "").split(".")[-1]
     args = event.get("tool_input") or {}
-    if tool in {"spawn_agent", "collaborationspawn_agent", "Agent"}:
-        if event.get("model") == LUNA:
-            return "Mechanical lanes cannot delegate."
-        if not args.get("model"):
-            return "Specify the worker model explicitly; mechanical work uses gpt-5.6-luna."
-        if args["model"] != LUNA:
-            return "This mechanical-lane configuration permits Luna only. Discuss a separate consult with Peter."
-        if args.get("reasoning_effort") != "low":
-            return "Mechanical Luna lanes require explicit reasoning_effort: low."
-        scope, pending_path = dispatch_scope(event, args, tool)
-        path = state_path(event)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(scope))
-        tmp.replace(path)
-        if pending_path is not None:
-            pending_path.unlink()
-        return None
     command = args.get("command", args.get("cmd", ""))
     if not isinstance(command, str):
         return "Unrecognized tool input; no guard decision is safe."
@@ -332,23 +225,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         import argparse
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("action", choices=["prepare-lane", "permit-check"])
-        parser.add_argument("--task")
+        parser.add_argument("action", choices=["permit-check"])
         parser.add_argument("--worktree", required=True)
-        parser.add_argument("--files", nargs="*", default=[])
         parser.add_argument("--command")
         parser.add_argument("--reason")
         parser.add_argument("--attempts", type=int, default=1)
         args = parser.parse_args()
-        if args.action == "permit-check":
-            if not args.command or not args.reason:
-                parser.error("permit-check requires --command and --reason")
-            permit_check(os.environ.get("CODEX_THREAD_ID"), args.command, args.worktree, args.reason, args.attempts)
-            print("Prepared bounded check exception; expires in 30 minutes.")
-        else:
-            if not args.task:
-                parser.error("prepare-lane requires --task")
-            prepare_lane(os.environ.get("CODEX_THREAD_ID"), args.task, args.worktree, args.files)
-            print(f"Prepared {args.task}; dispatch within 10 minutes.")
+        if not args.command or not args.reason:
+            parser.error("permit-check requires --command and --reason")
+        permit_check(os.environ.get("CODEX_THREAD_ID"), args.command, args.worktree, args.reason, args.attempts)
+        print("Prepared bounded check exception; expires in 30 minutes.")
     else:
         main()
