@@ -1,12 +1,15 @@
 # UI reliability audit — 2026-09-06
 
-<!-- index: Initial contract audit of scene modifier cards and graph-editor mappings, with executable probes and ranked findings. -->
+<!-- index: Health-check coverage map for scene UI, editing, renderer updates, GPU lifetime and performance, with mapping repro probes. -->
 
 Audited base: `84c5d672613a97f1762fd83c09f359e09f9237d8`. Author: Astra.
-Scope: parameter projection, modifier card adaptation, graph-editor mapping
-entry, mapping read/write authority, and relevant gesture dispatch. This is
-the first bounded health-check checkpoint, not a completed UI or 3D runtime
-audit. No application changes were landed.
+Scope: parameter projection, modifier card adaptation, graph-editor mapping,
+input ownership, structural editing, scene update propagation, RT transitions,
+GPU lifetime and selected performance paths. The first pass traced mappings;
+the second broadened coverage across these classes. This remains a staged
+health check with the explicit verification limits below. No application
+changes were landed. Astra owned diagnosis; one read-only Luna lane inventoried
+interaction tests, whose relevant paths were then checked by Astra.
 
 ## Result
 
@@ -126,16 +129,126 @@ Reverse the patch afterward. The audit worktree's production source was restored
 after the run. Reuse these cases when implementing the fixes, extending them
 through the actual input and command/undo path.
 
-## Next coverage
+## Broader pass: coverage and root classes
 
-First reproduce cross-card mapping and modifier audio interactions through the
-live input path, then repair identity and state authority together before
-expanding mapping eligibility. This avoids enabling more controls on an
-incorrect target/readback path. Existing gesture coverage work (`BUG-3v6`,
-`BUG-3ef`) should be extended at that seam.
+The unit of repair is a shared contract with representative behaviours from
+several surfaces. Mapping is one acceptance example, not the audit boundary.
 
-3D real-time/RT engine correctness and performance remain unreviewed. The first
-runtime seam should compare direct edits with modulation of coupled modifier
-parameters (`BUG-6dh6`), followed by scene invalidation/resource lifetime and
-bounded frame-time measurements. Existing issue descriptions are leads, not
-independent runtime verification from this audit.
+| Class | Current evidence | Remaining acceptance |
+|---|---|---|
+| Control identity and live state | Two mapping probes fail; findings 1–3 above | Same edit through effect, generator, modifier and node face; correct target, displayed range and undo |
+| Input ownership | Main UIRoot has captured `DragOwner`; editor routes ordinary canvas/panel events by current location | Cross-pane release, focus loss, Escape, text commit/cancel, popup transitions and first-click behaviour in a real editor window |
+| Structural editing/persistence | All 13 `scene_modifier_inv_gate` tests pass, covering loop/fog apply/remove, modulation pruning/restoration, migration and duplication | User-edited sections/mappings, interleaved operations, saved-project roundtrip, and other modifier kinds when landed |
+| Scene update propagation | Renderer applies graph value changes on version mismatch; coupled UI writes omit that bump; coupling exists on UI paths | Equivalent results through drag, type-in, undo, driver, envelope, OSC/Ableton and playback |
+| RT mode/history transitions | Readiness, forced outputs and history resets are distinct mechanisms; existing tests exercise subsets | On/off/on identity, term-order independence, mode changes during playback and host rebuilds |
+| GPU lifetime | Denoiser replacement remains immediate; GPU retirement infrastructure exists elsewhere | Resize/mode switch with frames in flight on classic and MTL4 paths; no crash or stale resource use |
+| Runtime cost | Event-based generator eviction and texture-pool pruning exist; per-frame ID allocation and synchronous generator fusion remain | Measured allocation/frame-time distributions for static, animated, edited and deleted scenes |
+
+Only **Scene Loop and Scene Fog** are registered modifier kinds on the audited
+main tip (`scene_modifier.rs:169–173`). Mirror/Merge work mentioned by beads
+and other worktrees was not part of this checkout and was not audited. The
+green lifecycle result must not be generalized to unlanded implementations.
+
+### Input ownership gap — BUG-ui2p (P2, new static finding)
+
+`window_input.rs:936` always sends moves to the canvas; lines 955–967 send
+moves to the editor UITree only over a panel or while the picker is open.
+Release at lines 1484–1498 goes only to the surface under the cursor. The
+originating surface can consequently miss its terminal event after a cross-pane
+drag. `GraphCanvas::on_left_button_up` is where its drag session releases
+(`graph_canvas/interaction.rs:1248`). This needs a native mouse reproduction.
+
+The existing reuse target is `ui_root/drag.rs`: it captures the owner and
+broadcasts terminal cleanup. Core `input.rs` tests correctly prove release
+after widget removal and tree rebuild; they cannot compensate for a host that
+never delivers release. Viewport/gizmo code already has unconditional release
+cleanup, another useful comparison within the editor host.
+
+### Write semantics and invalidation — existing BUG-agkv / BUG-6dh6
+
+`generator_renderer.rs:650` applies inner overrides only after a graph version
+change. `ui_bridge/project.rs:1319` writes coupled secondary node values without
+bumping that version. This source mismatch agrees with BUG-agkv's prior runtime
+reproduction; that reproduction was not rerun here. Another workstream was
+already investigating it, so this audit does not duplicate its fix.
+
+Coupling is resolved in the app's UI bridge while modulation writes the live
+manifest separately. A correct direct drag therefore does not prove equivalent
+modulation behaviour. Repair acceptance must cover all write sources and one
+atomic update of dependent values, while preserving value-only invalidation.
+
+### GPU lifetime and transition coverage — existing BUG-rnnr / BUG-zw2l
+
+`render_scene.rs:2461` still drops/replaces the denoiser on dimension mismatch;
+`denoiser.rs` has no retirement hook. `GpuDevice::retire_after_queue` exists for
+objects indirectly referenced by GPU work, but the correct lifetime boundary
+must account for classic and MTL4 queues. This is a source-supported priority
+for reproduction, not a newly reproduced crash or proof about Apple's internal
+resource retention.
+
+The representative GPU toggle tests serialize frames with
+`commit_and_wait_completed`. The performance-named
+`temporal_upscale_toggle_never_stalls_past_20ms` even alternates two separately
+constructed runtimes (`rt_t2b_temporal_wiring.rs:347`), rather than resizing one
+live instance. These tests have value, but cannot establish the missing
+in-flight transition guarantee. `rt_bugmajv_kernel_toggle.rs` explicitly records
+that its pooled-resource lifecycle did not distinguish pre-fix source. The
+ContentThread-based `rt-capture` harness is the existing next verification seam.
+
+### Performance opportunities — BUG-ax9h and existing BUG-wj73
+
+`generator_renderer.rs:606` allocates/clones a layer-ID vector every frame and
+then linearly searches project layers for each entry. Reused scratch and a
+dirty-built ID lookup are plausible small improvements; no speedup is measured.
+Deleted generator states are already evicted on structural changes, and the
+GPU texture pool has resolution eviction and age-based pruning. A blanket
+claim that deleted scene resources are never released would be incorrect.
+
+Generator fusion still compiles on cache miss
+(`freeze/install.rs:416`, called from `generators/registry.rs:269`), while effect
+fusion has a worker-backed ready/pending path. Existing BUG-wj73 covers this
+asymmetry. Measure edit/start tail latency before changing the swap-in lifecycle.
+
+## Broader-pass verification results
+
+- `cargo test -p manifold-renderer --test scene_modifier_inv_gate -- --nocapture`:
+  **13 passed, 0 failed, 0 ignored** on the audited base, using the build lock.
+- Fresh worktree `manifold-app --features perf-soak` build succeeded. Two
+  `rt_toggle_matrix.py` cells (`rt_enabled`, `sun-intensity-snap`) ran against
+  `RtNoiseTesting.manifold` at 1280×720 with a **45-second limit per cell**.
+  Both timed out: **transition verdicts inconclusive**. A frame-30 composite
+  from the first cell was inspected and showed the fixture car rendering.
+  This does not establish transition correctness or a performance baseline.
+- The matrix tool discarded partial timeout stdout and then reported missing
+  stats / an inert toggle from absent data. BUG-5v9d tracks preserving partial
+  output and separating process failure from behavioural verdicts. The audit
+  does not count those messages as confirmed rendering defects.
+- Native probe artifacts/logs are local under
+  `/tmp/manifold-audit-rt-20260906`; lifecycle/build/matrix logs are
+  `/tmp/manifold-audit-modifier-invariants.log`,
+  `/tmp/manifold-audit-rt-build.log`, `/tmp/manifold-audit-rt-matrix.log`.
+  The build was **dev**, not a release performance measurement.
+
+The interaction inventory confirmed that `ui-snapshot` drives one headless
+UIRoot, handles undo specially, and rejects `AutomationAction::Text`
+(`ui_snapshot/script.rs:493–586`). Registered scene flows and focus/drag unit
+tests therefore do not establish native editor text/modal ownership. The new
+`scripts/live_ui.py` and `launch_live_ui.py` provide an existing isolated-app
+entry for closing that gap; no additional automation framework is needed.
+
+## Repair order and next checkpoint
+
+1. Establish live input reproductions for ownership and cross-pane drag
+   termination, then repair target identity and live-state authority together.
+   Use effects and scene controls as acceptance cases in the same change class.
+2. Verify equivalent scene updates across direct and modulated writes, coordinate
+   with BUG-agkv's existing work, and retain the passing lifecycle contracts.
+3. Validate RT history/mode transitions and GPU retirement with the actual host
+   lifecycle before applying performance changes. The bounded attempts above
+   need a smaller or warmed discriminating fixture and preserved process logs.
+4. Measure performance on static, animated, edited and removed scenes, then
+   address attributable allocations/rebuilds/compilation. No free-upgrade or
+   whole-engine health claim is supported yet.
+
+The next checkpoint should include observed interactions and completed native
+transition verdicts across these classes, not just more mapping-specific fixes.
