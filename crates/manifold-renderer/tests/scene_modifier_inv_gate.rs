@@ -268,7 +268,7 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         .collect();
     let expected: std::collections::BTreeSet<(String, String)> = [
         ("loop_phase", "bars"),
-        ("scene_array", "count"),
+        ("scene_array", "pattern_length"),
         ("loop_camera", "height"),
         ("loop_camera", "lateral"),
         ("loop_camera", "near"),
@@ -279,7 +279,7 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         ("loop_camera", "pitch"),
         ("loop_camera", "yaw"),
         ("loop_camera", "flow"),
-        ("loop_camera", "stride"),
+        ("loop_camera", "patterns_per_loop"),
         ("loop_camera", "sway_amp"),
         ("loop_camera", "sway_cycles"),
         ("loop_camera", "look_sweep_amp"),
@@ -294,6 +294,46 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         targets, expected,
         "INV-M3: Scene Loop section rows must be exactly the whitelist"
     );
+}
+
+/// ENDLESS_CORRIDOR D3 coupled writes: the Pattern row (scene_array.
+/// pattern_length) couples ONE secondary — loop_camera.pattern_length,
+/// identity — so travel stays an integer multiple of the pattern for any
+/// dial. The Stride row (patterns_per_loop) couples NOTHING: the old
+/// count/jitter_period secondaries patched a desync (outrun, wrap-snap)
+/// the corridor dissolves, and any integer K is pure by construction.
+#[test]
+fn inv_coupled_writes_corridor_shape() {
+    use manifold_renderer::node_graph::scene_modifier::coupled_writes_for;
+
+    let (project, idx) = applied_project(grouped_scene_def());
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+
+    let pattern = coupled_writes_for(graph, "scene_array", "pattern_length");
+    assert_eq!(pattern.len(), 1, "Pattern couples exactly one secondary");
+    assert_eq!(
+        (pattern[0].1, pattern[0].2),
+        ("loop_camera", "pattern_length"),
+        "Pattern's secondary is the camera's internal pattern_length (identity)"
+    );
+    assert_eq!(
+        (pattern[0].3)(3.0),
+        3.0,
+        "the Pattern secondary is the identity coupling"
+    );
+
+    assert!(
+        coupled_writes_for(graph, "loop_camera", "patterns_per_loop").is_empty(),
+        "Stride couples nothing under the corridor (D3)"
+    );
+    assert!(
+        coupled_writes_for(graph, "loop_camera", "stride").is_empty(),
+        "the deleted stride primary no longer couples"
+    );
+
+    // Spacing is untouched: still both cell_size params + home.
+    let spacing = coupled_writes_for(graph, "loop_camera", "cell_size");
+    assert_eq!(spacing.len(), 2, "Spacing still couples both cells + home");
 }
 
 /// P4 load migration (INV-M3 extension): a loop applied BEFORE the control
@@ -315,7 +355,7 @@ fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
     // four D6 rows, exactly what an old save carries.
     let old_targets: std::collections::BTreeSet<(&str, &str)> = [
         ("loop_phase", "bars"),
-        ("scene_array", "count"),
+        ("scene_array", "pattern_length"),
         ("loop_camera", "height"),
         ("loop_camera", "lateral"),
     ]
@@ -641,7 +681,7 @@ fn inv_m8_pre_switch_graph_migrates_once_at_load() {
     phase_params.insert("rate".to_string(), SerializedParamValue::Float { value: 0.0 });
     phase_params.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
     let mut array_params = BTreeMap::new();
-    array_params.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
+    array_params.insert("pattern_length".to_string(), SerializedParamValue::Float { value: 1.0 });
     array_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
     array_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
     let mut camera_params = BTreeMap::new();

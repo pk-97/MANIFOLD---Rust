@@ -1147,15 +1147,14 @@ fn apply_scene_param_write(
 // coupling: rows stay pure data, the scrub/type-in wires are unchanged.
 
 /// One resolved secondary write of a coupled row. `binding` is `Some` when
-/// the secondary param is itself stamped (the Copies binding for
-/// scene_array.count, the Home binding for loop_camera.home) — the write
-/// lands on the instance manifest AND mirrors the def node param: the
-/// stamped binding owns the live value (it shadows the def param at eval),
-/// but the def is the durable record the card-path contract reads, so the
-/// two must not drift. `None` writes the def node param directly
-/// (cell_size — internal params). `value_fn` derives the secondary value
-/// from the primary's new value; `live` tracks the latest applied value
-/// across scrub Moves.
+/// the secondary param is itself stamped (the Home binding for
+/// loop_camera.home) — the write lands on the instance manifest AND mirrors
+/// the def node param: the stamped binding owns the live value (it shadows
+/// the def param at eval), but the def is the durable record the card-path
+/// contract reads, so the two must not drift. `None` writes the def node
+/// param directly (cell_size, loop_camera.pattern_length — internal
+/// params). `value_fn` derives the secondary value from the primary's new
+/// value; `live` tracks the latest applied value across scrub Moves.
 #[derive(Debug, Clone)]
 pub(crate) struct CoupledWriteTarget {
     pub binding: Option<manifold_core::effects::ParamId>,
@@ -2185,15 +2184,18 @@ mod tests {
         );
     }
 
-    /// P4 coupled write (SCENE_MODIFIER_FRAMEWORK): the Stride row is a
-    /// DUAL write — one undoable command writing loop_camera.stride AND
-    /// scene_array.count (K+2) together. Through the SAME
-    /// SceneSetupParamChanged wire: the primary lands in the stride binding's
-    /// instance slot (bound row), the secondary count write lands in the
-    /// Copies binding's slot — and the def's stamped params stay at the
-    /// minted defaults (bound writes never touch the def).
+    /// Corridor coupled writes (ENDLESS_CORRIDOR D3): the Stride row
+    /// (patterns_per_loop) is a SINGLE write — the old count/jitter_period
+    /// secondaries patched a desync the corridor dissolves, and any
+    /// integer K is wrap-pure by construction. Through the SAME
+    /// SceneSetupParamChanged wire: the write lands in the Stride binding's
+    /// instance slot (bound row), scene_array is untouched, and the def's
+    /// stamped params stay at the minted defaults (bound writes never touch
+    /// the def). The Pattern row is the coupled one: it writes
+    /// scene_array.pattern_length AND loop_camera's internal
+    /// pattern_length (identity) in one undo unit.
     #[test]
-    fn stride_row_write_couples_scene_array_count() {
+    fn stride_row_write_is_single_and_pattern_row_couples() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
@@ -2226,7 +2228,7 @@ mod tests {
             layer_id.clone(),
             Vec::new(),
             stride_doc,
-            "stride".to_string(),
+            "patterns_per_loop".to_string(),
             4.0,
         );
         let result = dispatch_project(
@@ -2235,10 +2237,10 @@ mod tests {
         );
         assert!(!result.structural_change, "a coupled row write is not structural");
 
-        // Primary: stride binding slot == 4.
+        // Primary: the Stride binding slot == 4.
         let stride_binding = project
             .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(stride_doc, "stride")
+                inst.binding_id_for_node_param(stride_doc, "patterns_per_loop")
             })
             .flatten()
             .expect("the Stride row is stamped");
@@ -2249,35 +2251,55 @@ mod tests {
             .expect("stride slot exists");
         assert_eq!(stride_slot, 4.0, "the Stride row write lands on its binding");
 
-        // Secondary: the Copies binding slot == K+2 = 6 — the travel/array
-        // coupling that keeps the loop covered.
-        let count_binding = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(count_doc, "count")
-            })
-            .flatten()
-            .expect("the Copies row is stamped");
-        let count_slot = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.get_base_param(manifold_core::effects::ParamId::from(count_binding).as_ref())
-            })
-            .expect("count slot exists");
-        assert_eq!(
-            count_slot, 6.0,
-            "the Stride write must couple scene_array.count = K+2 in the same undo unit"
-        );
-
-        // The def keeps its minted defaults — bound writes never touch it.
+        // No secondary: the corridor deleted the count coupling — the
+        // scene_array def params keep the mint exactly.
         let after_def = effective_def(&project, &layer_id);
+        let array_node = after_def
+            .nodes
+            .iter()
+            .find(|n| n.id == count_doc)
+            .expect("scene_array");
+        assert_eq!(
+            array_node.params.get("pattern_length"),
+            Some(&SerializedParamValue::Float { value: 1.0 }),
+            "Stride couples nothing under the corridor — scene_array keeps the mint"
+        );
         let stride_node = after_def
             .nodes
             .iter()
             .find(|n| n.id == stride_doc)
             .expect("loop_camera");
         assert_eq!(
-            stride_node.params.get("stride"),
+            stride_node.params.get("patterns_per_loop"),
             Some(&SerializedParamValue::Float { value: 1.0 }),
-            "the def keeps the minted stride default; the binding is the live value"
+            "the def keeps the minted patterns_per_loop default; the binding is the live value"
+        );
+
+        // The Pattern row IS coupled: one write to scene_array.
+        // pattern_length lands the identity secondary on loop_camera's
+        // internal pattern_length (unbound — internal param — so the def
+        // mirror carries it).
+        let pattern_write = ProjectAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            count_doc,
+            "pattern_length".to_string(),
+            3.0,
+        );
+        dispatch_project(
+            &pattern_write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        let coupled_def = effective_def(&project, &layer_id);
+        let coupled_camera = coupled_def
+            .nodes
+            .iter()
+            .find(|n| n.id == stride_doc)
+            .expect("loop_camera");
+        assert_eq!(
+            coupled_camera.params.get("pattern_length"),
+            Some(&SerializedParamValue::Float { value: 3.0 }),
+            "the Pattern write couples loop_camera.pattern_length = 3 in the same undo unit (D3)"
         );
     }
 

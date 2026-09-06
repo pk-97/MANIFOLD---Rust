@@ -413,6 +413,13 @@ impl ProjectIOService {
                         // load, once, through the same generic shape the
                         // apply mints — never a manual migrate button.
                         manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
+                        // ENDLESS_CORRIDOR D7: fixed-row loops (count/stride/
+                        // jitter_period shape) upgrade to the corridor shape
+                        // at load, BEFORE the exposure-row migration below —
+                        // it re-stamps through the current whitelist and its
+                        // jitter_period re-stamp is gated on the old node
+                        // shape this migration removes.
+                        manifold_renderer::node_graph::scene_modifier::migrate_fixed_row_scene_loops(graph);
                         // P4: applied loops stamped before the control
                         // enrichment gain the new card rows (Flow/Stride/
                         // Sway/…/Spacing/Jitter) at load, once — the stamper
