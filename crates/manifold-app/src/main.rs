@@ -138,7 +138,7 @@ mod viewport_p6_demo;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;
-// Gap-start black-frame probe — real-pipeline fbTest drive (2026-08-27).
+// Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
 mod window_registry;
