@@ -1,0 +1,69 @@
+diff --git a/crates/manifold-app/src/editor_bridge.rs b/crates/manifold-app/src/editor_bridge.rs
+index 6cffc6b1c..35d9b1dde 100644
+--- a/crates/manifold-app/src/editor_bridge.rs
++++ b/crates/manifold-app/src/editor_bridge.rs
+@@ -2059,6 +2059,64 @@ mod binding_reroute_tests {
+         assert!((back - 0.5).abs() < 1e-3, "expected ~0.5, got {back}");
+     }
+
++    // Temporary audit probes: exercise the production readers against the
++    // production editing command. Expected failures are evidence, not gates.
++    #[test]
++    fn audit_mapping_reader_follows_live_manifest() {
++        use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
++        use manifold_editing::command::Command;
++        use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
++        let def = def_with_binding();
++        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));
++        fx.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
++        fx.graph = Some(def);
++        let target = GraphTarget::Effect(fx.id.clone());
++        let mut project = manifold_core::project::Project::default();
++        project.settings.master_effects.push(fx);
++        let before = super::full_reshape_from_def(project.settings.master_effects[0].graph.as_ref().unwrap(), "amount").unwrap();
++        EditParamMappingCommand::new(target, "amount".into(), BindingMappingEdit {
++            max: Some(7.0), ..Default::default()
++        }, None).execute(&mut project);
++        let fx = &project.settings.master_effects[0];
++        assert_eq!(fx.params.get("amount").unwrap().spec.max, 7.0, "production edit landed");
++        let after = super::full_reshape_from_def(fx.graph.as_ref().unwrap(), "amount").unwrap();
++        eprintln!("AUDIT: before max={}, live manifest max=7, editor reader max={}; range commit detects change={}", before.2, after.2, (before.2-after.2).abs() > f32::EPSILON);
++        assert_eq!(after.2, 7.0, "mapping opener and commit reader must see the live edit");
++    }
++
++    #[test]
++    fn audit_canvas_mapping_supports_generator_and_stock_bindings() {
++        use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
++        use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot};
++        let mut def = def_with_binding();
++        def.preset_metadata.as_mut().unwrap().bindings[0].user_added = true;
++        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));
++        fx.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
++        fx.graph = Some(def.clone());
++        let effect_target = GraphTarget::Effect(fx.id.clone());
++        let mut project = manifold_core::project::Project::default();
++        project.settings.master_effects.push(fx);
++        let mut layer = manifold_core::layer::Layer::new_generator("Audit".into(), manifold_core::PresetTypeId::new("Audit"), 0);
++        let generator_target = GraphTarget::Generator(layer.layer_id.clone());
++        let gp = layer.gen_params_mut().unwrap();
++        gp.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
++        gp.graph = Some(def);
++        project.timeline.layers.push(layer);
++        let snapshot = GraphSnapshot { nodes: vec![NodeSnapshot {
++            id: 1, node_id: NodeId::new("blur1"), node_handle: Some("blur1".into()),
++            type_id: "node.blur".into(), title: "Blur".into(), inputs: vec![], outputs: vec![],
++            parameters: vec![], editor_pos: None, breaks_dependency_cycle: false,
++            group: None, wgsl_source: None,
++        }], wires: vec![], outer_routings: vec![] };
++        let effect_user = super::resolve_canvas_binding(Some(&snapshot), Some(&effect_target), &project, 1, "amount").is_some();
++        assert!(effect_user, "positive control: effect user binding resolves");
++        let generator_user = super::resolve_canvas_binding(Some(&snapshot), Some(&generator_target), &project, 1, "amount").is_some();
++        project.settings.master_effects[0].graph.as_mut().unwrap().preset_metadata.as_mut().unwrap().bindings[0].user_added = false;
++        let effect_stock = super::resolve_canvas_binding(Some(&snapshot), Some(&effect_target), &project, 1, "amount").is_some();
++        eprintln!("AUDIT: effect user={effect_user}, generator user={generator_user}, effect stock={effect_stock}");
++        assert!(generator_user && effect_stock, "equivalent bound rows should expose the same mapping workflow");
++    }
++
+     #[test]
+     fn binding_for_node_param_none_when_unbound() {
+         let def = def_with_binding();
