@@ -2297,8 +2297,8 @@ impl RenderScene {
     /// depth-resolve target used ONLY when shafts are on and the graph's
     /// `depth` output is unwired this frame — "shafts-on forces the
     /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
-    /// `RENDER_TARGET` because it is a resolve target of the MSAA depth
-    /// pass; `SHADER_READ` because the downsample kernel reads it.
+    /// The native depth resolve is converted into this R32Float texture by
+    /// compute, then read by the shaft downsample kernel.
     fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.shaft_depth_internal_width == width
             && self.shaft_depth_internal_height == height
@@ -2312,7 +2312,7 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::R32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+            usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
                 | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "node.render_scene shaft depth internal",
             mip_levels: 1,
@@ -4229,20 +4229,26 @@ impl EffectNode for RenderScene {
         // two things that must stay at the TRUE canvas size: the
         // upscaler's dst dims and the final blit destination.
         let temporal_upscale_param = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        // BUG-319: the reduced-res path is only viable when the compiled
-        // plan actually carries the stored depth/velocity targets MetalFX
-        // needs. A LIVE toggle can't change the plan (the in-place
-        // recompile is retracted — see PresetRuntime::refresh_plan_if_
-        // forced_outputs_changed), so a param=true / targets-absent frame
-        // renders natively — correct image, loud log, zero corruption —
-        // until the runtime rebuilds with the param baked in.
-        let temporal_upscale = temporal_upscale_param
-            && ctx.outputs.texture_2d("depth").is_some()
-            && ctx.outputs.texture_2d("velocity").is_some();
-        if temporal_upscale_param && !temporal_upscale && !self.rt_temporal_unavailable_logged {
+        // A live toggle cannot resize the compiled depth/velocity attachments
+        // (see PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
+        // dimensions, rather than the pending parameter, determine whether
+        // this frame uses MetalFX's reduced-resolution render path.
+        let reduced_dims = (
+            scale_dim(width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+            scale_dim(height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+        );
+        // A live toggle does not resize the compiled graph's attachments.
+        // Keep drawing at their committed resolution until the host rebuilds,
+        // in BOTH directions (native -> reduced and reduced -> native).
+        let temporal_upscale = (temporal_upscale_param || reduced_dims != (width, height))
+            && ["depth", "velocity"].iter().all(|port| {
+                ctx.outputs.texture_2d(port)
+                    .is_some_and(|t| (t.width, t.height) == reduced_dims)
+            });
+        if temporal_upscale_param != temporal_upscale && !self.rt_temporal_unavailable_logged {
             self.rt_temporal_unavailable_logged = true;
             log::warn!(
-                "node.render_scene: temporal_upscale is on but this runtime's plan has no stored depth/velocity targets (live toggle — BUG-319); rendering natively until the scene runtime rebuilds"
+                "node.render_scene: temporal_upscale changed but the compiled depth/velocity size has not; retaining the compiled render resolution until the scene runtime rebuilds"
             );
         }
         let native_width = width;

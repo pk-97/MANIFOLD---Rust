@@ -24,6 +24,8 @@ Obsolete when: the landing protocol itself changes shape (edit both).
 import argparse
 import subprocess
 import sys
+from datetime import datetime, timezone
+import time
 from pathlib import Path
 
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
@@ -64,6 +66,12 @@ def main():
         gate_cmd += ["--skip-gpu", a.skip_gpu]
     gate = step("landing_gate", gate_cmd, wt, check=False)
     gate_out = gate.stdout + gate.stderr
+    log_dir = wt / "target" / "landing-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    gate_log = (log_dir / f"landing-gate-{stamp}-{time.time_ns()}.log").resolve()
+    gate_log.write_text(gate_out)
+    print(f"[land] complete landing gate transcript: {gate_log}", flush=True)
     print(gate_out[-2000:], flush=True)
     if gate.returncode != 0:
         if a.skip_gpu or not (a.named_red and a.reason):

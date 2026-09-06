@@ -625,8 +625,12 @@ pub trait EffectNode: Send {
     /// `Some((input_port, output_port))` indicating which input the
     /// runtime should alias onto which output. The runtime then installs
     /// the input slot's texture into the output slot as a transient
-    /// borrowed override — **zero GPU work** — and skips `evaluate`
-    /// entirely.
+    /// borrowed override and skips `evaluate` entirely. Compatibility uses
+    /// the bound textures' actual dimensions and formats, so an inherited
+    /// default format matches an equivalent explicit fused output format.
+    /// If the host owns the destination binding and aliasing is refused,
+    /// the runtime copies compatible textures instead. Genuine shape or
+    /// format mismatches still evaluate (for example, a resampling mux).
     ///
     /// Default: `None` (always run `evaluate`).
     ///
