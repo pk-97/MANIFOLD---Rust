@@ -407,9 +407,16 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   rewrite the parity file to the new params and baseline it green, THEN
   red-first on a deliberately truncated-mod jitter (one-frame source change,
   run, revert). A red-for-the-boring-reason red proves nothing.
-  Gate: new gates green; gpu-proofs suite green.
-  Round-trip: none (no serialized change yet — the old param names still
-  exist in the manifest). Test scope: `manifold-renderer` nextest + lib
+  Gate: new gates green; gpu-proofs suite green except pre-existing
+  device-flake failures (BUG-cam (gpu-proofs-test-binary-faults-gpu-firmware) class — the
+  P1 wave verified the identical failure set at the base tip; the gate must
+  be green at LANDING time even if the device flakes mid-wave).
+  Round-trip: NONE EXPECTED AT P1 — but note the strict-loader reality the
+  P1 lane discovered: the rename makes old-shape graphs fail load with
+  UnknownParam immediately, so P1 alone would break saved-loop loading.
+  This is WHY the wave lands P1+P2 together and why the migration must run
+  before param validation in the load loop (P2 input).
+  Test scope: `manifold-renderer` nextest + lib
   gpu_tests; clippy `-p manifold-renderer`.
   Demo: none — L1 (atom-level phase; the observable surface arrives in P2).
 - **P2 — Plan builder, card surface, migration.** Deliverables: section 3.3
