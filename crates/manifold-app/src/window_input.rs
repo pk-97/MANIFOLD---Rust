@@ -1530,6 +1530,7 @@ impl Application {
                         )
                     {
                         canvas.open_mapping_popover(
+                            crate::editing_host::to_ui_graph_target(self.watched_graph_target.as_ref().expect("resolved binding has a graph target")),
                             viewport, node_id, pi, binding_id, label, min, max, invert,
                             crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
                             section,
@@ -1723,6 +1724,24 @@ impl Application {
                     }
                     _ => {}
                 }
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.offscreen_dirty = true;
+                }
+                return true;
+            }
+        }
+        if is_graph_editor && matches!(logical_key, Key::Named(NamedKey::Escape)) {
+            if self.editor_mapping_popover.is_open() {
+                self.editor_mapping_popover.close();
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.offscreen_dirty = true;
+                }
+                return true;
+            }
+            if let Some(canvas) = self.graph_canvas.as_mut()
+                && canvas.popover_open()
+            {
+                canvas.close_mapping_popover();
                 if let Some(ed) = self.graph_editor.as_mut() {
                     ed.offscreen_dirty = true;
                 }

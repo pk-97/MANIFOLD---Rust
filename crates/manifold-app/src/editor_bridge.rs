@@ -107,12 +107,10 @@ fn descend_def_level<'a>(
     Some((nodes, wires))
 }
 
-/// The current reshape for `param_id` read out of a preset graph def:
-/// `(label, min, max, invert, curve, scale, offset)`. Range/curve/invert/label
-/// live on the param's [`ParamSpecDef`]; scale/offset on its [`BindingDef`]
-/// (identity `1.0`/`0.0` when the param has no binding). `None` when the def
-/// carries no metadata or the param id isn't found.
-fn full_reshape_from_def(
+/// Read the live manifest spec and the graph's binding affine transform.
+/// Graph metadata's param specs are a serialization shadow, not live UI state.
+fn full_reshape_from_instance(
+    instance: &manifold_core::effects::PresetInstance,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     param_id: &str,
 ) -> Option<(
@@ -125,7 +123,7 @@ fn full_reshape_from_def(
     f32,
 )> {
     let meta = def.preset_metadata.as_ref()?;
-    let spec = meta.params.iter().find(|p| p.id == param_id)?;
+    let spec = &instance.params.get(param_id)?.spec;
     let (scale, offset) = meta
         .bindings
         .iter()
@@ -165,11 +163,12 @@ fn descend_level_ref<'a>(
 /// reads its stable `NodeId`, then looks that up against
 /// `preset_metadata.bindings` (the single unified list post
 /// `PRESET_UNIFICATION_PLAN.md` — bundled and user-added bindings both live
-/// here). Mirrors [`full_reshape_from_def`]'s reshape lookup, keyed the
+/// here). Mirrors [`full_reshape_from_instance`]'s reshape lookup, keyed the
 /// other way (by node target instead of outer id). `None` when the node has
 /// no stable id (a bundled node that's never been targeted), the level
 /// doesn't resolve, or no binding targets this param.
 fn binding_for_node_param(
+    params: &manifold_core::params::ParamManifest,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     scope_path: &[u32],
     node_id: u32,
@@ -196,7 +195,7 @@ fn binding_for_node_param(
         }
         BindingTarget::Composite { .. } => false,
     })?;
-    let spec = meta.params.iter().find(|p| p.id == binding.id)?;
+    let spec = &params.get(&binding.id)?.spec;
     Some((
         binding.id.clone(),
         spec.min,
@@ -424,13 +423,12 @@ fn non_empty_node_id(id: &manifold_core::NodeId) -> Option<manifold_core::NodeId
 }
 
 /// Resolve an on-canvas param row `(node_id, inner_param)` to the
-/// matching card `UserParamBinding` on the watched effect, returning the
+/// matching card binding on the watched effect or generator, returning the
 /// data the mapping popover needs to open. `None` when there's no active
 /// snapshot/target, the node has no stable handle, or the inner param
-/// isn't exposed as a user binding (only user-bound rows get the popover;
-/// preset/static routings and plain inner params don't).
+/// has no live exposed binding. Stock and user-added bindings use the same path.
 ///
-/// Returned tuple: `(binding_id, label, min, max, invert, curve, range)`.
+/// Returned tuple: `(binding_id, label, min, max, invert, curve, scale, offset, range, section)`.
 /// `range` is the binding's declared inner-param bounds, used to span the
 /// popover's trim track.
 ///
@@ -470,35 +468,193 @@ pub(crate) fn resolve_canvas_binding(
         .iter()
         .find(|p| p.name == inner_param)
         .and_then(|p| p.range);
-    // Only effect graphs carry card user-bindings; a generator target has none.
-    let manifold_core::GraphTarget::Effect(eid) = target? else {
-        return None;
+    let instance = project.preset_instance(target?)?;
+    let view;
+    let def = if let Some(def) = instance.graph.as_ref() {
+        def
+    } else {
+        view = manifold_renderer::node_graph::loaded_preset_view_by_id(instance.effect_type())?;
+        &view.canonical_def
     };
-    let fx = project.find_effect_by_id(eid)?;
-    let b = fx
-        .user_param_bindings()
-        .into_iter()
-        .find(|b| b.node_id == node.node_id && b.inner_param == inner_param)?;
-    Some((
-        b.id.clone(),
-        b.label.clone(),
-        b.min,
-        b.max,
-        b.invert,
-        b.curve,
-        b.scale,
-        b.offset,
-        range,
-        b.section.clone(),
-    ))
+    let binding = def.preset_metadata.as_ref()?.bindings.iter().find(|b| {
+        matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+            if *node_id == node.node_id && param == inner_param)
+    })?;
+    let (label, min, max, invert, curve, scale, offset) =
+        full_reshape_from_instance(instance, def, &binding.id)?;
+    Some((binding.id.clone(), label, min, max, invert, curve, scale, offset,
+        range, instance.params.get(&binding.id)?.spec.section.clone()))
 }
 
 impl Application {
-    /// The mapping drawer's store target for the editor's watched graph —
-    /// the [`manifold_core::GraphTarget`] the command then resolves to a
-    /// `GraphHost`.
-    pub(crate) fn mapping_target(&self) -> Option<manifold_core::GraphTarget> {
-        self.watched_graph_target.clone()
+    /// Open from the emitting card using the shared target resolver and its
+    /// clicked node geometry. Canvas selection is not an input.
+    pub(crate) fn open_card_mapping(
+        &mut self,
+        target: &manifold_ui::GraphParamTarget,
+        param_id: &str,
+        anchor_node_id: manifold_ui::node::NodeId,
+        clip: manifold_ui::graph_canvas::Rect,
+    ) -> bool {
+        let Some(ed) = self.graph_editor.as_ref() else { return false; };
+        let Some(owner) = crate::ui_bridge::resolve_graph_target(
+            target, None, ed.ui_root.inspector.last_effect_tab(),
+            &self.active_layer_id, &self.selection, &self.local_project,
+        ) else { return false; };
+        let Some((label, min, max, invert, curve, scale, offset)) = self.target_full_reshape(&owner, param_id)
+        else { return false; };
+        if ed.ui_root.tree.get_node(anchor_node_id).is_none() { return false; }
+        let anchor = ed.ui_root.tree.get_bounds(anchor_node_id);
+        let section = self.local_project.preset_instance(&owner)
+            .and_then(|inst| inst.params.get(param_id)).and_then(|p| p.spec.section.clone());
+        // Modifiers have no card selection-follow action. Bring their graph
+        // into view through the same watched-target path as other cards.
+        if self.watched_graph_target.as_ref() != Some(&owner) {
+            match &owner {
+                manifold_core::GraphTarget::Effect(id) => self.watch_effect_graph(id.clone()),
+                manifold_core::GraphTarget::Generator(id) => self.watch_generator_graph(id.clone()),
+            }
+        }
+        self.editor_mapping_popover.open(
+            crate::editing_host::to_ui_graph_target(&owner), param_id.to_owned(), label,
+            min, max, invert, crate::ui_translate::macro_curve_to_ui(curve),
+            scale, offset, None, section,
+            manifold_ui::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height), clip,
+        );
+        true
+    }
+
+    /// The existing mapping action handler, shared by both modal entry points.
+    /// Every event carries the owner captured at open; selection is irrelevant.
+    pub(crate) fn dispatch_mapping_action(&mut self, action: &manifold_ui::RootAction) -> bool {
+        use manifold_ui::RootAction;
+        use crate::ui_bridge::scrub::ResolvedScrub;
+        match action {
+            RootAction::EffectMappingRangeSnapshot { target, binding_id } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                if let Some(shape) = self.target_full_reshape(target, binding_id) {
+                    self.scrub.check_single_active_on_begin("mapping-range");
+                    self.scrub.active = Some(ResolvedScrub::MappingRange {
+                        target: target.clone(), param_id: binding_id.clone(),
+                        baseline: (shape.1, shape.2), live: (shape.1, shape.2),
+                    });
+                }
+            }
+            RootAction::EffectMappingRangeChanged { target, binding_id, min, max } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                if let Some(ResolvedScrub::MappingRange { target: owner, param_id, live, .. }) = &mut self.scrub.active
+                    && owner == target && param_id == binding_id
+                {
+                    *live = (*min, *max);
+                    self.preview_mapping(target, binding_id, BindingMappingEdit {
+                        min: Some(*min), max: Some(*max), ..Default::default()
+                    });
+                }
+            }
+            RootAction::EffectMappingRangeCommit { target, binding_id } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                if matches!(&self.scrub.active,
+                    Some(ResolvedScrub::MappingRange { target: owner, param_id, .. })
+                    if owner == target && param_id == binding_id)
+                    && let Some(ResolvedScrub::MappingRange { baseline, live, .. }) = self.scrub.active.take()
+                    && ((baseline.0 - live.0).abs() > f32::EPSILON || (baseline.1 - live.1).abs() > f32::EPSILON)
+                {
+                    self.commit_mapping_with_reverse(target, binding_id,
+                        BindingMappingEdit { min: Some(live.0), max: Some(live.1), ..Default::default() },
+                        BindingMappingEdit { min: Some(baseline.0), max: Some(baseline.1), ..Default::default() },
+                    );
+                }
+            }
+            RootAction::EffectMappingAffineSnapshot { target, binding_id } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                if let Some(shape) = self.target_full_reshape(target, binding_id) {
+                    self.scrub.check_single_active_on_begin("mapping-affine");
+                    self.scrub.active = Some(ResolvedScrub::MappingAffine {
+                        target: target.clone(), param_id: binding_id.clone(),
+                        baseline: (shape.5, shape.6), live: (shape.5, shape.6),
+                    });
+                }
+            }
+            RootAction::EffectMappingAffineChanged { target, binding_id, scale, offset } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                if let Some(ResolvedScrub::MappingAffine { target: owner, param_id, live, .. }) = &mut self.scrub.active
+                    && owner == target && param_id == binding_id
+                {
+                    *live = (*scale, *offset);
+                    self.preview_mapping(target, binding_id, BindingMappingEdit {
+                        scale: Some(*scale), offset: Some(*offset), ..Default::default()
+                    });
+                }
+            }
+            RootAction::EffectMappingAffineCommit { target, binding_id } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                if matches!(&self.scrub.active,
+                    Some(ResolvedScrub::MappingAffine { target: owner, param_id, .. })
+                    if owner == target && param_id == binding_id)
+                    && let Some(ResolvedScrub::MappingAffine { baseline, live, .. }) = self.scrub.active.take()
+                    && ((baseline.0 - live.0).abs() > f32::EPSILON || (baseline.1 - live.1).abs() > f32::EPSILON)
+                {
+                    self.commit_mapping_with_reverse(target, binding_id,
+                        BindingMappingEdit { scale: Some(live.0), offset: Some(live.1), ..Default::default() },
+                        BindingMappingEdit { scale: Some(baseline.0), offset: Some(baseline.1), ..Default::default() },
+                    );
+                }
+            }
+            RootAction::EffectMappingLabel { target, binding_id, label } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                    label: Some(label.clone()), ..Default::default()
+                });
+            }
+            RootAction::EffectMappingSection { target, binding_id, section } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                    section: Some(section.clone()), ..Default::default()
+                });
+            }
+            RootAction::EffectMappingInvert { target, binding_id, invert } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                    invert: Some(*invert), ..Default::default()
+                });
+            }
+            RootAction::EffectMappingCurve { target, binding_id, curve } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                    curve: Some(crate::ui_translate::macro_curve_to_core(*curve)), ..Default::default()
+                });
+            }
+            RootAction::EffectMappingGotoNode { target, binding_id } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                // A snapshot belongs to the watched graph. Never navigate a
+                // same-named binding in a different graph.
+                if self.watched_graph_target.as_ref() == Some(target)
+                    && let Some(snapshot) = self.editor_ui_snapshot()
+                    && let Some(node_id) = crate::graph_canvas::resolve_card_param_node_id(&snapshot, binding_id)
+                    && let Some(canvas) = self.graph_canvas.as_mut()
+                {
+                    canvas.focus_node(&snapshot, &node_id);
+                }
+            }
+            RootAction::EffectMappingCancel { target, binding_id } => {
+                let target = &crate::editing_host::to_graph_target(target);
+                let reverse = match &self.scrub.active {
+                    Some(ResolvedScrub::MappingRange { target: owner, param_id, baseline, .. })
+                        if owner == target && param_id == binding_id =>
+                        Some(BindingMappingEdit { min: Some(baseline.0), max: Some(baseline.1), ..Default::default() }),
+                    Some(ResolvedScrub::MappingAffine { target: owner, param_id, baseline, .. })
+                        if owner == target && param_id == binding_id =>
+                        Some(BindingMappingEdit { scale: Some(baseline.0), offset: Some(baseline.1), ..Default::default() }),
+                    _ => None,
+                };
+                if let Some(reverse) = reverse {
+                    self.scrub.active = None;
+                    self.preview_mapping(target, binding_id, reverse);
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Cursor position over the audio scope's waterfall, if inside it:
@@ -522,70 +678,24 @@ impl Application {
         Some((ux, uy, freq))
     }
 
-    /// Read the watched param's CURRENT reshape `(min, max, scale, offset)`
-    /// for the drawer seed + drag change-detection. Reads the preset's
-    /// authoring surface (`ParamSpecDef` range + `BindingDef` scale/offset)
-    /// from whichever graph def is live: the instance's per-instance override
-    /// if it has diverged, else the catalog graph (effect) / bundled def
-    /// (generator). `None` if the param doesn't resolve. This is the single
-    /// reshape source after `ParamMapping` was deleted.
-    pub(crate) fn watched_reshape(&self, param_id: &str) -> Option<(f32, f32, f32, f32)> {
-        let (_, min, max, _, _, scale, offset) = self.watched_full_reshape(param_id)?;
-        Some((min, max, scale, offset))
-    }
-
-    /// The watched param's full reshape `(label, min, max, invert, curve,
-    /// scale, offset)` — the drawer's complete seed. Reads the instance's
-    /// per-instance graph override first, then falls back to the catalog
-    /// (effect) / bundled (generator) graph def.
-    pub(crate) fn watched_full_reshape(
+    /// Mapping controls resolve their captured owner, independently of canvas selection.
+    pub(crate) fn target_full_reshape(
         &self,
+        target: &manifold_core::GraphTarget,
         param_id: &str,
-    ) -> Option<(
-        String,
-        f32,
-        f32,
-        bool,
-        manifold_core::macro_bank::MacroCurve,
-        f32,
-        f32,
-    )> {
-        match self.watched_graph_target.as_ref()? {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                if let Some(def) = fx.graph.as_ref()
-                    && let Some(r) = full_reshape_from_def(def, param_id)
-                {
-                    return Some(r);
-                }
-                let view =
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-                full_reshape_from_def(&view.canonical_def, param_id)
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let layer = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?;
-                if let Some(def) = layer.generator_graph()
-                    && let Some(r) = full_reshape_from_def(def, param_id)
-                {
-                    return Some(r);
-                }
-                let gp = layer.gen_params()?;
-                let view =
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())?;
-                full_reshape_from_def(&view.canonical_def, param_id)
-            }
+    ) -> Option<(String, f32, f32, bool, manifold_core::macro_bank::MacroCurve, f32, f32)> {
+        let instance = self.local_project.preset_instance(target)?;
+        if let Some(def) = instance.graph.as_ref() {
+            return full_reshape_from_instance(instance, def, param_id);
         }
+        let view = manifold_renderer::node_graph::loaded_preset_view_by_id(instance.effect_type())?;
+        full_reshape_from_instance(instance, &view.canonical_def, param_id)
     }
 
     /// The card binding (if any) governing `(node_id, param_name)` on the
     /// watched graph at `scope_path` — BUG-158 write-back's binding lookup
     /// (D1). Same override-then-canonical fallback as
-    /// [`Self::watched_full_reshape`]: most bound params are still on the
+    /// [`Self::target_full_reshape`]: most bound params are still on the
     /// bundled/canonical def (never diverged), so the instance's own
     /// per-instance `graph` override alone would miss them.
     pub(crate) fn watched_binding_for_node_param(
@@ -602,36 +712,12 @@ impl Application {
         f32,
         f32,
     )> {
-        match self.watched_graph_target.as_ref()? {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                if let Some(def) = fx.graph.as_ref()
-                    && let Some(r) = binding_for_node_param(def, scope_path, node_id, param_name)
-                {
-                    return Some(r);
-                }
-                let view =
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-                binding_for_node_param(&view.canonical_def, scope_path, node_id, param_name)
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let layer = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?;
-                if let Some(def) = layer.generator_graph()
-                    && let Some(r) = binding_for_node_param(def, scope_path, node_id, param_name)
-                {
-                    return Some(r);
-                }
-                let gp = layer.gen_params()?;
-                let view =
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())?;
-                binding_for_node_param(&view.canonical_def, scope_path, node_id, param_name)
-            }
+        let instance = self.local_project.preset_instance(self.watched_graph_target.as_ref()?)?;
+        if let Some(def) = instance.graph.as_ref() {
+            return binding_for_node_param(&instance.params, def, scope_path, node_id, param_name);
         }
+        let view = manifold_renderer::node_graph::loaded_preset_view_by_id(instance.effect_type())?;
+        binding_for_node_param(&instance.params, &view.canonical_def, scope_path, node_id, param_name)
     }
 
     /// BUG-282: the current value of `(node_id, param_name)` on the watched
@@ -810,29 +896,6 @@ impl Application {
             == rfd::MessageDialogResult::Yes
     }
 
-    /// Read the watched param's CURRENT (post-modulation) value — the number
-    /// shown on the card slider — for the mapping popover's live dot. Reads the
-    /// same `param_values` slot drivers / Ableton / envelopes write each frame,
-    /// so the dot tracks live motion. `None` if the param doesn't resolve.
-    pub(crate) fn watched_value(&self, param_id: &str) -> Option<f32> {
-        match self.watched_graph_target.as_ref()? {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                fx.params.get(param_id).map(|p| p.value)
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let gp = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?
-                    .gen_params()?;
-                gp.params.get(param_id).map(|p| p.value)
-            }
-        }
-    }
-
     /// Live-drag preview: apply the partial edit to the watched param's
     /// reshape store on BOTH the local project (immediate card UI) and the
     /// content thread (smooth canvas + survives the next snapshot sync),
@@ -927,6 +990,7 @@ impl Application {
     /// edit). Does NOT open the window — shared by the card cog (which also
     /// sets `pending_open_graph_editor`) and selection-follows (retarget-only).
     pub(crate) fn watch_effect_graph(&mut self, effect_id: manifold_core::EffectId) {
+        self.close_mapping_on_target_change(&manifold_core::GraphTarget::Effect(effect_id.clone()));
         self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(effect_id.clone())));
         self.watched_catalog_default = self.local_project.find_effect_by_id(&effect_id).and_then(
             |instance| manifold_renderer::node_graph::catalog_graph_def_for(instance.effect_type()),
@@ -939,6 +1003,7 @@ impl Application {
     /// NOT open the window — shared by the generator-card cog and
     /// selection-follows.
     pub(crate) fn watch_generator_graph(&mut self, layer_id: manifold_core::LayerId) {
+        self.close_mapping_on_target_change(&manifold_core::GraphTarget::Generator(layer_id.clone()));
         self.send_content_cmd(ContentCommand::WatchGeneratorGraph(Some(layer_id.clone())));
         self.watched_catalog_default = self
             .local_project
@@ -949,6 +1014,18 @@ impl Application {
             .and_then(|gt| manifold_renderer::node_graph::bundled_preset_json(&gt))
             .and_then(|json| serde_json::from_str(&json).ok());
         self.watched_graph_target = Some(manifold_core::GraphTarget::Generator(layer_id));
+    }
+
+    fn close_mapping_on_target_change(&mut self, target: &manifold_core::GraphTarget) {
+        if self.watched_graph_target.as_ref() == Some(target) {
+            return;
+        }
+        // Closing cancels an unfinished gesture. Already queued events retain
+        // their captured owner and are drained normally on the next tick.
+        self.editor_mapping_popover.close();
+        if let Some(canvas) = self.graph_canvas.as_mut() {
+            canvas.close_mapping_popover();
+        }
     }
 
     /// Open the shared Save to Library / Save to Project name-prompt text
@@ -1147,9 +1224,12 @@ impl Application {
             return;
         };
         // Resolve the open popover's live value before borrowing the editor
-        // window state mutably (`watched_value` borrows all of `self`).
+        // window state mutably. Its owner may differ from the watched graph.
         let popover_live_value = if self.editor_mapping_popover.is_open() {
-            self.watched_value(self.editor_mapping_popover.binding_id())
+            self.editor_mapping_popover.target()
+                .and_then(|target| self.local_project.preset_instance(&crate::editing_host::to_graph_target(target)))
+                .and_then(|instance| instance.params.get(self.editor_mapping_popover.binding_id()))
+                .map(|param| param.value)
         } else {
             None
         };
@@ -1962,6 +2042,8 @@ mod preview_target_tests {
 #[cfg(test)]
 mod binding_reroute_tests {
     use super::{binding_for_node_param, node_param_is_wired};
+    use crate::app::Application;
+    use crate::content_command::ContentCommand;
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::{
         BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
@@ -2046,11 +2128,127 @@ mod binding_reroute_tests {
         }
     }
 
+    fn manifest_for(def: &EffectGraphDef) -> manifold_core::params::ParamManifest {
+        let mut params = manifold_core::params::ParamManifest::default();
+        for spec in &def.preset_metadata.as_ref().unwrap().params {
+            params.push(manifold_core::params::Param::bundled(spec.clone()));
+        }
+        params
+    }
+
+    fn mapping_test_app() -> (Application, manifold_core::GraphTarget, manifold_core::GraphTarget) {
+        use manifold_core::{effects::PresetInstance, GraphTarget, PresetTypeId};
+        let mut app = Application::new();
+        app.user_prefs = crate::user_prefs::UserPrefs::for_test();
+        let def = def_with_binding();
+        let mut effect = PresetInstance::new(PresetTypeId::new("Test"));
+        effect.params = manifest_for(&def);
+        effect.graph = Some(def.clone());
+        let a = GraphTarget::Effect(effect.id.clone());
+        app.local_project.settings.master_effects.push(effect);
+        let mut layer = manifold_core::layer::Layer::new_generator("Test".into(), PresetTypeId::new("Test"), 0);
+        let b = GraphTarget::Generator(layer.layer_id.clone());
+        let generator = layer.gen_params_mut().unwrap();
+        generator.params = manifest_for(&def);
+        generator.graph = Some(def);
+        app.local_project.timeline.layers.push(layer);
+        app.watched_graph_target = Some(a.clone());
+        (app, a, b)
+    }
+
+    #[test]
+    fn mapping_first_open_uses_card_owner_and_clicked_anchor() {
+        use manifold_ui::{GraphParamTarget, node::Rect};
+        let (mut app, previous, owner) = mapping_test_app();
+        let manifold_core::GraphTarget::Generator(layer) = &owner else { unreachable!() };
+        let mut editor = crate::workspace::Workspace::new(crate::workspace::WorkspaceKind::GraphEditor);
+        let region = editor.ui_root.tree.begin_region(Rect::new(0.0, 0.0, 1000.0, 900.0),
+            manifold_ui::tree::ZTier::Base, "mapping-test", manifold_ui::UIFlags::empty());
+        let start = editor.ui_root.tree.count();
+        let upper = editor.ui_root.tree.add_node(None, Rect::new(50.0, 30.0, 16.0, 18.0),
+            manifold_ui::node::UINodeType::Button, Default::default(), None, manifold_ui::UIFlags::empty());
+        let lower = editor.ui_root.tree.add_node(None, Rect::new(50.0, 330.0, 16.0, 18.0),
+            manifold_ui::node::UINodeType::Button, Default::default(), None, manifold_ui::UIFlags::empty());
+        assert_ne!(upper, lower);
+        editor.ui_root.tree.end_region(region, start);
+        app.graph_editor = Some(editor);
+        assert!(app.open_card_mapping(&GraphParamTarget::GeneratorOf(layer.clone()), "amount", lower,
+            manifold_ui::graph_canvas::Rect::new(0.0, 0.0, 1000.0, 900.0)));
+        assert_eq!(app.editor_mapping_popover.target(), Some(&crate::editing_host::to_ui_graph_target(&owner)));
+        assert_eq!(app.watched_graph_target.as_ref(), Some(&owner));
+        // A press beside the lower row reaches the modal; the upper-row
+        // position must not. Same parameter name cannot choose its anchor.
+        assert!(!app.editor_mapping_popover.on_press(80.0, 40.0));
+        assert!(app.editor_mapping_popover.on_press(80.0, 340.0));
+        let manifold_core::GraphTarget::Effect(id) = previous else { unreachable!() };
+        app.watch_effect_graph(id);
+        assert!(!app.editor_mapping_popover.is_open(), "changing graphs dismisses the old modal");
+    }
+
+    #[test]
+    fn mapping_gesture_survives_selection_change_and_commits_one_undo() {
+        use manifold_ui::RootAction;
+        use manifold_editing::undo::UndoRedoManager;
+        let (mut app, owner, other) = mapping_test_app();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.content_tx = Some(tx);
+        let mut content_project = app.local_project.clone();
+        let target = crate::editing_host::to_ui_graph_target(&owner);
+        app.dispatch_mapping_action(&RootAction::EffectMappingRangeSnapshot { target: target.clone(), binding_id: "amount".into() });
+        app.watched_graph_target = Some(other.clone());
+        for max in [2.0, 4.0, 7.0] {
+            app.dispatch_mapping_action(&RootAction::EffectMappingRangeChanged {
+                target: target.clone(), binding_id: "amount".into(), min: 0.0, max,
+            });
+        }
+        // A stale terminal event for a different card must not steal this drag.
+        app.dispatch_mapping_action(&RootAction::EffectMappingRangeCommit {
+            target: crate::editing_host::to_ui_graph_target(&other), binding_id: "amount".into(),
+        });
+        assert!(app.scrub.active.is_some());
+        assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().2, 7.0);
+        assert_eq!(app.target_full_reshape(&other, "amount").unwrap().2, 1.0);
+        app.dispatch_mapping_action(&RootAction::EffectMappingRangeCommit { target, binding_id: "amount".into() });
+        assert!(app.scrub.active.is_none());
+        let mut undo = UndoRedoManager::new();
+        for command in rx.try_iter() {
+            match command {
+                ContentCommand::MutateProjectPreview(edit) => edit(&mut content_project),
+                ContentCommand::Execute(command) => undo.execute(command, &mut content_project),
+                _ => panic!("unexpected mapping command"),
+            }
+        }
+        assert_eq!(undo.undo_count(), 1);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 7.0);
+        assert!(undo.undo(&mut content_project));
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 1.0);
+        assert!(undo.redo(&mut content_project));
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 7.0);
+    }
+
+    #[test]
+    fn mapping_cancel_restores_captured_owner_without_undo() {
+        use manifold_ui::RootAction;
+        let (mut app, owner, other) = mapping_test_app();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.content_tx = Some(tx);
+        let target = crate::editing_host::to_ui_graph_target(&owner);
+        app.dispatch_mapping_action(&RootAction::EffectMappingAffineSnapshot { target: target.clone(), binding_id: "amount".into() });
+        app.watched_graph_target = Some(other.clone());
+        app.dispatch_mapping_action(&RootAction::EffectMappingAffineChanged { target: target.clone(), binding_id: "amount".into(), scale: 9.0, offset: 4.0 });
+        assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().5, 9.0);
+        app.dispatch_mapping_action(&RootAction::EffectMappingCancel { target, binding_id: "amount".into() });
+        assert!(app.scrub.active.is_none());
+        assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().5, 2.0);
+        assert_eq!(app.target_full_reshape(&other, "amount").unwrap().5, 2.0);
+        assert!(rx.try_iter().all(|cmd| matches!(cmd, ContentCommand::MutateProjectPreview(_))));
+    }
+
     #[test]
     fn binding_for_node_param_resolves_and_inverts() {
         let def = def_with_binding();
         let (outer_id, min, max, invert, curve, scale, offset) =
-            binding_for_node_param(&def, &[], 1, "amount").expect("binding resolves");
+            binding_for_node_param(&manifest_for(&def), &def, &[], 1, "amount").expect("binding resolves");
         assert_eq!(outer_id, "amount");
         let target =
             manifold_core::effects::apply_card_reshape(0.5, min, max, invert, curve, scale, offset);
@@ -2060,11 +2258,70 @@ mod binding_reroute_tests {
         assert!((back - 0.5).abs() < 1e-3, "expected ~0.5, got {back}");
     }
 
+    // Regression probes retained from the initial audit.
+    #[test]
+    fn mapping_reader_follows_live_manifest() {
+        use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
+        let def = def_with_binding();
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));
+        fx.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
+        fx.graph = Some(def);
+        let target = GraphTarget::Effect(fx.id.clone());
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(fx);
+        let before = super::full_reshape_from_instance(&project.settings.master_effects[0], project.settings.master_effects[0].graph.as_ref().unwrap(), "amount").unwrap();
+        EditParamMappingCommand::new(target, "amount".into(), BindingMappingEdit {
+            max: Some(7.0), ..Default::default()
+        }, None).execute(&mut project);
+        let fx = &project.settings.master_effects[0];
+        assert_eq!(fx.params.get("amount").unwrap().spec.max, 7.0, "production edit landed");
+        let after = super::full_reshape_from_instance(fx, fx.graph.as_ref().unwrap(), "amount").unwrap();
+        eprintln!("AUDIT: before max={}, live manifest max=7, editor reader max={}; range commit detects change={}", before.2, after.2, (before.2-after.2).abs() > f32::EPSILON);
+        assert_eq!(after.2, 7.0, "mapping opener and commit reader must see the live edit");
+        let inverse = binding_for_node_param(&fx.params, fx.graph.as_ref().unwrap(), &[], 1, "amount").unwrap();
+        assert_eq!(inverse.2, 7.0, "node-face inverse mapping must use the same live range");
+    }
+
+    #[test]
+    fn mapping_canvas_supports_generator_and_stock_bindings() {
+        use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
+        use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot};
+        let mut def = def_with_binding();
+        def.preset_metadata.as_mut().unwrap().bindings[0].user_added = true;
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));
+        fx.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
+        fx.graph = Some(def.clone());
+        let effect_target = GraphTarget::Effect(fx.id.clone());
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(fx);
+        let mut layer = manifold_core::layer::Layer::new_generator("Audit".into(), manifold_core::PresetTypeId::new("Audit"), 0);
+        let generator_target = GraphTarget::Generator(layer.layer_id.clone());
+        let gp = layer.gen_params_mut().unwrap();
+        gp.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
+        gp.graph = Some(def);
+        project.timeline.layers.push(layer);
+        let snapshot = GraphSnapshot { nodes: vec![NodeSnapshot {
+            id: 1, node_id: NodeId::new("blur1"), node_handle: Some("blur1".into()),
+            type_id: "node.blur".into(), title: "Blur".into(), inputs: vec![], outputs: vec![],
+            parameters: vec![], editor_pos: None, breaks_dependency_cycle: false,
+            group: None, wgsl_source: None,
+        }], wires: vec![], outer_routings: vec![] };
+        let effect_user = super::resolve_canvas_binding(Some(&snapshot), Some(&effect_target), &project, 1, "amount").is_some();
+        assert!(effect_user, "positive control: effect user binding resolves");
+        let generator_user = super::resolve_canvas_binding(Some(&snapshot), Some(&generator_target), &project, 1, "amount").is_some();
+        project.settings.master_effects[0].graph.as_mut().unwrap().preset_metadata.as_mut().unwrap().bindings[0].user_added = false;
+        let effect_stock = super::resolve_canvas_binding(Some(&snapshot), Some(&effect_target), &project, 1, "amount").is_some();
+        eprintln!("AUDIT: effect user={effect_user}, generator user={generator_user}, effect stock={effect_stock}");
+        assert!(generator_user && effect_stock, "equivalent bound rows should expose the same mapping workflow");
+    }
+
     #[test]
     fn binding_for_node_param_none_when_unbound() {
         let def = def_with_binding();
-        assert!(binding_for_node_param(&def, &[], 1, "other_param").is_none());
-        assert!(binding_for_node_param(&def, &[], 99, "amount").is_none());
+        assert!(binding_for_node_param(&manifest_for(&def), &def, &[], 1, "other_param").is_none());
+        assert!(binding_for_node_param(&manifest_for(&def), &def, &[], 99, "amount").is_none());
     }
 
     #[test]

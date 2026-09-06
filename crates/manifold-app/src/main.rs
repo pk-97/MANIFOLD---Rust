@@ -436,10 +436,34 @@ fn prune_crash_logs(dir: &std::path::Path, keep: usize) {
 /// exists while a session runs; removed by `clear_session_sentinel` on clean
 /// exit.
 fn session_sentinel_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|home| {
-        std::path::PathBuf::from(home)
-            .join("Library/Application Support/com.latentspace.manifold/session.active")
-    })
+    #[cfg(all(feature = "ui-automation", unix))]
+    let live_ui_socket = std::env::var_os("MANIFOLD_UI_SOCKET").map(std::path::PathBuf::from);
+    #[cfg(not(all(feature = "ui-automation", unix)))]
+    let live_ui_socket = None;
+    session_sentinel_for(std::env::var_os("HOME").map(std::path::PathBuf::from), live_ui_socket)
+}
+
+/// An isolated automation instance owns its recovery marker beside its socket.
+/// It must neither read nor clear the regular app's session marker.
+fn session_sentinel_for(
+    home: Option<std::path::PathBuf>,
+    live_ui_socket: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if let Some(socket) = live_ui_socket {
+        return Some(socket.with_extension("session.active"));
+    }
+    home.map(|home| home.join("Library/Application Support/com.latentspace.manifold/session.active"))
+}
+
+#[test]
+fn live_ui_session_sentinel_is_separate_from_regular_app() {
+    use std::path::PathBuf;
+    let home = Some(PathBuf::from("/Users/test"));
+    let regular = session_sentinel_for(home.clone(), None).unwrap();
+    assert_eq!(regular, PathBuf::from("/Users/test/Library/Application Support/com.latentspace.manifold/session.active"));
+    let isolated = session_sentinel_for(home, Some(PathBuf::from("/tmp/manifold-test/ui.sock"))).unwrap();
+    assert_eq!(isolated, PathBuf::from("/tmp/manifold-test/ui.session.active"));
+    assert_ne!(regular, isolated);
 }
 
 /// Returns true when the previous session left its sentinel behind (unclean
@@ -661,5 +685,4 @@ mod resume_arg_tests {
         );
     }
 }
-
 

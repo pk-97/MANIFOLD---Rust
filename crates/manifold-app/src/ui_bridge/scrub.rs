@@ -260,8 +260,8 @@ pub enum ResolvedScrub {
     /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*`,
     /// BUG-262). NOT a `PanelAction::Scrub` family — dispatched from
     /// `app_render`'s pending-actions loop (the commit reads the new range back
-    /// via `watched_reshape`, so it needs the app's editor context, not the
-    /// dispatch ctx). Only the snapshot-stomp guard lives here: `baseline`/`live`
+    /// from the captured baseline/live pair in `dispatch_mapping_action`).
+    /// The snapshot-stomp guard lives here: `baseline`/`live`
     /// are `(min, max)` pairs; the restore re-stamps the in-flight range through
     /// the SAME `build_mapping_command` write `preview_mapping` lands each tick.
     MappingRange {
@@ -541,7 +541,7 @@ impl ResolvedScrub {
             // The two mapping families restore through the SAME command
             // `preview_mapping` executes each `*Changed` tick — build the reshape
             // edit and run it on the project so a mid-drag snapshot swap can't
-            // revert the def value the commit reads back via `watched_reshape`
+            // revert the manifest value shown by the mapping controls
             // (BUG-262).
             ResolvedScrub::MappingRange {
                 target,

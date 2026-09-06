@@ -214,11 +214,13 @@ that *is the graph surface's vocabulary*. This is also a down-payment on Phase 5
 `GraphEditCommand` is a UI-local command the app maps to engine commands.
 
 **Deliberately scoped OUT** (recorded so the next reader doesn't redo it):
-- **`EffectMapping*` (12 variants, `mod.rs:483-546`)** — constructed in
-  `mapping_popover.rs`, they edit a `UserParamBinding` via
-  `EditUserParamBindingCommand`, a *different* command family (binding mapping,
+- **`RootAction::EffectMapping*`** — constructed in
+  `mapping_popover.rs`, they edit an exposed binding via
+  `EditParamMappingCommand`, a *different* command family (binding mapping,
   not graph topology). They live on the graph-editor surface but are not graph
   edits; folding them in would conflate two families. They stay in `PanelAction`.
+  Each event carries the `UiGraphTarget` captured when the modal opened;
+  range/affine commits use the matching scrub baseline and live value.
 - **`OpenGraphEditor` / `OpenGeneratorGraphEditor` / `OpenCardMapping`** — window-
   open *intents* constructed from `param_card` in the **main** window, not the
   canvas. Not mutations. They stay in `PanelAction`.

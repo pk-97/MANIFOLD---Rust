@@ -6,6 +6,7 @@
 
 mod context;
 mod dispatch;
+pub(crate) use dispatch::resolve::resolve_graph_target;
 mod editing;
 mod inspector;
 mod layer;
@@ -260,7 +261,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::AudioSendGainBeginTextInput(..)
             | RootAction::CopyOscAddress(_)
             | RootAction::OpenGraphEditor(_)
-            | RootAction::OpenCardMapping(_)
+            | RootAction::OpenCardMapping { .. }
             | RootAction::OpenGeneratorGraphEditor
             | RootAction::SceneSetupOpenGraphEditor(_)
             | RootAction::EffectMappingRangeSnapshot { .. }
@@ -273,6 +274,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::EffectMappingAffineSnapshot { .. }
             | RootAction::EffectMappingAffineChanged { .. }
             | RootAction::EffectMappingAffineCommit { .. }
+            | RootAction::EffectMappingCancel { .. }
             | RootAction::EffectMappingGotoNode { .. }
             | RootAction::AudioSendLabelClicked(_)
             | RootAction::SceneSetupRenameObjectClicked(..)
