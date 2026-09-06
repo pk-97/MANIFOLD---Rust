@@ -336,6 +336,11 @@ invariant a fused def must respect:
 2. **Unbound-output early-return** — a `WgslCompute` with any unbound storage
    output skips its whole dispatch. Why every fused output must be wired to a
    live consumer (cut rule).
+   **Disabled texture passthrough** compares allocated texture dimensions
+   and formats, not optional format declarations: fused explicit RGBA16 and
+   inherited default RGBA16 must bypass identically. A compatible host-bound
+   destination that refuses aliasing receives a copy; the disabled effect
+   must not run merely because its output binding cannot be replaced.
 3. **Stale-output guard** — debug_assert: an aliased-array node may not skip
    its dispatch without `mark_gpu_accessed()` (the `@reset_gated` skip uses
    exactly this escape hatch, contract: consumer reads only on reset).

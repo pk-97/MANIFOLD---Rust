@@ -715,10 +715,9 @@ impl Backend for MetalBackend {
         // Refuse to touch a slot that has a host-installed borrow we
         // don't own (e.g. StylizedFeedback's inner output slot points
         // at the outer chain's target via `replace_texture_2d`). The
-        // runtime falls back to calling `evaluate` when alias_2d
-        // returns false, which is the correct behavior — overwriting
-        // the host borrow would silently break whatever the host was
-        // routing through that slot.
+        // runtime copies compatible dynamic passthroughs when alias_2d
+        // returns false; overwriting the host borrow would silently break
+        // whatever the host was routing through that slot.
         if self.borrowed_2d.contains_key(&dst_slot) && !self.skip_aliased_slots.contains(&dst_slot)
         {
             return false;

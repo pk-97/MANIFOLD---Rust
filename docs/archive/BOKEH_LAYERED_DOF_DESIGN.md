@@ -83,7 +83,10 @@ around them.
   plane and over far content — that is the look real lenses give
   out-of-focus foreground), gathered with the same mip + ramp machinery,
   and composited over the far result using accumulated weight as coverage:
-  `out = mix(far_result, near_gather.rgb, clamp(near_w_acc / 32, 0, 1))`.
+  `out = near_gather.rgb + far_result * (1 - clamp(near_w_acc / 32, 0, 1))`.
+  Near RGB is `acc / 32`, already coverage-weighted. Multiplying it by
+  coverage again darkens constant colour at the near blur cutoff
+  (BUG-lpfd, corrected 2026-09-06).
   This is the pass that lets a defocused bright background's halo land on
   top of an in-focus foreground edge — Peter's rim, removed by
   construction.
@@ -123,7 +126,7 @@ still aliases `in→out` before any pass runs):
    is plain `acc/32` (no center fill — the near field is additive light
    over the composite, its own pixels' unscattered color is already in the
    far result).
-6. **Composite**: `out = mix(far, near.rgb, near.a)` — D4's formula.
+6. **Composite**: `out = near.rgb + far * (1 - near.a)` — D4's formula.
 
 Kernel mechanics: passes 2–3 and 6 are small helper kernels
 (`include_str!`, same pattern as the existing
