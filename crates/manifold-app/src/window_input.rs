@@ -59,6 +59,11 @@ pub(crate) fn normalize_scroll_delta(delta: MouseScrollDelta) -> (f32, f32) {
 }
 
 impl Application {
+    /// Shared modifier state for native window events and live UI gestures.
+    pub(crate) fn input_modifiers(&mut self, modifiers: manifold_ui::input::Modifiers) {
+        self.modifiers = modifiers;
+        self.ws.ui_root.input.set_modifiers(modifiers);
+    }
     /// Physical→logical cursor position using `window_id`'s scale factor. The
     /// one place that conversion lives; both the primary cursor track and the
     /// editor's zoom anchor read it.
