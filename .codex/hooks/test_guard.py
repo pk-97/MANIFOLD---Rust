@@ -2,6 +2,7 @@
 """Exercise denials and normal workflows against disposable git repositories."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -73,6 +74,26 @@ class Guards(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.spawn(message="unscoped")
         self.assertTrue(guard.evaluate(self.event("spawn_agent", {}, True)))
+
+    def test_native_dispatch_registers_read_only_scope(self):
+        config = json.loads((REAL_ROOT / ".codex/hooks.json").read_text())
+        matcher = config["hooks"]["PreToolUse"][0]["matcher"]
+        for tool in ("spawn_agent", "collaborationspawn_agent", "Agent"):
+            with self.subTest(tool=tool):
+                self.assertIsNotNone(re.search(matcher, tool))
+                state = self.root / "scope.json"
+                state.unlink(missing_ok=True)
+                args = {"model": guard.LUNA, "reasoning_effort": "low",
+                        "message": "MANIFOLD_SCOPE: " + json.dumps(
+                            {"worktree": str(self.root), "files": []})}
+                self.assertIsNone(guard.evaluate(self.event(tool, args)))
+                self.assertEqual(json.loads(state.read_text()),
+                                 {"worktree": str(self.root), "files": []})
+                for command in ("pwd", "git rev-parse --short HEAD", "cat .codex/README.md"):
+                    self.assertIsNone(self.shell_call(command, True))
+                self.assertTrue(self.patch_call(["*** Add File: forbidden.rs"], True))
+                self.assertTrue(self.shell_call("cargo test", True))
+                self.assertTrue(guard.evaluate(self.event(tool, args, True)))
 
     def test_scope_rejects_escape_and_unleased_slot(self):
         for name in ("../a.rs", "/tmp/a.rs", "src/*.rs", ".codex/config.toml"):

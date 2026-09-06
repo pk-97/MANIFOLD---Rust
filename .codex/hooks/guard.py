@@ -197,7 +197,7 @@ def check_shell(event, command, cwd, shell_guard):
 def evaluate(event):
     tool = event.get("tool_name", "").split(".")[-1]
     args = event.get("tool_input") or {}
-    if tool in {"spawn_agent", "Agent"}:
+    if tool in {"spawn_agent", "collaborationspawn_agent", "Agent"}:
         if event.get("model") == LUNA:
             return "Mechanical lanes cannot delegate."
         if not args.get("model"):

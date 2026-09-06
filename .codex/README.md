@@ -9,6 +9,11 @@ Use an empty file list for read-only work. Acquire write slots using the existin
 ring, from the current main tip. The lead does not edit a lane's files while it
 is working. Luna uses native patches, returns results, and never commits or lands.
 
+Native desktop dispatch currently reaches hooks as `collaborationspawn_agent`;
+keep that name alongside `spawn_agent` and `Agent` in both matcher and guard.
+After changing dispatch handling, verify a live read-only lane as well as tests:
+unit tests cannot establish runtime scope registration.
+
 The hook checks both paths of moves, blocks app patches in main, reuses CC's
 git/path detection, and requires app landings through `scripts/land_branch.py`.
 No approval auto-allows and no per-turn reminders or automatic build loops.

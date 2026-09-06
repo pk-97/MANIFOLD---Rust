@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|apply_patch|spawn_agent|Agent)$",
+        "matcher": "^(Bash|apply_patch|spawn_agent|collaborationspawn_agent|Agent)$",
         "hooks": [
           {
             "type": "command",
