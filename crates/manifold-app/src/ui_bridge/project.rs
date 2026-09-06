@@ -1328,14 +1328,27 @@ fn write_coupled_def_param(
     let Some(layer) = project.timeline.layers.iter_mut().find(|l| l.layer_id == *layer_id) else {
         return;
     };
-    let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) else {
+    let Some(gen_params) = layer.gen_params_mut() else {
         return;
     };
-    if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == node_doc_id) {
-        node.params.insert(
-            param.to_string(),
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
-        );
+    let changed = {
+        let Some(graph) = gen_params.graph.as_mut() else {
+            return;
+        };
+        if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == node_doc_id) {
+            let next = manifold_core::effect_graph_def::SerializedParamValue::Float { value };
+            if node.params.get(param) == Some(&next) {
+                false
+            } else {
+                node.params.insert(param.to_string(), next);
+                true
+            }
+        } else {
+            false
+        }
+    };
+    if changed {
+        gen_params.bump_graph_version();
     }
 }
 
@@ -2391,5 +2404,149 @@ mod tests {
             Some(SerializedParamValue::Float { value: -8.0 }),
             "home = −cell/2 tracks the Spacing write"
         );
+    }
+
+    /// Live scrub Moves must advance the generator graph value version for
+    /// every def-level coupled secondary, while preserving the structure
+    /// version used to decide whether the graph needs recompilation.
+    #[test]
+    fn coupled_live_secondaries_advance_value_version_without_structure_change() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let apply = ProjectAction::SceneModifierApply(
+            layer_id.clone(),
+            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
+        );
+        dispatch_project(
+            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+            .expect("looped graph traces");
+        let loop_vm = vm
+            .modifiers
+            .iter()
+            .find(|m| {
+                m.kind_id
+                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
+                    && m.applied
+            })
+            .expect("the loop kind traces applied");
+        let camera_doc = loop_vm.doc_ids["loop_camera"];
+        let array_doc = loop_vm.doc_ids["scene_array"];
+
+        let pattern_binding = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(array_doc, "pattern_length")
+            })
+            .flatten()
+            .expect("the Pattern row is stamped");
+        let spacing_binding = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(camera_doc, "cell_size")
+            })
+            .flatten()
+            .expect("the Spacing row is stamped");
+
+        let versions_before = project.timeline.find_layer_by_id(&layer_id).unwrap().1;
+        let value_before = versions_before.generator_graph_version();
+        let structure_before = versions_before.generator_graph_structure_version();
+
+        let pattern_targets = coupled_write_targets_for_binding(
+            &mut project,
+            &target,
+            pattern_binding.as_str(),
+        );
+        assert!(!pattern_targets.is_empty(), "Pattern resolves live secondaries");
+        for t in &pattern_targets {
+            apply_coupled_write_live(&mut project, &target, t, (t.value_fn)(3.0));
+        }
+
+        let spacing_targets = coupled_write_targets_for_binding(
+            &mut project,
+            &target,
+            spacing_binding.as_str(),
+        );
+        assert!(!spacing_targets.is_empty(), "Spacing resolves live secondaries");
+        for t in &spacing_targets {
+            apply_coupled_write_live(&mut project, &target, t, (t.value_fn)(16.0));
+        }
+
+        let layer = project.timeline.find_layer_by_id(&layer_id).unwrap().1;
+        assert!(
+            layer.generator_graph_version() > value_before,
+            "live coupled writes advance graph value version"
+        );
+        assert_eq!(
+            layer.generator_graph_structure_version(),
+            structure_before,
+            "live coupled writes preserve graph structure version"
+        );
+        let after = effective_def(&project, &layer_id);
+        for t in pattern_targets.iter().chain(spacing_targets.iter()) {
+            if t.def_baseline.is_some() {
+                let node = after.nodes.iter().find(|n| n.id == t.node_doc_id).unwrap();
+                let actual = match node.params.get(&t.param) {
+                    Some(SerializedParamValue::Float { value }) => *value,
+                    other => panic!("unexpected coupled value for {}: {other:?}", t.param),
+                };
+                assert_eq!(actual, (t.value_fn)(if t.param == "pattern_length" { 3.0 } else { 16.0 }));
+            }
+        }
+        let same_before = layer.generator_graph_version();
+        for t in pattern_targets.iter().chain(spacing_targets.iter()) {
+            apply_coupled_write_live(&mut project, &target, t, (t.value_fn)(
+                if t.param == "pattern_length" { 3.0 } else { 16.0 },
+            ));
+        }
+        assert_eq!(
+            project.timeline.find_layer_by_id(&layer_id).unwrap().1.generator_graph_version(),
+            same_before,
+            "same-value coupled writes do not dirty the graph"
+        );
+
+        // Exercise the actual card wire too: the content thread must receive
+        // the primary and all linked values in one indivisible live update.
+        use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let mut content_project = project.clone();
+        let mut scrub = super::super::ScrubState::default();
+        active_layer = Some(layer_id.clone());
+        for (binding, value) in [(spacing_binding, 12.0), (pattern_binding, 5.0)] {
+            let secondaries = coupled_write_targets_for_binding(&mut project, &target, binding.as_str());
+            let value_ref = ValueRef::Param(
+                GraphParamTarget::GeneratorOf(layer_id.clone()), binding.clone().into(),
+            );
+            for phase in [ScrubPhase::Begin, ScrubPhase::Move(ScrubValue::Scalar(value))] {
+                super::super::scrub::dispatch_scrub(&value_ref, &phase, &mut super::super::DispatchCtx {
+                    project: &mut project, content_tx: &content_tx, content_state: &content_state,
+                    ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
+                    user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub,
+                });
+            }
+            let commands: Vec<_> = content_rx.try_iter().collect();
+            assert_eq!(commands.len(), 1, "one atomic live command per card Move");
+            let before = content_project.timeline.find_layer_by_id(&layer_id).unwrap().1.generator_graph_version();
+            match commands.into_iter().next().unwrap() {
+                crate::content_command::ContentCommand::MutateProjectLive(apply) => apply(&mut content_project),
+                _ => panic!("Move must use the live content path"),
+            }
+            let layer = content_project.timeline.find_layer_by_id(&layer_id).unwrap().1;
+            assert_eq!(layer.gen_params().unwrap().get_base_param(binding.as_str()), value);
+            assert!(layer.generator_graph_version() > before);
+            assert_eq!(layer.generator_graph_structure_version(), structure_before);
+            let def = effective_def(&content_project, &layer_id);
+            for secondary in secondaries {
+                let node = def.nodes.iter().find(|n| n.id == secondary.node_doc_id).unwrap();
+                assert_eq!(node.params.get(&secondary.param), Some(&SerializedParamValue::Float {
+                    value: (secondary.value_fn)(value),
+                }));
+            }
+            scrub.active = None;
+        }
     }
 }

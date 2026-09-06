@@ -692,29 +692,23 @@ pub(crate) fn dispatch_scrub(
                     }
                     let pid = param_id.clone();
                     let t = target.clone();
+                    let targets = match &ctx.scrub.active {
+                        Some(ResolvedScrub::Param { coupled, .. }) => coupled.clone(),
+                        _ => Vec::new(),
+                    };
+                    // A frame must never see the primary without its linked
+                    // values: apply the whole slider move in one content command.
                     ContentCommand::send(
                         ctx.content_tx,
                         ContentCommand::MutateProjectLive(Box::new(move |p| {
                             p.with_preset_graph_mut(&t, |inst| {
                                 inst.set_base_param(pid.as_ref(), val);
                             });
+                            for ct in &targets {
+                                super::project::apply_coupled_write_live(p, &t, ct, ct.live);
+                            }
                         })),
                     );
-                    // And the same live writes on the content thread.
-                    if let Some(ResolvedScrub::Param { coupled, .. }) = &ctx.scrub.active
-                        && !coupled.is_empty()
-                    {
-                        let t = target.clone();
-                        let targets: Vec<super::project::CoupledWriteTarget> = coupled.clone();
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::MutateProjectLive(Box::new(move |p| {
-                                for ct in &targets {
-                                    super::project::apply_coupled_write_live(p, &t, ct, ct.live);
-                                }
-                            })),
-                        );
-                    }
                 }
                 DispatchResult::handled()
             }
