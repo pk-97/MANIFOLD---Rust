@@ -86,6 +86,9 @@ class Guards(unittest.TestCase):
                 args = {"model": guard.LUNA, "reasoning_effort": "low",
                         "message": "MANIFOLD_SCOPE: " + json.dumps(
                             {"worktree": str(self.root), "files": []})}
+                if tool == "collaborationspawn_agent":
+                    guard.prepare_lane("test", "readonly", str(self.root), [])
+                    args.update(task_name="readonly", message="gAAAA_encrypted_brief")
                 self.assertIsNone(guard.evaluate(self.event(tool, args)))
                 self.assertEqual(json.loads(state.read_text()),
                                  {"worktree": str(self.root), "files": []})
@@ -94,6 +97,33 @@ class Guards(unittest.TestCase):
                 self.assertTrue(self.patch_call(["*** Add File: forbidden.rs"], True))
                 self.assertTrue(self.shell_call("cargo test", True))
                 self.assertTrue(guard.evaluate(self.event(tool, args, True)))
+
+    def test_native_scope_is_required_bound_expiring_and_single_use(self):
+        args = {"model": guard.LUNA, "reasoning_effort": "low",
+                "task_name": "readonly", "message": "gAAAA_encrypted_brief"}
+        event = self.event("collaborationspawn_agent", args)
+        with self.assertRaisesRegex(ValueError, "Prepare this lane"):
+            guard.evaluate(event)
+        guard.prepare_lane("test", "different_task", str(self.root), [])
+        with self.assertRaisesRegex(ValueError, "task name"):
+            guard.evaluate(event)
+        with patch.object(guard.time, "time", return_value=100):
+            guard.prepare_lane("test", "readonly", str(self.root), [])
+        with patch.object(guard.time, "time", return_value=701):
+            with self.assertRaisesRegex(ValueError, "expired"):
+                guard.evaluate(event)
+        guard.prepare_lane("test", "readonly", str(self.root), [])
+        self.assertIsNone(guard.evaluate(event))
+        with self.assertRaisesRegex(ValueError, "Prepare this lane"):
+            guard.evaluate(event)
+
+    def test_native_scope_revalidates_lease_at_dispatch(self):
+        guard.prepare_lane("test", "write_lane", str(self.slot), ["src/a.rs"])
+        (self.slot / ".worktree-lease.json").unlink()
+        args = {"model": guard.LUNA, "reasoning_effort": "low",
+                "task_name": "write_lane", "message": "gAAAA_encrypted_brief"}
+        with self.assertRaisesRegex(ValueError, "Acquire the slot"):
+            guard.evaluate(self.event("collaborationspawn_agent", args))
 
     def test_scope_rejects_escape_and_unleased_slot(self):
         for name in ("../a.rs", "/tmp/a.rs", "src/*.rs", ".codex/config.toml"):

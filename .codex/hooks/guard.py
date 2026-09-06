@@ -15,6 +15,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,6 +70,35 @@ def scope_from_brief(message):
         if path.parts and path.parts[0] in {".git", ".claude", ".codex", "CLAUDE.md", "AGENTS.md"}:
             raise ValueError("Mechanical lanes cannot change harness configuration.")
     return {"worktree": str(worktree), "files": files}
+
+
+def prepare_lane(session_id, task_name, worktree, files):
+    if not session_id or not re.fullmatch(r"[a-z0-9_]+", task_name):
+        raise ValueError("Lane preparation requires a session ID and a lowercase task name.")
+    scope = scope_from_brief("MANIFOLD_SCOPE: " + json.dumps(
+        {"worktree": worktree, "files": files}))
+    path = state_path({"session_id": session_id}).with_suffix(".pending.json")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"task_name": task_name, "scope": scope,
+                               "created_at": time.time()}))
+    tmp.replace(path)
+
+
+def dispatch_scope(event, args, tool):
+    # Native desktop hook events encrypt message; task_name remains plaintext.
+    # Bind the lead's explicit, one-shot preparation to this session and task.
+    if tool == "collaborationspawn_agent":
+        path = state_path(event).with_suffix(".pending.json")
+        if not path.is_file():
+            raise ValueError("Prepare this lane with .codex/hooks/guard.py prepare-lane before native dispatch.")
+        pending = json.loads(path.read_text())
+        if pending["task_name"] != args.get("task_name"):
+            raise ValueError("Prepared lane task name does not match native dispatch.")
+        if not 0 <= time.time() - pending["created_at"] <= 600:
+            raise ValueError("Prepared lane scope expired; prepare it again before dispatch.")
+        scope = scope_from_brief("MANIFOLD_SCOPE: " + json.dumps(pending["scope"]))
+        return scope, path
+    return scope_from_brief(args.get("message", args.get("prompt", ""))), None
 
 
 def patch_paths(command, cwd):
@@ -206,11 +236,13 @@ def evaluate(event):
             return "This mechanical-lane configuration permits Luna only. Discuss a separate consult with Peter."
         if args.get("reasoning_effort") != "low":
             return "Mechanical Luna lanes require explicit reasoning_effort: low."
-        scope = scope_from_brief(args.get("message", args.get("prompt", "")))
+        scope, pending_path = dispatch_scope(event, args, tool)
         path = state_path(event)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(scope))
         tmp.replace(path)
+        if pending_path is not None:
+            pending_path.unlink()
         return None
     command = args.get("command", args.get("cmd", ""))
     if not isinstance(command, str):
@@ -238,4 +270,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1:
+        import argparse
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("action", choices=["prepare-lane"])
+        parser.add_argument("--task", required=True)
+        parser.add_argument("--worktree", required=True)
+        parser.add_argument("--files", nargs="*", default=[])
+        args = parser.parse_args()
+        prepare_lane(os.environ.get("CODEX_THREAD_ID"), args.task, args.worktree, args.files)
+        print(f"Prepared {args.task}; dispatch within 10 minutes.")
+    else:
+        main()

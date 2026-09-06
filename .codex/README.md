@@ -9,6 +9,18 @@ Use an empty file list for read-only work. Acquire write slots using the existin
 ring, from the current main tip. The lead does not edit a lane's files while it
 is working. Luna uses native patches, returns results, and never commits or lands.
 
+Before native dispatch, the lead registers the same scope locally:
+
+```sh
+python3 -B .codex/hooks/guard.py prepare-lane --task lane_name --worktree '/absolute/slot/path' --files relative/file.rs
+```
+
+Omit `--files` for read-only work. Use the exact `task_name` in the spawn call.
+Preparation uses `CODEX_THREAD_ID`, expires after ten minutes, and is consumed
+by one accepted dispatch. The native hook receives an encrypted `message`, so
+it cannot extract scope from the brief; the brief still tells Luna its scope.
+The hook revalidates the prepared scope before registering it for lane calls.
+
 Native desktop dispatch currently reaches hooks as `collaborationspawn_agent`;
 keep that name alongside `spawn_agent` and `Agent` in both matcher and guard.
 After changing dispatch handling, verify a live read-only lane as well as tests:
