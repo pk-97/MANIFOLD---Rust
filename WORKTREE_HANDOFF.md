@@ -1,9 +1,10 @@
-# Live UI control — paused at Peter's request, 2026-09-06
+# Live UI control — resumed hardening, 2026-09-06
 
 Branch `codex/live-ui-control`, slot-1. Base `909ad80bc9794361e325da7dea6739ae4c3727a5`.
 Follow-up: `BUG-m7nb`.
 Do not reset/reacquire this slot. Other Claude agents own their separate worktrees.
-No merge to main or landing gate has been performed.
+Refreshed from origin/main without conflicts (docs-only upstream change).
+No merge to main has been performed. Other main-checkout dirt remains untouched.
 
 Contract and use: `docs/UI_AUTOMATION_DESIGN.md`, live primary-window section.
 Feature `ui-automation` plus a private Unix socket exposes current widget metadata
@@ -42,3 +43,30 @@ because our original proof app was still running; the native tool then timed out
 
 Luna implemented the transport skeleton; Astra reviewed/corrected it and added
 its tests, app integration, client and demo. No worker landed changes.
+
+## Resumed hardening
+
+Fixed synthetic cursor handover: pointer actions now restore original cursor and
+modifiers, reject an already-held native pointer, revalidate a target before
+first press/wheel, and cancel on window resize/scale changes. Added on-demand
+last-interruption diagnostics (held button, remaining events, frame, reason).
+Ten focused Rust tests pass, including shared-handler native cursor/button/
+modifier restoration; six Python client/safety tests pass. Latest source needs
+final feature clippy and normal landing gate. Luna authored the safety flow;
+Astra corrected the observation geometry lookup, test mock and evidence checks.
+
+Live generator demo on hardened build passed in 3.68 seconds. Timed disconnect
+recovery and subsequent trim/undo/redo passed. The strengthened safety flow now
+requires diagnostic proof of a held-button interruption; rerun it on the latest
+build before landing. Native interruption is NOT verified: CUA attachment took
+175 seconds and native Escape 38 seconds while Peter used his Mac. Stop native
+interaction until the Mac is idle. Test PID 63179 was verified as our temporary
+bundle and terminated without taking focus. No demo project was saved.
+
+Evidence: /private/tmp/manifold-live-demo-final.json,
+/private/tmp/manifold-live-safety-final.json,
+/private/tmp/manifold-live-tests-final.log. The old safety JSON predates the new
+diagnostic assertion. Do not overstate it. Build command:
+`.claude/scripts/with-build-lock.sh cargo build -p manifold-app --features ui-automation --manifest-path "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1/Cargo.toml"`
+Launch command (when the Mac is idle):
+`python3 "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1/scripts/launch_live_ui.py"`

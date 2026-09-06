@@ -2645,7 +2645,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if is_primary && matches!(&event, WindowEvent::MouseInput { .. }
             | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. }
             | WindowEvent::ModifiersChanged(_) | WindowEvent::CursorMoved { .. }
-            | WindowEvent::Focused(false)) {
+            | WindowEvent::Focused(false) | WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }) {
             self.interrupt_live_ui();
         }
 

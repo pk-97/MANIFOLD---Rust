@@ -1,6 +1,6 @@
 # UI Automation — the agent drives the instrument
 
-**Status:** IN PROGRESS — P1/P2 shipped. P3 primary-window implementation and initial P4 generator flow verified on branch `codex/live-ui-control`, paused by Peter 2026-09-06 before landing. Full landing gate and final hardening remain; see `WORKTREE_HANDOFF.md` in slot-1.
+**Status:** IN PROGRESS — P1/P2 shipped. P3 primary-window implementation and initial P4 generator flow verified on branch `codex/live-ui-control`. Handover hardening and disconnect regression added 2026-09-06; native-user interruption acceptance and landing remain (BUG-m7nb).
 **Prerequisites:** none. P1–P2 extend the shipped ui-snap harness; P3–P4 are self-contained dev infra.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase. P3–P4 carry pre-flight re-derivation commands.
 
@@ -36,6 +36,8 @@ is fixture-backed and is not a live session. Extend these owners.
   headless verbs fail explicitly, particularly direct `SetParam` fixture setup.
 - **L-D4:** one event per real frame permits drag thresholds and state sync to
   run. Resolve against current layout; reject absent/ambiguous/offscreen targets.
+  Targets are checked again immediately before the first press or wheel event;
+  moved/hidden targets fail instead of retargeting. Resize/scale changes interrupt.
   Reply means input dispatched, not a successful project edit. Flow expectations
   inspect the real content snapshot with a bounded deadline and never retry edits.
 - **L-D5:** reuse WidgetId, names, text, ranges through existing parameter rows,
@@ -63,7 +65,9 @@ prevent delivery of old replies to new clients; disconnect releases held input.
 Wire v1: newline JSON with optional `id`; `op` is `observe` (optional `contains`),
 `resolve` (`target`), `act` (`action`), or `timeline_point` (`beat`, `layer`).
 Coordinates are primary-window logical pixels. Observe returns protocol, widget
-metadata, clip geometry and a content snapshot summary. Responses carry `ok`,
+metadata, clip geometry and a content snapshot summary. Its `input` diagnostic
+reports mouse/selection state, logical cursor and the last interruption (reason,
+request id, frame, held-button flag, remaining events and cursor before cleanup). Responses carry `ok`,
 `frame`, and `data` or `error`; action completion carries `dispatched` and `state`.
 The Python standard-library client `scripts/live_ui.py` supplies requests,
 common gestures and sequential JSON flows with read-only expectation polling.
@@ -281,7 +285,25 @@ or publish a project. Native dialogs still use ordinary computer-use tools.
 an array of `{"request": {...}}` and read-only `{"expect": {"data.path": value}}`
 steps. Expectations poll with a bounded timeout. Edits are never retried.
 Native mouse/keyboard input interrupts a pending sequence, which releases held
-input and reports an error; inspect state before continuing.
+input and reports an error; inspect state before continuing. Automated pointer
+sequences restore the pre-gesture cursor and modifiers on completion or failure,
+so a stationary native mouse click uses the user's position. New actions refuse
+an already-held native pointer. Interruption releases input; timeline move/trim
+uses the existing Escape rollback. Other controls retain their normal Escape
+and mouse-release semantics; interruption is not a general transaction rollback.
+
+After the generator demo, `python3 scripts/live_ui_safety_demo.py --socket '<socket>'`
+checks disconnect during a 60-step trim, rollback, released input, cursor
+restoration and subsequent trim/undo/redo. It requires the prepared demo state
+and a recorded interruption while the button was held; no timing-only success.
+Native computer-use testing requires an idle Mac because OS focus/input is
+shared with the user. Close the test window after each live testing session.
+
+Geometry is resolved from the current tree. Raw Point targets remain explicit
+coordinates, and drag destinations are fixed for the gesture; they have no
+identity/staleness guarantee. Use named/widget targets where available. Widget
+targets check visibility, ancestor clipping and occlusion; clip surface targets
+currently check window bounds only. Postconditions remain necessary.
 
 ## 8. What does NOT change
 
@@ -296,8 +318,8 @@ Forbidden across all phases: coordinate scripting where a widget target exists (
 
 - **P1 — Selector surface. ✅ SHIPPED 2026-07-05** (L2 — editor/timeline/automation dumps read at landing: 107 graph targets with scope/node/port payloads, 9 clips with clip-id payloads, 7 automation strips/breakpoints, named transport + layer-header widgets; `cargo test -p manifold-ui --lib` 595/595; clippy clean). Landing note: the `custom_surfaces` enumeration is a sibling top-level dump key, not the per-node `targets` field the section 3 prose implies — no `UITree` node owns the graph canvas / clip / automation surfaces (they're addressed by screen rects), so the enumeration is carried alongside `nodes`; still strictly additive. Minor gap → VD-005. `manifold-ui`: name storage + builder plumbing (D8), `HitTargets` trait + graph-canvas, timeline-clip, and automation-lane impls (section 5); `manifold-app`: dump gains `widget`/`name`/`targets` (section 3); naming pass at the section 3 scope. Read-back: section 3, section 5, `dump.rs` whole, `graph_canvas/hit.rs` + `model.rs`, `automation_hit_tester.rs` whole. Deliverables: extended dump visible in `ui-snap editor --dump` and `timeline --dump`. Gate (positive): editor-scene dump lists every node/port the canvas `hit_test` can return, with payload ids; timeline dump lists every fixture clip and every automation-lane strip/breakpoint visible in the fixture; `cargo test -p manifold-ui --lib` green including new tests for name storage + a `HitTargets` enumeration test per impl. Gate (negative): `rg -n "String" crates/manifold-ui/src/` shows no per-node name `String` storage in `tree.rs` (names are `&'static str`). **Acceptance demo (L2, section 10):** the two dumps above are the artifacts — the landing reviewer reads them and confirms named widgets, graph targets with payload ids, clips, and automation-lane targets are present; absence of any category is a gate failure, not a note. Test scope: `-p manifold-ui --lib` + the two ui-snap runs; no workspace sweep (additive dev surface, no product path touched).
 - **P2 — Script driver. ✅ SHIPPED 2026-07-05** (L2 — both proving flows exit 0; drag-clip moved Plasma 1's clip 230→314px through the real `process_pointer`→`process_events`→`InteractionOverlay`→`AppEditingHost` path with 6 interpolated steps, before/after PNGs read at landing; `cargo test -p manifold-ui --lib` 604/604; clippy clean; D6 hard-failures verified — zero-match and ambiguous Pointer both exit non-zero with candidates; both negative gates zero hits). Landing notes: the enum lives in `manifold-ui`, which gained a `serde` dependency (workspace, for the JSON `--script` format the doc mandates — `AutomationTarget` uses a manual `Deserialize` that leaks the `Surface.surface` string to keep the doc's committed `&'static str` type); `AutomationAction::Text` has no headless injection seam and fails loudly (neither proving flow needs it); the headless drag routes clip mutations through a driver-held `crossbeam` channel whose receiver is never drained (`ContentCommand::send` only errors on disconnect), so the real mutation lands on the scene `Project` with no live content thread. `AutomationAction` enum in `manifold-ui` (section 4 committed shape), gesture synthesis incl. interpolated drag, selector resolver, `--script` runner + artifacts + `result.json`, `--interact` rewired as sugar, `interact.rs` fallback deleted (section 6 seam brief). Read-back: section 4, section 6, `interact.rs` whole, `ui_root.rs:989-1030`. Deliverables: two proving scripts committed under `scripts/ui-flows/`: `select-and-inspect.json` (click layer → assert inspector shows it) and `drag-clip.json` (drag a clip → assert moved rect + non-overlap held). Gate (positive): both scripts exit 0; deliberately-broken selector exits non-zero with candidates listed; drag script's dump shows the clip's new rect. Gate (negative): section 6 deletion gate; `rg -n "Instant::now|SystemTime" crates/manifold-app/src/ui_snapshot/` → zero hits. **Acceptance demo (L2, section 10):** `result.json` plus the numbered PNGs from both proving scripts — the landing reviewer looks at the drag-clip run's before/after PNGs and confirms the clip visibly moved. 2026-07-05 note: `interact.rs` has grown ~10× since the section 6 inventory was baked — the seam brief's re-derivation command is mandatory before any edit there. Test scope: `-p manifold-ui --lib`, `-p manifold-app --features ui-snapshot` builds, script runs. No workspace sweep.
-- **P3 — Live primary window. IN PROGRESS 2026-09-06.** Implementation and focused tests pass on `codex/live-ui-control`; paused before landing. Current types, limits, acceptance and deferred scope are in the live contract above.
-- **P4 — Flows + docs. IN PROGRESS 2026-09-06.** `scripts/live_ui_generator_demo.py` completed the live generator workflow, including undo/redo and playback checks, in 3.79 seconds. Other flow families and repeatability at alternate window sizes remain future work.
+- **P3 — Live primary window. IN PROGRESS 2026-09-06.** Implementation and focused tests pass on `codex/live-ui-control`; native-user interruption acceptance and landing remain (BUG-m7nb). Current types, limits, acceptance and deferred scope are in the live contract above.
+- **P4 — Flows + docs. IN PROGRESS 2026-09-06.** `scripts/live_ui_generator_demo.py` completed the live generator workflow, including undo/redo and playback checks, in 3.68 seconds after cursor-handover hardening. Disconnect/undo recovery passed; the diagnostic-enforced safety flow still needs its final live run. Other flow families and repeatability at alternate window sizes remain future work.
 
 ## 10. Decided — do not reopen
 

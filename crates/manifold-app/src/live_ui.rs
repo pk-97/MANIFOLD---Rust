@@ -50,20 +50,31 @@ struct Pending {
     events: VecDeque<Input>,
     original_modifiers: Modifiers,
     button: Option<MouseButton>,
+    original_cursor: Option<Vec2>,
+    target_guard: Option<(AutomationTarget, Rect)>,
 }
 
 pub(crate) struct LiveUi {
     transport: transport::Transport,
     frame: u64,
     pending: Option<Pending>,
+    last_interruption: Option<Value>,
 }
 
 impl LiveUi {
+    fn record_interruption(&mut self, reason: &str, pending: &Pending, cursor: Vec2) {
+        self.last_interruption = Some(json!({"reason": reason, "id": pending.id,
+            "frame": self.frame, "buttonHeld": pending.button.is_some(),
+            "remainingEvents": pending.events.len(), "cursor": cursor,
+            "originalCursor": pending.original_cursor}));
+    }
+
     pub(crate) fn bind(path: &Path) -> std::io::Result<Self> {
         Ok(Self {
             transport: transport::Transport::bind(path)?,
             frame: 0,
             pending: None,
+            last_interruption: None,
         })
     }
 }
@@ -78,8 +89,39 @@ impl Application {
         if let Some(mut pending) = live.pending.take() {
             if !live.transport.connected() || live.transport.generation() != pending.generation {
                 // A disconnected client must never leave a held button/modifier.
+                live.record_interruption("disconnect", &pending, self.cursor_pos);
                 self.release_live_input(&pending);
             } else if let Some(event) = pending.events.pop_front() {
+                // A target can disappear or move between resolution and press.
+                // Do not retarget a gesture after input has begun.
+                let validation = if matches!(
+                    &event,
+                    Input::Button(_, ElementState::Pressed) | Input::Wheel(_)
+                ) {
+                    pending
+                        .target_guard
+                        .take()
+                        .map(|(target, expected)| {
+                            self.live_resolve(&target).and_then(|current| {
+                                if current == expected {
+                                    Ok(())
+                                } else {
+                                    Err("target moved before input; observe and resolve again"
+                                        .to_owned())
+                                }
+                            })
+                        })
+                        .transpose()
+                } else {
+                    Ok(None)
+                };
+                if let Err(error) = validation {
+                    self.release_live_input(&pending);
+                    live.transport
+                        .reply(json!({"id":pending.id, "ok":false, "error":error}));
+                    self.live_ui = Some(live);
+                    return;
+                }
                 if let Input::Button(button, state) = &event {
                     pending.button = (*state == ElementState::Pressed).then_some(*button);
                 }
@@ -123,7 +165,9 @@ impl Application {
         id: Value,
     ) -> Result<Option<Value>, String> {
         match request {
-            Request::Observe { contains } => Ok(Some(self.live_observation(contains.as_deref()))),
+            Request::Observe { contains } => {
+                Ok(Some(self.live_observation(contains.as_deref(), live)))
+            }
             Request::Resolve { target } => {
                 let rect = self.live_resolve(&target)?;
                 Ok(Some(json!({"rect": rect, "state": self.live_summary()})))
@@ -148,6 +192,16 @@ impl Application {
                 Ok(Some(json!({"point": point})))
             }
             Request::Act { action } => {
+                if self.mouse_pressed {
+                    return Err("native pointer is held; finish the current gesture first".into());
+                }
+                let (original_cursor, target_guard) = match &action {
+                    AutomationAction::Pointer { target, .. } => (
+                        Some(self.cursor_pos),
+                        Some((target.clone(), self.live_resolve(target)?)),
+                    ),
+                    _ => (None, None),
+                };
                 let events = self.live_events(action)?;
                 live.pending = Some(Pending {
                     id,
@@ -155,6 +209,8 @@ impl Application {
                     events,
                     original_modifiers: self.modifiers,
                     button: None,
+                    original_cursor,
+                    target_guard,
                 });
                 Ok(None)
             }
@@ -186,7 +242,7 @@ impl Application {
                 self.local_project.settings.time_signature_denominator], "layers": layers})
     }
 
-    fn live_observation(&self, contains: Option<&str>) -> Value {
+    fn live_observation(&self, contains: Option<&str>, live: &LiveUi) -> Value {
         let tree = &self.ws.ui_root.tree;
         let filter = contains.map(str::to_lowercase);
         let nodes: Vec<_> = tree
@@ -220,7 +276,9 @@ impl Application {
             })
             .collect();
         json!({"protocol": 1, "coordinates": "window logical pixels", "state": self.live_summary(),
-            "nodes": nodes, "clips": clips, "tracks": self.ws.ui_root.viewport.tracks_rect()})
+            "nodes": nodes, "clips": clips, "tracks": self.ws.ui_root.viewport.tracks_rect(),
+            "input": {"mousePressed": self.mouse_pressed, "cursor": self.cursor_pos,
+                "textSelecting": self.text_input.dragging, "lastInterruption": live.last_interruption}})
     }
 
     fn live_resolve(&self, target: &AutomationTarget) -> Result<Rect, String> {
@@ -364,6 +422,11 @@ impl Application {
             self.apply_live_input(Input::Button(button, ElementState::Released));
         }
         self.input_modifiers(pending.original_modifiers);
+        // Input injection moves only the app's logical pointer. Restore it to
+        // the native position so a stationary user's next click is not retargeted.
+        if let Some(cursor) = pending.original_cursor {
+            self.apply_live_input(Input::Move(cursor));
+        }
     }
 
     pub(crate) fn interrupt_live_ui(&mut self) {
@@ -371,6 +434,7 @@ impl Application {
             return;
         };
         if let Some(pending) = live.pending.take() {
+            live.record_interruption("native_input", &pending, self.cursor_pos);
             self.release_live_input(&pending);
             live.transport.reply(json!({"ok":false, "id":pending.id,
                 "error":"native input interrupted the sequence; inspect state before retrying"}));
@@ -460,6 +524,43 @@ mod tests {
         assert!(serde_json::from_value::<Request>(json!({"op":"observe","write":true})).is_err());
         assert!(serde_json::from_value::<Request>(json!({"op":"execute","code":"bad"})).is_err());
     }
+    #[test]
+    fn release_restores_native_cursor_modifiers_and_button_state() {
+        // Exercise the shared input handlers without creating an OS window/GPU.
+        let mut app = Application::new();
+        app.user_prefs = crate::user_prefs::UserPrefs::for_test();
+        app.primary_window_id = Some(winit::window::WindowId::dummy());
+        app.cursor_pos = Vec2::new(500.0, 300.0);
+        app.mouse_pressed = true;
+        let pending = Pending {
+            id: Value::Null,
+            generation: 1,
+            events: VecDeque::new(),
+            original_modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+            original_cursor: Some(Vec2::new(20.0, 30.0)),
+            button: Some(MouseButton::Left),
+            target_guard: None,
+        };
+        app.release_live_input(&pending);
+        assert!(!app.mouse_pressed);
+        assert!(!app.text_input.dragging);
+        assert_eq!(app.cursor_pos, Vec2::new(20.0, 30.0));
+        assert_eq!(app.modifiers, pending.original_modifiers);
+        // A stationary native click must use the restored location.
+        app.input_mouse_input(
+            winit::window::WindowId::dummy(),
+            true,
+            false,
+            MouseButton::Left,
+            ElementState::Pressed,
+        );
+        assert!(app.mouse_pressed);
+        assert_eq!(app.cursor_pos, Vec2::new(20.0, 30.0));
+    }
+
     #[test]
     fn key_mapping_uses_native_logical_keys() {
         assert_eq!(
