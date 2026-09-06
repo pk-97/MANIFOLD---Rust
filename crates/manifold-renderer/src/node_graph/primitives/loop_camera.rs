@@ -349,6 +349,7 @@ impl Primitive for LoopCamera {
         let fov = (fov_y + zoom_pulse_amp * (std::f32::consts::PI * phase).sin()).max(0.01);
         let mut cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
         cam.rotate_local(yaw, pitch, roll);
+        cam.world_period = Some(fwd.map(|component| component * patterns_per_loop * pattern_length * cell_size));
 
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));

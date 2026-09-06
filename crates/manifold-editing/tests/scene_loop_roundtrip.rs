@@ -101,6 +101,7 @@ fn minimal_loop_plan(render_scene_doc: u32) -> SceneModifierPlan {
             restore_types: &["node.orbit_camera", "node.free_camera", "node.look_at_camera"],
         }],
         exposures: vec![],
+        shared_params: vec![],
         enable: EnablePlan {
             toggle: ToggleDecl::NodeParam {
                 node_doc_hint: manifold_core::NodeId::new("loop_cam_switch"),
@@ -389,6 +390,7 @@ fn grouped_loop_plan() -> SceneModifierPlan {
             restore_types: &["node.orbit_camera", "node.free_camera", "node.look_at_camera"],
         }],
         exposures: vec![],
+        shared_params: vec![],
         enable: EnablePlan {
             toggle: ToggleDecl::NodeParam {
                 node_doc_hint: manifold_core::NodeId::new("loop_cam_switch"),
@@ -431,6 +433,7 @@ fn takeover_plan(source_doc_id: u32, replace_existing: bool) -> SceneModifierPla
         }],
         repoints: vec![],
         exposures: vec![],
+        shared_params: vec![],
         enable: EnablePlan {
             toggle: ToggleDecl::ValueAtom {
                 node_id: manifold_core::NodeId::new("modifier_b_enable"),

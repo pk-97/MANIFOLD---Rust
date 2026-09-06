@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::NodeId;
-use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire};
+use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphNode, EffectGraphWire};
 use crate::scene_exposure::SceneParamMetadata;
 
 /// One entry of a kind's declarative trace signature (D3). The plan carries
@@ -124,7 +124,44 @@ pub struct SceneModifierPlan {
     pub repoints: Vec<PortRepoint>,
     /// Per-node exposure curation (INV-6: each node its own manifest only).
     pub exposures: Vec<NodeExposure>,
+    /// Internal consumers that share one exposed control, including modulation.
+    pub shared_params: Vec<SharedParamBinding>,
     pub enable: EnablePlan,
+}
+
+/// A binding fan-out: both targets read the same manifest slot and mapping.
+/// Targets are internal parameters without independent card controls.
+#[derive(Debug, Clone)]
+pub struct SharedParamBinding {
+    pub source: BindingTarget,
+    pub target: BindingTarget,
+}
+
+/// Extend exposed controls to internal consumers using ordinary preset
+/// bindings. Called after exposure stamping, both on apply and on load.
+pub fn install_shared_param_bindings(bindings: &mut Vec<BindingDef>, links: &[SharedParamBinding]) -> bool {
+    let mut changed = false;
+    for link in links {
+        let Some(source) = bindings.iter().find(|binding| binding.target == link.source).cloned() else {
+            continue;
+        };
+        if let Some(existing) = bindings.iter_mut().find(|binding| binding.target == link.target) {
+            // An independently exposed target is a custom graph, not an
+            // internal consumer. Preserve its authored control and mapping.
+            if existing.id != source.id {
+                continue;
+            }
+            let replacement = BindingDef { target: link.target.clone(), ..source };
+            if *existing != replacement {
+                *existing = replacement;
+                changed = true;
+            }
+        } else {
+            bindings.push(BindingDef { target: link.target.clone(), ..source });
+            changed = true;
+        }
+    }
+    changed
 }
 
 impl SceneModifierPlan {

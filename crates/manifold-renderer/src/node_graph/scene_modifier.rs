@@ -400,6 +400,19 @@ pub mod scene_modifier_loop {
 
     pub const LOOP_KIND_ID: &str = "scene_loop";
 
+    fn shared_loop_params() -> Vec<manifold_core::scene_modifier::SharedParamBinding> {
+        use manifold_core::effect_graph_def::BindingTarget;
+        [("scene_array", "pattern_length", "loop_camera", "pattern_length"),
+         ("loop_camera", "cell_size", "scene_array", "cell_size")]
+            .into_iter().map(|(source, source_param, target, target_param)| {
+                manifold_core::scene_modifier::SharedParamBinding {
+                    source: BindingTarget::Node { node_id: NodeId::new(source), param: source_param.into() },
+                    target: BindingTarget::Node { node_id: NodeId::new(target), param: target_param.into() },
+                }
+            }).collect()
+    }
+
+
     const CAMERA_RESTORE_TYPES: &[&str] = &[
         "node.orbit_camera",
         "node.free_camera",
@@ -738,6 +751,7 @@ pub mod scene_modifier_loop {
             group_splices,
             repoints: skeleton.repoints,
             exposures: skeleton.exposures,
+            shared_params: shared_loop_params(),
             enable: EnablePlan {
                 toggle: ToggleDecl::NodeParam {
                     node_doc_hint: NodeId::new("loop_cam_switch"),
@@ -1061,6 +1075,26 @@ pub mod scene_modifier_loop {
                 changed = true;
             }
         }
+        if let Some(meta) = def.preset_metadata.as_mut() {
+            // Repair partially upgraded saves whose retargeted Pattern binding
+            // still carries the retired Copies label. Keep the binding id.
+            for binding in &mut meta.bindings {
+                if matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                    if node_id.as_str() == "scene_array" && param == "pattern_length") {
+                    if binding.label == "Copies" {
+                        binding.label = "Pattern".into();
+                        changed = true;
+                    }
+                    if let Some(spec) = meta.params.iter_mut().find(|spec| spec.id == binding.id && spec.name == "Copies") {
+                        spec.name = "Pattern".into();
+                        changed = true;
+                    }
+                }
+            }
+            changed |= manifold_core::scene_modifier::install_shared_param_bindings(
+                &mut meta.bindings, &shared_loop_params(),
+            );
+        }
         changed
     }
 }
@@ -1236,6 +1270,7 @@ pub mod scene_modifier_fog {
             group_splices: Vec::new(),
             repoints: skeleton.repoints,
             exposures: skeleton.exposures,
+            shared_params: Vec::new(),
             // Gate kinds (D5): the toggle row writes the enabled value
             // atom's `value` param; the multiply IS the bypass wiring, so
             // there are no enable extras beyond the atoms themselves.

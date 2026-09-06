@@ -1,6 +1,6 @@
 # Scene Loop — infinite looping flythroughs for imported GLB scenes
 
-**Status:** SHIPPED — absorbed into SCENE_MODIFIER_FRAMEWORK as kind `scene_loop` (loop behavior contract below unchanged; the panel fold section is superseded by inspector modifier cards). Owed: BUG-nkxg (scene-loop-copies-gate-VD), BUG-twa6 (real-import-seed-nondeterminism), BUG-59j1 (legacy-fog-on-remove), Peter's sakura acceptance run. · k3 (lead)
+**Status:** SHIPPED — absorbed into SCENE_MODIFIER_FRAMEWORK as kind `scene_loop` (loop behavior revised by SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN; the panel fold section is superseded by inspector modifier cards). Owed: BUG-nkxg (scene-loop-copies-gate-VD), BUG-twa6 (real-import-seed-nondeterminism), BUG-59j1 (legacy-fog-on-remove), Peter's sakura acceptance run. · k3 (lead)
 **Prerequisites:** none (builds on REALTIME_3D P0–P6, on main).
 Lifecycle: contract — scene-loop atoms and commands remain the cited contract for any future scene-loop work.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
@@ -101,7 +101,7 @@ don't redesign.
   Rejected: duplicating the object groups N times in the graph at edit time —
   a 10-mesh scene ×5 copies is 50 groups, 50 mesh uploads, and a panel trace
   surface that explodes for nothing.
-- **D2 — One new atom mints the copy array: `node.scene_array`.** Inputs:
+- **D2 — Revised by SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN D1–D6:** the same atom now maintains a camera-driven window of a periodic world. Historical fixed-row contract follows. **One new atom mints the copy array: `node.scene_array`.** Inputs:
   `count`, `axis` (enum: ±X/±Y/±Z), `cell_size`. Output:
   `Array<InstanceTransform>`, entry i = identity TRS translated `i * cell_size`
   along `axis`. Barrier-free per-element GPU atom on the freeze codegen path
@@ -180,7 +180,7 @@ don't redesign.
 - **D9 — v1 is raster `render_scene` only.** RT compatibility is unverified
   (the RT path's handling of `instances_n` is unknown) and is Deferred with a
   trigger, not promised.
-- **D10 — Copy count default 3.** One copy behind (for the wrap), the cell
+- **D10 — Revised by SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN D3/D5:** Pattern and Stride replace the finite copy-count controls; capacity stays 32 and the active window follows the camera. Historical default follows. **Copy count default 3.** One copy behind (for the wrap), the cell
   you're in, one ahead; fog eats anything further. No standalone perf probe:
   static analysis predicts the shape (no frustum culling ⇒ vertex cost scales
   linearly with copies, fragment cost at 4K is flat for behind-camera copies —

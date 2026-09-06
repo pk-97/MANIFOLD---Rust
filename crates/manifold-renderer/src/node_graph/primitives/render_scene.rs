@@ -845,7 +845,7 @@ pub struct RenderScene {
     /// change, so their bands widen with this magnitude — without it a
     /// rotating camera snapped the gates every frame and the
     /// snap→rebuild→retrip cycle boiled the image.
-    prev_cam_state: Option<([f32; 3], [f32; 3])>,
+    prev_cam_state: Option<Camera>,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -4457,7 +4457,21 @@ impl EffectNode for RenderScene {
         // so history is tracked continuously: if velocity is wired mid-
         // session, the first wired frame sees the object's REAL prior
         // motion, not a spurious first-frame zero.
-        let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
+        // Periodic sources identify the equivalent copy across a coordinate
+        // wrap. Share that correspondence across velocity, RT reprojection
+        // and motion conditioning instead of clearing valid temporal history.
+        let world_offset = self.prev_cam_state.map_or([0.0; 3], |previous| {
+            cam.previous_world_offset(previous.pos, previous.world_period)
+        });
+        let prev_view_proj = self.prev_view_proj.map_or(view_proj, |previous| {
+            let translation = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [world_offset[0], world_offset[1], world_offset[2], 1.0],
+            ];
+            if world_offset == [0.0; 3] { previous } else { mat4_mul(previous, translation) }
+        });
         self.prev_view_proj = Some(view_proj);
         // Camera-motion magnitude for the accumulator's change gates
         // (`AccumulateParams::cam_motion`): radians of view-direction turn
@@ -4467,7 +4481,9 @@ impl EffectNode for RenderScene {
         // 0 — a held camera feeds the gates exactly 0, keeping the static
         // path byte-identical.
         let cam_motion = match self.prev_cam_state {
-            Some((ppos, pfwd)) => {
+            Some(previous) => {
+                let ppos = std::array::from_fn::<_, 3, _>(|i| previous.pos[i] - world_offset[i]);
+                let pfwd = previous.fwd;
                 let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
                     .clamp(-1.0, 1.0);
                 let rot = d.acos();
@@ -4479,7 +4495,7 @@ impl EffectNode for RenderScene {
             }
             None => 0.0,
         };
-        self.prev_cam_state = Some((cam.pos, cam.fwd));
+        self.prev_cam_state = Some(cam);
         if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
             eprintln!(
                 "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
