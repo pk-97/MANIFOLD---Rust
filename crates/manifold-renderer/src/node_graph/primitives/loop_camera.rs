@@ -1,13 +1,17 @@
 //! `node.loop_camera` — beat-locked flythrough camera for scene looping
-//! (SCENE_LOOP_DESIGN.md D3, SCENE_MODIFIER_FRAMEWORK P4 controls).
+//! (SCENE_LOOP_DESIGN.md D3, SCENE_MODIFIER_FRAMEWORK P4 controls,
+//! SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D3).
 //!
 //! Emits a single [`Camera`] on `out`. Position advances along the chosen
-//! axis over the loop phase: travel = home + d(phase)·stride·cell_size,
-//! where d(p) = p − flow·sin(2πp)/(2π) eases the flight with equal slope at
-//! both seams. Sway drifts the lateral/height offsets, the look sweep
-//! weaves the target laterally, and the zoom pulse breathes the fov — every
-//! one a function of the loop phase alone, so the frame at phase 0 is
-//! identical to the frame at phase 1 (INV-3 wrap purity).
+//! axis over the loop phase: travel = home + d(phase)·K·P·cell_size, where
+//! d(p) = p − flow·sin(2πp)/(2π) eases the flight with equal slope at
+//! both seams, K = patterns_per_loop, P = pattern_length. Sway drifts the
+//! lateral/height offsets, the look sweep weaves the target laterally, and
+//! the zoom pulse breathes the fov — every one a function of the loop phase
+//! alone, so the frame at phase 0 is identical to the frame at phase 1
+//! (INV-3 wrap purity). Travel per loop is K·P whole cells — an integer
+//! multiple of pattern_length for any integers K, P, so the wrap is pure by
+//! construction (corridor D3; purity is arithmetic, not a coupling).
 //!
 //! `phase` (0..1) comes from a `beat_ramp` at attack=1, rate=1/bars.
 //!
@@ -25,7 +29,7 @@ pub const LOOP_CAMERA_AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z
 crate::primitive! {
     name: LoopCamera,
     type_id: "node.loop_camera",
-    purpose: "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Travel = home + d(phase)·stride·cell_size along axis, where d(p) = p − flow·sin(2πp)/(2π) eases the flight (equal seam slope, INV-3 wrap purity); sway drifts the lateral/height offsets, the look sweep weaves the target laterally, and the zoom pulse breathes the fov — all phase-periodic. The frame at phase 0 equals the frame at phase 1 by construction. CPU-only, no GPU dispatch.",
+    purpose: "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Travel = home + d(phase)·patterns_per_loop·pattern_length·cell_size along axis, where d(p) = p − flow·sin(2πp)/(2π) eases the flight (equal seam slope, INV-3 wrap purity); travel per loop is a whole number of pattern_length cells, so the wrap is pure by construction for any integers (corridor D3). Sway drifts the lateral/height offsets, the look sweep weaves the target laterally, and the zoom pulse breathes the fov — all phase-periodic. The frame at phase 0 equals the frame at phase 1 by construction. CPU-only, no GPU dispatch.",
     inputs: {
         phase: ScalarF32 optional,
     },
@@ -155,15 +159,27 @@ crate::primitive! {
             range: Some((0.0, 0.95)),
             enum_values: &[],
         },
-        // Stride: whole cells travelled per loop (travel = K·cell). The
-        // instance array must scale with it — the Stride card row is a
-        // coupled write that also sets scene_array.count = K+2 (behind +
-        // current + ahead) in one undo unit. scene_array.count clamps at
-        // its own ceiling of 8, so K ≥ 7 outruns the array by one cell
-        // (the clamp, not a wrap concern).
+        // Stride: whole PATTERNS travelled per loop — travel = K·P·cells
+        // (corridor D3). K and P are independent integers and travel is an
+        // integer multiple of pattern_length by construction, so the wrap is
+        // pure for any pair — the old outrun/wrap-snap couplings no longer
+        // exist. Card label stays "Stride".
         ParamDef {
-            name: Cow::Borrowed("stride"),
+            name: Cow::Borrowed("patterns_per_loop"),
             label: "Stride",
+            ty: ParamType::Int,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 8.0)),
+            enum_values: &[],
+        },
+        // Internal (never a card row): the pattern length in cells. Written
+        // by the plan builder, the Pattern row's coupled secondary, and the
+        // load migration — the spacing/cell_size dual-stamp precedent. The
+        // product K·P is the per-loop travel in cells; K·P ≡ 0 (mod P) for
+        // any integers, which is the whole wrap-purity argument (INV-EC1).
+        ParamDef {
+            name: Cow::Borrowed("pattern_length"),
+            label: "Pattern Length",
             ty: ParamType::Int,
             default: ParamValue::Float(1.0),
             range: Some((1.0, 8.0)),
@@ -222,7 +238,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "phase is port-shadowed: wire from beat_ramp (attack=1, rate=1/bars) for beat-locked looping. Unwired, reads FrameTime.beats mod 1. The SAME cell_size feeds both this node and node.scene_array — the plan builder computes it once from scene_bounds (D4). lateral/height offset the camera within the cross-section perpendicular to travel. axis enum matches scene_array's axis enum. Camera looks down the travel axis (fwd = axis direction); lateral offsets the camera perpendicular to travel. pos_x/pos_y/pos_z outputs for PBR material atoms.",
+    composition_notes: "phase is port-shadowed: wire from beat_ramp (attack=1, rate=1/bars) for beat-locked looping. Unwired, reads FrameTime.beats mod 1. The SAME cell_size feeds both this node and node.scene_array — the plan builder computes it once from scene_bounds (D4). lateral/height offset the camera within the cross-section perpendicular to travel. axis enum matches scene_array's axis enum. Camera looks down the travel axis (fwd = axis direction); lateral offsets the camera perpendicular to travel. Per-loop travel = patterns_per_loop * pattern_length cells — an integer multiple of scene_array's pattern_length for any integers, which is what makes the wrap pure without any coupling (corridor D3); wire loop_camera.out to scene_array.camera so the instance window rides this same camera (corridor D2). pos_x/pos_y/pos_z outputs for PBR material atoms.",
     examples: [],
     picker: { label: "Loop Camera", category: Driver },
     summary: "A camera that flies through a scene in a perfect loop, locked to the beat.",
@@ -259,9 +275,10 @@ impl Primitive for LoopCamera {
 
         // P4 loop controls — all phase-periodic (see the ParamDef block
         // above). Unset/absent reads as "off": flow 0 = linear travel,
-        // stride 1 = one cell, sway/look/zoom 0 = no effect.
+        // K = P = 1 = one cell per loop, sway/look/zoom 0 = no effect.
         let flow = ctx.scalar_or_param("flow", 0.0).clamp(0.0, 0.95);
-        let stride = ctx.scalar_or_param("stride", 1.0).round().clamp(1.0, 8.0);
+        let patterns_per_loop = ctx.scalar_or_param("patterns_per_loop", 1.0).round().clamp(1.0, 8.0);
+        let pattern_length = ctx.scalar_or_param("pattern_length", 1.0).round().clamp(1.0, 8.0);
         let sway_amp = ctx.scalar_or_param("sway_amp", 0.0);
         let sway_cycles = ctx.scalar_or_param("sway_cycles", 1.0).round().clamp(1.0, 8.0);
         let look_sweep_amp = ctx.scalar_or_param("look_sweep_amp", 0.0);
@@ -286,12 +303,13 @@ impl Primitive for LoopCamera {
 
         // Travel distance along the axis, from the corridor entry `home`.
         // Flow eases the flight: d(0)=0, d(1)=1, equal seam slopes (the
-        // sin term vanishes at both seams). Stride walks K cells per loop;
-        // integer stride keeps phase 0 == phase 1 in POSITION (K cells
-        // ahead = the identical scene, D4).
+        // sin term vanishes at both seams). The per-loop travel is K·P
+        // whole cells — phase 0 == phase 1 in POSITION for any integers
+        // K, P, because the world the camera re-enters is the world
+        // pattern_length-periodic tiling guarantees (corridor D3).
         let two_pi = std::f32::consts::TAU;
         let eased = phase - flow * (two_pi * phase).sin() / two_pi;
-        let travel = home + eased * stride * cell_size;
+        let travel = home + eased * (patterns_per_loop * pattern_length) * cell_size;
 
         // Sway: the SAME sine adds to lateral and height (the committed
         // P4 math — a diagonal drift through the cross-section).
@@ -331,6 +349,7 @@ impl Primitive for LoopCamera {
         let fov = (fov_y + zoom_pulse_amp * (std::f32::consts::PI * phase).sin()).max(0.01);
         let mut cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
         cam.rotate_local(yaw, pitch, roll);
+        cam.world_period = Some(fwd.map(|component| component * patterns_per_loop * pattern_length * cell_size));
 
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
@@ -364,16 +383,35 @@ mod tests {
     }
 
     #[test]
-    fn loop_camera_has_eighteen_params() {
+    fn loop_camera_has_nineteen_params() {
         let names: Vec<&str> = LoopCamera::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![
                 "cell_size", "axis", "lateral", "height", "home", "fov_y", "near", "far",
-                "roll", "pitch", "yaw", "flow", "stride", "sway_amp", "sway_cycles",
-                "look_sweep_amp", "look_sweep_cycles", "zoom_pulse_amp",
+                "roll", "pitch", "yaw", "flow", "patterns_per_loop", "pattern_length",
+                "sway_amp", "sway_cycles", "look_sweep_amp", "look_sweep_cycles",
+                "zoom_pulse_amp",
             ]
         );
+    }
+
+    /// INV-EC1 (corridor): wrap purity by construction — the per-loop travel
+    /// is patterns_per_loop · pattern_length cells, and K·P ≡ 0 (mod P) for
+    /// every integer pair, so the camera always re-enters the identical
+    /// tiled world. Grid proof over the full 1..8 × 1..8 card ranges.
+    #[test]
+    fn travel_cells_are_always_a_whole_number_of_patterns() {
+        for k in 1u32..=8 {
+            for p in 1u32..=8 {
+                let travel_cells = k * p;
+                assert_eq!(
+                    travel_cells.rem_euclid(p),
+                    0,
+                    "K={k} P={p}: travel {travel_cells} cells must be ≡ 0 (mod P)"
+                );
+            }
+        }
     }
 
     /// INV-3 (P4 extension), CPU half. The loop's phase input is fract()'d,
@@ -408,13 +446,14 @@ mod tests {
             "eased travel end within 1 ulp of 1 (got {})",
             d(1.0)
         );
-        // Travel per loop is stride·cell to within 1 ulp — an integer
-        // number of scene periods, so the rendered frame wraps pure.
+        // Travel per loop is K·P·cell to within 1 ulp — a whole number of
+        // patterns, so the rendered frame wraps pure for any integers.
         let cell = 10.0f32;
-        let stride = 3.0f32;
+        let travel_cells = 3.0f32 * 2.0f32; // K=3, P=2
         assert!(
-            ((d(1.0) - d(0.0)) * stride * cell - stride * cell).abs() <= f32::EPSILON * 100.0,
-            "travel per loop must be stride·cell within a hair"
+            ((d(1.0) - d(0.0)) * travel_cells * cell - travel_cells * cell).abs()
+                <= f32::EPSILON * 100.0,
+            "travel per loop must be K·P·cell within a hair"
         );
     }
 
@@ -473,7 +512,8 @@ mod tests {
             ("home", 0.0),
             ("fov_y", 0.9),
             ("flow", 0.0),
-            ("stride", 1.0),
+            ("patterns_per_loop", 1.0),
+            ("pattern_length", 1.0),
             ("sway_amp", 0.0),
             ("sway_cycles", 1.0),
             ("look_sweep_amp", 0.0),
@@ -553,7 +593,8 @@ mod tests {
             ("pitch", -0.4),
             ("yaw", 1.1),
             ("flow", 0.8),
-            ("stride", 3.0),
+            ("patterns_per_loop", 3.0),
+            ("pattern_length", 2.0),
             ("sway_amp", 0.5),
             ("sway_cycles", 2.0),
             ("look_sweep_amp", 0.5),
@@ -599,7 +640,8 @@ mod tests {
         let travel = phase * cell;
         let pos = [0.0f32, 1.5, travel];
         let target = [pos[0], pos[1], pos[2] + 1.0];
-        let expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let mut expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        expected.world_period = Some([0.0, 0.0, cell]);
         assert_eq!(base, expected, "zero roll/pitch/yaw must not perturb the camera at all");
     }
 }

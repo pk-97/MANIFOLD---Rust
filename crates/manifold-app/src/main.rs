@@ -141,6 +141,9 @@ mod mute_visibility_probe;
 // Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
+// D8.4 acceptance — deliberate native GPU journey with external reference projects.
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
+mod corridor_acceptance;
 mod window_registry;
 mod workspace;
 

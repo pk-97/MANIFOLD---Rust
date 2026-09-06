@@ -1,23 +1,26 @@
-//! `node.scene_array` — emit a linear `Array<InstanceTransform>` along one
-//! axis, for scene-loop instancing (SCENE_LOOP_DESIGN.md D2,
-//! SCENE_MODIFIER_FRAMEWORK P4 jitter).
+//! `node.scene_array` — camera-windowed `Array<InstanceTransform>` generator
+//! for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D1/D4/D5/D6).
 //!
-//! One instance per copy, translated `i * cell_size` along the chosen axis.
-//! The same node feeds ALL object groups — copy count changes are one param
-//! write, not N. Optional per-instance jitter (rotation + scale from a
-//! deterministic hash of `index % jitter_period` — no time dependence; the
-//! period is what makes it wrap-safe per SCENE_LOOP INV-3, see BUG-jvlq:
-//! the camera travels stride cells per loop, so purity needs
-//! jitter(i) == jitter(i-stride), i.e. period dividing stride. The Stride
-//! card row's coupled write sets jitter_period = stride; the default 1 gives
-//! every copy the same jitter). Source atom on the freeze codegen path.
+//! Slot `w` ↔ corridor cell `c = base_cell − BEHIND + w`; the cell's transform
+//! is a translation `c · cell_size` along `axis` plus deterministic jitter
+//! keyed on the Euclidean `c mod pattern_length`. `base_cell` and the live
+//! window span (`ahead`) resolve each frame from the optional `camera: Camera`
+//! input — unwired, the corridor runs from the origin (base_cell 0, ahead 22).
+//! Capacity is the constant [`WINDOW_CAPACITY`] (32), never a param: the old
+//! live `count` sized buffers at plan time and made every live write inert
+//! (BUG-757c), and the window span derives from the camera's far plane, so
+//! there is nothing left for a count to decide.
 //!
-//! The `out` buffer is sized for `count`'s FULL range (8), never the current
-//! value: capacity is fixed at plan pre-allocation while `count` is a live
-//! card-row write (the Scene Loop "Copies" row, and the Stride row's coupled
-//! count secondary) — sizing by the value made every live count write inert
-//! until a structural rebuild (BUG-757c). The body masks slots at or beyond
-//! the live count to zero-scale, so surplus capacity draws nothing.
+//! Wrap purity is arithmetic, not a coupling (D3/D4): travel per loop is
+//! `patterns_per_loop · pattern_length` cells and the jitter keys on the same
+//! `cell mod pattern_length`, so any integer pair is pure by construction —
+//! the jitter_period-divides-stride coupling (BUG-jvlq) stops existing.
+//!
+//! INV-RTI4 stasis (D6): the key carries `use_camera` because the unwired run
+//! and a wired camera parked at cell 0 with far ≥ 20·cell produce identical
+//! key fields with different intended content — without it the buffer goes
+//! stale on (re)wire. Camera motion inside a cell changes no key field, so a
+//! moving camera rewrites the buffer only on cell-boundary crossings.
 
 use std::borrow::Cow;
 
@@ -26,28 +29,63 @@ use manifold_gpu::GpuBinding;
 use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
+use crate::node_graph::primitive::Primitive;
 
 pub const AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
-/// Generated-codegen uniform layout. Params in PARAMS order:
-/// count (Int→i32), axis (Enum→u32), cell_size (f32), jitter_seed (Int→i32),
-/// jitter_amount (f32), jitter_period (Int→i32), then dispatch_count (u32),
-/// padded to 16 bytes.
-/// 8 words = 32 bytes.
+/// Fixed output capacity — the whole corridor concept (D5: vertex/descriptor
+/// cost flat regardless of speed). Value-level constant, never a param
+/// (BUG-757c class: a capacity that follows a live value deadens the card row).
+pub const WINDOW_CAPACITY: u32 = 32;
+
+/// Cells behind the camera's cell kept live in the window — shadow-map
+/// look-behind (D1; ~16 object-depths under the D4 gap rule).
+const BEHIND: u32 = 8;
+
+/// `ahead` ceiling: BEHIND + ahead + 1 ≤ WINDOW_CAPACITY with two margin
+/// cells reserved (D5). A hand-set far past the curated 20·cell band clamps
+/// here and the distant hole returns past that — stated, not hidden.
+const MAX_AHEAD: u32 = WINDOW_CAPACITY - BEHIND - 2; // 22
+
+/// Unwired-camera default window span: corridor from the origin (D1 run()).
+const STANDALONE_AHEAD: u32 = MAX_AHEAD; // 22
+
+/// D5 window span from the wired camera's far plane: every cell that can
+/// render exists in the buffer, with +2 margin cells beyond far that clip
+/// without rasterizing. Floors at 4 (a far shorter than one cell still sees
+/// the current cell and its neighbors); clamps at MAX_AHEAD.
+fn window_ahead(far: f32, cell_size: f32) -> u32 {
+    // f32 arithmetic end to end — no i32 cast to overflow on hand-edited
+    // absurd values: far huge → inf → the clamp arm; NaN → f32::max's
+    // NaN-rejection → the floor.
+    let cells = (far / cell_size).ceil() + 2.0;
+    if cells >= MAX_AHEAD as f32 {
+        MAX_AHEAD
+    } else {
+        cells.max(4.0) as u32
+    }
+}
+
+/// Generated-codegen uniform layout: params in PARAMS order —
+/// pattern_length (Int→i32), axis (Enum→u32), cell_size (f32),
+/// jitter_seed (Int→i32), jitter_amount (f32) — then the derived fields
+/// base_cell (i32), behind (u32), ahead (u32), use_camera (u32), then the
+/// codegen-injected dispatch_count (= output capacity). 10 words = 40 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SceneArrayUniforms {
-    count: i32,
+    pattern_length: i32,
     axis: u32,
     cell_size: f32,
     jitter_seed: i32,
     jitter_amount: f32,
-    jitter_period: i32,
+    base_cell: i32,
+    behind: u32,
+    ahead: u32,
+    use_camera: u32,
     dispatch_count: u32,
-    _pad: u32,
 }
 
 /// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
@@ -61,7 +99,10 @@ struct SceneArrayUniforms {
 /// key from the old executor must never match the new one's low numbers.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SceneArrayStasisKey {
-    pub count: u32,
+    pub use_camera: bool,
+    pub base_cell: i32,
+    pub ahead: u32,
+    pub pattern_length: u32,
     pub axis: u32,
     pub cell_size: f32,
     pub jitter_seed: u32,
@@ -72,17 +113,26 @@ pub struct SceneArrayStasisKey {
 crate::primitive! {
     name: SceneArray,
     type_id: "node.scene_array",
-    purpose: "Linear Array<InstanceTransform> along one axis for scene-loop instancing. count copies, each translated i * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z). The same node feeds ALL object groups — copy count changes are one param write, not N. Optional per-instance jitter (rotation ±jitter_amount rad per axis, scale 1 ± jitter_amount/2) from a deterministic hash of (index % jitter_period) mixed with jitter_seed — no time dependence; the period is the wrap-safety mechanism (the camera travels stride cells per loop, so purity needs the pattern to repeat with a period dividing stride — the Stride card row couples jitter_period = stride). Source atom on the freeze codegen path.",
-    inputs: {},
+    purpose: "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), ahead = clamp(ceil(camera.far / cell_size) + 2, 4, 22) — every cell that can render exists in the buffer, so the far-edge hole is gone by construction. Unwired, the corridor runs from the origin (base_cell 0, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
+    inputs: {
+        // D2: the camera arrives as one Camera port — the atom picks the axis
+        // component from its own axis param, so axis and position can never
+        // desync. Unwired: standalone corridor from the origin.
+        camera: Camera optional,
+    },
     outputs: {
         out: Array(InstanceTransform),
     },
     params: [
+        // How many distinct cells before the pattern repeats (card row
+        // "Pattern", P2 surface). Also the jitter period — ONE index drives
+        // both the cell's place in the pattern and its jitter, so variation
+        // and wrap safety can no longer be set independently (D4).
         ParamDef {
-            name: Cow::Borrowed("count"),
-            label: "Count",
+            name: Cow::Borrowed("pattern_length"),
+            label: "Pattern",
             ty: ParamType::Int,
-            default: ParamValue::Float(3.0),
+            default: ParamValue::Float(1.0),
             range: Some((1.0, 8.0)),
             enum_values: &[],
         },
@@ -102,16 +152,6 @@ crate::primitive! {
             range: Some((0.01, 1000.0)),
             enum_values: &[],
         },
-        // ── SCENE_MODIFIER_FRAMEWORK P4 jitter. Deterministic per-instance
-        // rotation/scale from a hash of (index % jitter_period) mixed with
-        // the seed (WGSL body) — no time dependence. The period is the
-        // wrap-safety half (INV-3, BUG-jvlq): the loop camera travels stride
-        // cells per loop, so at the wrap instance i inherits instance
-        // i-stride's screen slot — purity requires jitter(i) ==
-        // jitter(i-stride), i.e. a pattern period dividing stride. The
-        // Stride row's coupled write sets period = stride; the default 1
-        // gives every copy the same jitter (uniform, pure at any stride).
-        // Zero amount keeps the identity-TRS behaviour byte-identical to P3.
         ParamDef {
             name: Cow::Borrowed("jitter_seed"),
             label: "Jitter Seed",
@@ -128,29 +168,23 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
-        // Internal (never a card row): the jitter pattern period in cells.
-        // Written by the Stride coupled write (period = stride); absent on
-        // pre-fix projects reads as the default 1 — uniform jitter, which is
-        // wrap-pure at any stride (the BUG-jvlq fix for saved loops).
-        ParamDef {
-            name: Cow::Borrowed("jitter_period"),
-            label: "Jitter Period",
-            ty: ParamType::Int,
-            default: ParamValue::Float(1.0),
-            range: Some((1.0, 8.0)),
-            enum_values: &[],
-        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Source atom — no inputs. The out buffer is sized for count's full range (8), never the current value: buffer capacity is fixed at plan pre-allocation, so a value-sized buffer made every live count write inert until a rebuild (BUG-757c — the Scene Loop 'Copies' row and the Stride coupling both write count live). The body masks slots beyond the live count to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction (SCENE_LOOP_DESIGN D4). The Scene Loop card's Jitter row writes jitter_amount; jitter_seed stays an internal re-roll knob the plan stamps at 0, and jitter_period is internal too — the Stride row's coupled write sets it to the stride so the jitter pattern repeats once per loop's travel (BUG-jvlq wrap purity).",
+    composition_notes: "Optional camera: Camera port drives the window (D2) — wire node.loop_camera.out here for the corridor; the atom resolves the axis component itself so axis and position cannot desync. Unwired, the corridor runs from the origin (base_cell 0, ahead 22). Output capacity is the constant 32, never a param: the buffer is fixed at plan pre-allocation (BUG-757c), and the live window span derives from the wired camera's far plane (D5) — the body masks slots at or beyond behind+ahead+1 to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction. pattern_length is both the pattern period and the jitter period (D4); the loop camera's travel (patterns_per_loop * pattern_length cells) is an integer multiple of it, so the wrap is pure for any integers. jitter_seed stays an internal re-roll knob the plan stamps at 0.",
     examples: [],
     picker: { label: "Scene Array", category: Atom },
-    summary: "Lays out copies in a line along one axis, spacing them evenly for a looping flythrough.",
+    summary: "Generates the corridor of instances around the camera — cells repeat by pattern, forever.",
     category: Geometry3D,
     role: Source,
-    aliases: ["scene array", "instance line", "loop copies"],
-    fusion_kind: Source,
+    aliases: ["scene array", "instance line", "loop copies", "corridor"],
+    fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/scene_array_body.wgsl"),
+    derived_uniforms: [
+        "base_cell:i32",
+        "behind:u32",
+        "ahead:u32",
+        "use_camera:u32",
+    ],
     wgsl_includes: [NOISE_COMMON],
     extra_fields: {
         // INV-RTI4 stasis cache — see `SceneArrayStasisKey` and `run`.
@@ -168,26 +202,20 @@ impl Primitive for SceneArray {
         if port_name != "out" {
             return None;
         }
-        // BUG-757c: size for count's FULL range, never the current value.
-        // Buffer capacity is fixed at plan pre-allocation, and count is a
-        // live card-row write (Scene Loop "Copies" / the Stride coupling's
-        // secondary) applied in place with no rebuild — a value-sized buffer
-        // made every live count write inert. The body masks slots at or
-        // beyond the live count to zero-scale, so the surplus capacity
-        // renders nothing.
-        let range_max = SceneArray::PARAMS
-            .iter()
-            .find(|p| p.name == "count")
-            .and_then(|p| p.range)
-            .map(|(_, max)| max as u32)?;
-        Some(range_max)
+        // INV-EC2: the capacity is the constant WINDOW_CAPACITY for any
+        // params — it was never allowed to follow a live value (BUG-757c),
+        // and the corridor has no count-shaped param left to derive it from
+        // (the window span is camera-derived, D5).
+        Some(WINDOW_CAPACITY)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let count = match ctx.params.get("count") {
-            Some(ParamValue::Float(n)) => (*n).round().clamp(1.0, 8.0) as u32,
-            _ => 3,
-        };
+        let pattern_length = ctx
+            .params
+            .get("pattern_length")
+            .and_then(|v| v.as_u32_clamped(1))
+            .unwrap_or(1)
+            .clamp(1, 8);
         let axis = match ctx.params.get("axis") {
             Some(ParamValue::Enum(n)) => *n,
             _ => 4, // +Z
@@ -198,27 +226,42 @@ impl Primitive for SceneArray {
         };
         let jitter_seed = ctx.params.get("jitter_seed").and_then(|v| v.as_u32_clamped(0)).unwrap_or(0);
         let jitter_amount = ctx.scalar_or_param("jitter_amount", 0.0).clamp(0.0, 1.0);
-        let jitter_period = ctx
-            .params
-            .get("jitter_period")
-            .and_then(|v| v.as_u32_clamped(1))
-            .unwrap_or(1)
-            .clamp(1, 8);
+
+        // D2/D5: the wired camera drives the window. The atom picks the axis
+        // component from its own axis param, so axis and position cannot
+        // desync. Unwired: the standalone corridor from the origin.
+        let cam = ctx.inputs.camera("camera");
+        let use_camera = cam.is_some();
+        let (base_cell, ahead) = match cam {
+            Some(c) => {
+                let axis_pos = match axis {
+                    0 | 1 => c.pos[0],
+                    2 | 3 => c.pos[1],
+                    _ => c.pos[2],
+                };
+                let base_cell = (axis_pos / cell_size).floor() as i32;
+                (base_cell, window_ahead(c.far, cell_size))
+            }
+            None => (0, STANDALONE_AHEAD),
+        };
 
         let Some(out_buf) = ctx.outputs.array("out") else {
             return;
         };
         let item_size = std::mem::size_of::<InstanceTransform>() as u64;
         let capacity = (out_buf.size / item_size) as u32;
-        let count = count.min(capacity);
 
-        // INV-RTI4 stasis: every frame this node's output depends on is in
-        // the key — skip the rewrite when unchanged and declare the output
-        // unchanged, so the slot's write generation (and with it the RT
-        // accel key) holds across static frames. First evaluate after
-        // wiring, and every param write, misses the cache by construction.
+        // INV-RTI4 stasis: every frame-varying input is in the key — params,
+        // the resolved window (base_cell/ahead), AND use_camera (D6: the
+        // unwired run and a wired camera parked at cell 0 with far >=
+        // 20*cell collide on every other field; without use_camera the
+        // buffer would go stale on (re)wire). Camera motion inside a cell
+        // changes none of them → no rewrite → the RT accel key holds.
         let stasis = SceneArrayStasisKey {
-            count,
+            use_camera,
+            base_cell,
+            ahead,
+            pattern_length,
             axis,
             cell_size,
             jitter_seed,
@@ -241,14 +284,16 @@ impl Primitive for SceneArray {
         });
 
         let uniforms = SceneArrayUniforms {
-            count: count as i32,
+            pattern_length: pattern_length as i32,
             axis,
             cell_size,
             jitter_seed: jitter_seed as i32,
             jitter_amount,
-            jitter_period: jitter_period as i32,
+            base_cell,
+            behind: BEHIND,
+            ahead,
+            use_camera: use_camera as u32,
             dispatch_count: capacity,
-            _pad: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -278,22 +323,25 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn scene_array_declares_zero_inputs_and_array_output() {
+    fn scene_array_declares_optional_camera_input_and_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(SceneArray::TYPE_ID, "node.scene_array");
-        assert!(SceneArray::INPUTS.is_empty());
+        assert_eq!(SceneArray::INPUTS.len(), 1);
+        assert_eq!(SceneArray::INPUTS[0].name, "camera");
+        assert!(!SceneArray::INPUTS[0].required);
+        assert_eq!(SceneArray::INPUTS[0].ty, PortType::Camera);
         assert_eq!(SceneArray::OUTPUTS.len(), 1);
         assert_eq!(SceneArray::OUTPUTS[0].name, "out");
         assert_eq!(SceneArray::OUTPUTS[0].ty, PortType::Array(layout));
     }
 
     #[test]
-    fn scene_array_has_six_params() {
+    fn scene_array_has_five_params() {
         let names: Vec<&str> = SceneArray::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["count", "axis", "cell_size", "jitter_seed", "jitter_amount", "jitter_period"]
+            vec!["pattern_length", "axis", "cell_size", "jitter_seed", "jitter_amount"]
         );
     }
 
@@ -307,46 +355,80 @@ mod tests {
         assert_eq!(axis_param.enum_values.len(), 6);
     }
 
-    /// BUG-757c regression, the capacity layer of "the Copies row does
-    /// nothing": count is a LIVE card-row write (Scene Loop "Copies", and
-    /// the Stride row's coupled secondary), but an Array<T> buffer's
-    /// capacity is fixed at plan pre-allocation — sizing the buffer by the
-    /// count VALUE made every live write inert until a structural rebuild
-    /// (the card showed the new value; the frame never changed). The buffer
-    /// must be sized for count's full range so the live count uniform, not
-    /// the allocation, decides how many instances draw.
+    /// INV-EC2: output capacity is the constant WINDOW_CAPACITY for ANY
+    /// params — the value-level constant the buffer is pre-allocated at
+    /// (BUG-757c class: a capacity that followed a live value deadened the
+    /// card row; the corridor has no count-shaped param left at all).
     #[test]
-    fn output_capacity_is_count_range_max_not_current_value() {
+    fn output_capacity_is_window_capacity_not_param_derived() {
         use crate::node_graph::effect_node::ParamValues;
         let prim = SceneArray::new();
-        let range_max = SceneArray::PARAMS
-            .iter()
-            .find(|p| p.name == "count")
-            .and_then(|p| p.range)
-            .map(|(_, max)| max as u32)
-            .expect("count declares a range");
+        assert_eq!(WINDOW_CAPACITY, 32);
 
-        // Any live count value — including the apply-time default — must
-        // resolve to the same capacity.
-        for count in [1.0, 3.0, 8.0] {
+        for pattern_length in [1.0, 3.0, 8.0] {
             let mut params = ParamValues::default();
             params.insert(
-                std::borrow::Cow::Borrowed("count"),
-                ParamValue::Float(count),
+                std::borrow::Cow::Borrowed("pattern_length"),
+                ParamValue::Float(pattern_length),
             );
             assert_eq!(
                 Primitive::array_output_capacity(&prim, "out", &params, &[]),
-                Some(range_max),
-                "capacity must not follow the count value (live count={count})"
+                Some(WINDOW_CAPACITY),
+                "capacity must be the constant 32 (live pattern_length={pattern_length})"
             );
         }
 
         let params = ParamValues::default();
         assert_eq!(
+            Primitive::array_output_capacity(&prim, "out", &params, &[]),
+            Some(WINDOW_CAPACITY),
+            "capacity must be the constant 32 even with no params at all"
+        );
+        assert_eq!(
             Primitive::array_output_capacity(&prim, "bogus", &params, &[]),
             None,
             "a nonexistent port carries no capacity"
         );
+    }
+
+    /// INV-EC3: the D5 window span covers the visible range over the real far
+    /// band — the row curation `min(1.0, default)` .. `(20*cell).min(10000)`
+    /// (scene_modifier.rs), plan default 4*cell — plus the far < cell floor
+    /// and the beyond-band clamp. The bound demanded: ahead >= ceil(far/cell)
+    /// + 1 (every renderable cell exists) and BEHIND + ahead + 1 <= CAPACITY.
+    #[test]
+    fn window_ahead_covers_the_real_far_band() {
+        for cell_size in [0.5f32, 2.0, 10.0, 100.0, 500.0] {
+            let far_max = (20.0 * cell_size).min(10000.0);
+            let mut far = 1.0f32;
+            while far <= far_max {
+                let ahead = window_ahead(far, cell_size);
+                let need = ((far / cell_size).ceil() as i32) + 1;
+                assert!(
+                    (ahead as i32) >= need,
+                    "far {far} cell {cell_size}: ahead {ahead} must cover ceil(far/cell)+1 = {need}"
+                );
+                assert!(
+                    BEHIND + ahead < WINDOW_CAPACITY,
+                    "far {far} cell {cell_size}: BEHIND + ahead + 1 = {} exceeds capacity",
+                    BEHIND + ahead + 1
+                );
+                far *= 1.7;
+            }
+            // Plan default: far = 4*cell sits comfortably inside the band.
+            let ahead = window_ahead(4.0 * cell_size, cell_size);
+            assert_eq!(ahead, 6, "far = 4*cell: ahead = ceil(4)+2 = 6 (cell {cell_size})");
+        }
+
+        // far shorter than one cell: the +2 margin floors ahead at 4 — the
+        // current cell and its near neighbors always exist.
+        assert_eq!(window_ahead(0.5, 10.0), 4, "far < cell floors ahead at 4");
+        // A hand-set far beyond the curated band clamps at MAX_AHEAD — the
+        // distant hole past that is D5's stated honest cost, and the window
+        // still fits the capacity.
+        assert_eq!(window_ahead(10000.0, 10.0), MAX_AHEAD);
+        assert_eq!(window_ahead(f32::MAX, 10.0), MAX_AHEAD);
+        assert_eq!(BEHIND + MAX_AHEAD + 1, WINDOW_CAPACITY - 1);
     }
 
     #[test]
@@ -374,39 +456,44 @@ mod gpu_tests {
         x as f32 / 4294967295.0
     }
 
-    /// CPU oracle: compute the expected InstanceTransform array for given
-    /// params. Mirrors scene_array_body.wgsl exactly — axis translation,
-    /// then the (index % period)-hash jitter branch (identity TRS when
-    /// amount == 0).
-    fn cpu_scene_array(count: u32, axis: u32, cell_size: f32) -> Vec<InstanceTransform> {
-        cpu_scene_array_jitter(count, axis, cell_size, 0, 0.0, 1)
-    }
-
-    fn cpu_scene_array_jitter(
-        count: u32,
+    /// CPU oracle: the expected window for the given params, mirroring
+    /// scene_array_body.wgsl field-for-field. Slot w maps to cell
+    /// `c = base_cell - behind + w`; slots at or beyond behind+ahead+1 are
+    /// zero-scale. The jitter key is the Euclidean `c rem pattern_length`
+    /// (Rust rem_euclid == the body's ((c % p) + p) % p — WGSL % truncates,
+    /// so the body's fixup is load-bearing, D4 review finding 1).
+    fn cpu_scene_array_window(
+        pattern_length: u32,
         axis: u32,
         cell_size: f32,
         jitter_seed: u32,
         jitter_amount: f32,
-        jitter_period: u32,
+        base_cell: i32,
+        behind: u32,
+        ahead: u32,
+        capacity: u32,
     ) -> Vec<InstanceTransform> {
-        (0..count)
-            .map(|i| {
-                let t = i as f32 * cell_size;
+        (0..capacity)
+            .map(|w| {
+                if w >= behind + ahead + 1 {
+                    return InstanceTransform { pos_scale: [0.0; 4], rot_pad: [0.0; 4] };
+                }
+                let c = base_cell - behind as i32 + w as i32;
+                let t = c as f32 * cell_size;
                 let mut pos_scale = [0.0f32; 4];
                 let mut rot_pad = [0.0f32; 4];
                 pos_scale[3] = 1.0; // unit scale
                 match axis {
-                    0 => pos_scale[0] = t, // +X
+                    0 => pos_scale[0] = t,  // +X
                     1 => pos_scale[0] = -t, // -X
-                    2 => pos_scale[1] = t, // +Y
+                    2 => pos_scale[1] = t,  // +Y
                     3 => pos_scale[1] = -t, // -Y
-                    4 => pos_scale[2] = t, // +Z
+                    4 => pos_scale[2] = t,  // +Z
                     5 => pos_scale[2] = -t, // -Z
                     _ => pos_scale[2] = t,
                 }
                 if jitter_amount > 0.0 {
-                    let j = i % jitter_period.max(1);
+                    let j = c.rem_euclid(pattern_length.max(1) as i32) as u32;
                     let k = j.wrapping_mul(3).wrapping_add(jitter_seed.wrapping_mul(7919));
                     rot_pad[0] = (hash_u32(k) - 0.5) * 2.0 * jitter_amount;
                     rot_pad[1] = (hash_u32(k + 1) - 0.5) * 2.0 * jitter_amount;
@@ -421,25 +508,29 @@ mod gpu_tests {
     fn dispatch(
         device: &manifold_gpu::GpuDevice,
         pipeline: &manifold_gpu::GpuComputePipeline,
-        count: u32,
+        pattern_length: u32,
         axis: u32,
         cell_size: f32,
         jitter_seed: u32,
         jitter_amount: f32,
-        jitter_period: u32,
+        base_cell: i32,
+        behind: u32,
+        ahead: u32,
     ) -> Vec<InstanceTransform> {
-        let capacity = count;
+        let capacity = WINDOW_CAPACITY;
         let out_buf = device.create_buffer_shared(capacity as u64 * 32);
         let mut enc = device.create_encoder("scene_array_test");
         let uniforms = SceneArrayUniforms {
-            count: count as i32,
+            pattern_length: pattern_length as i32,
             axis,
             cell_size,
             jitter_seed: jitter_seed as i32,
             jitter_amount,
-            jitter_period: jitter_period as i32,
+            base_cell,
+            behind,
+            ahead,
+            use_camera: 1,
             dispatch_count: capacity,
-            _pad: 0,
         };
         enc.dispatch_compute(
             pipeline,
@@ -459,6 +550,7 @@ mod gpu_tests {
     }
 
     fn assert_matches_cpu(gpu_data: &[InstanceTransform], expected: &[InstanceTransform], ctx: &str) {
+        assert_eq!(gpu_data.len(), expected.len(), "{ctx}: length mismatch");
         for (i, (g, e)) in gpu_data.iter().zip(expected.iter()).enumerate() {
             for c in 0..4 {
                 assert!(
@@ -477,168 +569,220 @@ mod gpu_tests {
         }
     }
 
+    fn field_eq(a: &InstanceTransform, b: &InstanceTransform) -> bool {
+        a.pos_scale == b.pos_scale && a.rot_pad == b.rot_pad
+    }
+
+    /// Window placement: GPU vs the CPU oracle at multiple base_cells
+    /// INCLUDING negative (the plan's home = -cell/2 puts base_cell = -1 at
+    /// phase 0, so every real window straddles cell zero), plus an explicit
+    /// spot-check that slot 8 — the first slot, w = behind — sits exactly at
+    /// the base cell's position.
     #[test]
-    fn scene_array_matches_cpu_all_axes() {
+    fn scene_array_window_placement_matches_cpu_including_negative_base() {
         let device = crate::test_device();
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
 
-        for axis in 0u32..6u32 {
-            let count = 5u32;
-            let cell_size = 7.5f32;
-            let gpu_data = dispatch(&device, &pipeline, count, axis, cell_size, 0, 0.0, 1);
-            let expected = cpu_scene_array(count, axis, cell_size);
-            assert_matches_cpu(&gpu_data, &expected, "axis {axis}");
+        for base_cell in [0i32, 5, -1, -7, -22] {
+            let gpu_data = dispatch(&device, &pipeline, 3, 4, 10.0, 0, 0.0, base_cell, BEHIND, MAX_AHEAD);
+            let expected = cpu_scene_array_window(3, 4, 10.0, 0, 0.0, base_cell, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+            assert_matches_cpu(&gpu_data, &expected, "base {base_cell}");
+
+            // Slot 8 (w = behind) is the base cell: pos z = c * cell_size.
+            let c = base_cell;
+            assert!(
+                (gpu_data[BEHIND as usize].pos_scale[2] - c as f32 * 10.0).abs() < 1e-6,
+                "slot 8 must sit at the base cell {c}, got {}",
+                gpu_data[BEHIND as usize].pos_scale[2]
+            );
+            // Slot 0 is `behind` cells behind the base cell.
+            assert!(
+                (gpu_data[0].pos_scale[2] - (c - BEHIND as i32) as f32 * 10.0).abs() < 1e-6,
+                "slot 0 must sit at cell {}, got {}",
+                c - BEHIND as i32,
+                gpu_data[0].pos_scale[2]
+            );
         }
     }
 
-    /// BUG-757c value proof: the buffer is sized for count's full range while
-    /// the live count decides how many instances are real. With an
-    /// 8-capacity buffer and count=3, slots 0..3 match the CPU oracle and
-    /// slots 3..8 are zero-scale collapse-to-a-point elements (invisible in
-    /// render_scene's instance draw) — the pre-fix body wrote a full-strength
-    /// transform into every slot, so a value-sized buffer was the only thing
-    /// keeping surplus slots off screen.
+    /// BUG-757c mask, corridor edition: with a short window (ahead = 4, as a
+    /// far = 2*cell camera would resolve), slots 0..13 are live and match
+    /// the CPU oracle; slots 13..32 are zero-scale collapse-to-a-point
+    /// elements — invisible in the main pass and the shadow passes alike.
     #[test]
-    fn scene_array_masks_slots_beyond_live_count() {
+    fn scene_array_masks_slots_beyond_the_window() {
         let device = crate::test_device();
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
 
-        let capacity = 8u32;
-        let count = 3u32;
-        let out_buf = device.create_buffer_shared(capacity as u64 * 32);
-        let mut enc = device.create_encoder("scene_array_mask_test");
-        let uniforms = SceneArrayUniforms {
-            count: count as i32,
-            axis: 4, // +Z
-            cell_size: 10.0,
-            jitter_seed: 0,
-            jitter_amount: 0.0,
-            jitter_period: 1,
-            dispatch_count: capacity,
-            _pad: 0,
-        };
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
-            ],
-            [capacity.div_ceil(256), 1, 1],
-            "scene_array_mask_test",
-        );
-        enc.commit_and_wait_completed();
+        let ahead = 4u32;
+        let gpu_data = dispatch(&device, &pipeline, 1, 4, 10.0, 0, 0.0, 0, BEHIND, ahead);
+        let expected = cpu_scene_array_window(1, 4, 10.0, 0, 0.0, 0, BEHIND, ahead, WINDOW_CAPACITY);
+        assert_matches_cpu(&gpu_data, &expected, "window mask");
 
-        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let gpu_data =
-            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize) };
-
-        let expected = cpu_scene_array(count, 4, 10.0);
-        assert_matches_cpu(&gpu_data[..count as usize], &expected, "live count slots");
-
-        for (i, t) in gpu_data[count as usize..].iter().enumerate() {
+        let live = (BEHIND + ahead + 1) as usize;
+        for (i, t) in gpu_data[live..].iter().enumerate() {
             assert!(
                 t.pos_scale == [0.0; 4] && t.rot_pad == [0.0; 4],
                 "surplus slot {} (index {}) must be zero-scale, got pos_scale={:?}",
                 i,
-                count as usize + i,
+                live + i,
                 t.pos_scale
             );
         }
     }
 
-    /// P4 jitter value proof: with jitter_amount > 0, the GPU array matches
-    /// the CPU-computed hash oracle exactly — rotation ±amount rad per axis,
-    /// scale 1 ± amount/2, keyed by (index % period, seed). Two seeds must
-    /// disagree (the seed re-rolls), and amount 0 must stay identity TRS.
-    /// Period 8 (= the count ceiling) gives every slot its own hash — the
-    /// full-variety case.
+    /// D4 jitter value proof: with jitter_amount > 0 the GPU window matches
+    /// the CPU-computed hash oracle exactly, keyed on the Euclidean
+    /// (cell rem pattern_length) of the SIGNED cell index. The window
+    /// deliberately straddles cell zero (base_cell = -9 → cells -17..13) —
+    /// the region where a truncated mod would hash cell -1 as 0xFFFFFFFF.
+    /// Two seeds must disagree; amount 0 must stay identity TRS.
     #[test]
-    fn scene_array_jitter_matches_cpu_hash_oracle() {
+    fn scene_array_jitter_matches_cpu_rem_euclid_oracle() {
         let device = crate::test_device();
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
 
+        let period = 4u32;
         for (seed, amount) in [(0u32, 0.6f32), (7, 1.0), (1234, 0.25)] {
-            let count = 8u32;
-            let gpu_data = dispatch(&device, &pipeline, count, 4, 10.0, seed, amount, 8);
-            let expected = cpu_scene_array_jitter(count, 4, 10.0, seed, amount, 8);
+            let base_cell = -9i32; // cells -17..+13 cross zero twice
+            let gpu_data = dispatch(&device, &pipeline, period, 4, 10.0, seed, amount, base_cell, BEHIND, MAX_AHEAD);
+            let expected = cpu_scene_array_window(period, 4, 10.0, seed, amount, base_cell, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
             assert_matches_cpu(&gpu_data, &expected, "seed {seed} amount {amount}");
 
-            // Jitter is live: rotation is nonzero at full amount.
             if amount == 1.0 {
                 assert!(
                     gpu_data.iter().any(|t| t.rot_pad[0].abs() > 1e-3),
                     "jitter at amount 1.0 must produce nonzero rotation"
                 );
             }
+
+            // Cells with the same (c rem P) carry the same rotation/scale —
+            // inside one window the residue classes repeat and must agree
+            // field-for-field (the wrap-parity mechanism itself).
+            let rot_of = |c: i32| -> [f32; 4] {
+                let j = c.rem_euclid(period as i32) as u32;
+                let k = j.wrapping_mul(3).wrapping_add(seed.wrapping_mul(7919));
+                [
+                    (hash_u32(k) - 0.5) * 2.0 * amount,
+                    (hash_u32(k + 1) - 0.5) * 2.0 * amount,
+                    (hash_u32(k + 2) - 0.5) * 2.0 * amount,
+                    0.0,
+                ]
+            };
+            for w in 0..(BEHIND + MAX_AHEAD) as usize {
+                let c = base_cell - BEHIND as i32 + w as i32;
+                assert_eq!(
+                    gpu_data[w].rot_pad,
+                    rot_of(c),
+                    "slot {w} (cell {c}) must hash its Euclidean residue"
+                );
+            }
         }
 
-        // Determinism + seed sensitivity on the CPU oracle (the GPU half is
-        // proven above): same seed → identical, different seed → different.
-        // Field-wise (InstanceTransform carries no Debug/PartialEq).
+        // CPU-side seed sensitivity (the GPU half is proven above): same seed
+        // re-rolls identically, different seed changes the transforms.
         let same = |a: &[InstanceTransform], b: &[InstanceTransform]| {
-            a.len() == b.len()
-                && a.iter().zip(b).all(|(x, y)| {
-                    x.pos_scale == y.pos_scale && x.rot_pad == y.rot_pad
-                })
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| field_eq(x, y))
         };
-        let a = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0, 8);
-        let b = cpu_scene_array_jitter(4, 4, 10.0, 0, 1.0, 8);
-        let c = cpu_scene_array_jitter(4, 4, 10.0, 1, 1.0, 8);
+        let a = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+        let b = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+        let c = cpu_scene_array_window(4, 4, 10.0, 1, 1.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
         assert!(same(&a, &b), "same seed must re-roll identically");
-        assert!(
-            !same(&a, &c),
-            "a different seed must change the instance transforms"
-        );
+        assert!(!same(&a, &c), "a different seed must change the instance transforms");
 
         // Zero amount is byte-identical to the no-jitter oracle.
-        let zero = cpu_scene_array_jitter(4, 4, 10.0, 99, 0.0, 8);
-        let plain = cpu_scene_array(4, 4, 10.0);
+        let zero = cpu_scene_array_window(4, 4, 10.0, 99, 0.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+        let plain = cpu_scene_array_window(4, 4, 10.0, 0, 0.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
         assert!(same(&zero, &plain), "amount 0 must keep identity TRS");
     }
 
-    /// BUG-jvlq wrap-purity proof: the loop camera travels stride cells per
-    /// loop, so at the wrap instance i inherits instance i-stride's screen
-    /// slot — the rendered frame is pure only when jitter(i) ==
-    /// jitter(i-stride). Keying the hash on (index % period) with period =
-    /// stride (the Stride row's coupled write) makes that hold by
-    /// construction. GPU-dispatched: with period = 2, slots 2k and 2k+2 carry
-    /// identical rotation/scale; adjacent slots differ (the variety is real).
+    /// D8.1 — the enforcing wrap-purity gate (review finding 1): the window
+    /// at phase 0 equals the window at phase ~1 translated by exactly K·P
+    /// cells — slot-by-slot field equality, over NEGATIVE base_cells (the
+    /// plan's home = -cell/2 puts base_cell = -1 at phase 0) and P ∈ 2..8.
+    /// A truncated-mod jitter hash fails here for every P ≥ 2 while the
+    /// pixel gate stays blind (the minimal parity graph has no geometry in
+    /// the camera's own cell) — this is the gate that catches that class.
+    ///
+    /// RED-FIRST verified (P1 brief): with the body's mod temporarily keyed
+    /// on the truncated WGSL % (one-frame source change), this test goes RED
+    /// (cell -1 hashes as 0xFFFFFFFF ≠ cell P-1 across the seam); with the
+    /// Euclidean mod restored it is green.
     #[test]
-    fn scene_array_jitter_period_repeats_with_stride() {
+    fn window_at_phase_0_equals_window_at_phase_1_translated_by_kp_cells() {
         let device = crate::test_device();
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
 
-        let period = 2u32;
-        let gpu_data = dispatch(&device, &pipeline, 8, 4, 10.0, 7, 0.8, period);
-        let expected = cpu_scene_array_jitter(8, 4, 10.0, 7, 0.8, period);
-        assert_matches_cpu(&gpu_data, &expected, "period 2");
-
-        // Wrap purity: instance i+period carries i's rotation/scale exactly.
-        for i in 0..(8 - period) as usize {
-            assert_eq!(
-                gpu_data[i].rot_pad,
-                gpu_data[i + period as usize].rot_pad,
-                "jitter rotation must repeat every period cells (slot {i} vs {})",
-                i + period as usize
-            );
-            assert_eq!(
-                gpu_data[i].pos_scale[3],
-                gpu_data[i + period as usize].pos_scale[3],
-                "jitter scale must repeat every period cells"
-            );
+        for p in 2u32..=8u32 {
+            for k in [1i32, 2, 3, 5, 8] {
+                for base_cell in [-7i32, -1, 0, 5] {
+                    let phase_0 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell, BEHIND, MAX_AHEAD);
+                    // Phase ~1: the camera has travelled exactly K·P cells, so
+                    // base_cell has advanced by K·P.
+                    let phase_1 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell + k * p as i32, BEHIND, MAX_AHEAD);
+                    for (w, (a, b)) in phase_0.iter().zip(phase_1.iter()).enumerate() {
+                        // Surplus slots mask to zero-scale in BOTH windows —
+                        // no translation demand there.
+                        if w as u32 >= BEHIND + MAX_AHEAD + 1 {
+                            assert_eq!(a.pos_scale, [0.0; 4], "slot {w} must be masked at phase 0");
+                            assert_eq!(b.pos_scale, [0.0; 4], "slot {w} must be masked at phase ~1");
+                            continue;
+                        }
+                        // The window at phase ~1 IS the window at phase 0
+                        // translated by exactly K·P cells: jitter (keyed on
+                        // the Euclidean residue) and scale must be field-
+                        // identical, and the axis position must shift by the
+                        // exact travel. A truncated-mod jitter hash fails
+                        // the rot/scale equality for every P ≥ 2.
+                        assert_eq!(
+                            a.rot_pad,
+                            b.rot_pad,
+                            "P={p} K={k} base={base_cell}: slot {w} rotation differs across the seam \
+                             (cell {} vs {} — jitter must key on the Euclidean residue)",
+                            base_cell - BEHIND as i32 + w as i32,
+                            base_cell + k * p as i32 - BEHIND as i32 + w as i32
+                        );
+                        assert_eq!(
+                            a.pos_scale[3],
+                            b.pos_scale[3],
+                            "P={p} K={k} base={base_cell}: slot {w} scale differs across the seam"
+                        );
+                        assert_eq!(
+                            a.pos_scale[0], b.pos_scale[0],
+                            "P={p} K={k} base={base_cell}: slot {w} x must be unchanged by a +Z travel"
+                        );
+                        assert_eq!(
+                            a.pos_scale[1], b.pos_scale[1],
+                            "P={p} K={k} base={base_cell}: slot {w} y must be unchanged by a +Z travel"
+                        );
+                        let travel = k as f32 * p as f32 * 10.0;
+                        assert!(
+                            (b.pos_scale[2] - a.pos_scale[2] - travel).abs() < 1e-4,
+                            "P={p} K={k} base={base_cell}: slot {w} z must translate by exactly \
+                             K·P·cell = {travel}, got delta {}",
+                            b.pos_scale[2] - a.pos_scale[2]
+                        );
+                    }
+                }
+            }
         }
-        // Variety inside the period: adjacent slots differ.
-        assert_ne!(
-            gpu_data[0].rot_pad, gpu_data[1].rot_pad,
-            "slots inside one period must jitter differently"
+
+        // Vacuity guard: different pattern lengths genuinely change the
+        // window content (a constant buffer would pass the equality above
+        // trivially).
+        let p2 = dispatch(&device, &pipeline, 2, 4, 10.0, 7, 0.8, -1, BEHIND, MAX_AHEAD);
+        let p5 = dispatch(&device, &pipeline, 5, 4, 10.0, 7, 0.8, -1, BEHIND, MAX_AHEAD);
+        assert!(
+            p2.iter().zip(p5.iter()).any(|(a, b)| !field_eq(a, b)),
+            "pattern_length 2 vs 5 must change the window content"
         );
     }
 }

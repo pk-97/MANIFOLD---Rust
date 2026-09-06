@@ -70,12 +70,11 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "T",
-          "node_type": "Button"
+          "name": "param_row.41_flow.trigger_btn"
         }
       },
       "check": {
-        "Count": 45
+        "Count": 1
       }
     }
   },
@@ -116,9 +115,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "T",
-          "node_type": "Button",
-          "nth": 39
+          "name": "param_row.41_flow.trigger_btn"
         }
       },
       "gesture": {

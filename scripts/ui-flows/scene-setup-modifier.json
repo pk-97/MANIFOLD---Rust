@@ -116,6 +116,148 @@
     }
   },
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Pattern"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Stride"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.40_pattern_length.value"
+        }
+      },
+      "check": {
+        "TextEquals": "1"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.41_patterns_per_loop.value"
+        }
+      },
+      "check": {
+        "TextEquals": "1"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.40_pattern_length.slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 1310.0,
+              "y": 1177.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.41_patterns_per_loop.slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 1310.0,
+              "y": 1567.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Dump",
+  {
+    "Step": {
+      "frames": 30
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.wrap_debug"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.39_bars.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.wrap_debug"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.39_bars.value"
+        }
+      },
+      "check": {
+        "TextEquals": "8"
+      }
+    }
+  },
+  {
     "Pointer": {
       "target": {
         "Query": {

@@ -2817,6 +2817,7 @@ struct AtrousParams {
     uint  step;
     uint  history_valid;
     uint  obj_count;
+    uint  _pad;
 };
 
 // RT-T1-D: edge-aware À-TROUS spatial filter — dilated by `p.step`
@@ -5641,7 +5642,8 @@ pub const ACCUM_FLAG_GEO_GESTURE: u32 = 16;
 pub const ACCUM_FLAG_DENOISE_NEAR_RAW: u32 = 32;
 
 /// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
-/// (RT-T1-D, BUG-312). Plain POD, all `u32`, no alignment surprises.
+/// (RT-T1-D, BUG-312). MSL uint2 requires eight-byte alignment, including
+/// tail padding; keep that padding explicit and initialized on the CPU.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct AtrousParams {
@@ -5656,9 +5658,10 @@ pub struct AtrousParams {
     /// kernel to bounds-check the roughness lookup for the refl-channel
     /// luma edge-stop.
     pub obj_count: u32,
+    _pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<AtrousParams>() == 20);
+const _: () = assert!(std::mem::size_of::<AtrousParams>() == 24);
 
 impl AtrousParams {
     pub fn new(size: [u32; 2], step: u32, history_valid: bool, obj_count: u32) -> Self {
@@ -5667,6 +5670,7 @@ impl AtrousParams {
             step,
             history_valid: history_valid as u32,
             obj_count,
+            _pad: 0,
         }
     }
 }

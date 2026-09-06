@@ -701,6 +701,9 @@ pub struct RenderScene {
     /// resolves out to the single-sample output.
     msaa_color: Option<manifold_gpu::GpuTexture>,
     depth_texture: Option<manifold_gpu::GpuTexture>,
+    /// Native MSAA depth resolves require a matching depth format. Reused
+    /// only when depth is consumed, then copied to the graph's R32Float output.
+    depth_resolve_scratch: Option<manifold_gpu::GpuTexture>,
     depth_width: u32,
     depth_height: u32,
     /// Memoryless 4x-MSAA `Rg16Float` velocity aux-MRT target
@@ -845,7 +848,7 @@ pub struct RenderScene {
     /// change, so their bands widen with this magnitude — without it a
     /// rotating camera snapped the gates every frame and the
     /// snap→rebuild→retrip cycle boiled the image.
-    prev_cam_state: Option<([f32; 3], [f32; 3])>,
+    prev_cam_state: Option<Camera>,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -862,7 +865,7 @@ pub struct RenderScene {
     /// history does.
     jitter_frame_index: u32,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
-    /// RS-C: 1-byte shared buffer bound as a dummy emissive-triangle/alias
+    /// RS-C: ABI-sized zero buffer bound as a dummy emissive-triangle/alias
     /// buffer when no emissive table exists (entry_count=0 in ShadowRayParams
     /// skips the kernel block — same discipline as the dummy texture for
     /// the prefiltered-env chain).
@@ -993,9 +996,9 @@ pub struct RenderScene {
     /// prepass (reuses `shadow_pipeline`, fed the camera's `view_proj`
     /// instead of a light's) so Pass B can depth-test against it as an
     /// actual Metal depth ATTACHMENT. The existing MSAA pass's
-    /// `depth_resolve` mechanism (`R32Float`) can't serve this: `R32Float`
-    /// is a legal depth *resolve* destination but not a legal depth-
-    /// ATTACHMENT pixel format. `None` when no transmissive object is in
+    /// graph depth (`R32Float`) cannot serve as a depth attachment. Its
+    /// native depth resolve also happens later than this prepass is needed.
+    /// `None` when no transmissive object is in
     /// the scene this frame.
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
@@ -1516,6 +1519,7 @@ impl RenderScene {
             blend_depth_stencil: None,
             msaa_color: None,
             depth_texture: None,
+            depth_resolve_scratch: None,
             depth_width: 0,
             depth_height: 0,
             velocity_msaa: None,
@@ -1921,6 +1925,22 @@ impl RenderScene {
         self.depth_height = height;
     }
 
+    fn ensure_depth_resolve_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.depth_resolve_scratch.as_ref().is_some_and(|t| t.width == width && t.height == height) {
+            return;
+        }
+        self.depth_resolve_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Depth32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene native depth resolve",
+            mip_levels: 1,
+        }));
+    }
+
     /// Ensure the memoryless MSAA `Rg16Float` velocity aux-MRT target
     /// matches the render target size (GBUFFER_DESIGN.md section 2 D5, P2). Called
     /// ONLY when `evaluate` finds `velocity` wired this frame (D1 lazy
@@ -2113,7 +2133,8 @@ impl RenderScene {
                 depth: 1,
                 format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
                 label: "node.render_scene dummy",
                 mip_levels: 1,
             });
@@ -2130,11 +2151,14 @@ impl RenderScene {
 
     fn ensure_dummy_emissive_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.dummy_emissive_buffer.is_none() {
-            // 1-byte shared buffer — Metal requires a non-null buffer handle
-            // when the kernel declares a `device const` pointer binding, even
-            // when the kernel logically never reads it (entry_count=0 skips
-            // the sampler block).
-            let buf = device.create_buffer_shared(1);
+            // Metal validates one complete pointee even when entry_count=0
+            // skips the sampler block. Size from both shared GPU ABI types.
+            let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>()
+                .max(std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>());
+            let buf = device.create_buffer_shared(bytes as u64);
+            // The newly allocated buffer is exclusively owned and not yet
+            // submitted, and the write covers exactly its allocation.
+            unsafe { std::ptr::write_bytes(buf.mapped_ptr().expect("shared buffer"), 0, bytes); }
             self.dummy_emissive_buffer = Some(buf);
         }
     }
@@ -4457,7 +4481,21 @@ impl EffectNode for RenderScene {
         // so history is tracked continuously: if velocity is wired mid-
         // session, the first wired frame sees the object's REAL prior
         // motion, not a spurious first-frame zero.
-        let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
+        // Periodic sources identify the equivalent copy across a coordinate
+        // wrap. Share that correspondence across velocity, RT reprojection
+        // and motion conditioning instead of clearing valid temporal history.
+        let world_offset = self.prev_cam_state.map_or([0.0; 3], |previous| {
+            cam.previous_world_offset(previous.pos, previous.world_period)
+        });
+        let prev_view_proj = self.prev_view_proj.map_or(view_proj, |previous| {
+            let translation = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [world_offset[0], world_offset[1], world_offset[2], 1.0],
+            ];
+            if world_offset == [0.0; 3] { previous } else { mat4_mul(previous, translation) }
+        });
         self.prev_view_proj = Some(view_proj);
         // Camera-motion magnitude for the accumulator's change gates
         // (`AccumulateParams::cam_motion`): radians of view-direction turn
@@ -4467,7 +4505,9 @@ impl EffectNode for RenderScene {
         // 0 — a held camera feeds the gates exactly 0, keeping the static
         // path byte-identical.
         let cam_motion = match self.prev_cam_state {
-            Some((ppos, pfwd)) => {
+            Some(previous) => {
+                let ppos = std::array::from_fn::<_, 3, _>(|i| previous.pos[i] - world_offset[i]);
+                let pfwd = previous.fwd;
                 let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
                     .clamp(-1.0, 1.0);
                 let rot = d.acos();
@@ -4479,7 +4519,7 @@ impl EffectNode for RenderScene {
             }
             None => 0.0,
         };
-        self.prev_cam_state = Some((cam.pos, cam.fwd));
+        self.prev_cam_state = Some(cam);
         if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
             eprintln!(
                 "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
@@ -5018,6 +5058,9 @@ impl EffectNode for RenderScene {
                 ));
             }
             self.ensure_msaa_targets(gpu.device, width, height);
+            if depth_wired || wants_shafts_now {
+                self.ensure_depth_resolve_scratch(gpu.device, width, height);
+            }
             // GBUFFER_DESIGN.md section 2 D1/D5 (P2): the velocity aux-MRT
             // memoryless target is allocated ONLY when wired this frame —
             // this call site (not `ensure_msaa_targets`, which always runs)
@@ -7290,7 +7333,9 @@ impl EffectNode for RenderScene {
             msaa_color,
             resolve_target,
             msaa_depth: depth_tex,
-            depth_resolve: depth_resolve_target,
+            depth_resolve: depth_resolve_target.map(|_| {
+                self.depth_resolve_scratch.as_ref().expect("depth consumer ensured native resolve")
+            }),
             aux_color,
             depth_stencil_state: depth_stencil,
             second_pass,
@@ -7298,6 +7343,12 @@ impl EffectNode for RenderScene {
         ctx.gpu_encoder()
             .native_enc
             .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
+
+        if let Some(output) = depth_resolve_target {
+            ctx.gpu_encoder().native_enc.copy_depth_to_float(
+                self.depth_resolve_scratch.as_ref().expect("native resolve ensured"), output,
+            );
+        }
 
         // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the snapshot + Pass B
         // seam. Pass A above just resolved the fully-shaded opaque scene

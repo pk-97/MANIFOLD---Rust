@@ -373,6 +373,9 @@ impl Command for ApplySceneModifierCommand {
                         &exposure.params,
                     );
                 }
+                manifold_core::scene_modifier::install_shared_param_bindings(
+                    &mut meta.bindings, &plan_ref.shared_params,
+                );
             }
         });
 

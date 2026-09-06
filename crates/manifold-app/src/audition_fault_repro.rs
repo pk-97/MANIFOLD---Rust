@@ -363,7 +363,7 @@ fn audition_fault_particletext_bisect() {
 
     let mut first_fault = None;
     for frame in 0..frames {
-        let mut ctx = ctx.clone();
+        let mut ctx = ctx;
         ctx.time = frame as f64 / 60.0;
         ctx.beat = frame as f64 / 30.0;
         ctx.frame_count = frame as i64;

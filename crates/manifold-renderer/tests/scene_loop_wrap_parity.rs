@@ -1,9 +1,17 @@
-//! SCENE_LOOP_DESIGN.md INV-3: wrap purity — frame at phase 0 == frame at phase 1.
+//! SCENE_LOOP_DESIGN.md INV-3 + SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D8:
+//! wrap purity — frame at phase 0 == frame at phase 1.
 //!
-//! Renders a minimal scene loop graph at beat=0 (phase 0) and beat=8 (phase
+//! Renders a minimal corridor graph at beat=0 (phase 0) and beat=8 (phase
 //! wraps to 0 via `.fract()`) via `render_viewport_frame`, then asserts
 //! pixel-identical output (max abs diff == 0). A red result means a
 //! non-loop-phased driver snuck in.
+//!
+//! Corridor P1 shape: scene_array is camera-driven — loop_camera.out feeds
+//! BOTH render_scene.camera and scene_array.camera, and the corridor's
+//! window derives from that camera each frame. The enforcing buffer-level
+//! purity gate (D8.1, negative base_cells, Euclidean mod) lives in
+//! scene_array.rs's gpu_tests; these pixel gates are the regression
+//! sentinels (D8 gate roles).
 //!
 //! **Gate protocol (P1 brief):** this test MUST be shown red first against
 //! a deliberately non-phase-locked camera (orbit_camera vs loop_camera at
@@ -49,10 +57,11 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
     }
 }
 
-/// Build a minimal loop scene graph with a visible cube:
+/// Build a minimal corridor graph with a visible cube:
 ///   system.generator_input (boundary)
 ///   beat_ramp (rate=0.125, attack=1) → loop_camera.phase
 ///   loop_camera → render_scene.camera
+///   loop_camera → scene_array.camera      (corridor D2 — one camera drives both)
 ///   cube_mesh → scene_object.vertices
 ///   unlit_material → scene_object.material
 ///   scene_array → scene_object.instances
@@ -64,7 +73,7 @@ fn build_loop_graph() -> EffectGraphDef {
     params_phase.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
 
     let mut params_array = BTreeMap::new();
-    params_array.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
+    params_array.insert("pattern_length".to_string(), SerializedParamValue::Float { value: 1.0 });
     params_array.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
     params_array.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
 
@@ -117,6 +126,7 @@ fn build_loop_graph() -> EffectGraphDef {
         wires: vec![
             wire(1, "out", 3, "phase"),
             wire(3, "out", 7, "camera"),
+            wire(3, "out", 2, "camera"),
             wire(4, "vertices", 6, "vertices"),
             wire(5, "out", 6, "material"),
             wire(2, "out", 6, "instances"),
@@ -242,9 +252,9 @@ fn build_red_graph() -> EffectGraphDef {
 /// P4 extension: the loop graph with EVERY movement control live — flow
 /// 0.8, sway amp 0.5 cycles 2, look sweep amp 0.5 cycles 1, zoom pulse 0.25,
 /// jitter amount 0.5 seed 7. Shaped like the plan builder builds it (home =
-/// −cell/2 = mid-gap, count 3 = the D10 default). All controls
-/// phase-periodic (or index-only) by construction; the exact-seam wrap gate
-/// proves it.
+/// −cell/2 = mid-gap, pattern_length 1 = uniform jitter, the corridor mint).
+/// All controls phase-periodic (or cell-index-only) by construction; the
+/// exact-seam wrap gate proves it.
 fn build_loop_graph_with_controls() -> EffectGraphDef {
     let mut def = build_loop_graph();
     let camera = def
@@ -273,14 +283,15 @@ fn build_loop_graph_with_controls() -> EffectGraphDef {
     def
 }
 
-/// P4 near-seam shape: the PHASE controls only (no jitter), far plane
-/// clipped to 22 (~cell·2.2). The clip bounds the visible copy window to the
-/// two copies ahead of the camera, which makes the window EXACTLY periodic
-/// across the seam at the shipped count=3 — without the clip the finite
-/// array leaves a far-edge hole (one copy present at phase 0, absent at
-/// phase ~1) that would confound the measurement. Bisected 2026-09-05:
-/// every phase control contributes 0 to the near-seam diff at this shape.
-fn build_loop_graph_phase_controls_farclipped() -> EffectGraphDef {
+/// D8.3 near-seam shape: the PHASE controls only (no jitter), UNCLIPPED —
+/// the loop_camera manifest far (200) stands, so the corridor window runs
+/// its full ahead span (clamp(ceil(200/10)+2, 4, 22) = 22). Under the
+/// corridor the window is periodic by construction at any far — the
+/// far-edge hole that forced the shipped gate's far=22 clip no longer
+/// exists, and the clip is gone (ENDLESS_CORRIDOR D8.3). Bisected
+/// 2026-09-05: every phase control contributes 0 to the near-seam diff at
+/// this shape.
+fn build_loop_graph_phase_controls() -> EffectGraphDef {
     let mut def = build_loop_graph();
     let camera = def
         .nodes
@@ -289,7 +300,6 @@ fn build_loop_graph_phase_controls_farclipped() -> EffectGraphDef {
         .expect("loop_camera");
     for (k, v) in [
         ("home", -5.0f32),
-        ("far", 22.0),
         ("flow", 0.8),
         ("sway_amp", 0.5),
         ("sway_cycles", 2.0),
@@ -299,6 +309,43 @@ fn build_loop_graph_phase_controls_farclipped() -> EffectGraphDef {
     ] {
         camera.params.insert(k.to_string(), SerializedParamValue::Float { value: v });
     }
+    def
+}
+
+/// INV-EC5: a SAVED pre-corridor loop (count/jitter_period/stride shape, no
+/// scene_array camera wire — the fixed-row graph) run through the real load
+/// migration, then rendered: phase 0 vs phase 1 must be pixel-identical.
+/// The migration lands the corridor shape (pattern_length both nodes,
+/// patterns_per_loop, the D2 camera wire), and the wrap is pure on the
+/// migrated graph.
+fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
+    let mut def = build_loop_graph();
+
+    // Downgrade to the saved P4 shape.
+    let array = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "scene_array")
+        .expect("scene_array");
+    array.params.remove("pattern_length");
+    array.params.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
+    array.params.insert("jitter_period".to_string(), SerializedParamValue::Float { value: 1.0 });
+    let camera = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id.as_str() == "loop_camera")
+        .expect("loop_camera");
+    camera.params.remove("patterns_per_loop");
+    camera.params.remove("pattern_length");
+    camera.params.insert("stride".to_string(), SerializedParamValue::Float { value: 1.0 });
+    def.wires.retain(|w| !(w.from_node == 3 && w.to_node == 2 && w.to_port == "camera"));
+
+    // The app's load order (ENDLESS_CORRIDOR D7).
+    assert!(
+        manifold_renderer::node_graph::scene_modifier::migrate_fixed_row_scene_loops(&mut def),
+        "the pre-corridor fixture migrates"
+    );
+    let _ = manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(&mut def);
     def
 }
 
@@ -429,37 +476,39 @@ fn wrap_parity_with_movement_controls() {
 }
 
 /// P4 near-seam gate + measurement: phase 0 vs phase 0.99999 (beat 7.99992)
-/// with the phase controls live at the far-clipped shape. Asserts diff == 0
-/// — at this shape the measurement is a real purity signal (bisected: every
+/// with the phase controls live at the UNCLIPPED shape (D8.3 — the far=22
+/// crutch is gone; the corridor window is periodic at any far). Asserts
+/// diff == 0 — under the corridor the window is periodic by construction,
+/// so the measurement is a real purity signal at any far (bisected: every
 /// phase control contributes exactly 0; a clock-keyed driver explodes it).
 /// The number is printed for the report.
 ///
-/// JITTER runs at the same far-clipped shape (the unclipped graph has the
-/// finite-array far-edge hole — one copy present at phase 0, absent at
-/// phase ~1 — which is a separate, documented wrap artifact tracked by the
-/// scene-loop-far-edge-hole decision, not jitter's). BUG-jvlq cure test:
-/// before the fix the hash was keyed on the raw index, so at the seam the
-/// nearest copy swapped to its neighbor's orientation (the "reset" Peter
-/// reported); with the hash keyed on index % period and period = stride,
-/// the copy sliding into each screen slot carries the leaving copy's exact
-/// jitter and the near-seam diff is 0 WITH jitter live.
+/// JITTER runs at the same unclipped shape. Corridor D4 cure test: the
+/// jitter hash is keyed on the Euclidean (cell mod pattern_length), so the
+/// copy sliding into each screen slot at the wrap carries the leaving copy's
+/// exact jitter — with pattern_length 1 (uniform) the near-seam diff is 0
+/// WITH jitter live. The truncated-mod impurity class (cell −1 hashing as
+/// 0xFFFFFFFF across the seam) is caught by the D8.1 buffer-equality gate in
+/// scene_array.rs, which sees negative base_cells; this pixel gate is the
+/// regression sentinel (the minimal parity graph has no geometry in the
+/// camera's own cell).
 #[test]
 fn wrap_parity_near_seam_measurement() {
-    let def = build_loop_graph_phase_controls_farclipped();
+    let def = build_loop_graph_phase_controls();
 
     let frame_a = render_frame(&def, 0.0);
     let frame_b = render_frame(&def, 8.0 * 0.99999);
 
     let diff = max_pixel_diff(&frame_a, &frame_b);
-    println!("P4 near-seam (phase 0.99999, phase controls) max pixel diff = {diff}");
+    println!("near-seam (phase 0.99999, phase controls, unclipped far) max pixel diff = {diff}");
     assert_eq!(
         diff, 0,
         "near-seam purity violated — a phase control is not phase-periodic (max diff = {diff})"
     );
 
-    // BUG-jvlq cure: jitter on (amount 0.5, seed 7), period at the default 1
-    // — the seam must NOT swap orientations any more.
-    let mut jittered = build_loop_graph_phase_controls_farclipped();
+    // Corridor D4: jitter on (amount 0.5, seed 7), pattern_length at the
+    // default 1 — the seam must NOT swap orientations.
+    let mut jittered = build_loop_graph_phase_controls();
     let array = jittered
         .nodes
         .iter_mut()
@@ -467,20 +516,20 @@ fn wrap_parity_near_seam_measurement() {
         .expect("scene_array");
     array.params.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: 0.5 });
     array.params.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
-    array.params.insert("jitter_period".to_string(), SerializedParamValue::Float { value: 1.0 });
 
     let j_a = render_frame(&jittered, 0.0);
     let j_b = render_frame(&jittered, 8.0 * 0.99999);
     let j_diff = max_pixel_diff(&j_a, &j_b);
     println!("near-seam with jitter (BUG-jvlq cure) max pixel diff = {j_diff}");
 
-    // BUG-jvlq cure: with the hash keyed on index % period the seam must not
-    // swap orientations. The demand is a BOUND, not exact 0: uniform jitter
-    // rotates every copy, and a rotated silhouette rasterizes at sub-pixel
-    // precision — a 2e-5-unit camera shift (this near-seam beat) can flip the
-    // coverage of ONE edge pixel. The pre-fix snap changed whole-silhouette
-    // regions (hundreds of pixels, deltas ≫ 50). Few pixels at small deltas
-    // is the quantization floor, not a snap.
+    // BUG-jvlq / corridor D4: with the hash keyed on the Euclidean
+    // (cell mod pattern_length) the seam must not swap orientations. The
+    // demand is a BOUND, not exact 0: uniform jitter rotates every copy, and
+    // a rotated silhouette rasterizes at sub-pixel precision — a 2e-5-unit
+    // camera shift (this near-seam beat) can flip the coverage of ONE edge
+    // pixel. The pre-fix snap changed whole-silhouette regions (hundreds of
+    // pixels, deltas ≫ 50). Few pixels at small deltas is the quantization
+    // floor, not a snap.
     let mut differing_pixels = 0usize;
     for px in 0..(j_a.len() / 4) {
         let i = px * 4;
@@ -512,6 +561,24 @@ fn wrap_parity_near_seam_measurement() {
         max_pixel_diff(&j_a, &j_again),
         0,
         "jitter must be deterministic per index — same beat, same frame"
+    );
+}
+
+/// INV-EC5: a saved pre-corridor loop migrated at load wraps pure — the
+/// migrated graph (corridor params + the D2 camera wire landed by
+/// migrate_fixed_row_scene_loops) renders phase 0 vs phase 1
+/// pixel-identical. Unclipped far, same demand as the corridor mint gate.
+#[test]
+fn wrap_parity_migrated_pre_corridor_loop() {
+    let def = build_migrated_pre_corridor_graph();
+
+    let frame_a = render_frame(&def, 0.0);
+    let frame_b = render_frame(&def, 8.0);
+
+    let diff = max_pixel_diff(&frame_a, &frame_b);
+    assert_eq!(
+        diff, 0,
+        "INV-EC5: the migrated pre-corridor loop must wrap pure — phase 0 vs phase 1 (beat=8) max pixel diff = {diff}"
     );
 }
 

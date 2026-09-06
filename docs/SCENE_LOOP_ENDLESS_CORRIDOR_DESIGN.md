@@ -1,6 +1,7 @@
 # Scene Loop Endless Corridor — windowed modulo-tiled instancing
 
-**Status:** APPROVED design, not built — direction ratified + adversarial review folded 2026-09-06 · 2026-09-06 · k3 (lead)
+**Status:** SHIPPED — P1–P3, shared control bindings and periodic temporal correspondence · 2026-09-06 · Astra
+Lifecycle: contract — defines the current corridor geometry, shared controls, temporal correspondence, and acceptance requirements.
 **Prerequisites:** SCENE_LOOP (shipped, absorbed into SCENE_MODIFIER_FRAMEWORK — the atoms/commands contract this doc revises), RT_INSTANCING P0–P3 (shipped 2026-09-05 — the accel/stasis contract the windowed atom must preserve).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -301,7 +302,51 @@ pattern_length:    Int, 1..8, default 1   // internal — never a card row
 let travel = home + eased * (patterns_per_loop * pattern_length) as f32 * cell_size;
 ```
 
+#### Temporal correspondence at the coordinate wrap (P3 correction)
+
+The repeated world is position-continuous across the seam, but its raw camera
+coordinates wrap. Comparing the current copy with the previous camera at the
+far end produced a false backwards velocity (BUG-b6iv). The correction belongs
+in the Camera/renderer correspondence, shared by all temporal consumers.
+
+`Camera::world_period: Option<[f32; 3]>` is runtime-only port data. Ordinary
+camera constructors use `None`; `loop_camera` declares its signed travel-axis
+vector times `K * P * cell_size`. This source assumes the repeated-world
+composition described here. `camera_lens` preserves that data. When consecutive
+cameras declare the same period, `Camera::previous_world_offset` identifies the
+nearest equivalent world copy. `RenderScene::evaluate` translates the previous
+view-projection by that offset and uses the same translated previous position
+for motion conditioning. Velocity, RT reprojection and temporal upscaling share
+this correspondence. The existing reset detector still owns cuts/seeks; period
+changes are not folded. No renderer state is rebuilt or cleared on an ordinary
+coordinate wrap.
+
+As with a sampled periodic signal, nearest-copy correspondence requires less
+than half a full travel period per frame; the standard beat-synchronized loop
+cadence meets that bound. This does not make unique geometry or local lights
+periodic. They retain the scene-composition limits in SCENE_LOOP_DESIGN.
+
+Enforcement: `camera::tests::previous_world_offset_*` checks signed axes, ordinary
+motion, period changes and preserved small motion; the deliberate P3 real-project
+journey checks the complete render path with the saved lens effects enabled.
+Removing the period declaration makes that same journey red (v2: 26.9% adjacent
+coverage loss and 22x baseline p95); restoring it gives 0.5% and 0.43x.
+
 ### 3.3 Plan builder, card surface, coupling — committed deltas
+
+P3 closes the value-ownership gap in the original edit-time coupling. Pattern
+and Spacing are shared control bindings: `SceneModifierPlan::shared_params`
+carries ordinary `BindingTarget` pairs; the generic apply command and load
+migration install the same binding id on both consumers. This reuses preset
+binding fan-out (as shipped by Lissajous) and adds no serialized format. Stored
+values, card mappings and modulation therefore reach both consumers in the same
+frame. Independent custom exposures remain custom graph authoring; the migration
+does not erase those controls. Home remains an edit-time framing convenience,
+with the shared live-write path invalidating graph values and sending the whole
+edit in one content command. Existing undoable commands preserve the gesture.
+The runtime acceptance journey verifies load, drag, release, undo and redo on
+both reference projects, and the migration gate asserts the shared binding ids.
+
 
 `build_scene_loop_plan` (`scene_modifier.rs:569-756`):
 - scene_array mint params: `pattern_length = 1, axis, cell_size,
@@ -457,6 +502,16 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   Demo: the acceptance numbers table + wrap-adjacent tick plots — L2 (Peter
   reads the numbers; the real-import visuals remain his in-app run, the
   BUG-bgcr (headless-harness-cannot-light-real-imports) lighting caveat unchanged).
+  Run the native reference journey sequentially (project preset overlays are
+  process-global): `CORRIDOR_PROJECT_DIR=<reference-directory> RUSTC_WRAPPER=
+  cargo test -p manifold-app --bin manifold --features journey-proofs
+  corridor_acceptance -- --test-threads=1 --nocapture`. The directory holds
+  `Stone Effects v1.manifold` and `Stone Effects v2.manifold`; absent files fail
+  loudly. CSVs are written under `/tmp/corridor_acceptance`. The blip metric is
+  adjacent-frame fractional coverage loss, not deviation from the whole-loop
+  mean (normal camera motion changes that mean). Thresholds remain 5% drop and
+  5x the ordinary adjacent-frame p95 delta. Missing/nonfinite output is red.
+  The crossing gate measures the full content tick after warmup.
   Test scope: `manifold-renderer` + `manifold-app`; landing via the standard
   protocol. **Supersession sweep (same session):** SCENE_LOOP_DESIGN.md
   status header and D2/D10/Deferred entries annotated as revised-by-this-doc;
@@ -465,6 +520,28 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   description); BUG-b6iv verified-fixed or re-pointed with its metric
   outcome; BUG-nkxg (scene-loop-copies-gate-VD) folded into the P3 acceptance
   (its pixel-on-real-import gap is D8.4's deliverable).
+
+### P3 reference results (2026-09-06)
+
+The native journey passed all seven checks: migration, three measured wraps per
+project, crossing cost, metric regressions and live control undo/redo in both
+projects. Saved lens effects remained enabled. Observed wrap frames show the
+expected small motion rather than the earlier coverage collapse.
+
+| Project | Maximum adjacent coverage loss at wrap | Wrap delta / ordinary p95 |
+|---|---:|---:|
+| Stone Effects v1 | 2.4% | 1.00x |
+| Stone Effects v2 | 0.5% | 0.43x |
+
+Both remain below the unchanged 5% / 5x limits. The full content tick at the
+fastest crossing cadence stayed below 2 ms after warmup (limit 20 ms).
+The v2 negative control, with periodic correspondence removed, failed the same
+gate at 26.9% and 22x. A separate native negative control exposed v1 loading
+camera Pattern=1 versus instance Pattern=8; shared binding ids eliminate it.
+
+Pinned input SHA-256 values:
+- v1: `1d2073d08208afd481b8816c23d90f6514c762adbd2b1e680937891ed6db1c23`
+- v2: `c7a25b537ba2e30b1d1e07a0acf86ceb43a83b2320e83da6af6b9abc2ca83338`
 
 ## 6. Decided — do not reopen
 

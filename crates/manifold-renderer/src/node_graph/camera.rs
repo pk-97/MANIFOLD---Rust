@@ -102,9 +102,29 @@ pub struct Camera {
     /// sets `LensParams::PINHOLE` — `node.camera_lens` is the only writer
     /// that changes it (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4).
     pub lens: LensParams,
+    /// Translation identifying equivalent world-space copies for temporal
+    /// correspondence. Ordinary cameras use None. Periodic-world sources
+    /// declare their complete travel period.
+    pub world_period: Option<[f32; 3]>,
 }
 
 impl Camera {
+    /// Map current world coordinates into the previous periodic copy.
+    /// Both frames must declare the same period. As with any sampled periodic
+    /// signal, correspondence needs less than half a period of travel per
+    /// sample. The shared reset detector handles cuts and seeks first.
+    pub fn previous_world_offset(&self, previous_pos: [f32; 3], previous_period: Option<[f32; 3]>) -> [f32; 3] {
+        let Some(period) = self.world_period.filter(|p| Some(*p) == previous_period) else {
+            return [0.0; 3];
+        };
+        let length_sq = dot3(period, period);
+        if !length_sq.is_finite() || length_sq <= f32::EPSILON {
+            return [0.0; 3];
+        }
+        let copies = (dot3(sub3(previous_pos, self.pos), period) / length_sq).round();
+        period.map(|component| component * copies)
+    }
+
     /// Identity-ish default — origin position looking down +Z, FOV 60°, sensible
     /// near/far. Provided so consumers can have a sane fallback when nothing is
     /// wired (though wiring is required in practice).
@@ -129,6 +149,7 @@ impl Camera {
             mode: CameraMode::Perspective { fov_y },
             view,
             lens: LensParams::PINHOLE,
+            world_period: None,
         }
     }
 
@@ -197,6 +218,7 @@ impl Camera {
             mode: CameraMode::Perspective { fov_y },
             view,
             lens: LensParams::PINHOLE,
+            world_period: None,
         }
     }
 
@@ -261,6 +283,7 @@ impl Camera {
             mode: CameraMode::Perspective { fov_y },
             view,
             lens: LensParams::PINHOLE,
+            world_period: None,
         }
     }
 
@@ -289,6 +312,7 @@ impl Camera {
             mode: CameraMode::Perspective { fov_y },
             view,
             lens: LensParams::PINHOLE,
+            world_period: None,
         }
     }
 
@@ -780,6 +804,49 @@ mod tests {
                 oracle.view_z,
             );
         }
+    }
+
+    #[test]
+    fn previous_world_offset_wraps_each_signed_axis_to_nearest_copy() {
+        for (axis, period) in [
+            ([10.0, 0.0, 0.0], [10.0, 0.0, 0.0]),
+            ([-10.0, 0.0, 0.0], [-10.0, 0.0, 0.0]),
+            ([0.0, 10.0, 0.0], [0.0, 10.0, 0.0]),
+            ([0.0, -10.0, 0.0], [0.0, -10.0, 0.0]),
+            ([0.0, 0.0, 10.0], [0.0, 0.0, 10.0]),
+            ([0.0, 0.0, -10.0], [0.0, 0.0, -10.0]),
+        ] {
+            let mut current = Camera::default_perspective();
+            current.pos = [0.1, 0.1, 0.1];
+            current.world_period = Some(period);
+            let previous = [current.pos[0] + axis[0] - 0.2, current.pos[1] + axis[1] - 0.2, current.pos[2] + axis[2] - 0.2];
+            assert_eq!(current.previous_world_offset(previous, Some(period)), axis);
+        }
+    }
+
+    #[test]
+    fn previous_world_offset_only_folds_matching_periodic_cameras() {
+        let mut current = Camera::default_perspective();
+        current.pos = [0.1, 0.0, 0.0];
+        current.world_period = Some([10.0, 0.0, 0.0]);
+
+        assert_eq!(current.previous_world_offset([0.3, 0.0, 0.0], Some([10.0, 0.0, 0.0])), [0.0; 3]);
+        assert_eq!(current.previous_world_offset([9.9, 0.0, 0.0], None), [0.0; 3]);
+        assert_eq!(current.previous_world_offset([9.9, 0.0, 0.0], Some([12.0, 0.0, 0.0])), [0.0; 3]);
+        current.world_period = None;
+        assert_eq!(current.previous_world_offset([100.0, 0.0, 0.0], Some([10.0, 0.0, 0.0])), [0.0; 3]);
+    }
+
+    #[test]
+    fn previous_world_offset_preserves_small_real_velocity_at_seam() {
+        let mut current = Camera::default_perspective();
+        current.pos = [0.1, 0.0, 0.0];
+        current.world_period = Some([10.0, 0.0, 0.0]);
+
+        let offset = current.previous_world_offset([9.8, 0.0, 0.0], Some([10.0, 0.0, 0.0]));
+        assert_eq!(offset, [10.0, 0.0, 0.0]);
+        let translated_previous = [9.8 - offset[0], 0.0, 0.0];
+        assert!((translated_previous[0] - current.pos[0] + 0.3).abs() < 1e-6);
     }
 
     #[test]

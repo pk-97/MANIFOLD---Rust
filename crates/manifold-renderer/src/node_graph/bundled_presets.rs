@@ -721,7 +721,17 @@ mod tests {
             .flat_map(|p| p.to_le_bytes())
             .collect();
 
-        let src_target = RenderTarget::new(&device, w, h, format, "compass-source");
+        let src_target = RenderTarget::view_of(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
+                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+            label: "compass-source",
+            mip_levels: 1,
+        }), "compass-source");
         device.upload_texture(&src_target.texture, &raw_bytes);
 
         let registry = PrimitiveRegistry::with_builtin();
