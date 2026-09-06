@@ -1,6 +1,6 @@
 # Scene Loop Endless Corridor — windowed modulo-tiled instancing
 
-**Status:** IN PROGRESS — P1/P2 and live-control fix committed; P3 reference acceptance and landing checks underway · 2026-09-06 · Astra
+**Status:** SHIPPED — P1–P3, shared control bindings and periodic temporal correspondence · 2026-09-06 · Astra
 **Prerequisites:** SCENE_LOOP (shipped, absorbed into SCENE_MODIFIER_FRAMEWORK — the atoms/commands contract this doc revises), RT_INSTANCING P0–P3 (shipped 2026-09-05 — the accel/stasis contract the windowed atom must preserve).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -519,6 +519,28 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   description); BUG-b6iv verified-fixed or re-pointed with its metric
   outcome; BUG-nkxg (scene-loop-copies-gate-VD) folded into the P3 acceptance
   (its pixel-on-real-import gap is D8.4's deliverable).
+
+### P3 reference results (2026-09-06)
+
+The native journey passed all seven checks: migration, three measured wraps per
+project, crossing cost, metric regressions and live control undo/redo in both
+projects. Saved lens effects remained enabled. Observed wrap frames show the
+expected small motion rather than the earlier coverage collapse.
+
+| Project | Maximum adjacent coverage loss at wrap | Wrap delta / ordinary p95 |
+|---|---:|---:|
+| Stone Effects v1 | 2.4% | 1.00x |
+| Stone Effects v2 | 0.5% | 0.43x |
+
+Both remain below the unchanged 5% / 5x limits. The full content tick at the
+fastest crossing cadence stayed below 2 ms after warmup (limit 20 ms).
+The v2 negative control, with periodic correspondence removed, failed the same
+gate at 26.9% and 22x. A separate native negative control exposed v1 loading
+camera Pattern=1 versus instance Pattern=8; shared binding ids eliminate it.
+
+Pinned input SHA-256 values:
+- v1: `1d2073d08208afd481b8816c23d90f6514c762adbd2b1e680937891ed6db1c23`
+- v2: `c7a25b537ba2e30b1d1e07a0acf86ceb43a83b2320e83da6af6b9abc2ca83338`
 
 ## 6. Decided — do not reopen
 
