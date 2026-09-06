@@ -667,7 +667,11 @@ impl RowHost {
                 }
                 vec![PanelAction::Params(ParamsAction::ModConfigTabChanged)]
             }
-            RowRole::MappingChevron => vec![PanelAction::Root(RootAction::OpenCardMapping(rows[row].id.clone()))],
+            RowRole::MappingChevron => vec![PanelAction::Root(RootAction::OpenCardMapping {
+                target,
+                param_id: rows[row].id.clone(),
+                anchor_node_id: node,
+            })],
             RowRole::SectionHeader => {
                 let Some(name) = self
                     .section_header_ids

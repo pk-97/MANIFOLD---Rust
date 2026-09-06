@@ -1821,7 +1821,7 @@ mod tests {
         let chevron = panel.row_host.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
-            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping(pid))] if pid == "strength"),
+            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Effect(0), param_id: pid, anchor_node_id })] if pid == "strength" && *anchor_node_id == chevron),
             "got {actions:?}"
         );
         // The chevron also has a resolvable anchor rect by binding id.
@@ -1906,7 +1906,7 @@ mod tests {
         let chevron = panel.row_host.mapping_chevron_ids[1].expect("generator mappable row → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
-            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping(pid))] if pid == "strength"),
+            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Generator, param_id: pid, anchor_node_id })] if pid == "strength" && *anchor_node_id == chevron),
             "got {actions:?}"
         );
         assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
