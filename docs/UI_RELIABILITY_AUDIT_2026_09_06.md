@@ -40,6 +40,18 @@ Observed normal Quit removed the marker; relaunch reused the same approved
 identity and rendered without a crash alert. The marker-path regression and
 automation-feature clippy passed. Actual crash markers remain enabled.
 
+The native modifier follow-up stopped when opening the generator browser
+produced Compositor/Frame GPU address faults and a queue-blacklist exit. This
+is recorded on existing `BUG-l7t4`; concurrent landing UI-flow checks mean an
+uncontended reproduction is not established. The complete local log is
+`/tmp/manifold-audit-generator-browser-gpu-fault.log`.
+
+The first landing gate passed tests/clippy and 26 of 27 required flows. The
+remaining modifier-trigger flow failed identically on unchanged main
+`bffcc34a9`: it expected 45 global trigger buttons but found 52. The flow now
+addresses the intended Flow parameter through a name supplied by the existing
+shared row builder, retaining its drawer and undo assertions.
+
 ## Result
 
 The shared parameter surface exists and modifier cards reuse it. The important
