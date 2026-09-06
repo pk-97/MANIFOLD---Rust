@@ -1,6 +1,6 @@
 # Scene Loop Endless Corridor — windowed modulo-tiled instancing
 
-**Status:** PROPOSED — direction ratified by Peter 2026-09-06, pending adversarial review · 2026-09-06 · k3 (lead)
+**Status:** APPROVED design, not built — direction ratified + adversarial review folded 2026-09-06 · 2026-09-06 · k3 (lead)
 **Prerequisites:** SCENE_LOOP (shipped, absorbed into SCENE_MODIFIER_FRAMEWORK — the atoms/commands contract this doc revises), RT_INSTANCING P0–P3 (shipped 2026-09-05 — the accel/stasis contract the windowed atom must preserve).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
@@ -340,12 +340,12 @@ bindings targeting ("scene_array","count") or ("loop_camera","stride") —
 `user_added` exposure entries; (b) saved OSC/MIDI mappings referencing the
 dropped ParamSpecDef ids (format "{doc}_{param}", `scene_exposure.rs:205`);
 (c) `param_aliases`/`value_aliases` entries naming the renamed params.
-**Open ruling for Peter (default until answered: drop + log):** rewrite the
-binding/mapping targets in place (count→pattern_length, stride→
-patterns_per_loop, preserving the mapping id) instead of dropping — it
-keeps saved show mappings alive at the gig, at the cost of touching mapping
-storage in the migration. The executor does NOT choose; P2 implements the
-answered ruling. Deletion proof either way: after migration, `rg '"count"'`
+**Ruling (Peter 2026-09-06, accepting the lead's recommendation):
+rewrite the binding/mapping targets in place** (count→pattern_length,
+stride→patterns_per_loop, preserving the mapping id) — saved show mappings
+stay alive at the gig; the migration touches mapping storage deliberately
+and the dangling-reference inventory below is the verification net. Deletion
+proof: after migration, `rg '"count"'`
 over a migrated fixture's exposures is empty and the dangling-reference
 check is green.
 
@@ -471,7 +471,7 @@ semantics for migration (D7) · touching per-object mesh modifier chains
 8. Acceptance = wrap-parity pixel gates + Stone Effects v1/v2 as held-out inputs (D8); the enforcing purity gate is the near-seam BUFFER equality test, the pixel gates are sentinels (D8 gate roles).
 8. BUG-cb2k (scene-loop-seam-cut-under-live-param-modulation) (live-modulation seam cuts) is out of scope; the design leaves the two-clause purity predicate as its hook (section 3.5).
 9. `use_camera` is in the stasis key — the unwired-run and parked-wired key collision is a stale-buffer bug without it (D6).
-10. The exposure-row drop carries a dangling-reference inventory (bindings, OSC/MIDI mappings, aliases) as P2 deliverables; whether renamed-param bindings are rewritten in place or dropped is a Peter ruling, defaulted to drop + log (section 3.3).
+10. The exposure-row drop carries a dangling-reference inventory (bindings, OSC/MIDI mappings, aliases) as P2 deliverables; renamed-param bindings are REWRITTEN IN PLACE (mapping id preserved) per Peter's 2026-09-06 ruling (section 3.3).
 
 ## 7. Deferred
 
