@@ -33,6 +33,15 @@ Use source code to resolve stale documentation; read only the relevant subsystem
 
 ## Validation and delivery
 
+Keep execution usage bounded. Do not repeat passed checks without changed code
+or new evidence. After two failed attempts, stop and report evidence instead of
+continuing speculative fixes. No optional GPU exploration, broad test/render
+sweeps, or extra tasks without explicit scope. Computer use and rendering need
+a named behaviour that requires observation: at most one reproduction and one
+verification per fix; stop if inconclusive and report the gap. Preserve required
+landing checks. Use the Codex guard's short-lived, exact-command exceptions only
+for necessary checks with a concrete reason, never to evade its attempt budget.
+
 Start diagnosis with the relevant seam. Runtime claims need logs/reproduction; visual claims need an observed render. Use bounded probes when static evidence is insufficient. A green compile does not establish behaviour.
 
 Keep main runnable. App changes use the existing slot ring (`scripts/agent-worktree.py`), with one owner per workstream and a verified base tip. Read `.claude/GIT_TREE_DISCIPLINE.md` for slot, build-lock, and merge mechanics; do not modify it. Preserve unrelated work. Commit exact paths only; no blanket staging, force-push, or destructive history rewrites.

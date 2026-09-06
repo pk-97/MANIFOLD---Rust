@@ -186,6 +186,45 @@ class Guards(unittest.TestCase):
         self.assertIsNone(self.shell_call("rg 'test' src", True, self.slot))
         self.assertTrue(self.shell_call("cargo test", True))
 
+    def test_focused_attempt_budget_and_read_only_calls(self):
+        command = "cargo test -p manifold-ui mapping"
+        self.assertIsNone(self.shell_call(command))
+        self.assertIsNone(self.shell_call(command))
+        self.assertIn("Execution budget", self.shell_call(command))
+        self.assertIsNone(self.shell_call("git status --short"))
+        self.assertIsNone(self.shell_call(command, cwd=self.slot))
+
+    def test_broad_wrapped_and_visual_checks_need_exception(self):
+        for command in ("cargo test", "cargo test -p manifold-ui --workspace",
+                        "RUSTC_WRAPPER= cargo clippy --workspace",
+                        "bash .claude/scripts/with-build-lock.sh cargo test --workspace",
+                        "python3 -B scripts/trunk_health.py",
+                        "python3 scripts/launch_live_ui.py",
+                        "scripts/gpu_proofs_gate.py", "cargo xtask perf-soak"):
+            with self.subTest(command=command):
+                self.assertIn("Execution budget", self.shell_call(command))
+        self.assertIsNone(self.shell_call("python3 scripts/landing_gate.py"))
+        self.assertIsNone(self.shell_call("rg 'cargo test' docs"))
+
+    def test_exception_is_exact_bounded_and_expiring(self):
+        command = "cargo test --workspace"
+        guard.permit_check("test", command, str(self.root), "Required regression", 1)
+        self.assertTrue(self.shell_call(command, cwd=self.slot))
+        self.assertTrue(self.shell_call(command + " --lib"))
+        self.assertIsNone(self.shell_call(command))
+        self.assertTrue(self.shell_call(command))
+        with patch.object(guard.time, "time", return_value=100):
+            guard.permit_check("test", command, str(self.root), "New evidence", 1)
+        with patch.object(guard.time, "time", return_value=1901):
+            self.assertTrue(self.shell_call(command))
+        with self.assertRaises(ValueError):
+            guard.permit_check("test", command, str(self.root), "", 1)
+
+    def test_exec_command_uses_budget(self):
+        matcher = json.loads((REAL_ROOT / ".codex/hooks.json").read_text())["hooks"]["PreToolUse"][0]["matcher"]
+        self.assertIsNotNone(re.search(matcher, "exec_command"))
+        self.assertTrue(guard.evaluate(self.event("exec_command", {"cmd": "cargo test"})))
+
 
 if __name__ == "__main__":
     unittest.main()

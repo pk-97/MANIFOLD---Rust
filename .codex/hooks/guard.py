@@ -6,6 +6,7 @@ One Luna lane per session: its brief supplies an exact writable file list.
 Arbitrary scripts/MCP tools and interactive stdin are outside scope enforcement.
 """
 import hashlib
+import fcntl
 import importlib.util
 import json
 import os
@@ -253,8 +254,66 @@ def evaluate(event):
         return check_patch(event, command, cwd, paths_guard)
     if tool in {"Bash", "exec_command"}:
         shell_guard = load("cc_shell", ROOT / ".claude/hooks/preToolUseBash.py")
-        return check_shell(event, command, cwd, shell_guard)
+        return check_shell(event, command, cwd, shell_guard) or check_budget(event, command, cwd)
     return None
+
+
+def budget_key(command, cwd):
+    return hashlib.sha256((str(Path(cwd).resolve()) + "\n" + command.strip()).encode()).hexdigest()
+
+
+def expensive_checks(command):
+    """Recognize direct commands and common build-lock/env wrappers, not scripts."""
+    for tokens in segments(command):
+        names = [Path(t).name for t in tokens]
+        if "cargo" in names:
+            args = tokens[names.index("cargo") + 1:]
+            if any(a in {"test", "nextest", "clippy", "check", "build"} for a in args):
+                scoped = any(a in {"-p", "--package", "--manifest-path"} or
+                             a.startswith(("--package=", "--manifest-path=", "-pmanifold")) for a in args)
+                yield "broad" if "--workspace" in args or not scoped else "focused"
+            if "perf-soak" in args:
+                yield "broad"
+        if set(names) & {"trunk_health.py", "feature_matrix.py", "launch_live_ui.py"}:
+            yield "broad"
+        if any(re.search(r"(?:render|snapshot|rt_matrix|gpu_proofs|ui_flows).*\.py$", n) for n in names):
+            yield "broad"
+
+
+def check_budget(event, command, cwd):
+    kinds = list(expensive_checks(command))
+    if not kinds:
+        return None
+    path = state_path(event).with_suffix(".budget.json")
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = json.loads(path.read_text()) if path.exists() else {}
+        key = budget_key(command, cwd)
+        record = data.setdefault(key, {"attempts": 0})
+        permit = record.get("permit", {})
+        if permit.get("remaining", 0) > 0 and time.time() < permit.get("expires", 0):
+            permit["remaining"] -= 1
+        elif "broad" in kinds or record["attempts"] >= 2:
+            return ("Execution budget stopped this check. Broad/visual probes need a named, bounded exception; "
+                    "focused commands get two attempts per session. Report evidence instead of looping. "
+                    "The lead may use guard.py permit-check with the exact command, workdir and reason; "
+                    "do not renew without changed code, new evidence, or explicit user direction. "
+                    "Required checks inside land_branch.py/landing_gate.py remain unchanged.")
+        record["attempts"] += 1
+        path.write_text(json.dumps(data))
+    return None
+
+
+def permit_check(session_id, command, worktree, reason, attempts):
+    if not session_id or not command.strip() or not reason.strip() or not 1 <= attempts <= 3:
+        raise ValueError("A check exception needs session, exact command, reason and 1–3 attempts.")
+    path = state_path({"session_id": session_id}).with_suffix(".budget.json")
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = json.loads(path.read_text()) if path.exists() else {}
+        record = data.setdefault(budget_key(command, worktree), {"attempts": 0})
+        record["permit"] = {"reason": reason, "remaining": attempts, "expires": time.time() + 1800}
+        path.write_text(json.dumps(data))
 
 
 def main():
@@ -273,12 +332,23 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         import argparse
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("action", choices=["prepare-lane"])
-        parser.add_argument("--task", required=True)
+        parser.add_argument("action", choices=["prepare-lane", "permit-check"])
+        parser.add_argument("--task")
         parser.add_argument("--worktree", required=True)
         parser.add_argument("--files", nargs="*", default=[])
+        parser.add_argument("--command")
+        parser.add_argument("--reason")
+        parser.add_argument("--attempts", type=int, default=1)
         args = parser.parse_args()
-        prepare_lane(os.environ.get("CODEX_THREAD_ID"), args.task, args.worktree, args.files)
-        print(f"Prepared {args.task}; dispatch within 10 minutes.")
+        if args.action == "permit-check":
+            if not args.command or not args.reason:
+                parser.error("permit-check requires --command and --reason")
+            permit_check(os.environ.get("CODEX_THREAD_ID"), args.command, args.worktree, args.reason, args.attempts)
+            print("Prepared bounded check exception; expires in 30 minutes.")
+        else:
+            if not args.task:
+                parser.error("prepare-lane requires --task")
+            prepare_lane(os.environ.get("CODEX_THREAD_ID"), args.task, args.worktree, args.files)
+            print(f"Prepared {args.task}; dispatch within 10 minutes.")
     else:
         main()

@@ -39,3 +39,27 @@ not file-scope checked. Model-based lane identification assumes this two-model
 setup; one lane per parent session is essential to its scope tracking. Scope
 records are temporary and a missing record blocks lane edits/checks. Changing
 the roster or enabling parallel lanes requires revisiting this design.
+
+## Execution budget
+
+Recognized direct Cargo checks get two attempts per exact command and working
+directory per session, including successful attempts. Broad Cargo checks,
+nightly/feature sweeps, perf soaks and recognized visual/GPU probe scripts need
+a bounded exception. Common env/build-lock wrappers are recognized. Required
+checks run inside `land_branch.py` and `landing_gate.py` remain unchanged.
+
+The lead can register an exact command for 1–3 attempts (default one), expiring
+after 30 minutes:
+
+```sh
+python3 -B .codex/hooks/guard.py permit-check --worktree '/absolute/worktree' --command 'cargo test -p manifold-ui mapping' --reason 'Changed mapping dispatch; verify regression'
+```
+
+Do not renew or vary commands to evade the budget. A retry requires changed
+code, new evidence, or explicit user direction. Workers return the evidence
+to the lead. This is an attempt counter, not result caching or a token cap:
+it cannot distinguish success from failure, inspect arbitrary scripts, or
+budget checks nested inside landing scripts. Native computer-use/MCP calls
+are not covered; obey the repository's bounded visual-check rule. Tests cover
+synthetic hook events; live dispatch coverage depends on the trusted desktop
+hook. Re-trust the updated definition with `/hooks`.
