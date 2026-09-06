@@ -602,7 +602,7 @@ fn probe_worker_static_frames() {
             "color_g":{"type":"Float","value":0.8},
             "color_b":{"type":"Float","value":0.8}}},
         {"id":3,"typeId":"node.scene_array","nodeId":"array","params":{
-            "count":{"type":"Float","value":2.0},
+            "pattern_length":{"type":"Float","value":1.0},
             "axis":{"type":"Enum","value":4},
             "cell_size":{"type":"Float","value":3.0}}},
         {"id":4,"typeId":"node.scene_object","nodeId":"obj"},

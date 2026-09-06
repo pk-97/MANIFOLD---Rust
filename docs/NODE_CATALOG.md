@@ -212,7 +212,7 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
-| Scene Array | `node.scene_array` | Source | Lays out copies in a line along one axis, spacing them evenly for a looping flythrough. |
+| Scene Array | `node.scene_array` | Source | Generates the corridor of instances around the camera — cells repeat by pattern, forever. |
 | Scene Object | `node.scene_object` | Source | Binds one object's mesh, transform, material, maps, and instances into a single wire. Wire it into a render_scene object slot. |
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
