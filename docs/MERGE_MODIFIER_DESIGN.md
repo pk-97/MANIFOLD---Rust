@@ -151,8 +151,14 @@ and correct lighting behaviour."* Two consequences, one named platform
 boundary. (a) **Casting**: the goo neck must also cast shadows — the RT
 shadow trace's miss path gains an optional SDF march over flagged merge
 pixels (bounded: it runs only where the TLAS trace missed and the merge mask
-is set). The raster PCF shadow path cannot do this (baked depth maps) —
-documented v1 approximation: goo casts no shadow with RT off. (b) **Being
+is set). Worst case without the guard: a backlit scene with merge zones
+covering most of the screen pays a field march on most of the half-res shadow
+misses. Guard: the merge pass tracks the goo surface's world-space AABB each
+frame (min/max over the points it already evaluates — nearly free) and the
+miss path ray-box-tests against it before marching — only rays that actually
+pass through the goo volume pay, collapsing the worst case to near-constant
+overhead. The raster PCF shadow path cannot do this at all (baked depth
+maps) — documented v1 approximation: goo casts no shadow with RT off. (b) **Being
 reflected**: goo appearing *inside other surfaces' reflections* requires an
 implicit iso-surface in the TLAS; Metal exposes no custom intersection
 programs (triangles only), so other objects' reflections keep showing the
