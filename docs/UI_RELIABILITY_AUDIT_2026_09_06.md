@@ -13,8 +13,8 @@ interaction tests, whose relevant paths were then checked by Astra.
 
 ## First repair: mapping ownership and live values
 
-Implemented on `codex/ui-contract-audit` in commits `2a97709aa`, `1d596aedc`
-and `860e1c124`; the final local gate passed all seven required checks.
+Implemented in commits `725b148c7` and `c44ea3404`.
+The final landing gate passed all seven required checks.
 The findings below describe the audited baseline, not the repaired branch.
 Card open actions now carry their target, parameter and clicked anchor. Both
 mapping popovers capture a stable owner for every edit, and readers use the
