@@ -44,7 +44,7 @@ D1–D11 remain cited; this doc revises the instance model), `docs/RT_INSTANCING
 | Plan builder | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:569-756` (`build_scene_loop_plan`) | Mints loop_phase/scene_array/loop_camera (+switch); cell_size = 2× Z-extent (D4 gap rule, `:586-588`); home = −cell/2; wires `loop_phase.out → loop_camera.phase` ONLY — scene_array takes no input. |
 | Stride coupling | `scene_modifier.rs:450-492` | Stride row writes {loop_camera.stride, scene_array.count = K+2 clamped 8, scene_array.jitter_period = K}. **K ≥ 7 outruns the array** — the cap the corridor dissolves. |
 | Spacing coupling | `scene_modifier.rs:471-485` | cell_size row writes both nodes' cell_size + home = −cell/2 (INV-4). Unchanged by this design. |
-| Card rows | `scene_modifier.rs:421-441` (`LOOP_ROW_WHITELIST`) | 18 rows incl. ("scene_array","count","Copies"), ("loop_camera","stride","Stride"), ("scene_array","jitter_amount","Jitter"). |
+| Card rows | `scene_modifier.rs:421-441` (`LOOP_ROW_WHITELIST`) | 19 rows incl. ("scene_array","count","Copies"), ("loop_camera","stride","Stride"), ("scene_array","jitter_amount","Jitter"). Coupled writes resolve app-side: `manifold-app/src/ui_bridge/project.rs:1175,1258` → `CoupledWriteTarget` (`:1160`) → `apply_coupled_write_live` (`:1296`) → `scrub.rs:115,708,753` (bound secondaries write binding slot + def mirror; unbound write def only). |
 | Load migrations | `scene_modifier.rs:766-896` | `migrate_pre_switch_scene_loops`, `migrate_loop_exposure_rows` — the per-layer load loop precedent the corridor migration extends. |
 | Wrap-parity gates | `crates/manifold-renderer/tests/scene_loop_wrap_parity.rs` | INV-3 pixel gates: exact seam (beat 0 vs 8, diff == 0), near-seam bounded (phase 0.99999, ≤8 px / ≤48 delta), bars-change continuity. **The near-seam gate today needs far=22 clipping** (`:283-303`) because the finite array's far-edge hole otherwise confounds the measurement — the corridor removes that crutch. |
 | RT instancing | `docs/RT_INSTANCING_DESIGN.md` D1/D9/INV-RTI4/5 | Instance buffers GPU-resident; `instance_count = buffer_size/32` (CAPACITY, not live count — `render_scene.rs:4909-4919`); capacity rides the topo key (rebuild), values ride refit; INV-RTI4: static instance buffers trigger no descriptor dispatch/refit beyond the transform-driven cadence. |
@@ -125,7 +125,8 @@ nothing**.
 - **D5 — the window derives from the camera's far plane; the far-edge hole
   dies by construction, not by fog.** Per frame:
   `ahead = clamp(ceil(camera.far / cell_size) + 2, 4, CAPACITY − BEHIND − 2)`.
-  Every cell that can possibly render (within `far`) exists in the buffer;
+  Every cell that can possibly render (within `far`, view axis aligned with
+  the travel axis) exists in the buffer;
   the +2 margin cells sit beyond `far` and are clipped without rasterizing.
   The old copies-cap question disappears: vertex/descriptor cost is fixed at
   capacity regardless of speed. **Consequences, stated honestly:** the
@@ -136,12 +137,23 @@ nothing**.
   `ahead` at 22 and the distant hole returns past that (the card's curated
   Far range prevents this on the supported surface); window margin cells are
   submitted every frame and rejected by the far plane (fragment cost flat,
-  per the D10 analysis).
+  per the D10 analysis); **off-axis views** (yaw/pitch/roll are whitelisted
+  card rows) can see sideways beyond the window — at yaw ≈ π/2 the visible
+  axis-range becomes ±far/cell but the window covers −8..+22, so a side hole
+  appears (not a regression — the shipped finite row is worse — but the
+  guarantee is bound to view-axis ≈ travel-axis); **RT descriptor build per
+  crossing refit is 4× the shipped 8-slot shape** (32 slots; zero-scale
+  masking itself rides the shipped, gated path — `rt_instancing.rs:146`,
+  no NaN risk: nothing divides by instance scale).
 
 - **D6 — stasis is the RT contract, and the window is stasis-friendly.**
-  `SceneArrayStasisKey` becomes `{base_cell, ahead, pattern_length,
+  `SceneArrayStasisKey` becomes `{use_camera, base_cell, ahead, pattern_length,
   axis, cell_size, jitter_seed, jitter_amount, rebuild_epoch}` — every input
-  that can change the output. Camera motion inside a cell changes none of
+  that can change the output. `use_camera` is in the key because the unwired
+  run (base_cell 0, ahead 22) and a wired camera parked at base 0 with far ≥
+  20·cell produce identical key fields with different intended content —
+  without it the buffer goes stale on (re)wire (review finding 3). Camera
+  motion inside a cell changes none of
   them → no buffer rewrite → output generation holds → the RT accel key
   holds (INV-RTI4). A cell-boundary crossing (≤ `patterns_per_loop ·
   pattern_length` times per loop — e.g. once per bar at 8 bars/loop) rewrites
@@ -162,26 +174,52 @@ nothing**.
   - `loop_camera.stride S` → `loop_camera.patterns_per_loop = S / J`
   - `loop_camera.pattern_length = J` (new internal param)
   - Card row ("scene_array","count","Copies") → ("scene_array","pattern_length","Pattern"); the Stride row keeps its label, new semantics.
-  Hand-edited pre-migration graphs where J ∤ S were wrap-impure already;
-  migration rounds S/J and the loop stays impure (no worse). The migration
-  runs in the same per-layer load loop as `migrate_loop_exposure_rows`
-  (`scene_modifier.rs:829-896`); structural precedent `migrate_pre_switch_scene_loops` (`:766-817`).
+  Hand-edited pre-migration graphs where J ∤ S exist (the shipped coupling
+  only guarantees J = S for card-row writes; a graph-editor edit of stride
+  or jitter_period desyncs them, and `migrate_loop_exposure_rows` re-stamps
+  J = S only for pre-BUG-jvlq (scene-loop-jitter-wrap-snap) projects). **Ruling (review finding 2 —
+  corrected): the migration ALWAYS lands on a pure loop** — K·P ≡ 0 (mod P)
+  by construction — **but travel may change when J ∤ S:** K = round(S / J),
+  so old travel S·cell becomes round(S/J)·J·cell (e.g. stride 7,
+  jitter_period 3 → travel 7 cells → 6 cells). Travel-preservation is
+  unrepresentable under the new model (S·cell with P ∤ S is not a whole
+  number of patterns), so purity wins and the speed shift is the honest
+  cost, stated here rather than discovered at load. Rounding is `round()`,
+  half away from zero. The (S=7, J=3) case is an INV-EC5 migration test.
   **Rejected: dual-semantics param reading** (detect old vs new by a version
   flag), because a param whose meaning depends on a flag is the transitional
   state the house rule forbids — load migration upgrades to the single new
   semantics and the old names disappear from the manifest.
 
+  **Migration order (review finding 4):** `migrate_fixed_row_scene_loops`
+  runs BEFORE `migrate_loop_exposure_rows` in the per-layer load loop, and
+  the exposure migration's jitter_period re-stamp block
+  (`scene_modifier.rs:856-866`) MUST be gated on the OLD node shape
+  (scene_array still carrying `count`) — after the corridor migration runs,
+  the node is new-shape, and an ungated block would re-insert the deleted
+  param (keyed on its absence) and corrupt the migrated graph.
+
 - **D8 — acceptance is wrap-parity pixel gates plus the Stone Effects
-  projects as the held-out inputs.**
-  1. **Exact seam, unclipped, at multiple shapes:** beat 0 vs beat = bars
+  projects as the held-out inputs.** Gate roles (review finding 12): the
+  exact-seam gate compares phase 0.0 against phase 0.0 (fract lands both
+  sides on 0.0 — `loop_camera.rs:279-285`), so it is a REGRESSION SENTINEL,
+  not the purity proof; the enforcing gates are the near-seam buffer
+  equality test (finding 1, below) and the unclipped near-seam pixel gate.
+  1. **Near-seam BUFFER EQUALITY (the enforcing purity gate, review finding
+     1):** the generated window at phase 0 must equal the window at phase
+     ~1 translated by exactly K·P cells — slot-by-slot field equality, over
+     NEGATIVE base_cells (the plan's home = −cell/2 puts base_cell = −1),
+     P ∈ 2..8, Euclidean mod on both sides. This is the gate that catches
+     the truncated-mod impurity class the pixel gate cannot see.
+  2. **Exact seam, unclipped, at multiple shapes (regression sentinel):** beat 0 vs beat = bars
      (fract → phase 0) max pixel diff == 0 on the minimal corridor graph at
      (patterns, pattern) ∈ {(1,1), (1,3), (2,4), (8,1)} — the last is the
      old K≥7 outrun case the shipped model cannot represent.
-  2. **Near-seam, unclipped:** phase 0 vs 0.99999 bounded by the jitter
+  3. **Near-seam, unclipped (pixel):** phase 0 vs 0.99999 bounded by the jitter
      rasterization floor (≤8 px, ≤48 delta at 64×64) — **without** the
      far=22 crutch today's gate requires; the far-edge hole no longer
      confounds the measurement.
-  3. **Stone Effects v1/v2** (under Dropbox …/Interim/Head Noise/): load
+  4. **Stone Effects v1/v2** (under Dropbox …/Interim/Head Noise/): load
      (migration fires) → headless real-app-path render → v1's per-loop alpha
      coverage blip (the BUG-b6iv (scene-loop-wrap-one-frame-object-blip)
      metric: mean alpha 0.0166→0.0142 at the tick
@@ -218,17 +256,31 @@ params: [
 - `WINDOW_CAPACITY: u32 = 32` — value-level constant.
   `array_output_capacity` returns `Some(WINDOW_CAPACITY)` for `out`
   unconditionally (never param-derived — BUG-757c (scene-loop-copies-param-inert)).
-- Uniform layout (generated-codegen order):
+- Uniform layout (generated-codegen order, mirroring `project_3d`'s
+  `derived_uniforms` pattern — `project_3d.rs:119-128`):
   `pattern_length(i32), axis(u32), cell_size(f32), jitter_seed(i32),
   jitter_amount(f32), base_cell(i32), behind(u32), ahead(u32),
-  dispatch_count(u32), _pad` — 10 words, 40 bytes.
+  use_camera(u32), dispatch_count(u32)` — 10 words, 40 bytes.
+- **Modulo convention (adversarial review finding 1 — a wrap-impurity bug by
+  construction if left implicit):** the body MUST use the Euclidean mod
+  `j = ((c % pattern_length) + pattern_length) % pattern_length` on the
+  SIGNED cell index, and the CPU oracle MUST use `rem_euclid`. WGSL `%` on
+  i32 is a truncated remainder (same as Rust), and the plan's committed
+  home = −cell/2 puts base_cell = −1 at phase 0, so every window straddles
+  cell zero; truncating mod is not P-periodic across zero (cell −1 hashes
+  as 0xFFFFFFFF, cell K·P−1 as P−1 — the camera's own cell would carry
+  different jitter across the seam for every P ≥ 2, and the pixel gate
+  misses it because the minimal parity graph has no geometry in the
+  camera's own cell). The shipped body never hit this because its index was
+  u32; the corridor's cell is i32.
 - WGSL body (value-level contract): slot `w` computes
-  `c = base_cell − behind + w`; `w ≥ behind + ahead + 1` OR
-  `c mod pattern_length` out of range → zero-scale (the BUG-757c (scene-loop-copies-param-inert)
-  mask); otherwise `pos = axis_vec · (c · cell_size)` and the jitter branch
-  hashes `(c mod pattern_length)` exactly as today's body hashes
+  `c = base_cell − behind + w`; `w ≥ behind + ahead + 1` → zero-scale (the
+  BUG-757c (scene-loop-copies-param-inert) mask); otherwise
+  `pos = axis_vec · (c · cell_size)` and the jitter branch hashes the
+  Euclidean `j` above exactly as today's body hashes
   `(index % jitter_period)` (same `hash_u32`, same ±amount rotation, same
-  `1 ± amount/2` scale). CPU oracle in `gpu_tests` mirrors it field-for-field.
+  `1 ± amount/2` scale). CPU oracle in `gpu_tests` mirrors it field-for-field
+  with `rem_euclid`.
 - `run` (Rust): resolve camera input; unwired → `use_camera = 0`,
   `base_cell = 0`, `ahead = 22` (standalone default: corridor from the
   origin). Wired → axis component of `camera.pos`, `ahead` per D5's formula
@@ -267,20 +319,35 @@ All other rows unchanged.
 - Pattern primary ("scene_array","pattern_length") → secondary
   ("loop_camera","pattern_length", identity). *Purity cannot desync: any
   integer pair is pure (D3), so there is no count secondary and no
-  jitter_period secondary.*
+  jitter_period secondary.* The full resolution chain the executor touches:
+  the descriptor table here + the app-side resolver
+  (`manifold-app/src/ui_bridge/project.rs:1160,1175,1258,1296`,
+  `scrub.rs:115,708,753`) — table shape unchanged, only rows change.
 - Spacing primary ("loop_camera","cell_size") → unchanged secondaries
   (scene_array.cell_size, home = −cell/2).
 - **The Stride coupling (count = K+2, jitter_period = K) is deleted — the
   class it patched (outrun, wrap-snap) no longer exists.**
 
 New load migration `migrate_fixed_row_scene_loops(def) -> bool` (shape like
-`migrate_loop_exposure_rows`, same call site): the D7 arithmetic, then
-re-stamp the loop exposures through the new whitelist. The exposure stamper
-is idempotent by (node_id, param) — the migration must FIRST drop stamped
-rows whose (node_id, param) is no longer whitelisted ((scene_array,count) and
-(loop_camera,stride)) or the dead rows linger (the P4 double-stamp class).
-Deletion proof: after migration, `rg '"count"'` over a migrated fixture's
-exposures is empty.
+`migrate_loop_exposure_rows`, same call site, ordered per D7): the D7
+arithmetic, then re-stamp the loop exposures through the new whitelist. The
+exposure stamper is idempotent by (node_id, param)
+(`scene_exposure.rs:189-203` — verified) and NOTHING drops stamped rows
+today (only wire/node retains exist) — the drop is new behavior with an
+un-inventoried blast radius (review finding 5). P2 deliverables therefore
+include the full dangling-reference inventory and check: (a) performer
+bindings targeting ("scene_array","count") or ("loop_camera","stride") —
+`user_added` exposure entries; (b) saved OSC/MIDI mappings referencing the
+dropped ParamSpecDef ids (format "{doc}_{param}", `scene_exposure.rs:205`);
+(c) `param_aliases`/`value_aliases` entries naming the renamed params.
+**Open ruling for Peter (default until answered: drop + log):** rewrite the
+binding/mapping targets in place (count→pattern_length, stride→
+patterns_per_loop, preserving the mapping id) instead of dropping — it
+keeps saved show mappings alive at the gig, at the cost of touching mapping
+storage in the migration. The executor does NOT choose; P2 implements the
+answered ruling. Deletion proof either way: after migration, `rg '"count"'`
+over a migrated fixture's exposures is empty and the dangling-reference
+check is green.
 
 ### 3.4 Data-model answers (the four questions)
 
@@ -311,11 +378,11 @@ predicate as the doc-level contract; no code lands for it here.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| INV-EC1 | Wrap purity by construction: travel per loop = K·P·cells ≡ 0 (mod P); all visible content is a function of `cell mod P` | `wrap_parity_phase_0_vs_phase_1` extended to the four (K,P) shapes of D8.1 (exact 0, unclipped); a CPU test asserts `patterns_per_loop · pattern_length ≡ 0 (mod pattern_length)` for the full 1..8 × 1..8 grid. |
+| INV-EC1 | Wrap purity by construction: travel per loop = K·P·cells ≡ 0 (mod P); all visible content is a function of Euclidean `cell rem P` | `wrap_parity_phase_0_vs_phase_1` extended to the four (K,P) shapes of D8.2 (exact 0, unclipped, regression sentinel); the D8.1 near-seam buffer-equality test (negative base_cells, P ∈ 2..8) is the enforcing gate; a CPU test asserts `patterns_per_loop · pattern_length ≡ 0 (mod pattern_length)` for the full 1..8 × 1..8 grid. |
 | INV-EC2 | Output capacity is the constant 32, never a live value | Existing BUG-757c (scene-loop-copies-param-inert) capacity test repurposed: `array_output_capacity` returns 32 for any params. |
-| INV-EC3 | The window always covers the visible range: `ahead ≥ ceil(far/cell) + 1` and `BEHIND + ahead + 1 ≤ CAPACITY` | Unit test over the curated far band (0.25×..20× cell) asserts the D5 formula's bound; clamp path asserted at hand-set far beyond the band. |
-| INV-EC4 | Stasis key completeness: every frame-varying input is in the key | RT_INSTANCING's INV-RTI4 gpu_proofs (`rt_noise_gate.py` + instancing proofs) stay green on a corridor graph with the camera parked AND at speed; code review rule + a debug_assert that camera-wired and key fields move together. |
-| INV-EC5 | Migrated saved loops load, trace, and wrap pure | `scene_loop_roundtrip.rs` + `scene_loop_roundtrip_gate.rs` extended: a pre-corridor fixture (count/stride/jitter_period shape) loads → trace finds all three atoms → exposures are exactly the new whitelist → wrap-parity gate green on the migrated graph. Negative gate: zero `count`/`jitter_period`/`stride` param hits in the migrated def. |
+| INV-EC3 | The window always covers the visible range: `ahead ≥ ceil(far/cell) + 1` and `BEHIND + ahead + 1 ≤ CAPACITY` | Unit test over the real far band (row curation `min(1.0, default)` .. `(20·cell).min(10000)` — `scene_modifier.rs:533-536`; plan default 4·cell — `:684`) asserts the D5 formula's bound, including far < cell (ahead floors at 4); clamp path asserted at hand-set far beyond the band. |
+| INV-EC4 | Stasis key completeness: every frame-varying input is in the key (`use_camera` included — D6) | RT_INSTANCING's INV-RTI4 gpu_proofs stay green on a corridor graph with the camera parked AND at speed — the existing dispatch-count proof (`crates/manifold-renderer/tests/gpu_proofs/rt_instancing.rs:672-696`) extended with a corridor case asserting descriptor dispatches happen on cell-crossing frames only; `rt_noise_gate.py` green; completeness is the review rule on the key struct (every `run` input has a key field) — no debug_assert, the dispatch-count proof is the enforcement. |
+| INV-EC5 | Migrated saved loops load, trace, and wrap pure | `scene_loop_roundtrip.rs` + `scene_loop_roundtrip_gate.rs` extended: a pre-corridor fixture (count/stride/jitter_period shape) loads → trace finds all three atoms → exposures are exactly the new whitelist → wrap-parity gate green on the migrated graph. Cases: P1-era (no stride/jitter_period), P4 card-written (J = S), hand-desynced (S=7, J=3 → travel 7→6 cells per the D7 ruling). Negative gate: zero `count`/`jitter_period`/`stride` param hits in the migrated def. |
 
 ## 5. Phasing
 
@@ -328,29 +395,38 @@ semantics for migration (D7) · touching per-object mesh modifier chains
 (the curated-list trap, unchanged from SCENE_LOOP).
 
 - **P1 — The windowed atom.** Deliverables: section 3.1 surface
-  (scene_array), section 3.2 deltas (loop_camera), WGSL body, stasis key,
-  capacity constant; `gpu_tests` value proofs (CPU oracle: window placement
-  at multiple base_cells, `(cell mod P)` jitter parity across crossings,
-  mask beyond `behind + ahead + 1`); the D8.1 exact-seam pixel gates at four
+  (scene_array), section 3.2 deltas (loop_camera), WGSL body (Euclidean mod
+  pinned), stasis key (with `use_camera`), capacity constant; `gpu_tests`
+  value proofs (CPU oracle with `rem_euclid`: window placement
+  at multiple base_cells INCLUDING negative, `(cell rem P)` jitter parity
+  across crossings, mask beyond `behind + ahead + 1`); the D8.1
+  near-seam buffer-equality test; the D8.2 exact-seam pixel gates at four
   (K,P) shapes; INV-EC1 CPU grid test, INV-EC2/EC3 unit tests.
-  Gate: new gates green; `scene_loop_wrap_parity.rs` reds first on a
-  deliberately raw-index-keyed jitter (one-frame source change, run, revert —
-  the red-first protocol); gpu-proofs suite green.
+  Sequencing (review finding 9): `scene_loop_wrap_parity.rs` builds graphs
+  with `count`/`stride` params that this phase's rename deadens — FIRST
+  rewrite the parity file to the new params and baseline it green, THEN
+  red-first on a deliberately truncated-mod jitter (one-frame source change,
+  run, revert). A red-for-the-boring-reason red proves nothing.
+  Gate: new gates green; gpu-proofs suite green.
   Round-trip: none (no serialized change yet — the old param names still
   exist in the manifest). Test scope: `manifold-renderer` nextest + lib
   gpu_tests; clippy `-p manifold-renderer`.
   Demo: none — L1 (atom-level phase; the observable surface arrives in P2).
 - **P2 — Plan builder, card surface, migration.** Deliverables: section 3.3
   (plan builder deltas, whitelist, coupled writes, `migrate_fixed_row_scene_loops`
-  + exposure-row drop, both load call sites); `scene_loop_roundtrip` /
-  `scene_loop_roundtrip_gate` migration extensions (INV-EC5); D8.2 unclipped
+  + exposure-row drop per the answered binding-ruling, both load call sites,
+  migration order + jitter_period gate per D7); `scene_loop_roundtrip` /
+  `scene_loop_roundtrip_gate` migration extensions (INV-EC5); D8.3 unclipped
   near-seam gate; ui-snap flow `scene-setup-loop.json` re-run (Pattern row
   visible, writes land, Stride row writes patterns_per_loop).
   Seam brief (section 6 applies to the param renames): old → new written out
   in section 3.3; call-site inventory = the two whitelist entries, the two
   coupled-write entries, the mint params, and the migration fns — the
   compiler plus the INV-EC5 negative gate are the migration; there is no
-  parallel old path.
+  parallel old path. Re-derivation command (run at execution time; if the
+  count differs from the two/two listed, stop and list the new sites before
+  touching anything):
+  `rg -n '"stride"|"jitter_period"|"count"' crates/manifold-renderer/src/node_graph/scene_modifier.rs crates/manifold-renderer/src/node_graph/primitives/scene_array.rs crates/manifold-renderer/src/node_graph/primitives/loop_camera.rs crates/manifold-renderer/tests/scene_loop_*.rs`
   Gate: gates green; negative `rg` (zero `stride`/`count`/`jitter_period`
   hits in migrated fixtures + zero in the whitelist/coupled tables);
   round-trip gate green.
@@ -360,11 +436,15 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   nextest, `manifold-app` compile/clippy (ui-bridge card consumers), ui-snap
   flow.
 - **P3 — Acceptance on the reference projects + supersession sweep.**
-  Deliverables: D8.3 Stone Effects v1/v2 headless acceptance script
+  Deliverables: D8.4 Stone Effects v1/v2 headless acceptance script
   (`headless_content_thread` + per-tick GeneratorRenderer readback, the
-  BUG-b6iv repro pattern) run pre/post migration; `rt_noise_gate.py` +
+  BUG-b6iv (scene-loop-wrap-one-frame-object-blip) repro pattern) run pre/post migration; `rt_noise_gate.py` +
   gpu-proofs on corridor shapes; RT corridor proof at speed (INV-EC4);
   migration of the two reference projects verified in-app.
+  Content-thread work gate (review finding 10): a `MANIFOLD_RENDER_TRACE=1`
+  headless run at crossing cadence (patterns_per_loop = 8, bars = 1) — any
+  frame >20ms fails the phase; the crossing rewrite + refit spike is
+  measured, not argued.
   Gate: v1 blip metric at baseline across wrap-adjacent ticks; v2 no flash;
   RT gates green; D8.1/8.2 green on the migrated graphs.
   Demo: the acceptance numbers table + wrap-adjacent tick plots — L2 (Peter
@@ -377,18 +457,21 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   BUG-aepq (scene-loop-far-edge-hole-fog-default) closed (moot per its own
   description); BUG-b6iv verified-fixed or re-pointed with its metric
   outcome; BUG-nkxg (scene-loop-copies-gate-VD) folded into the P3 acceptance
-  (its pixel-on-real-import gap is D8.3's deliverable).
+  (its pixel-on-real-import gap is D8.4's deliverable).
 
 ## 6. Decided — do not reopen
 
 1. The corridor extends `node.scene_array` in place; no new primitive (D1, 2.5 audit).
 2. Camera arrives as a `Camera` port; no scalar-position wires (D2).
 3. Stride = patterns_per_loop, travel = K·P·cell, purity by construction for any integers K,P (D3).
-4. jitter_period is gone; jitter keys on `cell mod pattern_length` (D4).
+4. jitter_period is gone; jitter keys on Euclidean `cell rem pattern_length` — the mod convention is Euclidean on the signed cell index, pinned in the body and the CPU oracle both (D4, review finding 1; WGSL `%` truncates and the plan's home = −cell/2 puts every window across cell zero).
 5. The window derives from camera.far per frame; capacity is the constant 32; no window/copies card row ever (D5).
-6. Migration upgrades old params at load by exact arithmetic (J | S under shipped couplings); no dual semantics (D7).
-7. Acceptance = wrap-parity pixel gates + Stone Effects v1/v2 as held-out inputs (D8).
+6. Migration upgrades old params at load by exact arithmetic (J | S under shipped couplings); no dual semantics (D7). When J ∤ S (hand-desynced graphs), the migration ALWAYS lands pure and travel may change — K = round(S/J); travel-preservation is unrepresentable, purity wins (D7 ruling).
+7. Migration order: corridor migration before the exposure migration; the exposure migration's jitter_period re-stamp is gated on the old node shape (D7).
+8. Acceptance = wrap-parity pixel gates + Stone Effects v1/v2 as held-out inputs (D8); the enforcing purity gate is the near-seam BUFFER equality test, the pixel gates are sentinels (D8 gate roles).
 8. BUG-cb2k (scene-loop-seam-cut-under-live-param-modulation) (live-modulation seam cuts) is out of scope; the design leaves the two-clause purity predicate as its hook (section 3.5).
+9. `use_camera` is in the stasis key — the unwired-run and parked-wired key collision is a stale-buffer bug without it (D6).
+10. The exposure-row drop carries a dangling-reference inventory (bindings, OSC/MIDI mappings, aliases) as P2 deliverables; whether renamed-param bindings are rewritten in place or dropped is a Peter ruling, defaulted to drop + log (section 3.3).
 
 ## 7. Deferred
 
