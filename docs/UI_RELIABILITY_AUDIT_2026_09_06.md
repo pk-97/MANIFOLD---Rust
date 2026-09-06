@@ -7,13 +7,14 @@ Scope: parameter projection, modifier card adaptation, graph-editor mapping,
 input ownership, structural editing, scene update propagation, RT transitions,
 GPU lifetime and selected performance paths. The first pass traced mappings;
 the second broadened coverage across these classes. This remains a staged
-health check with the explicit verification limits below. No application
-changes were landed. Astra owned diagnosis; one read-only Luna lane inventoried
+health check with the explicit verification limits below. The initial audit
+made no application changes. Astra owned diagnosis; one read-only Luna lane inventoried
 interaction tests, whose relevant paths were then checked by Astra.
 
 ## First repair: mapping ownership and live values
 
-Implemented locally on `codex/ui-contract-audit`; landing remains pending.
+Implemented on `codex/ui-contract-audit` in commits `2a97709aa`, `1d596aedc`
+and `860e1c124`; the final local gate passed all seven required checks.
 The findings below describe the audited baseline, not the repaired branch.
 Card open actions now carry their target, parameter and clicked anchor. Both
 mapping popovers capture a stable owner for every edit, and readers use the
