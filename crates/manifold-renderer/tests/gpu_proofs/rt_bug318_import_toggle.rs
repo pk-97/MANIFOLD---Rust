@@ -156,6 +156,88 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
     );
 }
 
+#[test]
+fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
+    let h = harness::shared();
+    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/hostile/mixamo_like.glb");
+    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    eprintln!("[bug318-reduced-off] import report: {report:?}");
+    let mut manifest = harness::import_rt_manifest(&def, true, false);
+    let temporal_id = manifest
+        .iter()
+        .find(|p| p.id().ends_with("_temporal_upscale"))
+        .map(|p| p.id().to_string())
+        .expect("imported def exposes temporal_upscale card param");
+    manifest
+        .get_mut(&temporal_id)
+        .expect("temporal_upscale id came from manifest")
+        .value = 1.0;
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_def_with_device(
+        def,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        Some(&manifest),
+    )
+    .expect("imported def must build a runtime");
+    harness::assert_no_shadowed_def_params(&runtime, "bug318 reduced import");
+    let target = h.make_target("bug318-reduced-off");
+    let scene_node = runtime
+        .graph
+        .nodes()
+        .find(|n| n.params.get("temporal_upscale").is_some())
+        .map(|n| n.id)
+        .expect("imported scene contains temporal_upscale");
+
+    let scene_step = runtime
+        .plan
+        .steps()
+        .iter()
+        .find(|s| s.node == scene_node)
+        .expect("compiled plan contains render_scene");
+    for port in ["depth", "velocity"] {
+        let resource = scene_step
+            .outputs
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|&(_, resource)| resource)
+            .expect("temporal upscale forces depth and velocity outputs");
+        assert_eq!(
+            runtime.plan.resource_canvas_scale(resource),
+            Some((2, 3)),
+            "compiled {port} attachment must be reduced resolution"
+        );
+    }
+    for f in 0..4 {
+        frame(&mut runtime, h, &target.texture, f, &manifest);
+    }
+    // Toggle off before the host has rebuilt the compiled attachment layout.
+    // The executor must keep the reduced compiled mapping valid for this
+    // frame; no convergence claim is made here because this harness has no
+    // host attachment rebuild between frames.
+    runtime
+        .graph
+        .set_param(
+            scene_node,
+            "temporal_upscale",
+            manifold_renderer::node_graph::ParamValue::Bool(false),
+        )
+        .expect("temporal_upscale exists");
+    frame(&mut runtime, h, &target.texture, 4, &manifest);
+
+    let px = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    assert!(px.iter().all(|v| v.is_finite()), "reduced→native toggle produced non-finite output");
+    assert!(
+        magenta_fraction(&px) < 0.5,
+        "reduced→native toggle produced magenta fallback (fraction {})",
+        magenta_fraction(&px)
+    );
+}
+
 
 /// BUG-319 — Peter's ACTUAL break, with the ACTUAL asset (held-out fixture;
 /// skip if absent): fresh import of the apricot GLB, render, live rt_enabled

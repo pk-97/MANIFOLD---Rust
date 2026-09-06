@@ -62,6 +62,16 @@ def run_cmd(cmd, cwd, timeout):
     return r.returncode, r.stdout, r.stderr, duration
 
 
+def write_landing_log(repo, label, stdout, stderr):
+    """Persist the complete subprocess transcript for post-gate diagnosis."""
+    log_dir = Path(repo) / "target" / "landing-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    path = log_dir / f"{label}-{stamp}-{time.time_ns()}.log"
+    path.write_text(stdout + stderr)
+    return path.resolve()
+
+
 def parse_package_from_cargo(toml_path):
     """Extract the first 'name = \"...\"' line from a Cargo.toml."""
     content = Path(toml_path).read_text()
@@ -335,6 +345,8 @@ def main():
                     cmd += ["--skip", s]
                 print(f"[gpu-proofs] scoped to filters={filters} skips={skips}")
             exit_, out, err, duration = run_cmd(cmd, cwd=repo, timeout=7200)
+            transcript = write_landing_log(repo, "gpu-proofs", out, err)
+            print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
             # summary prints "Failed tests:"/"Drifted goldens:" ABOVE its
             # per-binary list, so a bare last-20-lines tail scrolls the names

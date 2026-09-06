@@ -381,6 +381,11 @@ invariant a fused def must respect:
     registered recompute fails the fuse closed at install time
     (`has_recompute`) — the same fail-safe contract every other cut rule
     follows: refusal always renders unfused, unfused is always correct.
+11. **Live render-resolution toggles** — `render_scene` uses the compiled
+    depth/velocity attachment dimensions until the host rebuilds the runtime.
+    A pending `temporal_upscale` change must not resize the render beneath
+    existing attachments, in either direction. Merely checking that outputs
+    exist is insufficient; native and reduced attachments can both be present.
 
 ## 10. Test surface & how to debug
 

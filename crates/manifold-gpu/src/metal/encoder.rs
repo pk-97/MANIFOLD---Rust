@@ -1864,6 +1864,8 @@ impl GpuEncoder {
         assert_eq!(target.format, crate::GpuTextureFormat::R32Float);
         assert_eq!(source.width, target.width);
         assert_eq!(source.height, target.height);
+        assert!(unsafe { target.raw.usage() }.contains(MTLTextureUsage::ShaderWrite),
+            "copy_depth_to_float destination must allow shader writes");
         let pipelines = unsafe { &*self.clear_pipelines };
         self.dispatch_compute(
             &pipelines.depth_to_float,
