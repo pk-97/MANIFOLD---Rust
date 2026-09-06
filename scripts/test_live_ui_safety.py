@@ -12,6 +12,22 @@ class SafetyDemoTests(unittest.TestCase):
                 safety.demonstrate("test.sock")
             drag.assert_not_called()
 
+    def test_native_handover_verifies_state_without_editing(self):
+        before = {"frame": 10, "data": {"state": {"layers": [{"name": "Test"}]}}}
+        after = {"data": {"state": before["data"]["state"], "input": {
+            "mousePressed": False, "textSelecting": False, "lastInterruption": {
+                "reason": "native_input", "id": "native-handover", "frame": 12}}}}
+        with mock.patch.object(safety, "request", side_effect=[before,
+                RuntimeError("native input interrupted the sequence"), after]) as request:
+            self.assertTrue(safety.await_native("test.sock")["ok"])
+        actions = [c.args[1]["action"] for c in request.call_args_list if c.args[1]["op"] == "act"]
+        self.assertEqual(actions, [{"Step": {"frames": 120}}])
+
+    def test_native_handover_does_not_swallow_other_failures(self):
+        with mock.patch.object(safety, "request", side_effect=[{"frame": 10}, RuntimeError("disconnected")]):
+            with self.assertRaisesRegex(RuntimeError, "disconnected"):
+                safety.await_native("test.sock")
+
     def test_disconnect_drag_sends_json_and_closes_without_reading(self):
         connection = mock.MagicMock()
         connection.__enter__.return_value = connection

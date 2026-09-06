@@ -74,9 +74,33 @@ def demonstrate(path, disconnect_after=0.15):
     return {"ok": True, "disconnect_after": disconnect_after, "restored": restored, "interruption": interruption, "checks": checks}
 
 
+def await_native(path, timeout=90):
+    """Wait without editing for a real native event; then verify handover."""
+    before = request(path, {"op": "observe", "contains": "px/beat"})
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            request(path, {"op": "act", "id": "native-handover",
+                           "action": {"Step": {"frames": 120}}})
+        except RuntimeError as error:
+            if "native input interrupted" not in str(error):
+                raise
+            after = request(path, {"op": "observe", "contains": "px/beat"})["data"]
+            last = after["input"]["lastInterruption"]
+            if (last["reason"] != "native_input" or last["id"] != "native-handover"
+                    or last["frame"] <= before["frame"]
+                    or after["input"]["mousePressed"] or after["input"]["textSelecting"]
+                    or after["state"]["layers"] != before["data"]["state"]["layers"]):
+                raise RuntimeError(f"native handover postcondition failed: {after}") from error
+            return {"ok": True, "input": after["input"], "error": str(error)}
+    raise RuntimeError("no native interruption observed before deadline")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True)
     parser.add_argument("--disconnect-after", type=float, default=0.15)
+    parser.add_argument("--await-native", action="store_true", help="wait for native Escape/focus input without editing")
     args = parser.parse_args()
-    print(json.dumps(demonstrate(args.socket, args.disconnect_after), separators=(",", ":")))
+    result = await_native(args.socket) if args.await_native else demonstrate(args.socket, args.disconnect_after)
+    print(json.dumps(result, separators=(",", ":")))

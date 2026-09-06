@@ -18,7 +18,7 @@ reason/frame/held button/remaining events for runtime evidence.
 
 Verified:
 - Final feature-enabled clippy (`--tests -- -D warnings`), ten focused Rust tests
-  including shared-handler cursor/button/modifier restoration, six Python tests.
+  including shared-handler cursor/button/modifier restoration, eight Python tests.
 - Standard landing gate: design status, flow selection, deny, ignored-test guard
   and default touched/dependent crate clippy passed. Test leg FAILED:
   `gap_start_probe::gap_start_black_frame_probe` cannot load
@@ -29,32 +29,41 @@ Verified:
   This does NOT make the landing gate green.
 - Explicit existing flows: drag-clip, drag-clip-release-over-inspector,
   select-and-inspect all passed (path selection had selected no flows).
-- Live generator workflow on hardened build: 3.68 seconds, one Caustics clip
+- Live generator workflow on hardened build: 3.78 seconds, one Caustics clip
   start 0/duration 128 (32 bars, 4/4), speed 0.35/scale 4.50/shine 0.60, undo/redo
   and playback/stop passed; screenshot observed. No project was saved.
-- Timed disconnect rollback and subsequent trim/undo/redo passed. The subsequent
-  strengthened safety flow REQUIRES held-button diagnostic evidence and still
-  needs a final live run on the latest build; do not overstate the earlier run.
+- Final diagnostic-enforced disconnect probe passed: buttonHeld=true,
+  remainingEvents=51; clip rolled back to 128, input/cursor restored, subsequent
+  trim64/undo128/redo64/undo128 passed.
+- Native Escape interrupted non-editing wait id=native-handover with an explicit
+  error; no held mouse/selection, layer/clip intact. This was a wait interruption,
+  not a native key injected during a held drag. The held-drag cleanup is covered
+  by the separate disconnect probe. `--await-native` now packages the native
+  probe in the safety script (extracted after the live probe; unit-tested).
 
 Next:
-1. When Peter's Mac is idle, run the latest generator + strengthened safety flows
-   and native-input takeover drill. CUA attachment took 175s and native Escape 38s
-   while Peter used the Mac; stop native interactions during his other work.
-2. Resolve the fixture-access gate blocker, then use `scripts/land_branch.py`.
-   No merge/push has occurred. Keep BUG-m7nb open until these checks and landing.
-3. Update this handoff/design status and superseded references when landed.
+1. Resolve the fixture-access gate blocker, then use `scripts/land_branch.py`.
+   Direct read still returns macOS Operation not permitted, even escalated.
+   No merge/push has occurred. Keep BUG-m7nb open until landing. All other
+   required checks are green; do not repeat broad checks without new changes.
+2. Update this handoff/design status and superseded references when landed.
+
+Peter clarified that the long CUA timings included his wait to approve tool
+calls. Do NOT attribute these delays to app/connection performance or Mac use.
+Actual approved Escape ran in 0.015s and AX close in 0.797s. Native input still
+shares OS focus, so coordinate with Peter when using his desktop.
 
 Exact commands:
 `.claude/scripts/with-build-lock.sh cargo build -p manifold-app --features ui-automation --manifest-path "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1/Cargo.toml"`
 `python3 "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1/scripts/launch_live_ui.py"`
 
-Test PID 63179 was verified as our temporary bundle, terminated without taking
-focus, and exit verified. Its matching `session.active` marker and private socket
-were removed so the test does not leave a false crash notice. Do not kill any
-other MANIFOLD instance; the ordinary singleton remains enforced.
+Latest test PID 54879 exited after the normal native AX close-button action;
+exit was verified. No project was saved. The earlier PID 63179 termination and
+PID-matched sentinel cleanup are complete. No test app remains running.
+Do not kill other MANIFOLD instances; the ordinary singleton remains enforced.
 
-Temporary evidence: `/private/tmp/manifold-live-demo-final.json`,
-`manifold-live-safety-final.json` (predates diagnostic assertion),
-`manifold-live-tests-final.log`, `manifold-live-clippy-final.log`,
-`manifold-live-landing-gate.log`, `manifold-live-remaining-tests.log`,
-`manifold-live-headless-flows.log` (all under `/private/tmp`).
+Temporary evidence (all `/private/tmp/`): `manifold-live-demo-final.json`,
+`manifold-live-safety-final.json` (now includes held-button diagnostics),
+`manifold-native-handover.json`, `manifold-live-tests-final.log`,
+`manifold-live-clippy-final.log`, `manifold-live-landing-gate.log`,
+`manifold-live-remaining-tests.log`, `manifold-live-headless-flows.log`.
