@@ -32,6 +32,7 @@ REPO = Path(__file__).resolve().parent.parent
 MATRIX = [
     ("manifold-app", "profiling"),
     ("manifold-app", "ui-snapshot"),
+    ("manifold-app", "ui-automation"),
     ("manifold-app", "journey-proofs"),
     ("manifold-app", "perf-soak"),
     ("manifold-core", "bench-timing"),

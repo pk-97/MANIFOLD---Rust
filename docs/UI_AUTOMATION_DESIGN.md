@@ -1,6 +1,6 @@
 # UI Automation — the agent drives the instrument
 
-**Status:** IN PROGRESS — P1 (selector surface) + P2 (script driver: gesture synthesis through the production input path, `--script` runner) SHIPPED 2026-07-05; L3 verification is available repo-wide via `scripts/ui-flows/` (`DESIGN_DOC_STANDARD.md` section 10 (Verification levels)). P3 (live door) + P4 (flow library) not built — their briefs must re-derive Runner anchors against UI_HARNESS_UNIFICATION's landed P2 rewrite of the `--script` Runner, not this doc's P2 code. · 2026-07-03 · Fable · baseline-reviewed 2026-07-05
+**Status:** IN PROGRESS — P1/P2 shipped. P3 primary-window implementation and initial P4 generator flow verified on branch `codex/live-ui-control`, paused by Peter 2026-09-06 before landing. Full landing gate and final hardening remain; see `WORKTREE_HANDOFF.md` in slot-1.
 **Prerequisites:** none. P1–P2 extend the shipped ui-snap harness; P3–P4 are self-contained dev infra.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase. P3–P4 carry pre-flight re-derivation commands.
 
@@ -9,6 +9,83 @@ Peter, 2026-07-03: *"we will likely need custom infra so you can interact with M
 The governing insight: **Playwright works because the DOM gives it three things — find, act, wait. MANIFOLD's bitmap UI already has two-thirds of the substrate**: a real retained tree with durable widget identity (`WidgetId`), a headless harness that renders the real UI and drives one real click, and a proven input seam. This design finishes the triad: the tree dump becomes the selector surface (the "DOM"), a gesture driver acts by widget identity through the production input path, and explicit sync replaces auto-wait. One interaction core, two transports: the headless harness (scripted, deterministic) and a dev-only live door into the running app.
 
 Companion docs: `docs/HEADLESS_UI_HARNESS.md` (the shipped harness this extends — read it whole before P1) · `docs/MCP_INTERFACE_DESIGN.md` (the product AI surface; section 9 pins how it may later forward to this layer — this design is NOT part of it) · `docs/archive/INPUT_IDENTITY_UNIFICATION.md` (why `WidgetId` exists and how input tracks it).
+
+## Live primary-window contract — 2026-09-06
+
+Peter: “agents need to use the same app people use”; reduce repeated screenshots
+with compact observations and reliable commands. This section governs live work;
+the historical TCP/thread/`EventLoopProxy` P3 proposal is superseded.
+
+Audit at base `909ad80bc`: `window_input.rs::input_cursor_moved`,
+`input_mouse_input`, `input_mouse_wheel`, and `input_keyboard` already own native
+window input. `about_to_wait` renders on the existing frame cadence.
+`manifold_ui::automation` owns selectors, stable widget targets and drag math;
+`viewport.visible_clip_rects` supplies actual clip geometry. The headless runner
+is fixture-backed and is not a live session. Extend these owners.
+
+- **L-D1:** feature `ui-automation` plus explicit `MANIFOLD_UI_SOCKET` enables a
+  per-instance Unix socket. Existing private directory, owner-only socket, no TCP,
+  shell evaluation, arbitrary file read, or project mutation endpoint. Shipping
+  builds without the feature have no listener. No new dependency/thread/lock.
+- **L-D2:** `Application` owns `Option<LiveUi>`, serviced once after a real render
+  tick. `LiveUi` owns transport and at most one pending gesture. No UI references
+  cross threads; content ownership and undo remain unchanged.
+- **L-D3:** reuse `AutomationAction`/`AutomationTarget`. Own the deserialized
+  `Surface.surface` string instead of leaking it; JSON shape stays compatible.
+  Live Pointer/Key/Text/Step reach the exact native input handlers. Unsupported
+  headless verbs fail explicitly, particularly direct `SetParam` fixture setup.
+- **L-D4:** one event per real frame permits drag thresholds and state sync to
+  run. Resolve against current layout; reject absent/ambiguous/offscreen targets.
+  Reply means input dispatched, not a successful project edit. Flow expectations
+  inspect the real content snapshot with a bounded deadline and never retry edits.
+- **L-D5:** reuse WidgetId, names, text, ranges through existing parameter rows,
+  and clip geometry. No second widget registry or mirrored mutable project.
+  Observe is on-demand; idle service does no tree walk, serialization or allocation.
+- **L-D6:** primary window first. Native menus, file dialogs and other windows
+  remain computer-use operations. Screenshots verify appearance when relevant.
+
+Rejected alternatives: full AccessKit coverage first would add broad focus and
+screen-reader design before proving the requested workflow. Driving fixture
+handlers in a headless harness would not meet live fidelity. The original TCP
+worker/proxy design adds a thread/channel and network exposure unnecessarily:
+the live event loop already ticks. Bounded nonblocking socket work is the smaller
+seam. Its cost is frame-paced command latency; this is a debugging tool, not a
+real-time performance-control protocol. The kill test is live click/drag/undo,
+not a compile or a harness screenshot.
+
+Committed seams: `LiveUi::bind(&Path) -> io::Result<LiveUi>`;
+`Application::tick_live_ui(&mut self)`; transport `bind`, `poll() -> Option<Value>`,
+`reply(Value)`, `connected() -> bool`, `generation() -> u64`. Transport is UI-thread
+resident, nonblocking, one request/client, 64 KiB requests, 2 MiB replies,
+64 KiB IO per direction per poll, five-second client timeout. Generation fences
+prevent delivery of old replies to new clients; disconnect releases held input.
+
+Wire v1: newline JSON with optional `id`; `op` is `observe` (optional `contains`),
+`resolve` (`target`), `act` (`action`), or `timeline_point` (`beat`, `layer`).
+Coordinates are primary-window logical pixels. Observe returns protocol, widget
+metadata, clip geometry and a content snapshot summary. Responses carry `ok`,
+`frame`, and `data` or `error`; action completion carries `dispatched` and `state`.
+The Python standard-library client `scripts/live_ui.py` supplies requests,
+common gestures and sequential JSON flows with read-only expectation polling.
+
+Invariants/checks: transport tests prove permission, framing, timeout, bounded
+write and reply isolation; request tests reject unknown operations/fields;
+existing selector tests prove exact-one matching. Source check: live module may
+not name `ContentCommand`, `EditingService`, or headless fixture dispatch.
+Native and automated modifiers share `input_modifiers` as well.
+
+Execution: entry base as above; read back shared input and selector contracts.
+Deliver live module/transport, feature wiring, client and reproducible generator
+flow. Gate with focused app/UI clippy/tests, feature-enabled transport tests,
+Python client tests, then the running-window workflow and undo/redo. Observe
+32 bars as 128 beats in 4/4 and playback advancement; produce a final native
+screenshot. Use the existing landing gate, keeping other worktrees untouched.
+
+Deferred: editor/output windows (trigger: first multiwindow workflow), full
+accessibility (trigger: dedicated accessibility scope), native-dialog automation
+(use OS computer tools), pixel capture in protocol (OS screenshot already works),
+arbitrary scripts/plugins inside the app (not required). New behaviours extend
+the shared input/target vocabulary and add a live flow; no direct model setters.
 
 ---
 
@@ -56,7 +133,7 @@ before P2 touches the file (the miss-fallback currently sits near `interact.rs:6
 - **D6 — No silent fallbacks, ever.** A target that doesn't resolve, or a synthesized gesture that misses, fails the script loudly with the dump attached as evidence. The existing `interact.rs` miss-fallback (`interact.rs:62-67`) is deleted in P2. (House rule: `feedback_no_silent_fallbacks_or_interim_stopgaps`.)
 - **D7 — The script owns the clock.** Headless runs pass explicit time into `pointer_event`/build; a `step` action advances frames by fixed dt. No wall-clock reads in the driver. Same run → same pixels → same dump, every time.
 - **D8 — Names are `&'static str` component names; dynamic identity comes from structure.** Panels name interaction points with static strings (`"layer_header.mute"`); *which row* comes from the selector's ancestor query (section 3), not from allocating per-row name strings. The editor rebuilds its tree every frame — per-node `String` names would be a per-frame alloc on the UI thread. Hot-path rule wins; `Vec<Option<&'static str>>` costs nothing.
-- **D9 — The live door ships in dev builds only.** Feature `ui-automation` (off by default, like `ui-snapshot`; renamed from `automation` in the 2026-07-05 baseline review — the automation-lanes UI shipped 2026-07-04 and owns the bare word in this codebase now), std-TCP + JSON-lines on `127.0.0.1`, port only via explicit `--automation-port <n>`. No tokio, no auth token: the feature is compiled out of shipping builds, so the venue laptop never has the surface at all. Rejected: a second product server (duplicates MCP's job); a bearer token (ceremony for a dev-only, loopback, opt-in flag).
+- **D9 — Live control is explicitly enabled.** Feature `ui-automation` plus `MANIFOLD_UI_SOCKET`, owner-private Unix socket, no new thread/channel. The current live contract above supersedes the original TCP proposal.
 - **D10 — Minimal assertions in the script driver; pixel goldens stay deferred.** `assert` steps cover exists / text-equals / count / rect-within (section 6). Everything richer is the reading agent's job over the emitted dumps. Golden-image diffing remains deferred exactly as `HEADLESS_UI_HARNESS.md` decided — a moving visual design would make it noise.
 
 ## 3. Selector model — the dump becomes the DOM
@@ -85,7 +162,7 @@ Lives in `manifold-ui` (no app dependencies; both transports and the harness rea
 
 ```rust
 /// One automation request. Transport-agnostic: the ui-snap script driver
-/// (headless) and the dev TCP server (live) both compile scripts down to this.
+/// (headless) and the opt-in live connection both compile scripts down to this.
 pub enum AutomationAction {
     /// Resolve `target` against the current build, synthesize the gesture
     /// through the production input path (D4).
@@ -170,25 +247,48 @@ The `select:`/`open:` `--interact` verbs become sugar for one-step scripts; `int
 
 Determinism (D7): the driver owns a monotonically stepped clock; `Step` advances it by `frames × dt` at the fixture's fixed dt. ⚠ VERIFY-AT-IMPL: where time currently enters `UIRoot` build/animation (the `time: f32` on `pointer_event` is caller-supplied; confirm no other wall-clock reads on the headless path — `rg -n "Instant::now|SystemTime" crates/manifold-app/src/ui_snapshot/ crates/manifold-ui/src/`).
 
-## 7. The live door (dev builds only)
+## 7. Using the live connection
 
-The piece that makes the agent a user of the *running* instrument — real content thread, generators animating, transport running, both windows up.
+The current live contract above replaces the original P3 TCP worker proposal.
+The ordinary application singleton is preserved: close the existing MANIFOLD
+instance before launching a test build. The launcher refuses a failed startup;
+it never kills another instance or bypasses the lock.
 
-- **Transport:** feature `ui-automation` in `manifold-app`. A std `TcpListener` thread on `127.0.0.1:<port>` (only when `--automation-port` is passed), speaking JSON-lines: one request per line, one reply per line. No tokio (D9). Precedent for the thread-with-channel shape: the MCP design's request lane (`MCP_INTERFACE_DESIGN.md` section 3 (Architecture)), shape reused, crate not shared.
-- **Threading:** requests cross to the UI thread via a bounded(8) crossbeam channel + `EventLoopProxy` wakeup. `main.rs:112` changes to `EventLoop::with_user_event::<AutomationWake>()` (or `()` as pure wake — executor's choice, both are winit-supported); the handler services **at most one automation request per event-loop turn** in the `user_event` arm. The reply travels on the request's own bounded(1) channel. Zero new shared state (hard rule).
-- **Injection:** live requests compile to calls on the `window_input.rs` dispatchers (D4) — the same functions winit events enter through, with `WindowTarget` picking the workspace.
-- **Sync verbs (live-only additions):** `WaitFor { condition, timeout_ms }` where condition ∈ { `DataVersionAtLeast(u64)` (`content_state.rs:62`), `SelectorExists(query)`, `StructureVersionChanged` (`tree.rs:132`) }. Timeout = loud failure with dump (D6). This is the auto-wait leg of the triad.
-- **Screenshot, live:** ⚠ VERIFY-AT-IMPL — the UI presents to a winit drawable; a live `Snapshot` needs a readback seam (render the UI pass to an offscreen texture and blit, or copy before present). Read `ui_snapshot/render.rs` and the present path in `app_render.rs` before designing the copy; the harness's readback (`render.rs`) is the precedent. Program-output snapshot (the IOSurface front buffer) is deliberately NOT duplicated here — that is MCP's `get_output_snapshot` (`MCP_INTERFACE_DESIGN.md` section 7 (Preview render path)); if it is needed for automation before MCP ships, escalate rather than parallel-build.
-- **Content mutations:** none via this surface. The automation layer drives *input*; whatever the input causes flows through the existing `ContentCommand`/`EditingService` lanes like any user gesture. The live door adds no mutation verbs of its own (that separation is what keeps its security story trivial).
+From the worktree, build with the shared build lock:
 
-**Forward constraint (pinned):** if the product MCP surface ever exposes UI driving (agent-assists-user flows), it does so by forwarding to `AutomationAction` over this same channel, gated by its own product-grade auth — the enum is the contract, transports are swappable. Nothing in MCP v1 does this; the pin only prevents a future second action vocabulary.
+```sh
+.claude/scripts/with-build-lock.sh cargo build -p manifold-app --features ui-automation --manifest-path "$PWD/Cargo.toml"
+python3 scripts/launch_live_ui.py
+```
+
+The launcher prints the exact app bundle, PID, log and socket paths. Use that
+socket with the CLI; `<socket>` below is the returned path:
+
+```sh
+python3 scripts/live_ui.py --socket '<socket>' observe --contains speed
+python3 scripts/live_ui.py --socket '<socket>' click --name transport.play
+python3 scripts/live_ui.py --socket '<socket>' key Z --command
+python3 scripts/live_ui_generator_demo.py --socket '<socket>'
+```
+
+The demo refuses an existing project: it requires one empty Layer 1, default
+120 px/beat zoom, and 4/4. It creates a Caustics clip at beat zero lasting 128
+beats, configures speed/scale/shine through the value editors, proves clip and
+parameter undo/redo, and checks playback advances then stops. It does not save
+or publish a project. Native dialogs still use ordinary computer-use tools.
+
+`live_ui.py request '<JSON>'` exposes the protocol; `run <flow.json>` executes
+an array of `{"request": {...}}` and read-only `{"expect": {"data.path": value}}`
+steps. Expectations poll with a bounded timeout. Edits are never retried.
+Native mouse/keyboard input interrupts a pending sequence, which releases held
+input and reports an error; inspect state before continuing.
 
 ## 8. What does NOT change
 
 - `EditingService` stays the sole mutation gateway; automation mutates nothing directly — it produces input events.
 - The two-thread model is untouched. The live door is a UI-thread *requester*; it never touches the content thread (its only content-thread contact is reading `ContentState` snapshots the UI already has).
 - `UIInputSystem`, panel `handle_event` dispatch, and the winit dispatchers keep their exact behavior — automation enters through them, never around them.
-- Shipping builds are byte-identical in behavior: both features (`ui-snapshot`, `automation`) are compiled out.
+- Shipping builds are byte-identical in behavior: both features (`ui-snapshot`, `ui-automation`) are compiled out.
 
 ## 9. Phasing
 
@@ -196,20 +296,20 @@ Forbidden across all phases: coordinate scripting where a widget target exists (
 
 - **P1 — Selector surface. ✅ SHIPPED 2026-07-05** (L2 — editor/timeline/automation dumps read at landing: 107 graph targets with scope/node/port payloads, 9 clips with clip-id payloads, 7 automation strips/breakpoints, named transport + layer-header widgets; `cargo test -p manifold-ui --lib` 595/595; clippy clean). Landing note: the `custom_surfaces` enumeration is a sibling top-level dump key, not the per-node `targets` field the section 3 prose implies — no `UITree` node owns the graph canvas / clip / automation surfaces (they're addressed by screen rects), so the enumeration is carried alongside `nodes`; still strictly additive. Minor gap → VD-005. `manifold-ui`: name storage + builder plumbing (D8), `HitTargets` trait + graph-canvas, timeline-clip, and automation-lane impls (section 5); `manifold-app`: dump gains `widget`/`name`/`targets` (section 3); naming pass at the section 3 scope. Read-back: section 3, section 5, `dump.rs` whole, `graph_canvas/hit.rs` + `model.rs`, `automation_hit_tester.rs` whole. Deliverables: extended dump visible in `ui-snap editor --dump` and `timeline --dump`. Gate (positive): editor-scene dump lists every node/port the canvas `hit_test` can return, with payload ids; timeline dump lists every fixture clip and every automation-lane strip/breakpoint visible in the fixture; `cargo test -p manifold-ui --lib` green including new tests for name storage + a `HitTargets` enumeration test per impl. Gate (negative): `rg -n "String" crates/manifold-ui/src/` shows no per-node name `String` storage in `tree.rs` (names are `&'static str`). **Acceptance demo (L2, section 10):** the two dumps above are the artifacts — the landing reviewer reads them and confirms named widgets, graph targets with payload ids, clips, and automation-lane targets are present; absence of any category is a gate failure, not a note. Test scope: `-p manifold-ui --lib` + the two ui-snap runs; no workspace sweep (additive dev surface, no product path touched).
 - **P2 — Script driver. ✅ SHIPPED 2026-07-05** (L2 — both proving flows exit 0; drag-clip moved Plasma 1's clip 230→314px through the real `process_pointer`→`process_events`→`InteractionOverlay`→`AppEditingHost` path with 6 interpolated steps, before/after PNGs read at landing; `cargo test -p manifold-ui --lib` 604/604; clippy clean; D6 hard-failures verified — zero-match and ambiguous Pointer both exit non-zero with candidates; both negative gates zero hits). Landing notes: the enum lives in `manifold-ui`, which gained a `serde` dependency (workspace, for the JSON `--script` format the doc mandates — `AutomationTarget` uses a manual `Deserialize` that leaks the `Surface.surface` string to keep the doc's committed `&'static str` type); `AutomationAction::Text` has no headless injection seam and fails loudly (neither proving flow needs it); the headless drag routes clip mutations through a driver-held `crossbeam` channel whose receiver is never drained (`ContentCommand::send` only errors on disconnect), so the real mutation lands on the scene `Project` with no live content thread. `AutomationAction` enum in `manifold-ui` (section 4 committed shape), gesture synthesis incl. interpolated drag, selector resolver, `--script` runner + artifacts + `result.json`, `--interact` rewired as sugar, `interact.rs` fallback deleted (section 6 seam brief). Read-back: section 4, section 6, `interact.rs` whole, `ui_root.rs:989-1030`. Deliverables: two proving scripts committed under `scripts/ui-flows/`: `select-and-inspect.json` (click layer → assert inspector shows it) and `drag-clip.json` (drag a clip → assert moved rect + non-overlap held). Gate (positive): both scripts exit 0; deliberately-broken selector exits non-zero with candidates listed; drag script's dump shows the clip's new rect. Gate (negative): section 6 deletion gate; `rg -n "Instant::now|SystemTime" crates/manifold-app/src/ui_snapshot/` → zero hits. **Acceptance demo (L2, section 10):** `result.json` plus the numbered PNGs from both proving scripts — the landing reviewer looks at the drag-clip run's before/after PNGs and confirms the clip visibly moved. 2026-07-05 note: `interact.rs` has grown ~10× since the section 6 inventory was baked — the seam brief's re-derivation command is mandatory before any edit there. Test scope: `-p manifold-ui --lib`, `-p manifold-app --features ui-snapshot` builds, script runs. No workspace sweep.
-- **P3 — Live door.** Feature `ui-automation`, TCP JSON-lines thread, channel + `EventLoopProxy` wakeup, one-request-per-turn servicing, live injection via `input_*` dispatchers, `WaitFor` verbs, live `Snapshot` (resolve the ⚠ readback seam first — escalate if it needs a present-path change beyond a copy). Read-back: section 7 whole, `window_input.rs:1-60`, `app.rs:2533` region, MCP design section 3. Deliverables: `scripts/ui-flows/live-smoke.json` — connect, dump, click transport play, `WaitFor DataVersionAtLeast`, snapshot. Gate (positive): smoke script passes against a live run with a playing project; app with feature off has no listener (`lsof -i :<port>` empty). Acceptance demo (L4, section 10 — manual live drill by design). Gate (negative): `cargo build -p manifold-app` (default features) then `rg -n "automation" target/` symbol check via `nm` on the binary → no automation server symbols; `rg -c "Arc<Mutex|Arc<RwLock" crates/` count unchanged from phase start. Test scope: focused; manual live drill is the gate. Pre-flight: re-run section 1 re-derivation commands (this phase may execute months after P1).
-- **P4 — Flows + docs.** A starter library of real regression flows under `scripts/ui-flows/` (MIDI-map a param, open graph editor and select a node via surface target, mute/solo matrix), `docs/HEADLESS_UI_HARNESS.md` updated to cover the driver, this doc's status flipped. Gate: each flow runs green twice consecutively (determinism check — this is the acceptance demo, L2 per section 10); doc review by Peter. Test scope: script runs only.
+- **P3 — Live primary window. IN PROGRESS 2026-09-06.** Implementation and focused tests pass on `codex/live-ui-control`; paused before landing. Current types, limits, acceptance and deferred scope are in the live contract above.
+- **P4 — Flows + docs. IN PROGRESS 2026-09-06.** `scripts/live_ui_generator_demo.py` completed the live generator workflow, including undo/redo and playback checks, in 3.79 seconds. Other flow families and repeatability at alternate window sizes remain future work.
 
 ## 10. Decided — do not reopen
 
 1. Selector surface = the extended tree dump; no separate semantic tree (D1).
 2. Targets resolve by identity at act time; coordinate scripts forbidden where a widget target exists (D2).
-3. One `AutomationAction` enum; transports (xtask script runner, dev TCP server) compile to it; MCP may only ever forward to it (D3, section 7 pin).
+3. One `AutomationAction` enum; headless runner and opt-in Unix live connection reuse it. Unsupported live verbs fail explicitly.
 4. Headless injects at `UIRoot::pointer_event`/`key_event`; live injects at the `window_input.rs` dispatchers; no OS-level event synthesis (D4).
 5. Hit-test ⇒ register: custom surfaces implement `HitTargets` or the feature owning them is incomplete (D5).
 6. No silent fallbacks; misses fail loudly with the dump attached (D6).
 7. Script owns the clock; deterministic stepping in headless mode (D7).
 8. Names are `&'static str`; row identity via structural query, never per-row name allocation (D8).
-9. Live door: dev-feature only, loopback, opt-in port flag, std TCP, no tokio, no token, compiled out of shipping builds (D9).
+9. Live connection: explicit feature and private socket path; no TCP or new threads. The normal single-instance app lock remains in force.
 10. Assertions: the four D10 checks; pixel goldens stay deferred.
 11. The automation layer has zero mutation verbs; all effects flow through real input → existing command lanes (section 7, section 8).
 
