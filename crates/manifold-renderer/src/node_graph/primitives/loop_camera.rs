@@ -640,7 +640,8 @@ mod tests {
         let travel = phase * cell;
         let pos = [0.0f32, 1.5, travel];
         let target = [pos[0], pos[1], pos[2] + 1.0];
-        let expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let mut expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        expected.world_period = Some([0.0, 0.0, cell]);
         assert_eq!(base, expected, "zero roll/pitch/yaw must not perturb the camera at all");
     }
 }

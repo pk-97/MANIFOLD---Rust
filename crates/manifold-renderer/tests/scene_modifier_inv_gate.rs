@@ -267,6 +267,8 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         })
         .collect();
     let expected: std::collections::BTreeSet<(String, String)> = [
+        ("loop_camera", "pattern_length"),
+        ("scene_array", "cell_size"),
         ("loop_phase", "bars"),
         ("scene_array", "pattern_length"),
         ("loop_camera", "height"),
@@ -292,8 +294,9 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
     .collect();
     assert_eq!(
         targets, expected,
-        "INV-M3: Scene Loop section rows must be exactly the whitelist"
+        "INV-M3: bindings must be the whitelist plus shared internal consumers"
     );
+    assert_eq!(section_ids.len(), 19, "shared consumers do not mint card rows");
 }
 
 /// ENDLESS_CORRIDOR D3 coupled writes: the Pattern row (scene_array.
@@ -436,15 +439,9 @@ fn inv_m2_apply_remove_exact_inverse_three_layers() {
     let stamped_ids: Vec<String> = {
         let graph = project.timeline.layers[idx].generator_graph().expect("graph");
         let meta = graph.preset_metadata.as_ref().unwrap();
-        meta.bindings
+        meta.params
             .iter()
-            .filter(|b| {
-                matches!(
-                    &b.target,
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. }
-                        if matches!(node_id.as_str(), "loop_phase" | "scene_array" | "loop_camera")
-                )
-            })
+            .filter(|p| p.section.as_deref() == Some("Scene Loop"))
             .map(|b| b.id.clone())
             .collect()
     };

@@ -181,12 +181,15 @@ fn scene_loop_targets(graph: &EffectGraphDef) -> Vec<(String, String)> {
 }
 
 /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment + BUG-gsql
-/// framing rows, corridor-renamed (ENDLESS_CORRIDOR D3) — the ONLY binding
+/// framing rows, corridor-renamed (ENDLESS_CORRIDOR D3), plus the two
+/// internal consumers of shared Pattern/Spacing slots. The ONLY binding
 /// targets the Scene Loop section may carry. (The Bars row targets the
 /// beat_ramp's bars param: with bars > 0 the ramp runs at 1/bars
 /// cycles/beat, so the row reads and writes bars directly — rate = 1/bars
 /// by construction.)
 const WHITELIST: &[(&str, &str)] = &[
+    ("loop_camera", "pattern_length"),
+    ("scene_array", "cell_size"),
     ("loop_phase", "bars"),
     ("scene_array", "pattern_length"),
     ("loop_camera", "height"),
@@ -209,6 +212,23 @@ const WHITELIST: &[(&str, &str)] = &[
 ];
 
 fn assert_whitelist(graph: &EffectGraphDef, context: &str) {
+    let meta = graph.preset_metadata.as_ref().expect("metadata");
+    assert_eq!(meta.params.iter().filter(|p| p.section.as_deref() == Some("Scene Loop")).count(),
+        19, "{context}: shared consumers must not mint additional card rows");
+    for (source_node, target_node, param) in [
+        ("scene_array", "loop_camera", "pattern_length"),
+        ("loop_camera", "scene_array", "cell_size"),
+    ] {
+        let binding_for = |node: &str| meta.bindings.iter().find(|b| matches!(&b.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: p }
+                if node_id.as_str() == node && p == param)).expect("shared binding");
+        let source = binding_for(source_node);
+        let consumer = binding_for(target_node);
+        let mut expected = source.clone();
+        expected.target = consumer.target.clone();
+        expected.label = consumer.label.clone();
+        assert_eq!(*consumer, expected, "{context}: shared consumer preserves slot and mapping");
+    }
     let mut targets = scene_loop_targets(graph);
     targets.sort();
     let mut expected: Vec<(String, String)> = WHITELIST
@@ -562,6 +582,12 @@ fn downgrade_to_pre_corridor(def: &mut EffectGraphDef, j: Option<f32>, s: Option
     let stride_id = format!("{camera_doc}_stride");
     let jitter_user_id = "scene_array_jitter_period_user".to_string();
     let meta = def.preset_metadata.as_mut().unwrap();
+    // Fixed-row saves predate shared consumers; remove those new bindings
+    // before rewriting the exposed rows into their historical shape.
+    meta.bindings.retain(|b| !matches!(&b.target,
+        BindingTarget::Node { node_id, param }
+            if (node_id.as_str() == "loop_camera" && param == "pattern_length")
+                || (node_id.as_str() == "scene_array" && param == "cell_size")));
     for b in &mut meta.bindings {
         match &mut b.target {
             BindingTarget::Node { node_id, param }

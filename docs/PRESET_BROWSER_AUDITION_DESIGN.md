@@ -2,6 +2,7 @@
 
 **Status:** SHIPPED P1–P3 · 2026-09-05 · k3 (lead) — live audition grid, crud removal, atomic context adds, layout polish all on main; Deferred section carries the follow-ups (audio-modulated audition, clip-slot entry, aliases authoring, triple-bridge upgrade on tearing)
 **Prerequisites:** none
+Lifecycle: contract — defines live audition behaviour and the remaining browser audition extensions.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 The effect/generator browser is a wall of identical gradient thumbnails on enormous

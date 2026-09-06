@@ -1,6 +1,7 @@
 # Scene Loop Endless Corridor — windowed modulo-tiled instancing
 
 **Status:** SHIPPED — P1–P3, shared control bindings and periodic temporal correspondence · 2026-09-06 · Astra
+Lifecycle: contract — defines the current corridor geometry, shared controls, temporal correspondence, and acceptance requirements.
 **Prerequisites:** SCENE_LOOP (shipped, absorbed into SCENE_MODIFIER_FRAMEWORK — the atoms/commands contract this doc revises), RT_INSTANCING P0–P3 (shipped 2026-09-05 — the accel/stasis contract the windowed atom must preserve).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 

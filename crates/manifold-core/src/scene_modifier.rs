@@ -151,7 +151,12 @@ pub fn install_shared_param_bindings(bindings: &mut Vec<BindingDef>, links: &[Sh
             if existing.id != source.id {
                 continue;
             }
-            let replacement = BindingDef { target: link.target.clone(), ..source };
+            // Exposure migrations may give a node its primitive label while
+            // the card keeps a curated name. Labels do not affect evaluation;
+            // sharing a value must not rewrite existing consumer presentation.
+            let replacement = BindingDef {
+                target: link.target.clone(), label: existing.label.clone(), ..source
+            };
             if *existing != replacement {
                 *existing = replacement;
                 changed = true;

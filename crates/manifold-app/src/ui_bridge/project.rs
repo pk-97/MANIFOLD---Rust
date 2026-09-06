@@ -2205,8 +2205,7 @@ mod tests {
     /// instance slot (bound row), scene_array is untouched, and the def's
     /// stamped params stay at the minted defaults (bound writes never touch
     /// the def). The Pattern row is the coupled one: it writes
-    /// scene_array.pattern_length AND loop_camera's internal
-    /// pattern_length (identity) in one undo unit.
+    /// one shared slot consumed by scene_array and loop_camera in one undo unit.
     #[test]
     fn stride_row_write_is_single_and_pattern_row_couples() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
@@ -2288,10 +2287,8 @@ mod tests {
             "the def keeps the minted patterns_per_loop default; the binding is the live value"
         );
 
-        // The Pattern row IS coupled: one write to scene_array.
-        // pattern_length lands the identity secondary on loop_camera's
-        // internal pattern_length (unbound — internal param — so the def
-        // mirror carries it).
+        // Both Pattern consumers resolve to the same live slot. Def defaults
+        // are not the value authority for a bound parameter.
         let pattern_write = ProjectAction::SceneSetupParamChanged(
             layer_id.clone(),
             Vec::new(),
@@ -2303,24 +2300,18 @@ mod tests {
             &pattern_write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs,
         );
-        let coupled_def = effective_def(&project, &layer_id);
-        let coupled_camera = coupled_def
-            .nodes
-            .iter()
-            .find(|n| n.id == stride_doc)
-            .expect("loop_camera");
-        assert_eq!(
-            coupled_camera.params.get("pattern_length"),
-            Some(&SerializedParamValue::Float { value: 3.0 }),
-            "the Pattern write couples loop_camera.pattern_length = 3 in the same undo unit (D3)"
-        );
+        project.with_preset_graph_mut(&target, |inst| {
+            let array = inst.binding_id_for_node_param(count_doc, "pattern_length").unwrap();
+            let camera = inst.binding_id_for_node_param(stride_doc, "pattern_length").unwrap();
+            assert_eq!(array, camera, "Pattern has one value owner for both consumers");
+            assert_eq!(inst.get_base_param(&array), 3.0);
+        }).expect("instance reachable");
     }
 
     /// P4 coupled write, Spacing flavor: ONE write to loop_camera.cell_size
     /// also writes scene_array.cell_size (INV-4, same value) AND
-    /// loop_camera.home (−cell/2 tracks). cell_size/home are NOT stamped
-    /// rows, so the secondaries are def-level writes — observed straight in
-    /// the def's node params.
+    /// loop_camera.home (−cell/2 tracks). Both cell_size consumers share the
+    /// Spacing slot; the Home convenience write also preserves its def mirror.
     #[test]
     fn spacing_row_write_couples_both_cells_and_home() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
@@ -2373,7 +2364,9 @@ mod tests {
             .expect("the Spacing row is stamped");
         let spacing_slot = project
             .with_preset_graph_mut(&target, |inst| {
-                inst.get_base_param(manifold_core::effects::ParamId::from(spacing_binding).as_ref())
+                let array_binding = inst.binding_id_for_node_param(array_doc, "cell_size").unwrap();
+                assert_eq!(array_binding, spacing_binding, "Spacing has one value owner");
+                inst.get_base_param(&spacing_binding)
             })
             .expect("spacing slot exists");
         assert_eq!(spacing_slot, 16.0, "the Spacing row write lands on its binding");
@@ -2396,8 +2389,8 @@ mod tests {
         );
         assert_eq!(
             stamped(array_doc, "cell_size"),
-            Some(SerializedParamValue::Float { value: 16.0 }),
-            "scene_array.cell_size coupled — INV-4 single source"
+            Some(SerializedParamValue::Float { value: 10.0 }),
+            "the array also keeps its default; both consumers read the shared Spacing slot"
         );
         assert_eq!(
             stamped(camera_doc, "home"),

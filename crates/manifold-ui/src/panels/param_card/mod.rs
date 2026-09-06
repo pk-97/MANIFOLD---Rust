@@ -1342,6 +1342,8 @@ mod tests {
         assert_eq!(tree.name_of(slider.value_text), Some("param_row.radius.value"));
         let drv = panel.row_host.driver_btn_ids[0].expect("radius row has a driver button");
         assert_eq!(tree.name_of(drv), Some("param_row.radius.driver_btn"));
+        let trigger = panel.row_host.envelope_btn_ids[0].expect("radius row has a trigger button");
+        assert_eq!(tree.name_of(trigger), Some("param_row.radius.trigger_btn"));
 
         // Toggle row ("invert"): no separate row-catcher — its button IS the
         // row's identity, so the row name lands there.
