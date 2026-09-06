@@ -11,6 +11,35 @@ health check with the explicit verification limits below. No application
 changes were landed. Astra owned diagnosis; one read-only Luna lane inventoried
 interaction tests, whose relevant paths were then checked by Astra.
 
+## First repair: mapping ownership and live values
+
+Implemented locally on `codex/ui-contract-audit`; landing remains pending.
+The findings below describe the audited baseline, not the repaired branch.
+Card open actions now carry their target, parameter and clicked anchor. Both
+mapping popovers capture a stable owner for every edit, and readers use the
+live manifest. Stock and user bindings on effects and generators share canvas
+eligibility. Mapping gestures retain their baseline for undo; dismissal cancels
+unfinished scrubs and changing graph closes the old modal.
+
+Native before/after check: with Bloom watched, Soft Focus Radius required two
+clicks before the repair and one afterward. Changing maximum 64 → 128 persisted
+through reopening the modal, undo (64), redo (128), save and project reload
+(128). Focused checks passed: 31 UI mapping tests and 8 app mapping tests,
+including repeated parameter ids, generator ownership, stale metadata,
+cross-target gesture events, cancellation and one-entry undo. A real scene
+modifier and nested canvas scopes still need native coverage; audio-row
+alignment, editable modifier membership and cross-pane pointer capture remain
+separate unfinished repairs.
+
+Testing also exposed launcher defects: every launch generated another app
+identity, and native macOS Quit skipped the crash-marker cleanup after
+`run_app`. The launcher now reuses its worktree identity and refuses duplicate
+instances. Cleanup also runs in the existing exit callback, and automation
+markers live beside their socket instead of sharing the regular app marker.
+Observed normal Quit removed the marker; relaunch reused the same approved
+identity and rendered without a crash alert. The marker-path regression and
+automation-feature clippy passed. Actual crash markers remain enabled.
+
 ## Result
 
 The shared parameter surface exists and modifier cards reuse it. The important

@@ -1964,6 +1964,12 @@ impl Application {
 }
 
 impl ApplicationHandler for Application {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Native macOS Quit terminates through this callback without returning
+        // from run_app, so clean-session bookkeeping must happen here too.
+        crate::clear_session_sentinel();
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.initialized {
             return;
