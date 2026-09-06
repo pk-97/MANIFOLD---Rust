@@ -6,9 +6,9 @@ A visual DAW and live performance instrument. Rust is authoritative; do not cons
 
 Be concise. Lead with the outcome; explain what a change means for the instrument. No routine action logs, mandatory planning ceremony, or documentation of every edit. Act within the agreed scope. State failures and unverified behaviour plainly.
 
-Astra owns design, diagnosis, review, and landing. Use native Luna subagents (`gpt-5.6-luna`, low effort) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Keep parallelism within review capacity; handle tiny fixes directly. Stop repeated failures and return evidence to the lead.
+Astra owns design, diagnosis, review, and landing. Use native Luna subagents (`gpt-5.6-luna`, low effort) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Start with one Luna lane at a time; handle tiny fixes directly. The lead leaves the lane’s files alone until it returns. Stop repeated failures and return evidence to the lead.
 
-CC and `k3m` are separate setups. Do not change `CLAUDE.md`, `.claude/`, Claude settings, shell aliases, or provider configuration unless explicitly requested. Existing shared scripts may be used. Claude hooks are not automatically active in Codex; do not claim their enforcement here.
+CC and `k3m` are separate setups. Do not change `CLAUDE.md`, `.claude/`, Claude settings, shell aliases, or provider configuration unless explicitly requested. Existing shared scripts may be used. Codex guards live in `.codex/hooks.json`; trust them before using lanes. Read `.codex/README.md` for the brief scope line and enforcement limits. Claude hook registration stays separate.
 
 ## Engineering essentials
 
@@ -39,4 +39,4 @@ Keep main runnable. App changes use the existing slot ring (`scripts/agent-workt
 
 Run focused clippy and tests for changed Rust crates. Use `scripts/gpu_proofs_gate.py` for GPU-path changes; GPU proofs use cargo test, not nextest. Use `scripts/landing_gate.py` before landing app changes; broad nightly checks belong to `scripts/trunk_health.py`. Documentation/config-only changes need appropriate syntax, reference, and diff checks, not an app build. Avoid repeating passed checks without new evidence.
 
-Commit and push completed, verified work. Workers report to the lead; only the lead lands. Give Peter the exact launch command when testing a worktree build. Track discovered unfinished engineering work in beads; update existing contracts when behaviour changes. Keep history in git and avoid duplicate status prose.
+Commit and push completed, verified work. Workers return edits and check results; the lead reviews and commits. App landings use `scripts/land_branch.py` to run the existing gate before merge/push. Give Peter the exact launch command when testing a worktree build. Track discovered unfinished engineering work in beads; update existing contracts when behaviour changes. Keep history in git and avoid duplicate status prose.
