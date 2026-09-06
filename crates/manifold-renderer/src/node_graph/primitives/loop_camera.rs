@@ -121,7 +121,9 @@ crate::primitive! {
             label: "Roll",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
-            range: Some((-3.2, 3.2)),
+            // Stored in radians; the shared angle presentation exposes this
+            // as the signed continuous -180°..180° range.
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
             enum_values: &[],
         },
         ParamDef {
@@ -129,7 +131,7 @@ crate::primitive! {
             label: "Pitch",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
-            range: Some((-3.2, 3.2)),
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
             enum_values: &[],
         },
         ParamDef {
@@ -137,7 +139,7 @@ crate::primitive! {
             label: "Yaw",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
-            range: Some((-3.2, 3.2)),
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
             enum_values: &[],
         },
         // ── SCENE_MODIFIER_FRAMEWORK P4 loop controls. Every time-varying

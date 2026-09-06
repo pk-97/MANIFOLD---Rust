@@ -428,7 +428,7 @@ fn non_empty_node_id(id: &manifold_core::NodeId) -> Option<manifold_core::NodeId
 /// snapshot/target, the node has no stable handle, or the inner param
 /// has no live exposed binding. Stock and user-added bindings use the same path.
 ///
-/// Returned tuple: `(binding_id, label, min, max, invert, curve, scale, offset, range, section)`.
+/// Returned tuple: `(binding_id, label, min, max, invert, curve, scale, offset, range, is_angle, section)`.
 /// `range` is the binding's declared inner-param bounds, used to span the
 /// popover's trim track.
 ///
@@ -453,6 +453,7 @@ pub(crate) fn resolve_canvas_binding(
     f32,
     f32,
     Option<(f32, f32)>,
+    bool,
     Option<String>,
 )> {
     let snap = snapshot?;
@@ -468,6 +469,11 @@ pub(crate) fn resolve_canvas_binding(
         .iter()
         .find(|p| p.name == inner_param)
         .and_then(|p| p.range);
+    let is_angle = node
+        .parameters
+        .iter()
+        .find(|p| p.name == inner_param)
+        .is_some_and(|p| p.kind == manifold_renderer::node_graph::ParamSnapshotKind::Angle);
     let instance = project.preset_instance(target?)?;
     let view;
     let def = if let Some(def) = instance.graph.as_ref() {
@@ -483,7 +489,7 @@ pub(crate) fn resolve_canvas_binding(
     let (label, min, max, invert, curve, scale, offset) =
         full_reshape_from_instance(instance, def, &binding.id)?;
     Some((binding.id.clone(), label, min, max, invert, curve, scale, offset,
-        range, instance.params.get(&binding.id)?.spec.section.clone()))
+        range, is_angle, instance.params.get(&binding.id)?.spec.section.clone()))
 }
 
 impl Application {
@@ -503,6 +509,10 @@ impl Application {
         ) else { return false; };
         let Some((label, min, max, invert, curve, scale, offset)) = self.target_full_reshape(&owner, param_id)
         else { return false; };
+        let is_angle = self.local_project
+            .preset_instance(&owner)
+            .and_then(|instance| instance.params.get(param_id))
+            .is_some_and(|param| param.spec.is_angle);
         if ed.ui_root.tree.get_node(anchor_node_id).is_none() { return false; }
         let anchor = ed.ui_root.tree.get_bounds(anchor_node_id);
         let section = self.local_project.preset_instance(&owner)
@@ -518,7 +528,7 @@ impl Application {
         self.editor_mapping_popover.open(
             crate::editing_host::to_ui_graph_target(&owner), param_id.to_owned(), label,
             min, max, invert, crate::ui_translate::macro_curve_to_ui(curve),
-            scale, offset, None, section,
+            scale, offset, None, is_angle, section,
             manifold_ui::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height), clip,
         );
         true

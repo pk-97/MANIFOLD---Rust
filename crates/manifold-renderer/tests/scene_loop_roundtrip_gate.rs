@@ -325,8 +325,8 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
     // BUG-gsql framing rows: Near/Far/Home stamped with the cell-scaled
     // bands (not the manifests' room-scale generics), defaults at the
     // plan-minted values (home = −cell/2, near = 0.002·cell, far = 4·cell).
-    // The Roll/Pitch/Yaw angle rows carry the manifest band (±3.2) and
-    // default 0 — the primitive's rotate_local no-op.
+    // The Roll/Pitch/Yaw angle rows carry the signed ±180° manifest band in
+    // radians, and wrap continuously at the signed seam.
     let section_spec = |graph: &EffectGraphDef, name: &str| {
         graph
             .preset_metadata
@@ -362,8 +362,8 @@ fn scene_loop_roundtrip_whitelist_rows_stable() {
     for angle in ["Roll", "Pitch", "Yaw"] {
         let spec = section_spec(&graph, angle);
         assert_eq!(
-            (spec.min, spec.max, spec.default_value),
-            (-3.2, 3.2, 0.0),
+            (spec.min, spec.max, spec.default_value, spec.wraps),
+            (-std::f32::consts::PI, std::f32::consts::PI, 0.0, true),
             "{angle} row carries the manifest angle band"
         );
     }

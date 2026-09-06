@@ -188,6 +188,9 @@ pub struct MappingPopover {
     /// Current selected min/max (the binding's `min`/`max`).
     cur_min: f32,
     cur_max: f32,
+    /// Mapping bounds remain in storage units for actions and preview math;
+    /// angle bounds are converted to signed degrees only at this UI boundary.
+    is_angle: bool,
     invert: bool,
     curve: MacroCurve,
     /// Card→consumer affine remap: `out = value * scale + offset`. The home
@@ -251,6 +254,7 @@ impl MappingPopover {
             range_hi: 1.0,
             cur_min: 0.0,
             cur_max: 1.0,
+            is_angle: false,
             invert: false,
             curve: MacroCurve::Linear,
             cur_scale: 1.0,
@@ -306,7 +310,9 @@ impl MappingPopover {
     /// to its right, nudged back on-screen against `clip` so it never
     /// renders past the canvas edge. `range` is the binding's declared
     /// bounds — the trim track spans it; `None` falls back to the current
-    /// min/max so the handles still have a usable span.
+    /// min/max so the handles still have a usable span. `is_angle` selects
+    /// the degrees display/edit boundary while emitted actions remain in
+    /// stored radians.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         &mut self,
@@ -320,6 +326,7 @@ impl MappingPopover {
         scale: f32,
         offset: f32,
         range: Option<(f32, f32)>,
+        is_angle: bool,
         section: Option<String>,
         anchor: Rect,
         clip: Rect,
@@ -330,6 +337,7 @@ impl MappingPopover {
         self.section = section;
         self.cur_min = min;
         self.cur_max = max;
+        self.is_angle = is_angle;
         self.invert = invert;
         self.curve = curve;
         self.cur_scale = scale;
@@ -516,6 +524,25 @@ impl MappingPopover {
 
     fn point_in(r: Rect, sx: f32, sy: f32) -> bool {
         sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h
+    }
+
+    /// Convert a stored mapping value to the unit shown in the popover.
+    fn display_value(&self, value: f32) -> f32 {
+        if self.is_angle { value.to_degrees() } else { value }
+    }
+
+    /// Convert a value typed in the popover back to storage units.
+    fn storage_value(&self, value: f32) -> f32 {
+        if self.is_angle { value.to_radians() } else { value }
+    }
+
+    fn format_mapping_value(&self, value: f32) -> String {
+        let display = self.display_value(value);
+        if self.is_angle {
+            format!("{}°", trim_num(display))
+        } else {
+            format!("{display:.2}")
+        }
     }
 
     /// True when the point is anywhere inside the popover panel. The host
@@ -812,11 +839,12 @@ impl MappingPopover {
         }
 
         // Numeric fields. Empty / unparseable buffer leaves the value unchanged.
-        let Some(v) = buffer.trim().parse::<f32>().ok().filter(|v| v.is_finite()) else {
+        let Some(mut v) = buffer.trim().parse::<f32>().ok().filter(|v| v.is_finite()) else {
             return;
         };
         match field {
             EditField::Min | EditField::Max => {
+                v = self.storage_value(v);
                 self.pending_actions
                     .push(PanelAction::Root(RootAction::EffectMappingRangeSnapshot {
                         target: self.target.clone().expect("open mapping popover"),
@@ -1061,7 +1089,11 @@ impl MappingPopover {
             self.draw_caret_and_selection(ui, hr, FONT, false);
         }
         if let Some(v) = self.live_value.filter(|_| !renaming) {
-            let readout = format!("{} → {}", trim_num(v), trim_num(self.reshape_output(v)));
+            let readout = format!(
+                "{} → {}",
+                self.format_mapping_value(v),
+                self.format_mapping_value(self.reshape_output(v)),
+            );
             let tw = readout.chars().count() as f32 * FONT_SMALL * 0.55;
             ui.draw_text(
                 panel.x + POPOVER_W - PAD - tw,
@@ -1084,7 +1116,7 @@ impl MappingPopover {
             (DragTarget::Min, "Min", self.cur_min),
             (DragTarget::Max, "Max", self.cur_max),
         ] {
-            self.draw_value_field(ui, panel.x, which, name, format!("{val:.2}"));
+            self.draw_value_field(ui, panel.x, which, name, self.format_mapping_value(val));
         }
 
         // ── Invert toggle row ──
@@ -1180,6 +1212,7 @@ mod tests {
             1.0,
             0.0,
             Some((0.0, 1.0)),
+            false,
             None,
             Rect::new(100.0, 100.0, 168.0, 18.0),
             Rect::new(0.0, 0.0, 1000.0, 800.0),
@@ -1198,6 +1231,45 @@ mod tests {
     }
 
     #[test]
+    fn angle_mapping_bounds_are_displayed_and_committed_in_degrees() {
+        let mut p = MappingPopover::new();
+        p.open(
+            UiGraphTarget::Effect(manifold_foundation::EffectId::new("test")),
+            "roll".to_string(),
+            "Roll".to_string(),
+            -std::f32::consts::PI,
+            std::f32::consts::PI,
+            false,
+            MacroCurve::Linear,
+            1.0,
+            0.0,
+            Some((-std::f32::consts::PI, std::f32::consts::PI)),
+            true,
+            None,
+            Rect::new(100.0, 100.0, 168.0, 18.0),
+            Rect::new(0.0, 0.0, 1000.0, 800.0),
+        );
+
+        assert_eq!(p.format_mapping_value(-std::f32::consts::PI), "-180°");
+        assert_eq!(p.format_mapping_value(std::f32::consts::PI), "180°");
+
+        p.enter_edit(EditField::Min);
+        for c in "-180".chars() {
+            p.on_text_char(c);
+        }
+        p.commit_edit();
+        assert!((p.cur_min + std::f32::consts::PI).abs() < 1e-6);
+        assert!(matches!(
+            p.drain_actions().as_slice(),
+            [
+                PanelAction::Root(RootAction::EffectMappingRangeSnapshot { .. }),
+                PanelAction::Root(RootAction::EffectMappingRangeChanged { min, .. }),
+                PanelAction::Root(RootAction::EffectMappingRangeCommit { .. }),
+            ] if (*min + std::f32::consts::PI).abs() < 1e-6
+        ));
+    }
+
+    #[test]
     fn mapping_queued_edits_keep_owner_across_reopen() {
         let mut p = open_popover();
         let first = p.target().unwrap().clone();
@@ -1206,7 +1278,7 @@ mod tests {
         p.close();
         let second = UiGraphTarget::Generator(manifold_foundation::LayerId::new("other"));
         p.open(second.clone(), "user.uv.rotation.1".into(), "Rotation".into(),
-            0.0, 1.0, false, MacroCurve::Linear, 1.0, 0.0, None, None,
+            0.0, 1.0, false, MacroCurve::Linear, 1.0, 0.0, None, false, None,
             Rect::new(100.0, 300.0, 168.0, 18.0), Rect::new(0.0, 0.0, 1000.0, 800.0));
         let r = p.invert_btn_rect();
         p.on_press(r.x + 2.0, r.y + 2.0);
@@ -1238,6 +1310,7 @@ mod tests {
             1.0,
             0.0,
             Some((0.0, 1.0)),
+            false,
             None,
             Rect::new(0.0, 0.0, 168.0, 18.0),
             Rect::new(0.0, 0.0, 1000.0, 800.0),
@@ -1511,6 +1584,7 @@ mod tests {
             1.0,
             0.0,
             Some((0.0, 1.0)),
+            false,
             Some("Old".to_string()),
             Rect::new(100.0, 100.0, 168.0, 18.0),
             Rect::new(0.0, 0.0, 1000.0, 800.0),

@@ -26,6 +26,8 @@ pub struct SceneParamMetadata {
     pub max: f32,
     pub default_value: SerializedParamValue,
     pub is_angle: bool,
+    /// Whether values outside the declared range wrap back into it.
+    pub wraps: bool,
     pub whole_numbers: bool,
     pub is_toggle: bool,
     pub is_trigger: bool,
@@ -238,7 +240,7 @@ pub fn stamp_scene_node_exposures_into(
             invert: false,
             is_angle: meta.is_angle,
             is_trigger_gate: false,
-            wraps: false,
+            wraps: meta.wraps,
             section: Some(section.to_string()),
             card_visible: card_visible_for(type_id, &meta.name),
         });
@@ -654,6 +656,7 @@ mod tests {
             max: 1.0,
             default_value: SerializedParamValue::Float { value: 0.5 },
             is_angle: false,
+            wraps: false,
             whole_numbers: false,
             is_toggle: false,
             is_trigger: false,
