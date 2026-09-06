@@ -128,6 +128,8 @@ mod ui_translate;
 mod user_library;
 mod user_prefs;
 mod window_input;
+#[cfg(all(feature = "ui-automation", unix))]
+mod live_ui;
 mod viewport_input;
 // P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
 mod viewport_p5c_demo;
@@ -136,13 +138,18 @@ mod viewport_p6_demo;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;
-// Gap-start black-frame probe — real-pipeline fbTest drive (2026-08-27).
+// Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
 mod window_registry;
 mod workspace;
 
 fn main() {
+    #[cfg(not(all(feature = "ui-automation", unix)))]
+    if std::env::var_os("MANIFOLD_UI_SOCKET").is_some() {
+        eprintln!("MANIFOLD_UI_SOCKET requires a Unix build with feature ui-automation");
+        std::process::exit(2);
+    }
     // UI motion layer OFF (experimental — evaluating whether the chrome
     // micro-animations earn their keep). Collapses every AnimF32/FlipList tween
     // to an instant snap; the motion code stays in place behind the flag, so
@@ -291,6 +298,14 @@ fn main() {
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
     let mut application = app::Application::new();
+    #[cfg(all(feature = "ui-automation", unix))]
+    if let Some(path) = std::env::var_os("MANIFOLD_UI_SOCKET") {
+        application.live_ui = Some(live_ui::LiveUi::bind(std::path::Path::new(&path))
+            .unwrap_or_else(|err| {
+                eprintln!("live UI connection failed: {err}");
+                std::process::exit(2);
+            }));
+    }
     application.show_crash_notice = previous_session_uncleanly_exited;
     application.resume_breadcrumb_path = resume_breadcrumb_path;
     event_loop.run_app(&mut application).unwrap();

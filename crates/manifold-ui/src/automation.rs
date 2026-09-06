@@ -99,14 +99,9 @@ pub enum FlowScrubTarget {
     GeneratorParam { param: String },
 }
 
-/// section 4 committed shape. `Surface`'s `surface` field is `&'static str` in the
-/// design doc (matching `HitTargets::surface_id()`'s return type); a JSON
-/// script can't hand us a `'static` borrow, so the `Deserialize` impl leaks
-/// the parsed string once via `leak_surface_id` — cheap and correct for a
-/// one-shot script process, and it keeps the field's *type* exactly what the
-/// doc committed (so in-process construction, e.g. from the live door in P3,
-/// still just writes a literal).
-#[derive(Debug, Clone, serde::Serialize)]
+/// Shared address for headless and live callers. Surface names are owned:
+/// a long-lived app must release strings received from automation clients.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AutomationTarget {
     /// section 3 structural query.
     Query(SelectorQuery),
@@ -114,7 +109,7 @@ pub enum AutomationTarget {
     Widget(u64),
     /// section 5 custom-surface target.
     Surface {
-        surface: &'static str,
+        surface: String,
         kind: String,
         label: String,
     },
@@ -169,51 +164,13 @@ pub struct SelectorQuery {
     pub nth: Option<usize>,
 }
 
-// Manual `Deserialize` for `AutomationTarget` so the `Surface.surface` field
-// keeps the doc's committed `&'static str` type (see the doc comment above)
-// while still round-tripping through JSON.
-impl<'de> serde::Deserialize<'de> for AutomationTarget {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        enum Raw {
-            Query(SelectorQuery),
-            Widget(u64),
-            Surface {
-                surface: String,
-                kind: String,
-                label: String,
-            },
-            Point(Vec2),
-        }
-        Ok(match Raw::deserialize(deserializer)? {
-            Raw::Query(q) => AutomationTarget::Query(q),
-            Raw::Widget(w) => AutomationTarget::Widget(w),
-            Raw::Surface { surface, kind, label } => AutomationTarget::Surface {
-                surface: leak_surface_id(surface),
-                kind,
-                label,
-            },
-            Raw::Point(p) => AutomationTarget::Point(p),
-        })
-    }
-}
-
-/// Leak a parsed surface id to `'static`. One-shot script processes only —
-/// never called on a hot path, and the set of distinct surface ids a script
-/// can name is bounded by the JSON file's own size.
-fn leak_surface_id(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
-
 // ── Resolver (section 3) ────────────────────────────────────────────────────────
 
 /// A target resolved to the rect a gesture should act on, plus a human
 /// description (evidence for `result.json` / failure messages).
 #[derive(Debug, Clone)]
 pub struct ResolvedTarget {
+    pub node: Option<crate::node::NodeId>,
     pub rect: Rect,
     pub description: String,
 }
@@ -245,6 +202,7 @@ impl std::fmt::Display for ResolveError {
 /// `Count`, not just a single winner) both build on.
 #[derive(Debug, Clone)]
 pub struct MatchInfo {
+    pub node: Option<crate::node::NodeId>,
     pub rect: Rect,
     /// `None` for targets with no natural text (a raw `Point`, most custom
     /// surfaces) — `Query` matches always carry the node's own `text`.
@@ -263,6 +221,7 @@ pub fn resolve_all(
     match target {
         AutomationTarget::Point(p) => (
             vec![MatchInfo {
+                node: None,
                 rect: Rect::new(p.x, p.y, 0.0, 0.0),
                 text: None,
                 description: format!("point ({:.1},{:.1})", p.x, p.y),
@@ -290,7 +249,7 @@ pub fn resolve(
         0 => Err(ResolveError::NoMatch { query }),
         1 => {
             let m = matches.into_iter().next().expect("len checked above");
-            Ok(ResolvedTarget { rect: m.rect, description: m.description })
+            Ok(ResolvedTarget { node: m.node, rect: m.rect, description: m.description })
         }
         _ => Err(ResolveError::Ambiguous {
             query,
@@ -328,6 +287,7 @@ fn all_surface_matches(
         .iter()
         .filter(|e| e.kind == kind && e.label == label)
         .map(|e| MatchInfo {
+            node: None,
             rect: e.rect,
             text: Some(e.label.clone()),
             description: format!("{} '{}' ({})", e.kind, e.label, e.payload),
@@ -357,6 +317,7 @@ fn all_query_matches(tree: &UITree, q: &SelectorQuery) -> (Vec<MatchInfo>, Strin
 
 fn node_match_info(tree: &UITree, nodes: &[crate::node::UINode], i: usize) -> MatchInfo {
     MatchInfo {
+        node: Some(nodes[i].id),
         rect: nodes[i].bounds,
         text: nodes[i].text.clone(),
         description: describe_node(tree, nodes, i),
@@ -741,7 +702,7 @@ mod tests {
     fn serde_round_trips_through_json() {
         let action = AutomationAction::Pointer {
             target: AutomationTarget::Surface {
-                surface: "timeline_clips",
+                surface: "timeline_clips".into(),
                 kind: "clip".into(),
                 label: "flowers_loop_B.mov".into(),
             },
