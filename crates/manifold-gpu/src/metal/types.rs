@@ -31,6 +31,17 @@ unsafe impl Send for GpuTexture {}
 unsafe impl Sync for GpuTexture {}
 
 impl GpuTexture {
+    /// CPU uploads require CPU-visible storage, including on unified-memory
+    /// devices. Catch a missing CPU_UPLOAD declaration before invoking Metal.
+    pub(crate) fn assert_cpu_uploadable(&self) {
+        use objc2_metal::{MTLResource, MTLStorageMode};
+        let mode = unsafe { self.raw.storageMode() };
+        assert!(
+            mode == MTLStorageMode::Shared || mode == MTLStorageMode::Managed,
+            "texture CPU upload requires CPU_UPLOAD usage (CPU-visible storage)"
+        );
+    }
+
     /// Wrap an existing Metal texture (e.g. from IOSurface).
     pub fn from_raw(
         raw: Retained<ProtocolObject<dyn MTLTexture>>,

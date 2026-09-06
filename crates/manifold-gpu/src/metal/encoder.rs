@@ -160,8 +160,10 @@ pub struct DepthMsaaPassDesc<'a> {
     pub msaa_depth: &'a GpuTexture,
     /// `Some(tex)` → the depth attachment stores `MultisampleResolve`
     /// (filter `Sample0` — D2: deterministic, matches a single-sample
-    /// render, unlike `Min`/`Max`) into this single-sample `R32Float`
-    /// texture. `None` → `DontCare`, exactly today's memoryless depth.
+    /// render, unlike `Min`/`Max`) into this single-sample `Depth32Float`
+    /// texture. The resolve target must have the same `Depth32Float` format
+    /// as `msaa_depth`; callers can then copy it to an `R32Float` graph output.
+    /// `None` → `DontCare`, exactly today's memoryless depth.
     pub depth_resolve: Option<&'a GpuTexture>,
     /// Extra MRT color attachments (index 1..). Order must match the
     /// pipeline's `aux_color_formats` (velocity, then ao_mask). Empty slice
@@ -985,7 +987,7 @@ impl GpuEncoder {
     /// shared depth buffer resolving inter-object occlusion; additionally:
     /// `desc.depth_resolve` — `Some(tex)` stores the depth attachment via
     /// `MultisampleResolve` with filter `Sample0` into `tex` (single-sample
-    /// `R32Float`, raw non-linear clip depth); `None` keeps today's
+    /// `Depth32Float`, raw non-linear clip depth); `None` keeps today's
     /// `DontCare` (memoryless, never leaves the GPU). `desc.aux_color` —
     /// extra MRT color attachments (index 1..), reserved for P2's velocity
     /// output; empty today.
@@ -1046,6 +1048,16 @@ impl GpuEncoder {
             depth.setClearDepth(1.0);
             match desc.depth_resolve {
                 Some(resolve) => {
+                    assert_eq!(
+                        resolve.format,
+                        desc.msaa_depth.format,
+                        "depth resolve texture must match the MSAA depth format"
+                    );
+                    assert_eq!(
+                        resolve.format,
+                        crate::GpuTextureFormat::Depth32Float,
+                        "depth resolve texture must be Depth32Float"
+                    );
                     depth.setResolveTexture(Some(&resolve.raw));
                     depth.setStoreAction(MTLStoreAction::MultisampleResolve);
                     // D2: deterministic, matches a single-sample render —
@@ -1846,6 +1858,24 @@ impl GpuEncoder {
         }
     }
 
+    /// Copy a single-sample depth texture into an R32Float storage texture.
+    pub fn copy_depth_to_float(&mut self, source: &GpuTexture, target: &GpuTexture) {
+        assert_eq!(source.format, crate::GpuTextureFormat::Depth32Float);
+        assert_eq!(target.format, crate::GpuTextureFormat::R32Float);
+        assert_eq!(source.width, target.width);
+        assert_eq!(source.height, target.height);
+        let pipelines = unsafe { &*self.clear_pipelines };
+        self.dispatch_compute(
+            &pipelines.depth_to_float,
+            &[
+                GpuBinding::Texture { binding: 0, texture: source },
+                GpuBinding::Texture { binding: 1, texture: target },
+            ],
+            [target.width.div_ceil(16), target.height.div_ceil(16), 1],
+            "Copy Depth To Float",
+        );
+    }
+
     /// Fill a buffer with zeros via blit encoder.
     pub fn clear_buffer(&mut self, buffer: &GpuBuffer) {
         self.end_current();
@@ -2115,7 +2145,7 @@ impl GpuEncoder {
         // Metal: no-op. Intra-queue ordering is automatic.
     }
 
-    /// Upload CPU data to a 2D texture region via replaceRegion.
+    /// Upload CPU data to a CPU_UPLOAD 2D texture region via replaceRegion.
     pub fn upload_texture(
         &mut self,
         texture: &GpuTexture,
@@ -2124,6 +2154,7 @@ impl GpuEncoder {
         _depth: u32,
         data: &[u8],
     ) {
+        texture.assert_cpu_uploadable();
         self.end_current();
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = width as u64 * bpp as u64;

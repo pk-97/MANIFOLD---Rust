@@ -58,9 +58,14 @@ full-res write on every scene that never wired a consumer, and a toggle is
 config where wiring is already the graph's native intent signal.
 
 **D2 — Depth output = raw device depth, `R32Float`, resolve filter
-`Sample0`.** The pass gains a single-sample `R32Float` resolve target for
-the depth attachment (`MTLStoreAction::MultisampleResolve` +
-`MTLMultisampleDepthResolveFilter::Sample0`). Raw [0,1] clip depth, NOT
+`Sample0`.** Metal requires the resolve destination to match the depth
+attachment: resolve to a reusable single-sample `Depth32Float` texture
+(`MTLStoreAction::MultisampleResolve` +
+`MTLMultisampleDepthResolveFilter::Sample0`), then copy each scalar through
+a cached compute pipeline into the graph's `R32Float` output. The original
+direct Depth32Float-to-R32Float resolve was rejected by Metal API validation
+(verified 2026-09-06). The intermediate is allocated only when depth is
+consumed and reused until dimensions change. Raw [0,1] clip depth, NOT
 linearized in the pass: consumers linearize via ONE shared WGSL helper
 (D4) — raw depth preserves full near-field precision and matches
 `Camera::project_to_pixel().depth`, which is what makes the conformance gate
@@ -90,7 +95,8 @@ pub struct DepthMsaaPassDesc<'a> {
     pub resolve_target: &'a GpuTexture,
     pub msaa_depth: &'a GpuTexture,
     /// Some(tex) → depth attachment stores MultisampleResolve (Sample0)
-    /// into this single-sample R32Float texture. None → DontCare (today).
+    /// into this matching single-sample Depth32Float texture. None → DontCare.
+    /// copy_depth_to_float exports the resolved values into an R32Float wire.
     pub depth_resolve: Option<&'a GpuTexture>,
     /// Extra MRT color attachments (index 1..): (msaa_tex, resolve_tex).
     /// P2 uses one slot for velocity. Empty slice → exactly today's pass.
@@ -149,9 +155,10 @@ there" — an output nothing reads is scope widening with a permanent
 bandwidth invoice.
 
 **Consequences of the whole design, stated honestly:** a wired depth output
-adds a full-res R32Float resolve write (+ the consumer's read): ~33 MB/frame
-at 4K ≈ 2 GB/s at 60 fps — affordable on Apple silicon per the direction
-doc, but it is a permanent line item that PERF_BUDGET_GATE (approved, not
+adds a native depth resolve write, a depth-to-float read/write, and the
+consumer's read: about 133 MB/frame at 4K (8 GB/s at 60 fps), plus a reused
+33 MB native depth intermediate. These are nominal traffic counts, before
+hardware caching/compression, and a permanent line item that PERF_BUDGET_GATE (approved, not
 built) must measure; until the gate exists, the lazy rule (D1) is the cost
 control. `Sample0` depth at MSAA-4 means post effects see one sample's
 geometry at silhouettes — faint edge shimmer under motion is possible in

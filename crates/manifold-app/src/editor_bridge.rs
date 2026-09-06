@@ -1397,7 +1397,8 @@ impl Application {
                     depth: 1,
                     format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     dimension: manifold_gpu::GpuTextureDimension::D2,
-                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
+                        | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
                     label: "3D Viewport",
                     mip_levels: 1,
                 });
