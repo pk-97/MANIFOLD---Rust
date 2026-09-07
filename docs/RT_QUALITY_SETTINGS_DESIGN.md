@@ -8,6 +8,11 @@ Today the RT sample counts are compile-time constants in `render_scene.rs` (`AO_
 
 Companion docs: `docs/RAYTRACING_DESIGN.md` (the RT engine this tunes; spp committed ranges live there), `docs/MANIFOLD_GPU_ARCHITECTURE.md` (uniform/texture discipline), `docs/WIDGET_TREE_DESIGN.md` section 5b (Agent contract & enforcement — the panel's manifest machinery).
 
+Warmup delivery (2026-09-07, BUG-qh04): load-time warmup applies the newly
+loaded project's real-time quality column through the same compositor and
+clip-renderer fan-out used by normal frames, before its first GPU submission.
+It must not inherit renderer defaults or the previous project/export column.
+
 ## 1. Audit — what exists (verified 2026-08-17)
 
 | Piece | Where | State |

@@ -1997,6 +1997,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    /// Apply project quality before rendering, including load-time warmup.
+    pub(crate) fn apply_rt_quality(&mut self, engine: &mut PlaybackEngine, export_mode: bool) {
+        // RT_QUALITY_SETTINGS_DESIGN.md D2/D5: resolve the active quality
+        // column once per frame, before any rendering. Copy out of the
+        // project borrow so `engine` stays usable below.
+        if let Some(project) = engine.project() {
+            let column = if export_mode {
+                project.settings.rt_quality.export
+            } else {
+                project.settings.rt_quality.realtime
+            };
+            self.compositor
+                .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
+            // Same column to every clip renderer — generators render
+            // `render_scene` through their own PresetRuntimes, which the
+            // compositor fan-out never reaches (the split-brain behind the
+            // 2026-08-18 "settings do nothing" report).
+            let (renderers, _) = engine.split_renderer_project();
+            for renderer in renderers.iter_mut() {
+                renderer.set_rt_quality(&column);
+            }
+        }
+    }
+
     /// Render all generators and composite, then submit asynchronously.
     ///
     /// Uses native Metal encoding on macOS via manifold-gpu.
@@ -2022,26 +2046,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // instead of busy-spinning. Export mode waits via wait_for_gpu_idle().
         let _poll_ms = self.last_fence_wait_ms;
 
-        // RT_QUALITY_SETTINGS_DESIGN.md D2/D5: resolve the active quality
-        // column once per frame, before any rendering. Copy out of the
-        // project borrow so `engine` stays usable below.
-        if let Some(project) = engine.project() {
-            let column = if export_mode {
-                project.settings.rt_quality.export
-            } else {
-                project.settings.rt_quality.realtime
-            };
-            self.compositor
-                .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
-            // Same column to every clip renderer — generators render
-            // `render_scene` through their own PresetRuntimes, which the
-            // compositor fan-out never reaches (the split-brain behind the
-            // 2026-08-18 "settings do nothing" report).
-            let (renderers, _) = engine.split_renderer_project();
-            for renderer in renderers.iter_mut() {
-                renderer.set_rt_quality(&column);
-            }
-        }
+        self.apply_rt_quality(engine, export_mode);
 
         // SCENE_FX P4a: hand the generator renderer the compositor's
         // layer-skin registry (previous-frame per-layer composites) so
