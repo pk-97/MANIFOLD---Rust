@@ -1470,7 +1470,10 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
                 }
             }
-            native_enc.commit_and_wait_completed();
+            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+                log::error!("Generator warmup failed for layer {layer_id}: {err}");
+                return manifold_core::WarmupOutcome::GpuFailed;
+            }
             self.uniform_arena.flush(&device);
 
             if let Some(ls) = self.layer_generators.get(&layer_id)

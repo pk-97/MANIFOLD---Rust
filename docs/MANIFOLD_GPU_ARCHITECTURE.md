@@ -45,6 +45,16 @@ manifold-gpu/
 
 **Dependency policy:** manifold-gpu pulls only `objc2`, `block2`, `objc2-foundation`, `objc2-metal`, `objc2-metal-fx`, `objc2-metal-performance-shaders`. No `metal` crate, no `objc 0.2`, no `block 0.1`, no `core-graphics-types`. Raw-window-handle is the only non-objc2 macOS dep (winit interop).
 
+## Failure diagnostics
+
+Command buffers request Metal encoder execution status. On failure the session
+log records encoder labels, error states, and dispatch signposts when Metal
+supplies them. RT trace dispatches start a separate labelled compute encoder;
+this changes encoder boundaries, not submission order. Blocking production
+warmup uses `try_commit_and_wait_completed` and propagates GPU failure instead
+of treating a logged error as successful work. Diagnostics identify the failed
+encoder, not necessarily the earlier cause of a resource or synchronization bug.
+
 ## Phase Roadmap
 
 | Phase                  | What                                                                                             | Status          |

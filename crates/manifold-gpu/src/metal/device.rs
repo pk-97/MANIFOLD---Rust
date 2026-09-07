@@ -12,6 +12,7 @@ use objc2::{Encoding, RefEncode};
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
+    MTLCommandBufferDescriptor, MTLCommandBufferErrorOption,
     MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLHeap, MTLHeapDescriptor,
     MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource,
     MTLResourceOptions, MTLSamplerDescriptor, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
@@ -1158,9 +1159,12 @@ impl GpuDevice {
     /// [`GpuEncoder::commit_and_continue`] to keep encoding across submits
     /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
     pub(crate) fn new_command_buffer(&self, label: &str) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
-        let cmd_buf = self
-            .queue
-            .commandBuffer()
+        let descriptor = unsafe { MTLCommandBufferDescriptor::new() };
+        unsafe {
+            descriptor.setRetainedReferences(true);
+            descriptor.setErrorOptions(MTLCommandBufferErrorOption::EncoderExecutionStatus);
+        }
+        let cmd_buf = unsafe { self.queue.commandBufferWithDescriptor(&descriptor) }
             .expect("Failed to acquire command buffer");
         unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
         cmd_buf

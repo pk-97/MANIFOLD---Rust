@@ -8,6 +8,38 @@
 //! ASK. `submissions_ignored` is that ask.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use objc2_foundation::NSError;
+
+/// Emit Metal's encoder execution diagnostics attached to an NSError.
+pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
+    use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_foundation::{NSArray, NSString};
+    use objc2_metal::{MTLCommandBufferEncoderInfoErrorKey, MTLCommandEncoderErrorState};
+    let user_info = err.userInfo();
+    let Some(infos) = user_info.objectForKey(unsafe { MTLCommandBufferEncoderInfoErrorKey }) else {
+        emit_diagnostic(format_args!("[GPU] buffer {buffer}: Metal supplied no per-encoder execution details"));
+        return;
+    };
+    // Metal documents this key as NSArray<MTLCommandBufferEncoderInfo>.
+    let count: usize = unsafe { msg_send![&*infos, count] };
+    for index in 0..count {
+        let info: *mut AnyObject = unsafe { msg_send![&*infos, objectAtIndex: index] };
+        let label: Option<Retained<NSString>> = unsafe { msg_send![info, label] };
+        let state: MTLCommandEncoderErrorState = unsafe { msg_send![info, errorState] };
+        let signposts: Option<Retained<NSArray<NSString>>> = unsafe { msg_send![info, debugSignposts] };
+        emit_diagnostic(format_args!("[GPU] buffer {buffer} encoder[{index}] label={label:?} state={state:?} signposts={signposts:?}"));
+    }
+}
+
+/// Headless proof binaries may not install a logger; don't discard their fault evidence.
+fn emit_diagnostic(args: std::fmt::Arguments<'_>) {
+    if log::log_enabled!(log::Level::Error) {
+        log::error!("{args}");
+    } else {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "{args}");
+    }
+}
 
 static FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SUBMISSIONS_IGNORED: AtomicBool = AtomicBool::new(false);

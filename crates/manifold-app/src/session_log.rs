@@ -177,8 +177,7 @@ mod tests {
         init();
         log::info!("test project: Corrosion copy");
         log::error!("test warmup GPU hang");
-        crate::write_fatal_gpu_report("test submissions ignored", 70);
-        std::process::exit(70);
+        crate::abort_gpu_work("test submissions ignored");
     }
 
     #[test]
