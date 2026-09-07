@@ -85,6 +85,9 @@ impl ContentThread {
         cmd_tx: &Sender<ContentCommand>,
         state_tx: &Sender<ContentState>,
     ) {
+        // Warmup precedes render_content: install the new project's live
+        // quality now rather than inheriting defaults or a previous export.
+        self.content_pipeline.apply_rt_quality(&mut self.engine, false);
         let Some(project) = self.engine.project() else {
             return;
         };
@@ -105,6 +108,7 @@ impl ContentThread {
             })
             .map(|(i, l)| (i, l.layer_id.clone(), l.name.clone()))
             .collect();
+        log::info!("[ContentThread] Warmup RT quality: {:?}", project.settings.rt_quality.realtime);
         let total = warmup_layers.len() as u32;
         let budget = manifold_core::WarmupBudget::default();
         let start = std::time::Instant::now();
