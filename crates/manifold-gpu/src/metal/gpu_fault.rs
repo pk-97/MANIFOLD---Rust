@@ -24,10 +24,10 @@ pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
     let count: usize = unsafe { msg_send![&*infos, count] };
     for index in 0..count {
         let info: *mut AnyObject = unsafe { msg_send![&*infos, objectAtIndex: index] };
-        let label: Retained<NSString> = unsafe { msg_send![info, label] };
+        let label: Option<Retained<NSString>> = unsafe { msg_send![info, label] };
         let state: MTLCommandEncoderErrorState = unsafe { msg_send![info, errorState] };
-        let signposts: Retained<NSArray<NSString>> = unsafe { msg_send![info, debugSignposts] };
-        log::error!("[GPU] buffer {buffer} encoder[{index}] label={label} state={state:?} signposts={signposts:?}");
+        let signposts: Option<Retained<NSArray<NSString>>> = unsafe { msg_send![info, debugSignposts] };
+        log::error!("[GPU] buffer {buffer} encoder[{index}] label={label:?} state={state:?} signposts={signposts:?}");
     }
 }
 
