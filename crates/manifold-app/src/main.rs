@@ -112,6 +112,7 @@ mod rt_capture;
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod bridge_probe;
 mod project_io;
+mod session_log;
 #[cfg(target_os = "macos")]
 mod shared_texture;
 #[cfg(target_os = "macos")]
@@ -264,6 +265,7 @@ fn main() {
             let _ = write_crash_log(&dir, &msg, timestamp);
             prune_crash_logs(&dir, CRASH_LOGS_KEPT);
         }
+        session_log::flush();
     }));
 
     // --- SIGPIPE handler (10.9) ---
@@ -278,7 +280,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     let _instance_lock = acquire_instance_lock();
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    session_log::init();
     log::info!("MANIFOLD starting...");
 
     // --- Unclean-exit detection (GIG_RESILIENCE_DESIGN section 6, G10) ---
@@ -402,8 +404,39 @@ fn write_crash_log(
     unix_ts: u64,
 ) -> std::io::Result<std::path::PathBuf> {
     let path = dir.join(format!("crash-{unix_ts:010}.log"));
-    std::fs::write(&path, msg)?;
+    use std::io::Write;
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(msg.as_bytes())?;
+    file.sync_all()?;
     Ok(path)
+}
+
+/// Intentional GPU exits bypass the panic hook; preserve their own audit record.
+fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let msg = format!(
+        "MANIFOLD FATAL GPU EXIT at unix_ts={timestamp}\nexit_code={exit_code}\npid={}\ncurrent_beat={:?}\nsession_log={:?}\n{reason}\n",
+        std::process::id(),
+        breadcrumb::last_known_beat_for_crash_log(),
+        session_log::path(),
+    );
+    if let Some(dir) = crash_log_dir() {
+        match std::fs::create_dir_all(&dir)
+            .and_then(|()| write_crash_log(&dir, &msg, timestamp))
+        {
+            Ok(path) => {
+                log::error!("Fatal GPU report saved: {}", path.display());
+                prune_crash_logs(&dir, CRASH_LOGS_KEPT);
+            }
+            Err(err) => log::error!("Cannot save fatal GPU report: {err}; {msg}"),
+        }
+    } else {
+        log::error!("Cannot locate fatal GPU report directory; {msg}");
+    }
+    session_log::flush();
 }
 
 /// Delete the oldest `crash-*.log` files beyond `keep`. Best-effort — this
@@ -685,4 +718,3 @@ mod resume_arg_tests {
         );
     }
 }
-

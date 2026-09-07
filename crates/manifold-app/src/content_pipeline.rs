@@ -1637,8 +1637,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             log::error!(
                 "[ContentPipeline] FATAL: the GPU driver blacklisted this process's command \
                  queue (submissions ignored after prior GPU errors) — rendering cannot \
-                 recover this session. Exiting now; relaunch Manifold. (BUG-665r)"
+                 recover this session. Exiting now; relaunch Manifold. exit_code=70 (BUG-665r)"
             );
+            crate::write_fatal_gpu_report("GPU submissions ignored after prior GPU errors", 70);
             std::process::exit(70);
         }
         let idx = self.write_surface_index;
