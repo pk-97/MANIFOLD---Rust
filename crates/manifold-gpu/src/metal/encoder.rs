@@ -383,7 +383,9 @@ impl GpuEncoder {
             self.ensure_compute()
         };
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setComputePipelineState(&pipeline.state);
         }
 
@@ -567,13 +569,17 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        self.end_current();
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
         } else {
             self.ensure_compute()
         };
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.setLabel(Some(&debug_label));
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setComputePipelineState(&pipeline.state);
             if let Some(slot) = pipeline.slot_map.get(accel_binding) {
                 enc.setAccelerationStructure_atBufferIndex(
@@ -756,7 +762,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -798,7 +806,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -853,7 +863,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -908,7 +920,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -1074,7 +1088,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&pass_desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setDepthStencilState(Some(&desc.depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1189,7 +1205,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1266,7 +1284,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
@@ -1346,7 +1366,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(fill_mode));
@@ -1422,7 +1444,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1491,7 +1515,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
 
             if let Some((x, y, w, h)) = viewport {
@@ -1563,7 +1589,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setViewport(MTLViewport {
                 originX: 0.0,
                 originY: 0.0,
@@ -1597,7 +1625,9 @@ impl GpuEncoder {
         };
 
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
 
             if let Some((x, y, w, h)) = viewport {
@@ -2257,6 +2287,7 @@ impl GpuEncoder {
                 let (code, desc) = match err {
                     None => (-1i64, String::from("(nil)")),
                     Some(err) => {
+                        super::gpu_fault::log_error_diagnostics(&err, &label);
                         let code = err.code() as i64;
                         let desc = err.localizedDescription().to_string();
                         (code, desc)
@@ -2308,6 +2339,7 @@ impl GpuEncoder {
                 let (code, desc) = match err {
                     None => (-1i64, String::from("(nil)")),
                     Some(err) => {
+                        super::gpu_fault::log_error_diagnostics(&err, &label);
                         let code = err.code() as i64;
                         let desc = err.localizedDescription().to_string();
                         (code, desc)
@@ -2383,6 +2415,27 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilCompleted() };
         self.verify_completed("commit_and_wait_completed");
+    }
+
+    /// Commit, wait for completion, and return a failure instead of panicking.
+    /// Completion handlers have run by the time Metal returns from the wait.
+    pub fn try_commit_and_wait_completed(mut self) -> Result<(), String> {
+        self.end_current();
+        self.register_fault_handler();
+        self.cmd_buf.commit();
+        unsafe { self.cmd_buf.waitUntilCompleted() };
+        use objc2_metal::MTLCommandBufferStatus;
+        if unsafe { self.cmd_buf.status() } == MTLCommandBufferStatus::Completed {
+            return Ok(());
+        }
+        let (code, desc) = match unsafe { self.cmd_buf.error() } {
+            None => (-1i64, String::from("(no error object)")),
+            Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
+        };
+        Err(format!(
+            "[GPU] try_commit_and_wait_completed: command buffer did not reach Completed (status={}, code={}): {}",
+            unsafe { self.cmd_buf.status() }.0, code, desc
+        ))
     }
 
     /// Assert the command buffer reached `Completed` after a blocking wait.

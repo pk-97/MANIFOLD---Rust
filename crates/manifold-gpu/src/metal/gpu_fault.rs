@@ -8,6 +8,28 @@
 //! ASK. `submissions_ignored` is that ask.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use objc2_foundation::NSError;
+
+/// Emit Metal's encoder execution diagnostics attached to an NSError.
+pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
+    use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_foundation::{NSArray, NSString};
+    use objc2_metal::{MTLCommandBufferEncoderInfoErrorKey, MTLCommandEncoderErrorState};
+    let user_info = err.userInfo();
+    let Some(infos) = user_info.objectForKey(unsafe { MTLCommandBufferEncoderInfoErrorKey }) else {
+        log::error!("[GPU] buffer {buffer}: Metal supplied no per-encoder execution details");
+        return;
+    };
+    // Metal documents this key as NSArray<MTLCommandBufferEncoderInfo>.
+    let count: usize = unsafe { msg_send![&*infos, count] };
+    for index in 0..count {
+        let info: *mut AnyObject = unsafe { msg_send![&*infos, objectAtIndex: index] };
+        let label: Retained<NSString> = unsafe { msg_send![info, label] };
+        let state: MTLCommandEncoderErrorState = unsafe { msg_send![info, errorState] };
+        let signposts: Retained<NSArray<NSString>> = unsafe { msg_send![info, debugSignposts] };
+        log::error!("[GPU] buffer {buffer} encoder[{index}] label={label} state={state:?} signposts={signposts:?}");
+    }
+}
 
 static FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SUBMISSIONS_IGNORED: AtomicBool = AtomicBool::new(false);

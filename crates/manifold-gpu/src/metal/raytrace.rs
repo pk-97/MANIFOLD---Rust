@@ -457,6 +457,7 @@ fn encode_descriptor_build(
     let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
         .computeCommandEncoder()
         .expect("computeCommandEncoder failed");
+    unsafe { enc.setLabel(Some(&NSString::from_str("RT descriptor build compute"))) };
     let pipeline = &device.rt_pipelines().descriptor_build_pipeline;
     unsafe {
         enc.setComputePipelineState(&pipeline.state);
@@ -550,11 +551,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     let total_slots = slot_total_raw.max(1);
     let max_slots: u32 = objects.iter().map(effective_instance_slots).max().unwrap_or(1);
 
-    let cb = device
-        .raw_queue()
-        .commandBuffer()
-        .expect("Failed to acquire command buffer for RT accel build");
-    unsafe { cb.setLabel(Some(&NSString::from_str("RT accel build"))) };
+    let cb = device.new_command_buffer("RT accel build");
 
     // D1: in instanced mode the descriptor-build kernel runs FIRST on this
     // same command buffer (sequential encoders are GPU-ordered ahead of
@@ -585,6 +582,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
+    unsafe { enc.setLabel(Some(&NSString::from_str("RT BLAS build"))) };
 
     // BUG-84fv hardening: pin the geometry buffers up front. The BLAS
     // builds below read them through descriptor raw addresses, so they
@@ -729,7 +727,10 @@ fn add_ready_completion_handler<T: Send + 'static>(
         if unsafe { cb.status() } == MTLCommandBufferStatus::Error {
             let (code, desc) = match unsafe { cb.error() } {
                 None => (-1i64, String::from("(nil)")),
-                Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
+                Some(err) => {
+                    super::gpu_fault::log_error_diagnostics(&err, label);
+                    (err.code() as i64, err.localizedDescription().to_string())
+                },
             };
             super::gpu_fault::record_fault(&desc);
             log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
@@ -797,15 +798,12 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         let max_slots: u32 = objects.iter().map(effective_instance_slots).max().unwrap_or(1);
 
         accel.ready.store(false, Ordering::Release);
-        let cb = device
-            .raw_queue()
-            .commandBuffer()
-            .expect("Failed to acquire command buffer for RT TLAS instanced refit");
-        unsafe { cb.setLabel(Some(&NSString::from_str("RT TLAS instanced refit"))) };
+        let cb = device.new_command_buffer("RT TLAS instanced refit");
         encode_descriptor_build(device, &cb, objects, &accel.instance_buffer, obj_params, max_slots);
         let enc = cb
             .accelerationStructureCommandEncoder()
             .expect("accelerationStructureCommandEncoder failed");
+        unsafe { enc.setLabel(Some(&NSString::from_str("RT TLAS instanced refit"))) };
         // BUG-84fv hardening: same declaration set as the fast path below,
         // plus the wired instances sources for the descriptor kernel's
         // raw-address reads (declared on the compute encoder inside
@@ -877,14 +875,11 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
     // read from `accel.structure` in the meantime (Metal doesn't mutate
     // it destructively until the refit command actually runs).
     accel.ready.store(false, Ordering::Release);
-    let cb = device
-        .raw_queue()
-        .commandBuffer()
-        .expect("Failed to acquire command buffer for RT TLAS refit");
-    unsafe { cb.setLabel(Some(&NSString::from_str("RT TLAS refit"))) };
+    let cb = device.new_command_buffer("RT TLAS refit");
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
+    unsafe { enc.setLabel(Some(&NSString::from_str("RT TLAS refit"))) };
     // BUG-84fv hardening: the refit reads the BLAS list + instance buffer
     // through the descriptor (raw addresses) — declare usage on this
     // encoder (BUG-jddy reclamation class) and pin them through completion

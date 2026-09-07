@@ -3930,6 +3930,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    /// Export must never encode an unfinished or GPU-failed render target.
+    #[cfg(target_os = "macos")]
+    pub fn wait_for_export_complete(&self, initial_faults: u64) -> Result<(), String> {
+        let event = self.native_event.as_ref().ok_or("Export GPU completion event missing")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(result) = crate::content_export::export_gpu_completion(
+                event.is_done(self.native_signal_value),
+                initial_faults,
+                manifold_gpu::gpu_fault::fault_count(),
+                manifold_gpu::gpu_fault::submissions_ignored(),
+                std::time::Instant::now() >= deadline,
+            ) {
+                return result;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     /// Export output texture (post-tonemap, post-effects).
     pub fn export_output_texture(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.output_texture()

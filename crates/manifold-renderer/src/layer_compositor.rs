@@ -971,7 +971,10 @@ impl LayerCompositor {
                     crate::node_graph::RtQuality::default(),
                 );
             }
-            native_enc.commit_and_wait_completed();
+            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+                log::error!("Effect-chain warmup GPU failure: {err}");
+                return WarmupOutcome::GpuFailed;
+            }
             self.uniform_arena.flush(device);
 
             if let Some(chain) = self.effect_chains.get(&group_id)
@@ -1102,6 +1105,7 @@ impl LayerCompositor {
                 budget,
             );
             match outcome {
+                WarmupOutcome::GpuFailed => return WarmupOutcome::GpuFailed,
                 WarmupOutcome::Quiescent => {}
                 WarmupOutcome::BudgetExhausted { cap, elapsed } => {
                     log::warn!(
@@ -1185,7 +1189,10 @@ impl LayerCompositor {
                     crate::node_graph::RtQuality::default(),
                 );
             }
-            native_enc.commit_and_wait_completed();
+            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+                log::error!("Effect-chain warmup GPU failure: {err}");
+                return WarmupOutcome::GpuFailed;
+            }
             uniform_arena.flush(device);
 
             if let Some(cg) = chain.as_ref()

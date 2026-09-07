@@ -13,6 +13,49 @@ use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, ExportFinishedEvent};
 use crate::content_thread::ContentThread;
 
+/// Distinguish encoder failures from GPU failures that invalidate the session.
+struct ExportFrameFailure {
+    message: String,
+    gpu: bool,
+}
+
+/// A signalled fence is not success if any GPU work failed during the frame.
+pub(crate) fn export_gpu_completion(
+    completed: bool,
+    initial_faults: u64,
+    current_faults: u64,
+    submissions_ignored: bool,
+    timed_out: bool,
+) -> Option<Result<(), String>> {
+    if current_faults != initial_faults || submissions_ignored {
+        Some(Err("GPU execution failed during export; see session encoder diagnostics".into()))
+    } else if completed {
+        Some(Ok(()))
+    } else if timed_out {
+        Some(Err("GPU completion timed out during export".into()))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod gpu_completion_tests {
+    use super::export_gpu_completion;
+
+    #[test]
+    fn gpu_failure_overrides_signalled_fence() {
+        assert!(export_gpu_completion(true, 4, 5, false, false).unwrap().is_err());
+        assert!(export_gpu_completion(true, 4, 4, true, false).unwrap().is_err());
+    }
+
+    #[test]
+    fn unfinished_frame_waits_then_fails_at_deadline() {
+        assert!(export_gpu_completion(false, 0, 0, false, false).is_none());
+        assert!(export_gpu_completion(false, 0, 0, false, true).unwrap().is_err());
+        assert_eq!(export_gpu_completion(true, 0, 0, false, true), Some(Ok(())));
+    }
+}
+
 /// Derive export sections from timeline markers. Every marker inside the
 /// export range is a cut — sections are `[range_start, m₁)`, `[m₁, m₂)`, …,
 /// `[mₙ, range_end)` over the sorted, deduplicated markers strictly inside
@@ -530,6 +573,7 @@ impl ContentThread {
         //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;
         let mut encode_error: Option<String> = None;
+        let mut gpu_failed = false;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -544,7 +588,7 @@ impl ContentThread {
             }
 
             #[cfg(target_os = "macos")]
-            let frame_err: Option<String> = objc2::rc::autoreleasepool(|_| {
+            let frame_err: Option<ExportFrameFailure> = objc2::rc::autoreleasepool(|_| {
                 self.export_one_frame(
                     &mut session,
                     &export_config,
@@ -558,7 +602,7 @@ impl ContentThread {
                 )
             });
             #[cfg(not(target_os = "macos"))]
-            let frame_err: Option<String> = self.export_one_frame(
+            let frame_err: Option<ExportFrameFailure> = self.export_one_frame(
                 &mut session,
                 &export_config,
                 frame_idx,
@@ -571,7 +615,8 @@ impl ContentThread {
             );
 
             if let Some(err) = frame_err {
-                encode_error = Some(err);
+                gpu_failed = err.gpu;
+                encode_error = Some(err.message);
                 break;
             }
         }
@@ -586,6 +631,7 @@ impl ContentThread {
                     session.frames_encoded()
                 );
             }
+            session.cancel();
             // Clean up partial file
             let _ = std::fs::remove_file(&export_config.output_path);
             let temp_video = format!("{}.video_only.mp4", export_config.output_path);
@@ -634,6 +680,9 @@ impl ContentThread {
             self.send_export_finished(state_tx, false, msg, &export_config.output_path);
         }
 
+        if gpu_failed {
+            crate::abort_gpu_work("Export GPU failure; partial export cancelled");
+        }
         failed || finalize_failed
     }
 
@@ -649,7 +698,8 @@ impl ContentThread {
         progress_prefix: Option<&str>,
         generator_only: bool,
         offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
-    ) -> Option<String> {
+    ) -> Option<ExportFrameFailure> {
+        let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         let ctx = TickContext {
             dt_seconds: Seconds(frame_dt),
             realtime_now: Seconds(frame_idx as f64 * frame_dt),
@@ -707,18 +757,21 @@ impl ContentThread {
             Self::get_metal_texture_ptr(texture)
         };
 
-        self.content_pipeline.wait_for_render_complete();
+        if let Err(message) = self.content_pipeline.wait_for_export_complete(initial_gpu_faults) {
+            log::error!("[Export] Frame {frame_idx} failed: {message}");
+            return Some(ExportFrameFailure { message, gpu: true });
+        }
 
         match tex_ptr {
             Some(ptr) => {
                 if let Err(e) = unsafe { session.encode_frame(ptr) } {
                     log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
-                    return Some(format!("Encode failed at frame {frame_idx}: {e}"));
+                    return Some(ExportFrameFailure { message: format!("Encode failed at frame {frame_idx}: {e}"), gpu: false });
                 }
             }
             None => {
                 log::error!("[ContentThread] No Metal texture at frame {frame_idx}");
-                return Some(format!("No texture at frame {frame_idx}"));
+                return Some(ExportFrameFailure { message: format!("No texture at frame {frame_idx}"), gpu: false });
             }
         }
 

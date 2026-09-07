@@ -411,6 +411,13 @@ fn write_crash_log(
     Ok(path)
 }
 
+/// A GPU-failed session cannot safely resume using its partially written resources.
+fn abort_gpu_work(reason: &str) -> ! {
+    log::error!("[GPU] Aborting session: {reason}; exit_code=70");
+    write_fatal_gpu_report(reason, 70);
+    std::process::exit(70);
+}
+
 /// Intentional GPU exits bypass the panic hook; preserve their own audit record.
 fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
     let timestamp = std::time::SystemTime::now()
