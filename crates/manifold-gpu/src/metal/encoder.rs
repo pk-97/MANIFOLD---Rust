@@ -377,6 +377,10 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        let isolate_rt_stage = label.starts_with("node.render_scene RT");
+        if isolate_rt_stage {
+            self.end_current();
+        }
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
         } else {
@@ -384,6 +388,9 @@ impl GpuEncoder {
         };
         unsafe {
             let debug_label = NSString::from_str(label);
+            if isolate_rt_stage {
+                enc.setLabel(Some(&debug_label));
+            }
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
             enc.setComputePipelineState(&pipeline.state);
@@ -547,6 +554,9 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
+        if isolate_rt_stage {
+            self.end_current();
+        }
     }
 
     /// Dispatch a compute shader that also binds a Metal acceleration
@@ -700,14 +710,10 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
-        // Cross-dispatch cache invalidation: this path doesn't populate
-        // `compute_cache`, but a subsequent `dispatch_compute` call in the
-        // same encoder must not skip a `setBuffer`/`setTexture` because
-        // the cache still thinks a slot holds what it held before this
-        // accel-structure dispatch touched it. Clear the cache wholesale
-        // — cheap (one dispatch/frame) and correct, vs. tracking exactly
-        // which slots this call touched.
-        self.compute_cache.clear();
+        // Keep the RT dispatch in its own labelled encoder. Besides making
+        // the failure boundary visible, end_current clears the ordinary
+        // compute binding cache before the next dispatch reuses this slot.
+        self.end_current();
     }
 
     /// Insert a buffer-scope memory barrier on the active compute encoder.

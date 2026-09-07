@@ -49,11 +49,14 @@ manifold-gpu/
 
 Command buffers request Metal encoder execution status. On failure the session
 log records encoder labels, error states, and dispatch signposts when Metal
-supplies them. RT trace dispatches start a separate labelled compute encoder;
-this changes encoder boundaries, not submission order. Blocking production
-warmup uses `try_commit_and_wait_completed` and propagates GPU failure instead
-of treating a logged error as successful work. Diagnostics identify the failed
-encoder, not necessarily the earlier cause of a resource or synchronization bug.
+supplies them. RT trace and the `node.render_scene RT*` postprocess stages
+(upsample, à-trous, and accumulate) each use a separate labelled compute
+encoder, so an RT-A3a trace can be distinguished from a later stage. This
+changes encoder boundaries, not submission order, and the labels identify the
+failed encoder rather than guaranteeing the exact shader fault or its earlier
+resource/synchronization cause. Blocking production warmup uses
+`try_commit_and_wait_completed` and propagates GPU failure instead of treating
+a logged error as successful work.
 
 ## Phase Roadmap
 
