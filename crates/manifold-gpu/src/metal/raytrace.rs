@@ -48,7 +48,7 @@ use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder,
     MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
     MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureTriangleGeometryDescriptor,
-    MTLAccelerationStructureUsage, MTLAttributeFormat, MTLBuffer, MTLCommandBuffer,
+    MTLAccelerationStructureUsage, MTLAttributeFormat, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus,
     MTLCommandEncoder,
     MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
     MTLDataType, MTLDevice, MTLFunctionConstantValues,
@@ -363,6 +363,18 @@ fn encode_blas_build(
         eprintln!("MANIFOLD_PROBE_RT_ACCEL: encode_blas_build triangle_count={}, vertex_buffer_size={}, vertex_stride={}, vertex_offset={}",
             obj.triangle_count, obj.vertex_buffer.size(), obj.vertex_stride, obj.vertex_offset);
     }
+    if super::gpu_fault::diagnostics_enabled() {
+        let flat_bytes = u64::from(obj.triangle_count).checked_mul(3)
+            .and_then(|v| v.checked_mul(u64::from(obj.vertex_stride)))
+            .and_then(|v| v.checked_add(u64::from(obj.vertex_offset)));
+        let bounds = if obj.index_buffer.is_none() {
+            flat_bytes.map(|needed| needed <= obj.vertex_buffer.size())
+        } else { None };
+        log::info!("[RT-DIAG] BLAS triangles={} vertex_bytes={} stride={} offset={} indexed={} flat_vertex_bounds={bounds:?} instance_slots={}",
+            obj.triangle_count, obj.vertex_buffer.size(), obj.vertex_stride, obj.vertex_offset,
+            obj.index_buffer.is_some(), effective_instance_slots(obj));
+        if bounds == Some(false) { log::error!("[RT-DIAG] invalid flat geometry bounds before AS build"); }
+    }
     let tri_desc = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
     tri_desc.setVertexBuffer(Some(obj.vertex_buffer.raw()));
     tri_desc.setVertexFormat(MTLAttributeFormat::Float3);
@@ -549,6 +561,9 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         .map(|o| effective_instance_slots(o) as usize)
         .sum();
     let total_slots = slot_total_raw.max(1);
+    if super::gpu_fault::diagnostics_enabled() {
+        log::info!("[RT-DIAG] AS build objects={} instances={total_slots} instanced={instanced}", objects.len());
+    }
     let max_slots: u32 = objects.iter().map(effective_instance_slots).max().unwrap_or(1);
 
     let cb = device.new_command_buffer("RT accel build");
@@ -932,6 +947,62 @@ const SHADOW_RAYS_MSL: &str = r#"
 #include <metal_raytracing>
 using namespace metal;
 using namespace metal::raytracing;
+
+struct RtTraceDiagnostics {
+    uint enabled;
+    atomic_uint state;
+    atomic_uint invalid_count;
+    uint first_stage;
+    uint first_pixel;
+    uint _pad;
+    float raw_origin[3];
+    float raw_direction[3];
+    float raw_min_distance;
+    float raw_max_distance;
+};
+
+static bool rt_finite(float x);
+
+static bool rt_diag_finite3(float3 v) {
+    return rt_finite(v.x) && rt_finite(v.y) && rt_finite(v.z);
+}
+
+static bool rt_validate_ray(thread ray& r, uint stage, uint2 pix,
+                            device RtTraceDiagnostics* d) {
+    if (d->enabled == 0u) return true;
+    float dir_len2 = length_squared(r.direction);
+    bool valid = rt_diag_finite3(r.origin) && rt_diag_finite3(r.direction) &&
+        rt_finite(r.min_distance) &&
+        rt_finite(dir_len2) && dir_len2 > 1e-12f && r.min_distance >= 0.0f &&
+        (as_type<uint>(r.max_distance) & 0x7fffffffu) <= 0x7f800000u &&
+        r.max_distance > r.min_distance;
+    if (!valid && d != nullptr && d->enabled != 0u) {
+        uint expected = 0u;
+        while (!atomic_compare_exchange_weak_explicit(&d->state, &expected, 1u, memory_order_relaxed, memory_order_relaxed)) {
+            if (expected != 0u) return false;
+        }
+        {
+            atomic_store_explicit(&d->invalid_count, 1u, memory_order_relaxed);
+            d->first_stage = stage;
+            d->first_pixel = pix.y * 65536u + pix.x;
+            d->raw_origin[0] = r.origin.x; d->raw_origin[1] = r.origin.y; d->raw_origin[2] = r.origin.z;
+            d->raw_direction[0] = r.direction.x; d->raw_direction[1] = r.direction.y; d->raw_direction[2] = r.direction.z;
+            d->raw_min_distance = r.min_distance; d->raw_max_distance = r.max_distance;
+            atomic_store_explicit(&d->state, 2u, memory_order_relaxed);
+        }
+    }
+    return valid;
+}
+
+static void rt_sanitize_ray(thread ray& r, uint stage, uint2 pix,
+                            device RtTraceDiagnostics* d) {
+    if (!rt_validate_ray(r, stage, pix, d)) {
+        r.origin = float3(0.0);
+        r.direction = float3(0.0, 1.0, 0.0);
+        r.min_distance = 0.0;
+        r.max_distance = 1e-6;
+    }
+}
 
 // Per-caster shadow support (multi-caster fix): mirrors the Rust
 // `RtCasterParams` field-for-field (P0 section 5.1 kernel lesson). `kind`
@@ -1693,7 +1764,7 @@ static float3 sun_bounce_at_hit(
     float3 hit_albedo,
     float bias_eps,
     uint2 tid,
-    uint seed_base)
+    uint seed_base, device RtTraceDiagnostics* diagnostics)
 {
     float3 term = float3(0.0);
     for (uint sc = 0; sc < n_casters; sc++) {
@@ -1706,7 +1777,7 @@ static float3 sun_bounce_at_hit(
         sun_r.min_distance = bias_eps * 0.5;
         sun_r.max_distance = INFINITY;
         intersection_query<triangle_data, instancing> sun_q;
-        sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
+        rt_sanitize_ray(sun_r, 1u, tid, diagnostics); sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
         // RT-TL-B (TL4): sun-bounce shadow rays transmit — a petal between
         // the bounce vertex and the sun attenuates (tinted) instead of
         // killing the term outright. Binary-identical when every factor
@@ -1865,6 +1936,7 @@ kernel void trace_shadow_rays(
     // only when `emissive_entries_are_local`; bound always (ABI-stub
     // discipline — the D7 fast path never reads it).
     device const RtAsInstanceDescriptor* emissive_descriptors [[buffer(6)]],
+    device RtTraceDiagnostics* diagnostics [[buffer(7)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
@@ -2000,7 +2072,7 @@ kernel void trace_shadow_rays(
             pr.min_distance = 0.0;
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
-            primary_q.reset(pr, accel, RT_MASK_VISIBLE);
+            rt_sanitize_ray(pr, 0u, tid, diagnostics); primary_q.reset(pr, accel, RT_MASK_VISIBLE);
             if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 primary_pid = primary_q.get_committed_primitive_id();
@@ -2137,7 +2209,7 @@ kernel void trace_shadow_rays(
             for (uint s = 0; s < spp; s++) {
                 r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
                 intersection_query<triangle_data, instancing> shadow_q;
-                shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
+                rt_sanitize_ray(r, 1u, tid, diagnostics); shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
                 // RT-TL-B (TL4/TL5): shadow rays transmit through thin surfaces
                 // when HAS_TRANSLUCENCY is true. Binary scenes keep the pre-TL-B
                 // walk_with_alpha_test codegen byte-for-byte.
@@ -2186,7 +2258,7 @@ kernel void trace_shadow_rays(
         for (uint s = 0; s < p.ao_spp; s++) {
             ao_r.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
-            ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
+                rt_sanitize_ray(ao_r, 2u, tid, diagnostics); ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
             if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
@@ -2279,7 +2351,7 @@ kernel void trace_shadow_rays(
             float3 throughput = float3(1.0);
             for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
                 intersection_query<triangle_data, instancing> gi_q;
-                gi_q.reset(gr, accel, RT_MASK_VISIBLE);
+                rt_sanitize_ray(gr, 3u, tid, diagnostics); gi_q.reset(gr, accel, RT_MASK_VISIBLE);
                 if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
@@ -2304,7 +2376,7 @@ kernel void trace_shadow_rays(
                 float3 bounce_term = sun_bounce_at_hit(
                     accel, slot_sources, slot_materials, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid,
-                    400u + s * MAX_RT_CASTERS);
+                    400u + s * MAX_RT_CASTERS, diagnostics);
                 // RS7: the bounce-0 direct-emissive term is owned by the
                 // emissive direct-light sampler when active (substitution,
                 // never addition — the 818a06b0 double-count trap).
@@ -2422,7 +2494,7 @@ kernel void trace_shadow_rays(
                         em_r.max_distance = l_len - bias_eps;
                         em_r.direction = l_hat;
                         intersection_query<triangle_data, instancing> em_q;
-                        em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
+                        rt_sanitize_ray(em_r, 4u, tid, diagnostics); em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
                         bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true);
                         if (!blocked) {
                             float3 em_factor = float3(gi_materials[tri.object_index].emissive);
@@ -2536,7 +2608,7 @@ kernel void trace_shadow_rays(
             rr.min_distance = bias_eps * 0.5;
             rr.max_distance = INFINITY;
             intersection_query<triangle_data, instancing> refl_q;
-            refl_q.reset(rr, accel, RT_MASK_VISIBLE);
+            rt_sanitize_ray(rr, 5u, tid, diagnostics); refl_q.reset(rr, accel, RT_MASK_VISIBLE);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
             if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false)) {
@@ -2586,7 +2658,7 @@ kernel void trace_shadow_rays(
                 // (kind==0), same discipline as the GI gather's bounce above.
                 float3 sun_bounce_term = sun_bounce_at_hit(
                     accel, slot_sources, slot_materials, material_textures, p, n_casters,
-                    hit_pos, hit_n, hit_albedo, bias_eps, tid, 500u);
+                    hit_pos, hit_n, hit_albedo, bias_eps, tid, 500u, diagnostics);
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
                 traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
             } else {
@@ -4300,6 +4372,23 @@ impl RtCasterParams {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+struct RtTraceDiagnostics {
+    enabled: u32,
+    state: u32,
+    invalid_count: u32,
+    first_stage: u32,
+    first_pixel: u32,
+    _pad: u32,
+    raw_origin: [f32; 3],
+    raw_direction: [f32; 3],
+    raw_min_distance: f32,
+    raw_max_distance: f32,
+}
+
+
+
 /// CPU mirror of `ShadowRayParams` above — field order and packing MUST
 /// match exactly (P0 section 5.1 kernel lesson: `packed_float3` in MSL == dense
 /// `[f32; 3]` here, no padding).
@@ -4318,7 +4407,6 @@ impl RtCasterParams {
 /// `sun_color` (single-caster-only) replaced with `casters`/`caster_count`
 /// — up to [`MAX_RT_CASTERS`] independently-traced casters, one visibility
 /// channel per slot in `trace_shadow_rays`'s `out_sv` output.
-#[repr(C)]
 /// RT quality A3a: Split-dispatch control.
 /// The single `trace_shadow_rays` kernel now runs twice with different spp masks:
 /// - Mask dispatch: shadow_spp > 0, ao_spp=0, gi_spp=0, refl_spp=0 → writes out_sv only
@@ -4326,6 +4414,7 @@ impl RtCasterParams {
 ///
 /// Each dispatch carries its own trace_size; spp=0 gates kernel writes to leave textures untouched.
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct ShadowRayParams {
     pub shadow_spp: u32,
     pub frame_index: u32,
@@ -6136,7 +6225,17 @@ pub trait ShadowRayTracer {
 /// Metal implementation of [`ShadowRayTracer`] — ray queries via
 /// `metal_raytracing`, compiled once and kept resident (mirrors the
 /// pipeline-cache pattern `GpuDevice` already uses for the WGSL path).
+// Fixed diagnostic slots. Each slot is exclusively owned until its completion
+// callback finishes reading; no CPU/GPU readback race and no per-frame buffers.
+struct TraceDiagnosticPool {
+    buffers: [GpuBuffer; 8],
+    busy: [AtomicBool; 8],
+    disabled: GpuBuffer,
+}
+
 pub struct MetalShadowRayTracer {
+    /// Fixed slots retain their first incident; callbacks hold the pool alive.
+    rt_diagnostics: Arc<TraceDiagnosticPool>,
     /// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): trace pipeline
     /// for translucent scenes — `HAS_TRANSLUCENCY` baked to true (walk_with_transmission
     /// in sv caster loop + sun_bounce_at_hit).
@@ -6237,6 +6336,7 @@ impl RtPipelines {
             (4, SlotKind::Buffer), // RS-C: emissive_triangles, MSL [[buffer(4)]]
             (5, SlotKind::Buffer), // RS-C: emissive_aliases, MSL [[buffer(5)]]
             (6, SlotKind::Buffer), // D8: instance descriptors, MSL [[buffer(6)]]
+            (7, SlotKind::Buffer), // diagnostics record, MSL [[buffer(7)]]
             (0, SlotKind::Texture),
             (1, SlotKind::Texture),
             (2, SlotKind::Texture),
@@ -6539,6 +6639,24 @@ impl MetalShadowRayTracer {
         // per process); the tracer instance owns only data.
         let p = device.rt_pipelines();
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
+        let enabled = super::gpu_fault::diagnostics_enabled();
+        if enabled {
+            log::info!("[RT-DIAG] stages:0=primary,1=shadow/sun,2=AO,3=GI,4=emissive-shadow,5=reflection; invalid rays replaced only in diagnostic mode; records retain first incident per fixed slot");
+        }
+        let make_record = |enabled: bool| {
+            let buffer = device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
+            let ptr = buffer.mapped_ptr().expect("shared RT diagnostics");
+            unsafe {
+                std::ptr::write_bytes(ptr, 0, std::mem::size_of::<RtTraceDiagnostics>());
+                (*ptr.cast::<RtTraceDiagnostics>()).enabled = enabled as u32;
+            }
+            buffer
+        };
+        let rt_diagnostics = Arc::new(TraceDiagnosticPool {
+            buffers: std::array::from_fn(|_| make_record(enabled)),
+            busy: std::array::from_fn(|_| AtomicBool::new(false)),
+            disabled: make_record(false),
+        });
 
         Self {
             trace_pipeline_translucent: p.trace_pipeline_translucent.clone(),
@@ -6553,6 +6671,7 @@ impl MetalShadowRayTracer {
             atrous_post_pipeline: p.atrous_post_pipeline.clone(),
             debug_atrous_post_pipeline: p.debug_atrous_post_pipeline.clone(),
             dummy_alpha_tex,
+            rt_diagnostics,
         }
     }
 
@@ -6965,6 +7084,39 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
+        let diagnostic_slot = if super::gpu_fault::diagnostics_enabled() {
+            self.rt_diagnostics.busy.iter().position(|busy|
+                busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok())
+        } else { None };
+        if let Some(slot) = diagnostic_slot {
+            let pool = Arc::clone(&self.rt_diagnostics);
+            let frame = params.frame_index;
+            log::info!("[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={}",
+                params.trace_size, params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp);
+            let block = block2::RcBlock::new(move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                let cb = unsafe { cb.as_ref() };
+                if unsafe { cb.status() } == MTLCommandBufferStatus::Completed {
+                    // This slot cannot be submitted again until we release it.
+                    // Metal completion makes all writes visible, including
+                    // relaxed-atomic publication within this completed buffer.
+                    let ptr = pool.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
+                    let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
+                    if d.state == 2 {
+                        log::error!("[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true", d.first_stage, d.first_pixel, d.raw_origin, d.raw_direction, d.raw_min_distance, d.raw_max_distance);
+                    } else {
+                        log::info!("[RT-DIAG] frame={frame} slot={slot} record_state={} (0=no invalid recorded,1=incomplete)", d.state);
+                    }
+                } else {
+                    log::error!("[RT-DIAG] frame={frame} slot={slot} validation=unavailable command did not complete");
+                }
+                pool.busy[slot].store(false, Ordering::Release);
+            });
+            unsafe { encoder.cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)); }
+        } else if super::gpu_fault::diagnostics_enabled() {
+            log::warn!("[RT-DIAG] validation=unavailable all diagnostic slots in flight");
+        }
+        let diagnostic_buffer = diagnostic_slot.map(|slot| &self.rt_diagnostics.buffers[slot])
+            .unwrap_or(&self.rt_diagnostics.disabled);
         let groups = dispatch_groups_2d(params.trace_size, SHADOW_WORKGROUP);
         let mut bindings = vec![
             GpuBinding::Buffer {
@@ -7038,6 +7190,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 4 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_refl,
         });
+        bindings.push(GpuBinding::Buffer { binding: 7, buffer: diagnostic_buffer, offset: 0 });
         // RT-R1 (section 9.3 RD4): prefiltered env chain at [[texture(69)]] — the
         // reflection miss branch's radiance source.
         bindings.push(GpuBinding::Texture {
@@ -7696,6 +7849,55 @@ mod tests {
                     "case {i}: {result:?}, expected {expected:?}");
             }
         }
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn trace_diagnostics_records_invalid_ray() {
+        use super::*;
+        let device = GpuDevice::new();
+        let source = format!("{}\n{}", SHADOW_RAYS_MSL, r#"
+        kernel void diag_probe(device RtTraceDiagnostics* d [[buffer(0)]],
+            device float4* out [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
+            if (tid.x != 0 || tid.y != 0) return;
+            ray r; r.origin=float3(0); r.direction=float3(0,1,0);
+            r.min_distance=0; r.max_distance=INFINITY;
+            bool valid = rt_validate_ray(r, 0, uint2(0), d);
+            r.direction.x = as_type<float>(0x7fc00000u);
+            rt_sanitize_ray(r, 3, uint2(17,29), d);
+            out[0]=float4(r.direction, valid ? 1.0 : 0.0);
+            // A later failure must not overwrite the original incident.
+            r.min_distance=-1;
+            rt_sanitize_ray(r, 5, uint2(99), d);
+        }
+        "#);
+        let opts = MTLCompileOptions::init(MTLCompileOptions::alloc());
+        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
+        let library = device.raw_device()
+            .newLibraryWithSource_options_error(&NSString::from_str(&source), Some(&opts))
+            .expect("trace diagnostics MSL compile");
+        let pipeline = compile_pipeline(&device, &library, "diag_probe",
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]));
+        let record = device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
+        let ptr = record.mapped_ptr().unwrap();
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, std::mem::size_of::<RtTraceDiagnostics>());
+            (*ptr.cast::<RtTraceDiagnostics>()).enabled = 1;
+        }
+        let out = device.create_buffer_shared(16);
+        let mut enc = device.create_encoder("trace diagnostics regression");
+        enc.dispatch_compute(&pipeline, &[
+            GpuBinding::Buffer { binding: 0, buffer: &record, offset: 0 },
+            GpuBinding::Buffer { binding: 1, buffer: &out, offset: 0 },
+        ], [1,1,1], "trace diagnostics regression");
+        enc.try_commit_and_wait_completed().expect("trace diagnostic dispatch");
+        let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
+        assert_eq!(d.state, 2);
+        assert_eq!(d.first_stage, 3);
+        assert_eq!(d.first_pixel, 29 * 65536 + 17);
+        assert!(d.raw_direction[0].is_nan());
+        let result = unsafe { out.mapped_ptr().unwrap().cast::<[f32;4]>().read_unaligned() };
+        assert_eq!(result, [0.0,1.0,0.0,1.0]);
     }
 
     /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks

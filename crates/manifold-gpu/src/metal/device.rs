@@ -1167,6 +1167,11 @@ impl GpuDevice {
         let cmd_buf = unsafe { self.queue.commandBufferWithDescriptor(&descriptor) }
             .expect("Failed to acquire command buffer");
         unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] device={:?} queue={:p} allocated_bytes={} buffer={label}",
+                self.raw_device().name(), &*self.queue, self.raw_device().currentAllocatedSize());
+            super::gpu_fault::trace_buffer(&cmd_buf);
+        }
         cmd_buf
     }
 

@@ -58,6 +58,24 @@ resource/synchronization cause. Blocking production warmup uses
 `try_commit_and_wait_completed` and propagates GPU failure instead of treating
 a logged error as successful work.
 
+### Incident capture
+
+`MANIFOLD_GPU_DIAGNOSTICS=1` enables command-buffer correlation IDs,
+creation/scheduling/completion events, available GPU durations, allocation
+footprints, RT dispatch sizes, and bound-buffer identities/sizes. This is an
+opt-in diagnostic mode: logging and validation overhead may change timing.
+Ray validation covers primary, shadow/sun, AO, GI, emissive-shadow and reflection
+queries. Invalid inputs are recorded and replaced with a finite short ray only
+in this mode. Eight preallocated slots retain their first invalid inputs;
+exclusive ownership lasts through completion readback. Failed commands and slot
+exhaustion log validation as unavailable. Positive infinite maximum distance is
+valid. Geometry logs check flat vertex-buffer extents; indexed hit bounds and
+full resource lifetime correctness remain unverified.
+Fatal GPU reports embed a bounded session-log tail; the adjacent full session
+is the authoritative timeline. Buffer states and missing GPU timestamps are
+reported as evidence, not inferred causes. Resource metadata does not prove
+lifetime safety, and driver-internal traversal is not observable here.
+
 ## Phase Roadmap
 
 | Phase                  | What                                                                                             | Status          |

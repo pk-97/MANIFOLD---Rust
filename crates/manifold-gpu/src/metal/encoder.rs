@@ -8,7 +8,7 @@ use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
+    MTLBuffer, MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
@@ -378,6 +378,9 @@ impl GpuEncoder {
         label: &str,
     ) {
         let isolate_rt_stage = label.starts_with("node.render_scene RT");
+        if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] dispatch stage={label} groups={workgroups:?} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
+        }
         if isolate_rt_stage {
             self.end_current();
         }
@@ -579,6 +582,21 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
+                pipeline.workgroup_size, accel.blas.len(), accel.geometry_buffers.len(), bindings.len());
+            log::info!("[GPU-DIAG] accel={:p} instances_bytes={}", &*accel.structure, accel.instance_buffer.size);
+            for binding in bindings {
+                if let GpuBinding::Buffer { binding: slot, buffer, offset } = binding {
+                    log::info!("[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
+                        &*buffer.raw, buffer.size, *offset <= buffer.size);
+                }
+            }
+            for geo in &accel.geometry_buffers {
+                log::info!("[GPU-DIAG] geometry handle={:p} bytes={}", &**geo, geo.length());
+            }
+
+        }
         self.end_current();
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
@@ -2319,6 +2337,9 @@ impl GpuEncoder {
     /// instead of just the buffer (BUG-84fv). A handful of calls per
     /// frame — per card, not per dispatch.
     pub fn note_scope(&mut self, scope: &str) {
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe { self.cmd_buf.label() });
+        }
         self.scopes.push(scope.to_string());
     }
 
@@ -2337,6 +2358,9 @@ impl GpuEncoder {
             .map(|s| s.to_string())
             .unwrap_or_else(|| String::from("(unlabeled)"));
         let scopes = std::mem::take(&mut self.scopes);
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] submitting buffer={label} scopes={scopes:?}");
+        }
         let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             let cb = unsafe { buf.as_ref() };
             let status = unsafe { cb.status() };

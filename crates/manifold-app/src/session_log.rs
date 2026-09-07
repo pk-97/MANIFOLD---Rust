@@ -148,6 +148,25 @@ pub fn flush() {
     }
 }
 
+/// Bounded crash attachment. The full session remains alongside the report.
+pub fn crash_tail() -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    flush();
+    let read = || -> io::Result<String> {
+        let path = path().ok_or_else(|| io::Error::other("session path unavailable"))?;
+        let mut file = std::fs::File::open(path)?;
+        let total = file.metadata()?.len();
+        const LIMIT: u64 = 512 * 1024;
+        let offset = total.saturating_sub(LIMIT);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::with_capacity(total.min(LIMIT) as usize);
+        file.take(LIMIT).read_to_end(&mut bytes)?;
+        Ok(format!("session_tail_offset={offset} total_bytes={total}\n{}",
+            String::from_utf8_lossy(&bytes)))
+    };
+    read().unwrap_or_else(|err| format!("session_tail_unavailable={err}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +242,9 @@ mod tests {
         assert!(session_text.contains("test warmup GPU hang"));
         let crash_text = std::fs::read_to_string(crash).unwrap();
         assert!(crash_text.contains("exit_code=70"));
+        assert!(crash_text.contains("test project: Corrosion copy"));
+        assert!(crash_text.contains("test warmup GPU hang"));
+        assert!(crash_text.contains("diagnostic_limitations="));
         assert!(crash_text.contains("test submissions ignored"));
         assert!(crash_text.contains(session.to_str().unwrap()));
         std::fs::remove_dir_all(dir).unwrap();
