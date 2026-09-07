@@ -88,6 +88,16 @@ impl ContentThread {
         // Warmup precedes render_content: install the new project's live
         // quality now rather than inheriting defaults or a previous export.
         self.content_pipeline.apply_rt_quality(&mut self.engine, false);
+        // Runtime diagnostic switch: available in release builds too. Keep
+        // quality setup, but defer proactive warmup work to normal first use.
+        if std::env::var("MANIFOLD_SKIP_WARMUP").as_deref() == Ok("1") {
+            log::warn!("[ContentThread] Project warmup skipped: MANIFOLD_SKIP_WARMUP=1; first-use loading remains active");
+            let _ = state_tx.send(ContentState {
+                warmup: None,
+                ..ContentState::default()
+            });
+            return;
+        }
         let Some(project) = self.engine.project() else {
             return;
         };
