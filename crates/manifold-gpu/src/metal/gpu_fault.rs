@@ -80,6 +80,44 @@ pub fn submissions_ignored() -> bool {
     SUBMISSIONS_IGNORED.load(Ordering::Acquire)
 }
 
+/// Opt-in incident capture; normal rendering pays only a cached flag read.
+pub fn diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MANIFOLD_GPU_DIAGNOSTICS").as_deref() == Ok("1"))
+}
+
+/// Correlate every buffer, including asynchronous AS builds, without retaining
+/// command buffers after completion. Missing completion means unknown, not hung.
+pub(crate) fn trace_buffer(cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>) {
+    if !diagnostics_enabled() { return; }
+    use block2::RcBlock;
+    use objc2_metal::MTLCommandBuffer;
+    use std::ptr::NonNull;
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let started = std::time::Instant::now();
+    let label = unsafe { cb.label() };
+    let tagged = objc2_foundation::NSString::from_str(&format!("diag#{id} {}", label.as_ref().map(|v| v.to_string()).unwrap_or_default()));
+    unsafe { cb.setLabel(Some(&tagged)); }
+    log::info!("[GPU-DIAG] created id={id} label={label:?}");
+    let scheduled = RcBlock::new(move |_cb: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
+        log::info!("[GPU-DIAG] scheduled id={id} elapsed_us={}", started.elapsed().as_micros());
+    });
+    let complete = RcBlock::new(move |ptr: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
+        let cb = unsafe { ptr.as_ref() };
+        let status = unsafe { cb.status() };
+        let start = unsafe { cb.GPUStartTime() };
+        let end = unsafe { cb.GPUEndTime() };
+        let gpu_ms = if start > 0.0 && end >= start { Some((end-start)*1000.0) } else { None };
+        log::info!("[GPU-DIAG] completed id={id} label={label:?} status={status:?} elapsed_us={} gpu_ms={gpu_ms:?}", started.elapsed().as_micros());
+    });
+    unsafe {
+        cb.addScheduledHandler(RcBlock::as_ptr(&scheduled));
+        cb.addCompletedHandler(RcBlock::as_ptr(&complete));
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     // The exact description strings the driver produced in the BUG-84fv

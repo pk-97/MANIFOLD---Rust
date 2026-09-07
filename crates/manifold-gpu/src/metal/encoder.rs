@@ -8,7 +8,7 @@ use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
+    MTLBuffer, MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
@@ -377,6 +377,13 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        let isolate_rt_stage = label.starts_with("node.render_scene RT");
+        if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] dispatch stage={label} groups={workgroups:?} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
+        }
+        if isolate_rt_stage {
+            self.end_current();
+        }
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
         } else {
@@ -384,6 +391,9 @@ impl GpuEncoder {
         };
         unsafe {
             let debug_label = NSString::from_str(label);
+            if isolate_rt_stage {
+                enc.setLabel(Some(&debug_label));
+            }
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
             enc.setComputePipelineState(&pipeline.state);
@@ -547,6 +557,9 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
+        if isolate_rt_stage {
+            self.end_current();
+        }
     }
 
     /// Dispatch a compute shader that also binds a Metal acceleration
@@ -569,6 +582,21 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
+                pipeline.workgroup_size, accel.blas.len(), accel.geometry_buffers.len(), bindings.len());
+            log::info!("[GPU-DIAG] accel={:p} instances_bytes={}", &*accel.structure, accel.instance_buffer.size);
+            for binding in bindings {
+                if let GpuBinding::Buffer { binding: slot, buffer, offset } = binding {
+                    log::info!("[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
+                        &*buffer.raw, buffer.size, *offset <= buffer.size);
+                }
+            }
+            for geo in &accel.geometry_buffers {
+                log::info!("[GPU-DIAG] geometry handle={:p} bytes={}", &**geo, geo.length());
+            }
+
+        }
         self.end_current();
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
@@ -700,14 +728,10 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
-        // Cross-dispatch cache invalidation: this path doesn't populate
-        // `compute_cache`, but a subsequent `dispatch_compute` call in the
-        // same encoder must not skip a `setBuffer`/`setTexture` because
-        // the cache still thinks a slot holds what it held before this
-        // accel-structure dispatch touched it. Clear the cache wholesale
-        // — cheap (one dispatch/frame) and correct, vs. tracking exactly
-        // which slots this call touched.
-        self.compute_cache.clear();
+        // Keep the RT dispatch in its own labelled encoder. Besides making
+        // the failure boundary visible, end_current clears the ordinary
+        // compute binding cache before the next dispatch reuses this slot.
+        self.end_current();
     }
 
     /// Insert a buffer-scope memory barrier on the active compute encoder.
@@ -2313,6 +2337,9 @@ impl GpuEncoder {
     /// instead of just the buffer (BUG-84fv). A handful of calls per
     /// frame — per card, not per dispatch.
     pub fn note_scope(&mut self, scope: &str) {
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe { self.cmd_buf.label() });
+        }
         self.scopes.push(scope.to_string());
     }
 
@@ -2331,6 +2358,9 @@ impl GpuEncoder {
             .map(|s| s.to_string())
             .unwrap_or_else(|| String::from("(unlabeled)"));
         let scopes = std::mem::take(&mut self.scopes);
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] submitting buffer={label} scopes={scopes:?}");
+        }
         let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             let cb = unsafe { buf.as_ref() };
             let status = unsafe { cb.status() };

@@ -424,12 +424,17 @@ fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let msg = format!(
+    let mut msg = format!(
         "MANIFOLD FATAL GPU EXIT at unix_ts={timestamp}\nexit_code={exit_code}\npid={}\ncurrent_beat={:?}\nsession_log={:?}\n{reason}\n",
         std::process::id(),
         breadcrumb::last_known_beat_for_crash_log(),
         session_log::path(),
     );
+    msg.push_str(&format!("diagnostic_mode={}\napp_version={}\narchitecture={}\n",
+        manifold_gpu::gpu_fault::diagnostics_enabled(), env!("CARGO_PKG_VERSION"), std::env::consts::ARCH));
+    msg.push_str("diagnostic_limitations=GPU timing may be unavailable on failed buffers; missing completion is not proof of a hang; shader counters may be incomplete after device failure; resource metadata does not prove lifetime or ordering safety; geometry hit-index bounds and driver-internal traversal are not fully instrumented.\n");
+    msg.push_str("--- recent session evidence (bounded; full session path above) ---\n");
+    msg.push_str(&session_log::crash_tail());
     if let Some(dir) = crash_log_dir() {
         match std::fs::create_dir_all(&dir)
             .and_then(|()| write_crash_log(&dir, &msg, timestamp))
