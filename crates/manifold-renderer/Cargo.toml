@@ -142,6 +142,11 @@ name = "glb_conformance"
 path = "tests/glb_conformance.rs"
 required-features = ["gpu-proofs"]
 
+[[test]]
+name = "warmup_probe"
+path = "tests/warmup_probe.rs"
+required-features = ["gpu-proofs"]
+
 [features]
 # GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
 # readback. Off by default so the workspace test sweep stays fast and

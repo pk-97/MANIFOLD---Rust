@@ -210,6 +210,25 @@ const SUN_CONE_VERY_SOFT_RADIANS: f32 = 0.06;
 /// does for free under ray tracing (penumbra widens with occluder
 /// distance), so the raster path's blocker-search `light_size` has no
 /// meaning here.
+// Diagnostic comparison: drain preparation and AS updates independently.
+// This changes timing too; success alone does not prove an ordering defect.
+fn diagnostic_as_fence(gpu: &mut crate::gpu_encoder::GpuEncoder<'_>, label: &str) {
+    #[cfg(feature = "gpu-proofs")]
+    {
+        static ORDERED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ORDERED.get_or_init(|| std::env::var("MANIFOLD_REPRO_SERIAL_AS").as_deref() == Ok("1")) {
+            let faults = manifold_gpu::gpu_fault::fault_count();
+            gpu.native_enc.commit_and_continue(gpu.device);
+            gpu.device.create_encoder(label).try_commit_and_wait_completed()
+                .expect("ordered AS reproduction fence");
+            assert_eq!(faults, manifold_gpu::gpu_fault::fault_count(), "GPU error at AS fence");
+            log::info!("[RT-REPRO] completed {label}");
+        }
+    }
+    #[cfg(not(feature = "gpu-proofs"))]
+    let _ = (gpu, label);
+}
+
 fn sun_cone_half_angle(softness: crate::node_graph::light::ShadowSoftness) -> f32 {
     use crate::node_graph::light::ShadowSoftness;
     match softness {
@@ -5838,6 +5857,7 @@ impl EffectNode for RenderScene {
             }
 
             if build_this_frame {
+                diagnostic_as_fence(gpu, "RT-REPRO preparation before AS build");
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 // Q1 probe: what did build_accel see?
                 if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
@@ -5853,6 +5873,7 @@ impl EffectNode for RenderScene {
                 // Generators traces provably finish before anything
                 // frees. No caller-side handoff needed.
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects, &gi_materials_data));
+                diagnostic_as_fence(gpu, "RT-REPRO AS build complete");
                 self.rt_accel_topo_key = Some(topo_key);
                 // BUG-oqta: only a content-settle-triggered build records
                 // the content key (why: the trigger block above).
@@ -5886,7 +5907,9 @@ impl EffectNode for RenderScene {
                     && accel.ready.load(std::sync::atomic::Ordering::Acquire)
                 {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                    diagnostic_as_fence(gpu, "RT-REPRO preparation before AS refit");
                     tracer.refit_accel(gpu.device, accel, &objects);
+                    diagnostic_as_fence(gpu, "RT-REPRO AS refit complete");
                     self.rt_accel_key = Some(accel_key);
                 }
             }
