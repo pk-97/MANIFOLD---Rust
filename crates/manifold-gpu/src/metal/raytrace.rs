@@ -1309,6 +1309,8 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
 // `primitive_id` (flat, non-indexed layout) in `normal_sources[instance_id]`
 // and return the NORMALIZED world-space normal. Metal's ray-tracing
 // barycentric convention: hit = (1-u-v)*v0 + u*v1 + v*v2.
+static bool rt_finite(float x);
+
 static float3 fetch_interpolated_normal(device RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
     device RtNormalSource& src = normal_sources[instance_id];
     uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
@@ -1318,7 +1320,7 @@ static float3 fetch_interpolated_normal(device RtNormalSource* normal_sources, u
     float w0 = 1.0 - bary.x - bary.y;
     float3 n = n0 * w0 + n1 * bary.x + n2 * bary.y;
     float len2 = length_squared(n);
-    if (!isfinite(len2) || len2 < 1e-12) return float3(0, 1, 0);
+    if (!rt_finite(len2) || len2 < 1e-12) return float3(0, 1, 0);
     return n * rsqrt(len2);
 }
 
@@ -1362,6 +1364,23 @@ static float2 fetch_interpolated_uv(device RtNormalSource* normal_sources, uint 
 // and recomputing it would render mirrored-handedness surfaces wrong).
 // Degenerate UVs (zero-area triangle in UV space) fall back to the vertex
 // normal. Returns the perturbed world-space normal.
+static float3 rt_perturb_frame(float3 n, float3 t, float3 b, float3 tn) {
+    t -= n * dot(n, t);
+    float t_len2 = length_squared(t);
+    if (!rt_finite(t.x) || !rt_finite(t.y) || !rt_finite(t.z) || !rt_finite(t_len2) || t_len2 < 1e-12) return n;
+    t *= rsqrt(t_len2);
+    b -= n * dot(n, b) + t * dot(t, b);
+    float b_len2 = length_squared(b);
+    if (!rt_finite(b.x) || !rt_finite(b.y) || !rt_finite(b.z) || !rt_finite(b_len2) || b_len2 < 1e-12) return n;
+    b *= rsqrt(b_len2);
+    if (!rt_finite(tn.x) || !rt_finite(tn.y) || !rt_finite(tn.z)) return n;
+    float3 combined = t * tn.x + b * tn.y + n * tn.z;
+    float combined_len2 = length_squared(combined);
+    if (!rt_finite(combined.x) || !rt_finite(combined.y) || !rt_finite(combined.z)
+        || !rt_finite(combined_len2) || combined_len2 < 1e-12) return n;
+    return combined * rsqrt(combined_len2);
+}
+
 static float3 perturb_normal_with_map(
     device RtNormalSource& src,
     device RtNormalSource* normal_sources,
@@ -1396,20 +1415,18 @@ static float3 perturb_normal_with_map(
     float2 duv1 = uv1 - uv0;
     float2 duv2 = uv2 - uv0;
     float det = duv1.x * duv2.y - duv1.y * duv2.x;
-    if (fabs(det) < 1e-12) return n; // degenerate UV parameterization: vertex normal stands
+    if (!rt_finite(det) || fabs(det) < 1e-12) return n; // degenerate UV parameterization: vertex normal stands
     float r = 1.0 / det;
     float3 t = (edge1 * duv2.y - edge2 * duv1.y) * r;
     float3 b = (edge2 * duv1.x - edge1 * duv2.x) * r;
     // Gram-Schmidt orthonormalization against the world-space vertex normal.
-    t = normalize(t - n * dot(n, t));
-    b = normalize(b - n * dot(n, b) - t * dot(t, b));
     // Interpolated UV + decode + combine — the same `coord::normalized,
     // address::repeat, filter::linear` convention the kernel's MR/alpha
     // sampling uses (and, like them, no KHR_texture_transform UV fold).
     float2 uv = fetch_interpolated_uv(normal_sources, instance_id, primitive_id, bary);
     constexpr sampler normal_sampler(coord::normalized, address::repeat, filter::linear);
     float3 tn = material_textures[src.normal_tex_index].sample(normal_sampler, uv).rgb * 2.0 - 1.0;
-    return normalize(t * tn.x + b * tn.y + n * tn.z);
+    return rt_perturb_frame(n, t, b, tn);
 }
 
 // BUG-1gqt (rt-trace-ignores-emissive-texture): the trace-path mirror of
@@ -7620,6 +7637,66 @@ mod tests {
     use super::blas_geometry_opaque;
     use super::{GpuDevice, MetalShadowRayTracer};
     use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
+
+    /// Executes the production normal-frame helper under production MSL options.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn normal_map_degenerate_frame_stays_finite() {
+        use super::*;
+        let device = GpuDevice::new();
+        let source = format!("{}\n{}", SHADOW_RAYS_MSL, r#"
+        kernel void normal_guard_probe(device const float4* input [[buffer(0)]],
+            device float4* output [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
+            if (tid.y != 0 || tid.x >= 8) return;
+            uint base = tid.x * 4;
+            output[tid.x] = float4(rt_perturb_frame(input[base].xyz,
+                input[base+1].xyz, input[base+2].xyz, input[base+3].xyz), 1);
+        }
+        "#);
+        let opts = MTLCompileOptions::init(MTLCompileOptions::alloc());
+        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
+        let library = device.raw_device()
+            .newLibraryWithSource_options_error(&NSString::from_str(&source), Some(&opts))
+            .expect("normal guard MSL compile");
+        let pipeline = compile_pipeline(&device, &library, "normal_guard_probe",
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]));
+        let n = [0.0_f32, 0.0, 1.0, 0.0];
+        let t = [1.0, 0.0, 0.0, 0.0];
+        let b = [0.0, 1.0, 0.0, 0.0];
+        let mapped = [1.0, 1.0, 1.0, 0.0];
+        let cases = [
+            [n, t, b, mapped],
+            [n, n, b, mapped], // tangent collapses after projection
+            [n, t, t, mapped], // bitangent collapses after projection
+            [n, [f32::INFINITY, 0.0, 0.0, 0.0], b, mapped],
+            [n, [f32::NAN, 0.0, 0.0, 0.0], b, mapped],
+            [n, t, b, [0.0; 4]],
+            [n, t, b, [f32::NAN, 0.0, 1.0, 0.0]],
+            [n, [1e-8, 0.0, 0.0, 0.0], b, mapped],
+        ];
+        let input = device.create_buffer_shared(std::mem::size_of_val(&cases) as u64);
+        let output = device.create_buffer_shared((cases.len() * 16) as u64);
+        unsafe {
+            std::ptr::copy_nonoverlapping(cases.as_ptr().cast::<u8>(),
+                input.mapped_ptr().expect("shared input"), std::mem::size_of_val(&cases));
+        }
+        let mut enc = device.create_encoder("normal guard regression");
+        enc.dispatch_compute(&pipeline, &[
+            GpuBinding::Buffer { binding: 0, buffer: &input, offset: 0 },
+            GpuBinding::Buffer { binding: 1, buffer: &output, offset: 0 },
+        ], [1, 1, 1], "normal guard regression");
+        enc.try_commit_and_wait_completed().expect("normal guard dispatch");
+        let actual = unsafe { std::slice::from_raw_parts(
+            output.mapped_ptr().expect("shared output").cast::<[f32; 4]>(), cases.len()) };
+        for (i, result) in actual.iter().enumerate() {
+            let expected = if i == 0 { [1.0 / 3.0_f32.sqrt(); 3] } else { [0.0, 0.0, 1.0] };
+            for channel in 0..3 {
+                assert!(result[channel].is_finite(), "case {i}: {result:?}");
+                assert!((result[channel] - expected[channel]).abs() < 1e-5,
+                    "case {i}: {result:?}, expected {expected:?}");
+            }
+        }
+    }
 
     /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks
     /// translucency — the hardware fast path is kept only for objects the

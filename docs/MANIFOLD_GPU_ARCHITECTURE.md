@@ -52,8 +52,8 @@ log records encoder labels, error states, and dispatch signposts when Metal
 supplies them. RT trace and the `node.render_scene RT*` postprocess stages
 (upsample, à-trous, and accumulate) each use a separate labelled compute
 encoder, so an RT-A3a trace can be distinguished from a later stage. This
-changes encoder boundaries, not submission order, and the labels identify the
-failed encoder rather than guaranteeing the exact shader fault or its earlier
+changes encoder boundaries, not submission order, and the labels identify
+completed, affected, or pending encoders rather than guaranteeing the exact shader fault or its earlier
 resource/synchronization cause. Blocking production warmup uses
 `try_commit_and_wait_completed` and propagates GPU failure instead of treating
 a logged error as successful work.
