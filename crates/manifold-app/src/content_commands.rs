@@ -108,6 +108,7 @@ impl ContentThread {
         let total = warmup_layers.len() as u32;
         let budget = manifold_core::WarmupBudget::default();
         let start = std::time::Instant::now();
+        let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         let mut any_budget_exhausted = false;
         let mut any_install_failed = false;
 
@@ -485,7 +486,13 @@ impl ContentThread {
             }
         }
 
-        let status = if any_install_failed {
+        let gpu_faults = manifold_gpu::gpu_fault::fault_count().saturating_sub(initial_gpu_faults);
+        let status = if gpu_faults > 0 {
+            log::error!(
+                "[ContentThread] {gpu_faults} GPU errors observed during warmup; warmup success is unverified"
+            );
+            "ended with GPU errors"
+        } else if any_install_failed {
             "completed with install failure(s)"
         } else if any_budget_exhausted {
             "completed with budget exhaustion"
