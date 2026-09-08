@@ -1313,6 +1313,18 @@ fn wants_shafts(atmosphere: &Atmosphere) -> bool {
     atmosphere.shaft_intensity > 0.0
 }
 
+fn rt_trace_gate(
+    rt_ready: bool,
+    resident_topo_key: Option<u64>,
+    topo_key: u64,
+    resident_content_key: Option<u64>,
+    content_key: u64,
+) -> bool {
+    rt_ready
+        && resident_topo_key == Some(topo_key)
+        && resident_content_key == Some(content_key)
+}
+
 /// D1's `shaft_quality` enum (0/1/2 = Low/Med/High) -> D2's committed march
 /// step count (16/24/32). Any value past 2 clamps to High — the enum can
 /// only ever carry 0..=2 (`AtmosphereNode`'s param clamps it), this is just
@@ -3937,9 +3949,12 @@ impl EffectNode for RenderScene {
         // intentionally not used here — we want to observe the accel's own
         // readiness so the pre-roll doesn't stop early while a refit is
         // still in flight.
-        self.rt_accel
-            .as_ref()
-            .is_some_and(|a| !a.ready.load(std::sync::atomic::Ordering::Acquire))
+        self.rt_accel_pending_key.is_some()
+            || self.rt_accel_content_pending_key.is_some()
+            || self
+                .rt_accel
+                .as_ref()
+                .is_some_and(|a| !a.ready.load(std::sync::atomic::Ordering::Acquire))
     }
 
     /// A rasterizer's outputs are screen-space: always canvas-sized.
@@ -5911,7 +5926,15 @@ impl EffectNode for RenderScene {
             // the current frame's topo key closes that hole: during the
             // defer frame the keys don't match, tracing is blocked, and
             // the raster shadow-map path serves the transition.
-            if rt_ready && self.rt_accel_topo_key == Some(topo_key) {
+            // The resident content key must match too: a deferred settle
+            // build serves raster while current geometry is not resident.
+            if rt_trace_gate(
+                rt_ready,
+                self.rt_accel_topo_key,
+                topo_key,
+                self.rt_accel_content_key,
+                content_key,
+            ) {
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
                 // emissive geometry. Hoisted to the evaluate scope (mut
@@ -7832,6 +7855,33 @@ mod tests {
     use super::*;
     use crate::node_graph::ports::ArrayType;
     use crate::node_graph::transform::Transform;
+
+    #[test]
+    fn warmup_pending_includes_deferred_accel_builds() {
+        let mut scene = RenderScene::new();
+
+        scene.rt_accel_pending_key = Some(1);
+        assert!(
+            scene.warmup_pending(),
+            "deferred topology build must keep warmup pending"
+        );
+
+        scene.rt_accel_pending_key = None;
+        scene.rt_accel_content_pending_key = Some(2);
+        assert!(
+            scene.warmup_pending(),
+            "deferred content build must keep warmup pending"
+        );
+    }
+
+    #[test]
+    fn rt_trace_gate_requires_matching_resident_content() {
+        assert!(!rt_trace_gate(false, Some(7), 7, Some(11), 11));
+        assert!(!rt_trace_gate(true, Some(8), 7, Some(11), 11));
+        assert!(!rt_trace_gate(true, Some(7), 7, Some(10), 11));
+        assert!(!rt_trace_gate(true, Some(7), 7, None, 11));
+        assert!(rt_trace_gate(true, Some(7), 7, Some(11), 11));
+    }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
