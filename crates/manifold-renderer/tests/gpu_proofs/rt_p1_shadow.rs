@@ -254,7 +254,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
@@ -277,6 +277,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
@@ -528,7 +529,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
@@ -541,6 +542,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,

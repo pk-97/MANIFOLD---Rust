@@ -294,7 +294,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, floor_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
         GiMaterial::new([0.5, 0.5, 0.5], EMITTER_EMISSIVE, [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
     ];
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
 
     let mut encoder = device.create_encoder("rt-r3-textured-roughness-proof");
@@ -316,6 +316,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &material_textures,
         &depth_tex,
         &out_sv,

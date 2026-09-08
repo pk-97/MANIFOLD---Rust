@@ -319,6 +319,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         &params_buffer,
         &gi_buffer,
         &normal_sources,
+        &objects,
         &[],
         &depth_tex,
         &out_sv,

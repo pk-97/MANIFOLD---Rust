@@ -269,7 +269,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         0.0, // RS-C: emissive_table_total_area — no emissive in fixture
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -293,6 +293,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &alpha_textures,
         &depth_tex,
         &out_sv,

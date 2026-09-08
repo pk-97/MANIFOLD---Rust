@@ -585,12 +585,13 @@ impl GpuEncoder {
     /// per-slot resource cache (`ComputeBindCache`) that `dispatch_compute`
     /// uses — this dispatches once or twice per frame (the shadow-ray
     /// pass), not the many-dispatches-per-frame case the cache exists for.
-    pub fn dispatch_compute_with_accel(
+    pub fn dispatch_compute_with_accel<'a>(
         &mut self,
         pipeline: &GpuComputePipeline,
         accel_binding: u32,
         accel: &super::raytrace::RtAccel,
         bindings: &[GpuBinding],
+        indirect_reads: impl IntoIterator<Item = &'a GpuBuffer>,
         inline_bytes: Option<(u32, &[u8])>,
         workgroups: [u32; 3],
         label: &str,
@@ -684,6 +685,11 @@ impl GpuEncoder {
                         );
                     }
                 }
+            }
+        }
+        for buffer in indirect_reads {
+            unsafe {
+                let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
             }
         }
         if let Some((binding, bytes)) = inline_bytes {

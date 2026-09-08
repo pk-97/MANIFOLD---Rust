@@ -353,6 +353,19 @@ pub struct RtObjectGeometry<'a> {
     pub instance_slots: u32,
 }
 
+fn validate_instance_source_address(instances_addr: u64, source_address: Option<u64>) -> Result<(), &'static str> {
+    if instances_addr == 0 {
+        return Ok(());
+    }
+    let Some(source_address) = source_address else {
+        return Err("RT wired instance source buffer is missing");
+    };
+    if instances_addr != source_address {
+        return Err("RT instance address does not match its current source buffer");
+    }
+    Ok(())
+}
+
 /// RT instance mask bits (`MTLAccelerationStructureInstanceDescriptor::mask`,
 /// matched by `intersection_query::reset`'s mask argument). Every instance
 /// carries `RT_MASK_VISIBLE`; `RT_MASK_SHADOW_CASTER` is additionally set
@@ -6050,8 +6063,10 @@ pub trait ShadowRayTracer {
     /// world-pos/normal G-buffer target. Writes per-caster visibility to
     /// `out_sv` (slots 0-3) + `out_sv2` (slots 4-7, RS-A) and demodulated
     /// irradiance (now including the GI gather) to `out_irr`, all at
-    /// `params.trace_size`. RT-T1-B: `normal_sources`
-    /// is the per-object [`RtNormalSource`] bindless table (built via
+    /// `params.trace_size`.
+    /// `current_objects` must be the identical ordered slice used to build
+    /// `normal_sources`; wired instance sources are declared from this slice.
+    /// RT-T1-B: `normal_sources` is the per-object [`RtNormalSource`] bindless table (built via
     /// [`build_normal_sources`] from the SAME `objects` slice `accel` was
     /// built from) — feeds the primary-ray-cast real vertex normal AO/GI
     /// sample against, and the GI bounce's hit-point normal. RT-T2-A:
@@ -6069,6 +6084,7 @@ pub trait ShadowRayTracer {
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
+        current_objects: &[RtObjectGeometry<'_>],
         alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
@@ -6084,9 +6100,9 @@ pub trait ShadowRayTracer {
         // scene has no env chain).
         prefiltered_env: &GpuTexture,
         // RS-C: emissive-triangle light table + alias table buffers, built
-        // CPU-side at accel registration. Dummy 1-byte buffers when the
-        // scene has no emissive geometry (entry_count=0 skips the kernel
-        // block).
+        // CPU-side at accel registration. Empty-scene fallbacks are
+        // zero-filled and sized to the larger typed element (80-byte
+        // triangle / 8-byte alias); entry_count=0 skips the kernel block.
         emissive_triangles: &GpuBuffer,
         emissive_aliases: &GpuBuffer,
         // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): selects
@@ -7132,6 +7148,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
+        current_objects: &[RtObjectGeometry<'_>],
         alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
@@ -7149,6 +7166,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         has_translucency: bool,
         label: &str,
     ) {
+        for object in current_objects {
+            validate_instance_source_address(
+                object.instances_addr,
+                object.instances_buffer.map(GpuBuffer::gpu_address),
+            ).unwrap_or_else(|message| panic!("{message}"));
+        }
         assert!(params.refl_spp <= MAX_RT_REFLECTION_SPP,
             "reflection spp exceeds the supported quality ladder maximum");
         params_buffer.upload(bytemuck_bytes(params));
@@ -7301,6 +7324,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 ));
                 encoder.dispatch_compute_with_accel(
                     pipeline, 0, accel, &bindings,
+                    current_objects.iter()
+                        .filter(|object| object.instances_addr != 0)
+                        .map(|object| object.instances_buffer
+                            .expect("validated RT wired instance source buffer")),
                     Some((8, trace_region_bytes(&region))),
                     dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
                     diagnostic_label.as_deref().unwrap_or(&pipeline.label),
@@ -7888,6 +7915,30 @@ impl UploadBytes for GpuBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wired_instance_source_address_contract() {
+        assert!(validate_instance_source_address(0, None).is_ok());
+        assert!(validate_instance_source_address(0, Some(7)).is_ok());
+        assert_eq!(validate_instance_source_address(7, None),
+            Err("RT wired instance source buffer is missing"));
+        assert_eq!(validate_instance_source_address(7, Some(8)),
+            Err("RT instance address does not match its current source buffer"));
+        assert!(validate_instance_source_address(7, Some(7)).is_ok());
+
+        // Equal-capacity replacement is valid only when the current source's
+        // identity is the address carried by the object; stale identity fails.
+        let old = 0x1000;
+        let replacement = 0x2000;
+        assert!(validate_instance_source_address(replacement, Some(replacement)).is_ok());
+        assert!(validate_instance_source_address(old, Some(replacement)).is_err());
+
+        // Multiple objects may share one source buffer; each declaration is
+        // independently valid and the dispatch iterator may contain duplicates.
+        for address in [replacement, replacement] {
+            assert!(validate_instance_source_address(address, Some(replacement)).is_ok());
+        }
+    }
 
     #[test]
     fn trace_specialization_selection_preserves_params() {
