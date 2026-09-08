@@ -241,16 +241,18 @@ fn run_tlc_fixture(
         svt_slot,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
 
     let mut encoder = device.create_encoder("tlc-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &final_alpha_textures,
         &depth_tex,
         &out_sv,

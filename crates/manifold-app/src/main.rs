@@ -111,6 +111,8 @@ mod rt_capture;
 // ── bridge-probe: headless SharedTextureBridge tear detector (BUG-xaw4) ──
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod bridge_probe;
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod export_repro;
 mod project_io;
 mod session_log;
 #[cfg(target_os = "macos")]
@@ -159,6 +161,14 @@ fn main() {
     // to an instant snap; the motion code stays in place behind the flag, so
     // flipping this back to `true` restores it. See `manifold_ui::anim`.
     manifold_ui::anim::set_motion_enabled(false);
+
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("export-repro") {
+            crate::export_repro::run(&args[1..]);
+        }
+    }
 
     // Headless UI snapshot subcommand (feature `ui-snapshot`): render the real
     // UI tree to a PNG + tree dump with no window, then exit before winit.
@@ -414,6 +424,15 @@ fn write_crash_log(
 /// A GPU-failed session cannot safely resume using its partially written resources.
 fn abort_gpu_work(reason: &str) -> ! {
     log::error!("[GPU] Aborting session: {reason}; exit_code=70");
+    // Completion handlers own the final Metal error/encoder evidence. Give
+    // already-submitted buffers a bounded chance to publish it before the
+    // fatal report is sealed; normal completion never waits or polls.
+    let drained = manifold_gpu::gpu_fault::drain_completions(
+        std::time::Duration::from_millis(250),
+    );
+    if !drained {
+        log::error!("[GPU] Completion drain timed out; report may omit in-flight buffer evidence");
+    }
     write_fatal_gpu_report(reason, 70);
     std::process::exit(70);
 }

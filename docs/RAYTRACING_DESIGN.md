@@ -2282,3 +2282,44 @@ probe — "they will be better than previous."
   beauty denoise is dead for live; section 18 = lighting-only
   architecture (native 4K scene, RT lighting traced + denoised at
   reduced res, per section 17.6 per-term trigger, now fired).
+
+## 19. Final architecture contract (2026-09-09)
+
+The shipped implementation treats the ray pass as one unified live/export
+pipeline. Live and export share `DEFAULT_TRACE_WORK_LIMITS`; export changes
+resolution and workload, not a distinct work-limit configuration. Constant 100 selects the translucency policy; constant 101 selects
+the pass (`shadow=0`, `diffuse=1`, `reflection=2`). There are six PSOs: the
+three pass choices with and without the translucency walk. Outputs have fixed
+ownership and miss sentinels; a repeated primary query is accepted where it
+keeps ownership and sentinel rules explicit. Export changes work limits and
+resolution, not pipeline roles.
+
+The host binds a 16-byte `TraceRegion` inline via `setBytes` at buffer 8; no
+persistent allocation is used. The planner writes `TraceRegion` records and
+performs a checked,
+conservative query estimate with default work limits, emits exact parent
+regions, and keeps each pass contiguous. Rollover occurs only between regions.
+The estimate is a planning bound, not a watchdog guarantee.
+
+BLAS opacity is alpha-only. Exactly two per-ray overrides handle translucency;
+no additional opacity modes are implied. RT transforms, RT inputs, and
+composed descriptor transforms must be finite and valid; invalid values are
+rejected. Geometry vertex finiteness is not comprehensively validated.
+Emissive entries reserve their declared capacity. Topology is checked before uploads and refit, then
+refit/build state is advanced only after validation. Deferred rebuild rejection
+is idempotent: the first rejection clears resident and pending keys, later
+observations preserve pending keys, and a newly installed AS clears rejection
+while remaining unready until completion. No arbitrary coordinate or quality
+clamps are part of this contract.
+
+Fault callbacks log before publication and completion accounting is atomic.
+Fatal drain is bounded; export cancellation is explicit and bounded. Runtime
+role, fused, termination, subtile, sequence, failed-TLAS-weighting, and grouped
+schedule controls are not architecture knobs. Candidate-walk/fusion history
+is not assigned causal responsibility for the Corrosion incident.
+
+Direct proofs and bounded exports were run during this investigation and
+passed, but the intermittent Corrosion GPU hang was not reproduced in final
+comparisons; its root cause remains unidentified.
+This architecture is verified hardening and pass decomposition; the incident
+remains open.

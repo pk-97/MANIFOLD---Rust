@@ -43,6 +43,10 @@ fn emit_diagnostic(args: std::fmt::Arguments<'_>) {
 
 static FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SUBMISSIONS_IGNORED: AtomicBool = AtomicBool::new(false);
+// Completion handlers must never contend on a lock: they execute on Metal's
+// callback threads and may be invoked while the process is tearing down.
+static IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+static COMPLETED: AtomicU64 = AtomicU64::new(0);
 
 /// True for the driver's queue-blacklist error description. The blacklist
 /// signature has no stable numeric code exposed to us, so match the
@@ -66,7 +70,42 @@ pub(crate) fn record_fault(desc: &str) {
     }
 }
 
-/// Total command-buffer faults observed this process.
+/// Mark a command buffer before committing it. The release increment pairs
+/// with `complete_submission` so a fatal-exit drain observes all diagnostics
+/// published by the callback.
+pub(crate) fn begin_submission() {
+    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Mark completion only after logging and publishing the command-buffer error.
+pub(crate) fn complete_submission() {
+    COMPLETED.fetch_add(1, Ordering::Release);
+}
+
+/// Bounded fatal-path drain. Healthy completion callbacks do not wait; this
+/// is only used while exiting after a GPU fault to avoid callback-after-free.
+pub fn drain_completions(timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if COMPLETED.load(Ordering::Acquire) >= IN_FLIGHT.load(Ordering::Acquire) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_submission_counters_for_test() {
+    IN_FLIGHT.store(0, Ordering::Release);
+    COMPLETED.store(0, Ordering::Release);
+}
+
+/// Total command-buffer faults observed this process. This is an observation
+/// count, not a positive attribution of the originating encoder: Metal also
+/// reports innocent victims after a prior fault.
 pub fn fault_count() -> u64 {
     FAULT_COUNT.load(Ordering::Relaxed)
 }
@@ -123,7 +162,8 @@ mod tests {
     // The exact description strings the driver produced in the BUG-84fv
     // incident log (2026-08-02) — pinning the REAL text, not a remembered
     // paraphrase, is what the BUG-665r original lacked.
-    use super::is_blacklist_desc;
+    use super::{complete_submission, begin_submission, drain_completions, is_blacklist_desc,
+        reset_submission_counters_for_test};
 
     #[test]
     fn blacklist_description_matches() {
@@ -146,5 +186,14 @@ mod tests {
             "Caused GPU Address Fault Error \
              (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)"
         ));
+    }
+
+    #[test]
+    fn completion_drain_tracks_callbacks_without_waiting() {
+        reset_submission_counters_for_test();
+        begin_submission();
+        assert!(!drain_completions(std::time::Duration::ZERO));
+        complete_submission();
+        assert!(drain_completions(std::time::Duration::ZERO));
     }
 }

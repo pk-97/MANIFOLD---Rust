@@ -237,6 +237,7 @@ impl GpuEncoder {
             tag: String::new(),
             overflow: 0,
             calib_start,
+            committed_buffers: Vec::new(),
         });
     }
 
@@ -258,12 +259,23 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         let total_ms = unsafe {
             self.cmd_buf.waitUntilCompleted();
-            (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0) * 1000.0
+            let mut total = (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0);
+            if let Some(profile) = &self.profile {
+                total += profile.committed_buffers.iter()
+                    .map(|buf| (buf.GPUEndTime() - buf.GPUStartTime()).max(0.0)).sum::<f64>();
+            }
+            total * 1000.0
         };
         match self.profile.take() {
             Some(state) => {
                 let calib_end = profiling::sample_cpu_gpu(device.raw_device());
-                profiling::resolve(&state, calib_end, total_ms)
+                let mut profile = profiling::resolve(&state, calib_end, total_ms);
+                use objc2_metal::MTLCommandBufferStatus;
+                profile.failed_command_buffers = state.committed_buffers.iter()
+                    .chain(std::iter::once(&self.cmd_buf))
+                    .filter(|buf| unsafe { buf.status() } != MTLCommandBufferStatus::Completed)
+                    .count();
+                profile
             }
             None => GpuFrameProfile {
                 total_ms,
@@ -573,12 +585,14 @@ impl GpuEncoder {
     /// per-slot resource cache (`ComputeBindCache`) that `dispatch_compute`
     /// uses — this dispatches once or twice per frame (the shadow-ray
     /// pass), not the many-dispatches-per-frame case the cache exists for.
-    pub fn dispatch_compute_with_accel(
+    pub fn dispatch_compute_with_accel<'a>(
         &mut self,
         pipeline: &GpuComputePipeline,
         accel_binding: u32,
         accel: &super::raytrace::RtAccel,
         bindings: &[GpuBinding],
+        indirect_reads: impl IntoIterator<Item = &'a GpuBuffer>,
+        inline_bytes: Option<(u32, &[u8])>,
         workgroups: [u32; 3],
         label: &str,
     ) {
@@ -671,6 +685,21 @@ impl GpuEncoder {
                         );
                     }
                 }
+            }
+        }
+        for buffer in indirect_reads {
+            unsafe {
+                let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+            }
+        }
+        if let Some((binding, bytes)) = inline_bytes {
+            let Some(slot) = pipeline.slot_map.get(binding) else {
+                panic!("dispatch_compute_with_accel: inline binding {binding} absent from pipeline slot map");
+            };
+            let ptr = NonNull::new(bytes.as_ptr() as *mut c_void)
+                .expect("dispatch_compute_with_accel: inline bytes must not be empty");
+            unsafe {
+                enc.setBytes_length_atIndex(ptr, bytes.len(), slot.metal_index as usize);
             }
         }
         // BUG-jddy root fix: declare usage for every resource the trace
@@ -2317,15 +2346,19 @@ impl GpuEncoder {
                         (code, desc)
                     }
                 };
-                super::gpu_fault::record_fault(&desc);
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
                     label,
                     code,
                     desc,
                 );
+                super::gpu_fault::record_fault(&desc);
             }
+            // Publish completion after diagnostics and fault state so a
+            // fatal-path drain cannot race the evidence it is meant to save.
+            super::gpu_fault::complete_submission();
         });
+        super::gpu_fault::begin_submission();
         unsafe {
             self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
         }
@@ -2375,7 +2408,6 @@ impl GpuEncoder {
                         (code, desc)
                     }
                 };
-                super::gpu_fault::record_fault(&desc);
                 if scopes.is_empty() {
                     log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
                 } else {
@@ -2385,8 +2417,11 @@ impl GpuEncoder {
                         scopes.join(" | ")
                     );
                 }
+                super::gpu_fault::record_fault(&desc);
             }
+            super::gpu_fault::complete_submission();
         });
+        super::gpu_fault::begin_submission();
         unsafe {
             self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
         }
@@ -2404,13 +2439,16 @@ impl GpuEncoder {
     /// order is preserved; Metal's automatic hazard tracking covers cross-chunk
     /// resource dependencies. Never blocks (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
     ///
-    /// Dispatch profiling is incompatible with mid-encode splits (D5), so the
-    /// call panics in dev builds if profiling is enabled.
+    /// Profiled frames retain completed command buffers so their timings and
+    /// completion status are included in the final profile.
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
-        debug_assert!(self.profile.is_none(), "commit_and_continue: dispatch profiling is incompatible with mid-encode chunking (UI_RESPONSIVENESS_UNDER_LOAD D5)");
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
+
+        if let Some(profile) = &mut self.profile {
+            profile.committed_buffers.push(self.cmd_buf.clone());
+        }
 
         let label = unsafe { self.cmd_buf.label() }
             .map(|s| s.to_string())
