@@ -28,6 +28,15 @@ unsafe impl Sync for GpuPipelineArchive {}
 impl GpuPipelineArchive {
     /// Load an existing archive from disk, or create a new empty one.
     pub fn load_or_create(device: &ProtocolObject<dyn MTLDevice>, path: &Path) -> Option<Self> {
+        // Metal shader instrumentation is incompatible with binary archives.
+        // Leave the device's archive absent so pipeline attachment, population,
+        // and saving also stay disabled, without touching the existing cache.
+        if std::env::var("MTL_SHADER_VALIDATION").as_deref() == Ok("1") {
+            log::info!(
+                "[GPU] Binary archives disabled: MTL_SHADER_VALIDATION=1 (no load, create, attach or save)"
+            );
+            return None;
+        }
         let url_string = format!("file://{}", path.display());
         let url_ns = NSString::from_str(&url_string);
         let url = NSURL::initWithString(NSURL::alloc(), &url_ns)

@@ -14,6 +14,13 @@ Purpose-built `manifold-gpu` crate on typed `objc2-metal` bindings. Native Metal
 
 ## Architecture
 
+Shader-validation runs (`MTL_SHADER_VALIDATION=1`) leave the binary archive
+absent: no load, creation, pipeline attachment, population or save. This
+preserves the ordinary cache file and avoids Metal's incompatible archive
+path while shader instrumentation is active. Set
+`MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1` to capture validation messages in
+the terminal. See [Apple's shader-validation constraints](https://developer.apple.com/documentation/xcode/validating-your-apps-metal-shader-usage).
+
 ```
 manifold-gpu/
 ├── lib.rs              — crate entry; re-exports metal::*
