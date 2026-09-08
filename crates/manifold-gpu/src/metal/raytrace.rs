@@ -1030,10 +1030,6 @@ constant uint MAX_RT_CASTERS = 8;
 // (walk_with_transmission). Baked into the PSO via MTLFunctionConstantValues
 // at index 100.
 constant bool HAS_TRANSLUCENCY [[function_constant(100)]];
-// Diagnostic-only RT-A3a isolation variant. Same ABI and bindings, but no
-// ray work; writes valid deterministic downstream values.
-constant bool RT_A3A_BYPASS [[function_constant(101)]];
-constant uint RT_A3A_STAGE [[function_constant(102)]];
 
 // RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
 // cap — power-rank truncated. Matches manifold-gpu's Rust
@@ -1897,26 +1893,12 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
     float ndc_y = 1.0 - uv.y * 2.0;
     float4 clip = float4(ndc_x, ndc_y, raw_depth, 1.0);
     float4 wh = inv_view_proj * clip;
-    // A near-zero homogeneous W is a projective singularity, not a usable
-    // world position. Dividing by it can yield very large finite coordinates
-    // that pass the old finite-only check and feed pathological ray intervals
-    // to the intersector. Treat those texels as void and let the raster path
-    // provide the fallback shading.
-    constexpr float RT_MIN_HOMOGENEOUS_W = 1e-7;
-    constexpr float RT_MAX_WORLD_COORD = 1e6;
-    if (!rt_finite(wh.w) || abs(wh.w) < RT_MIN_HOMOGENEOUS_W) {
-        out_valid = false;
-        return float3(0.0);
-    }
     float3 wp = wh.xyz / wh.w;
     // A non-finite view-proj (a modulated camera param gone NaN reaches here
     // even with valid depth) must read as void: a NaN world position makes
     // every ray this texel spawns NaN, and the intersector is undefined on
     // NaN rays (hang → page fault, BUG-84fv).
-    out_valid = rt_finite(wp.x) && rt_finite(wp.y) && rt_finite(wp.z)
-        && abs(wp.x) <= RT_MAX_WORLD_COORD
-        && abs(wp.y) <= RT_MAX_WORLD_COORD
-        && abs(wp.z) <= RT_MAX_WORLD_COORD;
+    out_valid = rt_finite(wp.x) && rt_finite(wp.y) && rt_finite(wp.z);
     return wp;
 }
 
@@ -1988,15 +1970,6 @@ kernel void trace_shadow_rays(
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
-    if (RT_A3A_BYPASS) {
-        out_sv.write(float4(1.0), tid);
-        out_sv2.write(float4(1.0), tid);
-        out_svt.write(float4(1.0), tid);
-        out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-        out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-        out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-        return;
-    }
     // RT_INSTANCING_DESIGN.md D11: the material/normal tables are ONE
     // buffer — canonical per-object rows at [0, N), per-slot rows at
     // [N, N+Σ). Every read indexed by a committed instance_id (a SLOT)
@@ -2008,18 +1981,6 @@ kernel void trace_shadow_rays(
     device RtNormalSource* slot_sources = normal_sources + p.slot_row_base;
     device GiMaterial*     slot_materials = gi_materials + p.slot_row_base;
     uint2 gpix = min(uint2((float2(tid) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
-
-    if (RT_A3A_STAGE == 8u) {
-        // Camera-position-only probe before depth reconstruction.
-        float3 camera = float3(p.camera_pos);
-        out_sv.write(float4(camera, 1.0), tid);
-        out_sv2.write(float4(camera, 1.0), tid);
-        out_svt.write(float4(camera, 1.0), tid);
-        out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-        out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-        out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-        return;
-    }
 
     bool valid;
     float3 wp = world_pos_from_depth(gpix, p.gbuffer_size, depth_tex.read(gpix, 0), p.inv_view_proj, valid);
@@ -2050,16 +2011,6 @@ kernel void trace_shadow_rays(
         out_refl.write(float4(0, 0, 0, -1.0), tid);
         return;
     }
-    if (RT_A3A_STAGE == 7u) {
-        // World-position-only probe: use the reconstructed position directly.
-        out_sv.write(float4(wp, 1.0), tid);
-        out_sv2.write(float4(wp, 1.0), tid);
-        out_svt.write(float4(wp, 1.0), tid);
-        out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-        out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-        out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-        return;
-    }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
     // ONLY for `texel_scale` below (the bias epsilon's scale-awareness);
     // RT-T1-B moved normal reconstruction off this finite difference (see
@@ -2070,19 +2021,6 @@ kernel void trace_shadow_rays(
     bool vx, vy;
     float3 wpx = world_pos_from_depth(gx, p.gbuffer_size, depth_tex.read(gx, 0), p.inv_view_proj, vx);
     float3 wpy = world_pos_from_depth(gy, p.gbuffer_size, depth_tex.read(gy, 0), p.inv_view_proj, vy);
-
-    if (RT_A3A_STAGE == 2u) {
-        // Pre-ray probe: retain depth/world-position and neighbor reads, then
-        // stop before any primary ray construction or intersection work.
-        float finite = (valid && vx && vy && rt_finite(wp.x + wpx.x + wpy.x)) ? 1.0 : 0.0;
-        out_sv.write(float4(finite), tid);
-        out_sv2.write(float4(finite), tid);
-        out_svt.write(float4(finite), tid);
-        out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-        out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-        out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-        return;
-    }
 
     // RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): real interpolated
     // vertex normal via a PRIMARY visibility ray from the camera through
@@ -2126,103 +2064,13 @@ kernel void trace_shadow_rays(
     bool sampler_active = (p.emissive_table_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr) && (p.gi_spp > 0u);
     if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u || sampler_active) {
         float3 to_surface = wp - float3(p.camera_pos);
-        if (RT_A3A_STAGE == 10u) {
-            // Vector-branch probe: consume one subtraction component in a
-            // comparison, but write only fixed deterministic values.
-            float marker = to_surface.x > 0.0 ? 1.0 : 0.0;
-            out_sv.write(float4(marker), tid);
-            out_sv2.write(float4(marker), tid);
-            out_svt.write(float4(marker), tid);
-            out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-            out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-            out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-            return;
-        }
-        if (RT_A3A_STAGE == 9u) {
-            // Sanitized-vector probe: make the combined value safe for the
-            // half-float outputs before writing it.
-            float3 safe = float3(
-                rt_finite(to_surface.x) ? clamp(to_surface.x, -60000.0, 60000.0) : 0.0,
-                rt_finite(to_surface.y) ? clamp(to_surface.y, -60000.0, 60000.0) : 0.0,
-                rt_finite(to_surface.z) ? clamp(to_surface.z, -60000.0, 60000.0) : 0.0);
-            out_sv.write(float4(safe, 1.0), tid);
-            out_sv2.write(float4(safe, 1.0), tid);
-            out_svt.write(float4(safe, 1.0), tid);
-            out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-            out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-            out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-            return;
-        }
-        if (RT_A3A_STAGE == 6u) {
-            // Raw-vector probe: use the subtraction result directly. No
-            // finite checks, length, normalization, or ray construction.
-            out_sv.write(float4(to_surface, 1.0), tid);
-            out_sv2.write(float4(to_surface, 1.0), tid);
-            out_svt.write(float4(to_surface, 1.0), tid);
-            out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-            out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-            out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-            return;
-        }
-        if (RT_A3A_STAGE == 5u) {
-            // Vector-only probe: exercise subtraction, then return before
-            // length, normalization, or ray setup.
-            float finite = rt_finite(to_surface.x) && rt_finite(to_surface.y)
-                && rt_finite(to_surface.z) ? 1.0 : 0.0;
-            out_sv.write(float4(finite), tid);
-            out_sv2.write(float4(finite), tid);
-            out_svt.write(float4(finite), tid);
-            out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-            out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-            out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-            return;
-        }
         float dist = length(to_surface);
         if (dist > 1e-6) {
-            if (RT_A3A_STAGE == 4u) {
-                // Distance-only probe: exercise subtraction and length, but
-                // do not normalize the vector or construct a ray.
-                float finite = rt_finite(dist) ? 1.0 : 0.0;
-                out_sv.write(float4(finite), tid);
-                out_sv2.write(float4(finite), tid);
-                out_svt.write(float4(finite), tid);
-                out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-                out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-                out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-                return;
-            }
-            if (RT_A3A_STAGE == 3u) {
-                // Scalar-ray probe: exercise distance and normalization only;
-                // do not construct or populate a Metal ray object.
-                float3 direction = to_surface / dist;
-                bool finite_direction = rt_finite(dist) && rt_finite(direction.x)
-                    && rt_finite(direction.y) && rt_finite(direction.z);
-                float finite = finite_direction ? 1.0 : 0.0;
-                out_sv.write(float4(finite), tid);
-                out_sv2.write(float4(finite), tid);
-                out_svt.write(float4(finite), tid);
-                out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-                out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-                out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-                return;
-            }
             ray pr;
             pr.origin = float3(p.camera_pos);
             pr.direction = to_surface / dist;
             pr.min_distance = 0.0;
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
-            if (RT_A3A_STAGE == 1u) {
-                // Primary-ray construction probe: no intersection query or
-                // secondary ray work. Keep every downstream output valid.
-                float ray_finite = all(isfinite(pr.direction)) ? 1.0 : 0.0;
-                out_sv.write(float4(ray_finite), tid);
-                out_sv2.write(float4(ray_finite), tid);
-                out_svt.write(float4(ray_finite), tid);
-                out_irr.write(float4(0.0, 0.0, 0.0, 1.0), tid);
-                out_n.write(float4(0.0, 1.0, 0.0, -1.0), tid);
-                out_refl.write(float4(0.0, 0.0, 0.0, -1.0), tid);
-                return;
-            }
             intersection_query<triangle_data, instancing> primary_q;
             rt_sanitize_ray(pr, 0u, tid, diagnostics); primary_q.reset(pr, accel, RT_MASK_VISIBLE);
             if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false)) {
@@ -6396,17 +6244,6 @@ pub struct MetalShadowRayTracer {
     /// scenes — `HAS_TRANSLUCENCY` baked to false (walk_with_alpha_test, pre-TL-B
     /// codegen byte-for-byte in the sv caster loop).
     trace_pipeline_binary: GpuComputePipeline,
-    trace_pipeline_bypass: GpuComputePipeline,
-    trace_pipeline_primary_probe: GpuComputePipeline,
-    trace_pipeline_pre_ray_probe: GpuComputePipeline,
-    trace_pipeline_scalar_ray_probe: GpuComputePipeline,
-    trace_pipeline_distance_probe: GpuComputePipeline,
-    trace_pipeline_vector_probe: GpuComputePipeline,
-    trace_pipeline_raw_vector_probe: GpuComputePipeline,
-    trace_pipeline_world_pos_probe: GpuComputePipeline,
-    trace_pipeline_camera_probe: GpuComputePipeline,
-    trace_pipeline_clamped_vector_probe: GpuComputePipeline,
-    trace_pipeline_vector_branch_probe: GpuComputePipeline,
     upsample_pipeline: GpuComputePipeline,
     /// RT-T1-D (BUG-312): the dilated edge-aware à-trous filter pipeline.
     atrous_pipeline: GpuComputePipeline,
@@ -6449,17 +6286,6 @@ pub struct MetalShadowRayTracer {
 pub struct RtPipelines {
     pub trace_pipeline_binary: GpuComputePipeline,
     pub trace_pipeline_translucent: GpuComputePipeline,
-    pub trace_pipeline_bypass: GpuComputePipeline,
-    pub trace_pipeline_primary_probe: GpuComputePipeline,
-    pub trace_pipeline_pre_ray_probe: GpuComputePipeline,
-    pub trace_pipeline_scalar_ray_probe: GpuComputePipeline,
-    pub trace_pipeline_distance_probe: GpuComputePipeline,
-    pub trace_pipeline_vector_probe: GpuComputePipeline,
-    pub trace_pipeline_raw_vector_probe: GpuComputePipeline,
-    pub trace_pipeline_world_pos_probe: GpuComputePipeline,
-    pub trace_pipeline_camera_probe: GpuComputePipeline,
-    pub trace_pipeline_clamped_vector_probe: GpuComputePipeline,
-    pub trace_pipeline_vector_branch_probe: GpuComputePipeline,
     pub upsample_pipeline: GpuComputePipeline,
     pub atrous_pipeline: GpuComputePipeline,
     pub accumulate_pipeline: GpuComputePipeline,
@@ -6542,22 +6368,11 @@ impl RtPipelines {
         let binary_constants = {
             let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
             let val: u8 = 0; // false
-            let stage: u32 = 0;
             unsafe {
                 cv.setConstantValue_type_atIndex(
                     core::ptr::NonNull::from(&val).cast(),
                     MTLDataType::Bool,
                     100,
-                );
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&val).cast(),
-                    MTLDataType::Bool,
-                    101,
-                );
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&stage).cast(),
-                    MTLDataType::UInt,
-                    102,
                 )
             };
             cv
@@ -6570,18 +6385,6 @@ impl RtPipelines {
                     core::ptr::NonNull::from(&val).cast(),
                     MTLDataType::Bool,
                     100,
-                );
-                let bypass: u8 = 0;
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&bypass).cast(),
-                    MTLDataType::Bool,
-                    101,
-                );
-                let stage: u32 = 0;
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&stage).cast(),
-                    MTLDataType::UInt,
-                    102,
                 )
             };
             cv
@@ -6599,183 +6402,6 @@ impl RtPipelines {
             "trace_shadow_rays",
             trace_slot_map,
             Some(&translucent_constants),
-        );
-        let bypass_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let translucency: u8 = 0;
-            let bypass: u8 = 1;
-            unsafe {
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&translucency).cast(),
-                    MTLDataType::Bool,
-                    100,
-                );
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&bypass).cast(),
-                    MTLDataType::Bool,
-                    101,
-                );
-                let stage: u32 = 0;
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&stage).cast(),
-                    MTLDataType::UInt,
-                    102,
-                )
-            }
-            cv
-        };
-        let trace_pipeline_bypass = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&bypass_constants),
-        );
-        let primary_probe_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            let stage: u32 = 1;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_primary_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&primary_probe_constants),
-        );
-        let pre_ray_probe_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            let stage: u32 = 2;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_pre_ray_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&pre_ray_probe_constants),
-        );
-        let scalar_ray_probe_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            let stage: u32 = 3;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_scalar_ray_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&scalar_ray_probe_constants),
-        );
-        let distance_probe_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            let stage: u32 = 4;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_distance_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&distance_probe_constants),
-        );
-        let vector_probe_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            let stage: u32 = 5;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_vector_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&vector_probe_constants),
-        );
-        let raw_vector_probe_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            let stage: u32 = 6;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_raw_vector_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&raw_vector_probe_constants),
-        );
-        let make_probe_constants = |stage: u32| {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let false_value: u8 = 0;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 100);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&false_value).cast(), MTLDataType::Bool, 101);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&stage).cast(), MTLDataType::UInt, 102);
-            }
-            cv
-        };
-        let trace_pipeline_world_pos_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&make_probe_constants(7)),
-        );
-        let trace_pipeline_camera_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&make_probe_constants(8)),
-        );
-        let trace_pipeline_clamped_vector_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&make_probe_constants(9)),
-        );
-        let trace_pipeline_vector_branch_probe = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            identity_slot_map(&trace_slots),
-            Some(&make_probe_constants(10)),
         );
         let upsample_pipeline = compile_pipeline(
             device,
@@ -6986,17 +6612,6 @@ impl RtPipelines {
         Self {
             trace_pipeline_binary,
             trace_pipeline_translucent,
-            trace_pipeline_bypass,
-            trace_pipeline_primary_probe,
-            trace_pipeline_pre_ray_probe,
-            trace_pipeline_scalar_ray_probe,
-            trace_pipeline_distance_probe,
-            trace_pipeline_vector_probe,
-            trace_pipeline_raw_vector_probe,
-            trace_pipeline_world_pos_probe,
-            trace_pipeline_camera_probe,
-            trace_pipeline_clamped_vector_probe,
-            trace_pipeline_vector_branch_probe,
             upsample_pipeline,
             atrous_pipeline,
             accumulate_pipeline,
@@ -7046,17 +6661,6 @@ impl MetalShadowRayTracer {
         Self {
             trace_pipeline_translucent: p.trace_pipeline_translucent.clone(),
             trace_pipeline_binary: p.trace_pipeline_binary.clone(),
-            trace_pipeline_bypass: p.trace_pipeline_bypass.clone(),
-            trace_pipeline_primary_probe: p.trace_pipeline_primary_probe.clone(),
-            trace_pipeline_pre_ray_probe: p.trace_pipeline_pre_ray_probe.clone(),
-            trace_pipeline_scalar_ray_probe: p.trace_pipeline_scalar_ray_probe.clone(),
-            trace_pipeline_distance_probe: p.trace_pipeline_distance_probe.clone(),
-            trace_pipeline_vector_probe: p.trace_pipeline_vector_probe.clone(),
-            trace_pipeline_raw_vector_probe: p.trace_pipeline_raw_vector_probe.clone(),
-            trace_pipeline_world_pos_probe: p.trace_pipeline_world_pos_probe.clone(),
-            trace_pipeline_camera_probe: p.trace_pipeline_camera_probe.clone(),
-            trace_pipeline_clamped_vector_probe: p.trace_pipeline_clamped_vector_probe.clone(),
-            trace_pipeline_vector_branch_probe: p.trace_pipeline_vector_branch_probe.clone(),
             upsample_pipeline: p.upsample_pipeline.clone(),
             atrous_pipeline: p.atrous_pipeline.clone(),
             accumulate_pipeline: p.accumulate_pipeline.clone(),
@@ -7604,35 +7208,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 7 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_svt,
         });
-        let pipeline = if std::env::var("MANIFOLD_RT_A3A_VECTOR_BRANCH").as_deref() == Ok("1") {
-            &self.trace_pipeline_vector_branch_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_CLAMPED_VECTOR").as_deref() == Ok("1") {
-            &self.trace_pipeline_clamped_vector_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_WORLD_POS").as_deref() == Ok("1") {
-            &self.trace_pipeline_world_pos_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_CAMERA_ONLY").as_deref() == Ok("1") {
-            &self.trace_pipeline_camera_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_RAW_VECTOR").as_deref() == Ok("1") {
-            &self.trace_pipeline_raw_vector_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_VECTOR_ONLY").as_deref() == Ok("1") {
-            &self.trace_pipeline_vector_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_DISTANCE_ONLY").as_deref() == Ok("1") {
-            &self.trace_pipeline_distance_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_SCALAR_RAY").as_deref() == Ok("1") {
-            &self.trace_pipeline_scalar_ray_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_PRE_RAY").as_deref() == Ok("1") {
-            &self.trace_pipeline_pre_ray_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_PRIMARY_RAY").as_deref() == Ok("1") {
-            &self.trace_pipeline_primary_probe
-        } else if std::env::var("MANIFOLD_RT_A3A_BYPASS").as_deref() == Ok("1") {
-            &self.trace_pipeline_bypass
-        } else if has_translucency {
-            &self.trace_pipeline_translucent
-        } else {
-            &self.trace_pipeline_binary
-        };
         encoder.dispatch_compute_with_accel(
-            pipeline,
+            if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
             0,
             accel,
             &bindings,
