@@ -7233,6 +7233,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         .expect("validated RT trace dimensions must produce a tile plan")
         .peekable();
         while let Some(region) = regions.next() {
+            let diagnostic_label = super::gpu_fault::diagnostics_enabled().then(|| {
+                format!(
+                    "{label} tile origin={},{} extent={}x{}",
+                    region.origin[0], region.origin[1], region.extent[0], region.extent[1],
+                )
+            });
             encoder.dispatch_compute_with_accel(
                 if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
                 0,
@@ -7240,7 +7246,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 &bindings,
                 Some((8, trace_region_bytes(&region))),
                 dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
-                label,
+                diagnostic_label.as_deref().unwrap_or(label),
             );
             if regions.peek().is_some() {
                 encoder.commit_and_continue(device);

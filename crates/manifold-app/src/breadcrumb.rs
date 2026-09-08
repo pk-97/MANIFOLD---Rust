@@ -52,7 +52,7 @@ static LAST_KNOWN_BEAT_BITS: AtomicU64 = AtomicU64::new(u64::MAX);
 
 /// Store the latest known beat for the panic hook. Called from the UI
 /// thread's content-state drain — see `tick_breadcrumb` below.
-fn publish_beat_for_crash_log(beat: Beats) {
+pub(crate) fn publish_beat_for_crash_log(beat: Beats) {
     LAST_KNOWN_BEAT_BITS.store(beat.0.to_bits(), Ordering::Relaxed);
 }
 

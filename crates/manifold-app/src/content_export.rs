@@ -720,6 +720,7 @@ impl ContentThread {
             driver.feed_frame(frame_idx, &mut self.engine);
         }
         let tick_result = self.engine.tick(ctx);
+        crate::breadcrumb::publish_beat_for_crash_log(self.engine.current_beat());
 
         // Wait for any in-flight video decodes to complete before rendering.
         // At GPU speed the export outruns the async decoder — without this,

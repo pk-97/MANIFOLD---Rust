@@ -64,6 +64,7 @@ fn parse_args(args: &[String]) -> Result<ExportReproArgs, String> {
 }
 
 pub fn run(args: &[String]) -> ! {
+    crate::session_log::init();
     let parsed = match parse_args(args) {
         Ok(v) => v,
         Err(e) => {
