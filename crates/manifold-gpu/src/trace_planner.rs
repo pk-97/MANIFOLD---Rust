@@ -170,6 +170,27 @@ pub fn plan_trace_regions(
     })
 }
 
+impl Iterator for TraceRegionIter {
+    type Item = TraceRegion;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.y >= self.height {
+            return None;
+        }
+        let origin = [self.x, self.y];
+        let extent = [
+            self.tile_width.min(self.width - self.x),
+            self.tile_height.min(self.height - self.y),
+        ];
+        self.x = self.x.saturating_add(extent[0]);
+        if self.x >= self.width {
+            self.x = 0;
+            self.y = self.y.saturating_add(extent[1]);
+        }
+        Some(TraceRegion { origin, extent })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,26 +290,5 @@ mod tests {
             plan_trace_regions(u32::MAX, u32::MAX, 1, 1, 1, limits(u64::MAX, u64::MAX)).unwrap();
         assert_eq!(plan.tile_width, u32::MAX);
         assert_eq!(plan.tile_height, u32::MAX);
-    }
-}
-
-impl Iterator for TraceRegionIter {
-    type Item = TraceRegion;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.y >= self.height {
-            return None;
-        }
-        let origin = [self.x, self.y];
-        let extent = [
-            self.tile_width.min(self.width - self.x),
-            self.tile_height.min(self.height - self.y),
-        ];
-        self.x = self.x.saturating_add(extent[0]);
-        if self.x >= self.width {
-            self.x = 0;
-            self.y = self.y.saturating_add(extent[1]);
-        }
-        Some(TraceRegion { origin, extent })
     }
 }

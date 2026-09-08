@@ -1510,9 +1510,8 @@ struct ShaftCompositeUniforms {
 const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
 #[inline]
-fn rt_trace_gate(rt_ready: bool, resident_topo_key: Option<u64>, topo_key: u64,
-    resident_content_key: Option<u64>, content_key: u64) -> bool {
-    rt_ready && resident_topo_key == Some(topo_key) && resident_content_key == Some(content_key)
+fn rt_trace_gate(rt_ready: bool, resident_topo_key: Option<u64>, topo_key: u64) -> bool {
+    rt_ready && resident_topo_key == Some(topo_key)
 }
 
 #[inline]
@@ -5967,7 +5966,10 @@ impl EffectNode for RenderScene {
             // the current frame's topo key closes that hole: during the
             // defer frame the keys don't match, tracing is blocked, and
             // the raster shadow-map path serves the transition.
-            if rt_trace_gate(rt_ready, self.rt_accel_topo_key, topo_key, self.rt_accel_content_key, content_key) {
+            // Content generations may continue using the resident AS while
+            // the existing two-observation content rebuild settles. Strict
+            // dynamic-content freshness is outside this landing.
+            if rt_trace_gate(rt_ready, self.rt_accel_topo_key, topo_key) {
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
                 // emissive geometry. Hoisted to the evaluate scope (mut
@@ -7950,7 +7952,7 @@ mod tests {
         assert_eq!(rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2), RtBuildDecision::Defer);
         assert_eq!(rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2), RtBuildDecision::Build { content_trigger_fired: false });
         assert_eq!(rt_deferred_build_decision(Some(1), Some(2), &mut pt, &mut pc, 2, 3), RtBuildDecision::Defer);
-        assert!(!rt_trace_gate(false, Some(1), 1, Some(2), 2));
+        assert!(!rt_trace_gate(false, Some(1), 1));
     }
 
     #[test]
@@ -7959,7 +7961,7 @@ mod tests {
         s.rt_topology_rejected = true; s.rt_accel_built = false;
         s.rt_topology_rejected = false;
         assert!(!s.rt_accel_built);
-        assert!(!rt_trace_gate(s.rt_accel_built && !s.rt_topology_rejected, Some(1), 1, Some(2), 2));
+        assert!(!rt_trace_gate(s.rt_accel_built && !s.rt_topology_rejected, Some(1), 1));
     }
 
     #[test]
@@ -7968,7 +7970,18 @@ mod tests {
         let build_this_frame = true;
         if build_this_frame { local_ready = false; }
         assert!(!local_ready);
-        assert!(!rt_trace_gate(local_ready, Some(1), 1, Some(2), 2));
+        assert!(!rt_trace_gate(local_ready, Some(1), 1));
+    }
+
+    #[test]
+    fn content_settle_does_not_starve_resident_trace_admission() {
+        let mut pending_topo = None;
+        let mut pending_content = None;
+        assert_eq!(rt_deferred_build_decision(Some(1), Some(1), &mut pending_topo, &mut pending_content, 1, 2), RtBuildDecision::Defer);
+        assert!(rt_trace_gate(true, Some(1), 1));
+        assert_eq!(rt_deferred_build_decision(Some(1), Some(1), &mut pending_topo, &mut pending_content, 1, 3), RtBuildDecision::Defer);
+        assert!(rt_trace_gate(true, Some(1), 1));
+        assert!(!rt_trace_gate(true, Some(2), 1));
     }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
