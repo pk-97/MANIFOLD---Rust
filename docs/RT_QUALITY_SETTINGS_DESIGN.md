@@ -13,6 +13,14 @@ loaded project's real-time quality column through the same compositor and
 clip-renderer fan-out used by normal frames, before its first GPU submission.
 It must not inherit renderer defaults or the previous project/export column.
 
+Trace scheduling delivery (2026-09-08, BUG-qh04): every RT trace uses the same
+query-budgeted spatial tile planner, whether it is a live frame or an export.
+Tiles preserve global pixel coordinates, sample counts, random seeds, output
+textures, and post-processing; only Metal command-buffer boundaries change.
+The CPU rejects sample counts above the six-tier ladder instead of silently
+clamping them in the kernel. In particular, Extra High and Ultra reflections
+now execute their requested 16/32 spp rather than the old hidden 8 spp cap.
+
 ## 1. Audit — what exists (verified 2026-08-17)
 
 | Piece | Where | State |
@@ -42,6 +50,7 @@ Export renders through the **normal content-thread pipeline** — the frame loop
 - **D6 — Change semantics: latched at frame boundary.** Settings are read once per frame by the compositor; a mid-frame UI edit takes effect next frame. The content thread owns `Project` and the executor — no race exists to handle. An spp change needs NO realloc and NO accumulation reset (dims unchanged; converged history keeps converging). A ray-resolution change IS a dims change and rides the existing `ensure_rt_irradiance` realloc + `TemporalResetDetector` reset — the executor adds nothing new here.
 - **D7 — Scene-level override: deferred.** Revival trigger: Peter hits a show where one heavy GLB scene needs lower tiers than the rest. When revived, it lands as an optional per-`render_scene`-node param group that wins over the project column — never a third column.
 - **D8 — Env probes deleted, not layered.** `MANIFOLD_RT_SWEEP_*` and `MANIFOLD_RT_NATIVE_TERMS` are subsumed by the panel. Keeping them as overrides on top is a second source of truth. The `rt_noise_gate.py` baseline is unaffected (it never sets them); any script that does gets updated in the same phase.
+- **D9 — One estimator, spatially tiled.** The resolved quality column feeds a conservative query-work estimate (primary + shadow + AO + two-bounce GI/sun + emissive visibility + reflection/sun). A pure row-major planner covers the trace texture exactly and rolls the Metal command buffer between tiles. There is no export-specific renderer, term split, sample split, repeated primary ray, accumulation buffer, CPU wait, or quality reduction. Dispatch profiling retains and resolves every rolled command buffer.
 
 ## 3. Data model (committed signatures)
 
@@ -122,6 +131,8 @@ Seams:
 - **I3 — Resolution changes reset temporal history.** Enforcement: existing `ensure_rt_irradiance` reset-flag path plus a gpu-proofs test flipping ray_resolution across frames and asserting the reset flag fired. P2 deliverable.
 - **I4 — No env-probe second source of truth.** Enforcement: negative `rg` gate — `rg "MANIFOLD_RT_SWEEP|MANIFOLD_RT_NATIVE_TERMS" crates/` returns zero hits after P2. (`scripts/rt_a2_term_cost.py` / `rt_a3_term_cost.py` name the retired probe in loud inert-warning comments — deliberate, they fail obviously if someone runs them.)
 - **I5 — No per-frame allocation for the settings path.** `RtQuality` is `Copy`; `set_rt_quality` stores by value. Enforcement: code shape; `MANIFOLD_RENDER_TRACE=1` run in P2's gate (content-thread work gate, DESIGN_DOC_STANDARD.md section 5 (Phase briefs)).
+- **I6 — Requested spp is executed.** The CPU accepts only the shared 1/2/4/8/16/32 ladder maximum and the Metal reflection scratch extent mirrors 32. The kernel does not clamp `refl_spp`; planner unit tests include the 16-spp export workload and the focused RT GPU proof compiles and executes the MSL ABI.
+- **I7 — Tiling is mathematically invisible.** The shader adds a CPU-supplied tile origin to its local thread coordinate before every depth read, random seed, output write, and diagnostic pixel record. Planner tests prove exact cover/no overlap, partial edges, tiny images, limit enforcement, and checked large-input behavior. Temporal accumulation and denoisers still run once after the complete trace.
 
 ## 5. Phasing
 
@@ -168,6 +179,7 @@ Seams:
 6. Frame-boundary latching; spp change = no reset, resolution change = existing realloc/reset path (D6).
 7. Env probes deleted, not layered (D8).
 8. Live defaults reproduce today's constants exactly; export defaults brute-force (D2).
+9. Live and export share one query-budgeted spatial scheduler; scheduling never changes quality (D9).
 
 ## 7. Deferred
 

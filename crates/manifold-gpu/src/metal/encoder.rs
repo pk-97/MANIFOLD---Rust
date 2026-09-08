@@ -3,12 +3,12 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
+    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
@@ -237,6 +237,7 @@ impl GpuEncoder {
             tag: String::new(),
             overflow: 0,
             calib_start,
+            committed_buffers: Vec::new(),
         });
     }
 
@@ -258,12 +259,34 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         let total_ms = unsafe {
             self.cmd_buf.waitUntilCompleted();
-            (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0) * 1000.0
+            let mut total = (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0);
+            if let Some(profile) = &self.profile {
+                total += profile
+                    .committed_buffers
+                    .iter()
+                    .map(|buf| (buf.GPUEndTime() - buf.GPUStartTime()).max(0.0))
+                    .sum::<f64>();
+            }
+            total * 1000.0
         };
         match self.profile.take() {
             Some(state) => {
                 let calib_end = profiling::sample_cpu_gpu(device.raw_device());
-                profiling::resolve(&state, calib_end, total_ms)
+                let mut profile = profiling::resolve(&state, calib_end, total_ms);
+                use objc2_metal::MTLCommandBufferStatus;
+                profile.failed_command_buffers = state
+                    .committed_buffers
+                    .iter()
+                    .chain(std::iter::once(&self.cmd_buf))
+                    .filter(|buf| unsafe { buf.status() } != MTLCommandBufferStatus::Completed)
+                    .count();
+                if profile.failed_command_buffers != 0 {
+                    log::warn!(
+                        "profiled frame had {} command buffer(s) not completed",
+                        profile.failed_command_buffers
+                    );
+                }
+                profile
             }
             None => GpuFrameProfile {
                 total_ms,
@@ -379,7 +402,11 @@ impl GpuEncoder {
     ) {
         let isolate_rt_stage = label.starts_with("node.render_scene RT");
         if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] dispatch stage={label} groups={workgroups:?} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
+            log::info!(
+                "[GPU-DIAG] dispatch stage={label} groups={workgroups:?} threads={:?} bindings={}",
+                pipeline.workgroup_size,
+                bindings.len()
+            );
         }
         if isolate_rt_stage {
             self.end_current();
@@ -503,16 +530,14 @@ impl GpuEncoder {
         // in raytrace.rs; BUG-jddy).
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { buffer, .. } => {
-                    unsafe {
-                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
-                    }
-                }
-                GpuBinding::Texture { texture, .. } => {
-                    unsafe {
-                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
-                    }
-                }
+                GpuBinding::Buffer { buffer, .. } => unsafe {
+                    let () =
+                        msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                },
+                GpuBinding::Texture { texture, .. } => unsafe {
+                    let () =
+                        msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                },
                 GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
             }
         }
@@ -579,23 +604,45 @@ impl GpuEncoder {
         accel_binding: u32,
         accel: &super::raytrace::RtAccel,
         bindings: &[GpuBinding],
+        inline_bytes: Option<(u32, &[u8])>,
         workgroups: [u32; 3],
         label: &str,
     ) {
         if super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
-                pipeline.workgroup_size, accel.blas.len(), accel.geometry_buffers.len(), bindings.len());
-            log::info!("[GPU-DIAG] accel={:p} instances_bytes={}", &*accel.structure, accel.instance_buffer.size);
+            log::info!(
+                "[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
+                pipeline.workgroup_size,
+                accel.blas.len(),
+                accel.geometry_buffers.len(),
+                bindings.len()
+            );
+            log::info!(
+                "[GPU-DIAG] accel={:p} instances_bytes={}",
+                &*accel.structure,
+                accel.instance_buffer.size
+            );
             for binding in bindings {
-                if let GpuBinding::Buffer { binding: slot, buffer, offset } = binding {
-                    log::info!("[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
-                        &*buffer.raw, buffer.size, *offset <= buffer.size);
+                if let GpuBinding::Buffer {
+                    binding: slot,
+                    buffer,
+                    offset,
+                } = binding
+                {
+                    log::info!(
+                        "[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
+                        &*buffer.raw,
+                        buffer.size,
+                        *offset <= buffer.size
+                    );
                 }
             }
             for geo in &accel.geometry_buffers {
-                log::info!("[GPU-DIAG] geometry handle={:p} bytes={}", &**geo, geo.length());
+                log::info!(
+                    "[GPU-DIAG] geometry handle={:p} bytes={}",
+                    &**geo,
+                    geo.length()
+                );
             }
-
         }
         self.end_current();
         let enc = if self.profile.is_some() {
@@ -653,10 +700,7 @@ impl GpuEncoder {
                         continue;
                     };
                     unsafe {
-                        enc.setSamplerState_atIndex(
-                            Some(&sampler.raw),
-                            slot.metal_index as usize,
-                        );
+                        enc.setSamplerState_atIndex(Some(&sampler.raw), slot.metal_index as usize);
                     }
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -673,6 +717,17 @@ impl GpuEncoder {
                 }
             }
         }
+        if let Some((binding, data)) = inline_bytes
+            && let Some(slot) = pipeline.slot_map.get(binding)
+        {
+            unsafe {
+                enc.setBytes_length_atIndex(
+                    NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                    data.len(),
+                    slot.metal_index as usize,
+                );
+            }
+        }
         // BUG-jddy root fix: declare usage for every resource the trace
         // kernel reaches only INDIRECTLY — the TLAS's referenced BLASes
         // and the instance buffer the TLAS was built from. Resources no
@@ -684,7 +739,8 @@ impl GpuEncoder {
         unsafe {
             let () = msg_send![&enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read];
             for blas in &accel.blas {
-                let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
+                let () =
+                    msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
             }
             let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
             // BUG-84fv audit: the kernels also read vertex/index data via
@@ -699,7 +755,9 @@ impl GpuEncoder {
         // are declared Read|Write so Metal's hazard tracker sees RT outputs.
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, .. } => {
+                GpuBinding::Buffer {
+                    binding: b, buffer, ..
+                } => {
                     // RT trace binding 7 is the optional diagnostics record.
                     // The kernel updates its atomics and first-invalid fields;
                     // declaring it Read-only would leave those writes outside
@@ -714,11 +772,12 @@ impl GpuEncoder {
                     }
                 }
                 GpuBinding::Texture { texture, .. } => {
-                    let usage = if unsafe { texture.raw.usage() }.contains(MTLTextureUsage::ShaderWrite) {
-                        MTLResourceUsage::Read | MTLResourceUsage::Write
-                    } else {
-                        MTLResourceUsage::Read
-                    };
+                    let usage =
+                        if unsafe { texture.raw.usage() }.contains(MTLTextureUsage::ShaderWrite) {
+                            MTLResourceUsage::Read | MTLResourceUsage::Write
+                        } else {
+                            MTLResourceUsage::Read
+                        };
                     unsafe {
                         let () = msg_send![&enc, useResource: &*texture.raw, usage: usage];
                     }
@@ -1075,11 +1134,7 @@ impl GpuEncoder {
         // the clear color is per-attachment (see `AuxColorAttachment`).
         for (i, aux_att) in desc.aux_color.iter().enumerate() {
             let idx = i + 1;
-            let aux = unsafe {
-                pass_desc
-                    .colorAttachments()
-                    .objectAtIndexedSubscript(idx)
-            };
+            let aux = unsafe { pass_desc.colorAttachments().objectAtIndexedSubscript(idx) };
             unsafe {
                 aux.setTexture(Some(&aux_att.msaa.raw));
                 aux.setResolveTexture(Some(&aux_att.resolve.raw));
@@ -1102,8 +1157,7 @@ impl GpuEncoder {
             match desc.depth_resolve {
                 Some(resolve) => {
                     assert_eq!(
-                        resolve.format,
-                        desc.msaa_depth.format,
+                        resolve.format, desc.msaa_depth.format,
                         "depth resolve texture must match the MSAA depth format"
                     );
                     assert_eq!(
@@ -1933,14 +1987,22 @@ impl GpuEncoder {
         assert_eq!(target.format, crate::GpuTextureFormat::R32Float);
         assert_eq!(source.width, target.width);
         assert_eq!(source.height, target.height);
-        assert!(unsafe { target.raw.usage() }.contains(MTLTextureUsage::ShaderWrite),
-            "copy_depth_to_float destination must allow shader writes");
+        assert!(
+            unsafe { target.raw.usage() }.contains(MTLTextureUsage::ShaderWrite),
+            "copy_depth_to_float destination must allow shader writes"
+        );
         let pipelines = unsafe { &*self.clear_pipelines };
         self.dispatch_compute(
             &pipelines.depth_to_float,
             &[
-                GpuBinding::Texture { binding: 0, texture: source },
-                GpuBinding::Texture { binding: 1, texture: target },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: source,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: target,
+                },
             ],
             [target.width.div_ceil(16), target.height.div_ceil(16), 1],
             "Copy Depth To Float",
@@ -1995,14 +2057,21 @@ impl GpuEncoder {
         depth: u32,
     ) {
         assert_eq!(
-            src.format, dst.format,
+            src.format,
+            dst.format,
             "copy_texture_to_texture: pixel format mismatch — \
              src {:?} ({}×{}) → dst {:?} ({}×{}), copy region {}×{}×{}. \
              Metal blit requires matching formats. If you need a cross-\
              format copy, use a compute-shader copy path instead.",
-            src.format, src.width, src.height,
-            dst.format, dst.width, dst.height,
-            width, height, depth,
+            src.format,
+            src.width,
+            src.height,
+            dst.format,
+            dst.width,
+            dst.height,
+            width,
+            height,
+            depth,
         );
         // Same-size guard. A Metal blit copies from origin (0,0) with NO
         // scaling, so a size mismatch silently copies the top-left
@@ -2019,19 +2088,32 @@ impl GpuEncoder {
              scaling) — src {}×{} != dst {}×{}. To change resolution, \
              sample: use GpuEncoder::resize_sample. A size-mismatched blit \
              would silently crop the top-left corner.",
-            src.width, src.height, dst.width, dst.height,
+            src.width,
+            src.height,
+            dst.width,
+            dst.height,
         );
         assert!(
             width <= src.width && height <= src.height,
             "copy_texture_to_texture: copy region exceeds source bounds — \
              src {}×{} ({:?}), copy region {}×{}×{}. Source extent out of bounds.",
-            src.width, src.height, src.format, width, height, depth,
+            src.width,
+            src.height,
+            src.format,
+            width,
+            height,
+            depth,
         );
         assert!(
             width <= dst.width && height <= dst.height,
             "copy_texture_to_texture: copy region exceeds destination bounds — \
              dst {}×{} ({:?}), copy region {}×{}×{}. Destination extent out of bounds.",
-            dst.width, dst.height, dst.format, width, height, depth,
+            dst.width,
+            dst.height,
+            dst.format,
+            width,
+            height,
+            depth,
         );
         self.end_current();
         let enc = self.make_blit_encoder("copy_texture_to_texture");
@@ -2106,7 +2188,11 @@ impl GpuEncoder {
             width <= src.width && height <= src.height,
             "copy_texture_to_buffer: copy region exceeds source bounds — \
              src {}×{} ({:?}), copy region {}×{}. Source extent out of bounds.",
-            src.width, src.height, src.format, width, height,
+            src.width,
+            src.height,
+            src.format,
+            width,
+            height,
         );
         let required = u64::from(bytes_per_row) * u64::from(height);
         assert!(
@@ -2157,7 +2243,13 @@ impl GpuEncoder {
             width <= src.width && height <= src.height && depth <= src.depth,
             "copy_texture_3d_to_buffer: copy region exceeds source bounds — \
              src {}×{}×{} ({:?}), copy region {}×{}×{}.",
-            src.width, src.height, src.depth, src.format, width, height, depth,
+            src.width,
+            src.height,
+            src.depth,
+            src.format,
+            width,
+            height,
+            depth,
         );
         let bytes_per_image = u64::from(bytes_per_row) * u64::from(height);
         let required = bytes_per_image * u64::from(depth);
@@ -2279,7 +2371,6 @@ impl GpuEncoder {
         }
     }
 
-
     /// Register a callback to run when the GPU finishes executing this command buffer.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
         use block2::RcBlock;
@@ -2353,7 +2444,9 @@ impl GpuEncoder {
     /// frame — per card, not per dispatch.
     pub fn note_scope(&mut self, scope: &str) {
         if super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe { self.cmd_buf.label() });
+            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe {
+                self.cmd_buf.label()
+            });
         }
         self.scopes.push(scope.to_string());
     }
@@ -2419,13 +2512,14 @@ impl GpuEncoder {
     /// order is preserved; Metal's automatic hazard tracking covers cross-chunk
     /// resource dependencies. Never blocks (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
     ///
-    /// Dispatch profiling is incompatible with mid-encode splits (D5), so the
-    /// call panics in dev builds if profiling is enabled.
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
-        debug_assert!(self.profile.is_none(), "commit_and_continue: dispatch profiling is incompatible with mid-encode chunking (UI_RESPONSIVENESS_UNDER_LOAD D5)");
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
+
+        if let Some(profile) = &mut self.profile {
+            profile.committed_buffers.push(self.cmd_buf.clone());
+        }
 
         let label = unsafe { self.cmd_buf.label() }
             .map(|s| s.to_string())
@@ -2479,7 +2573,9 @@ impl GpuEncoder {
         };
         Err(format!(
             "[GPU] try_commit_and_wait_completed: command buffer did not reach Completed (status={}, code={}): {}",
-            unsafe { self.cmd_buf.status() }.0, code, desc
+            unsafe { self.cmd_buf.status() }.0,
+            code,
+            desc
         ))
     }
 
@@ -2587,11 +2683,9 @@ mod tests {
         let completed = Arc::new(AtomicUsize::new(0));
         for value in values {
             let completed_inner = Arc::clone(&completed);
-            let block = RcBlock::new(
-                move |_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                    completed_inner.fetch_add(1, Ordering::SeqCst);
-                },
-            );
+            let block = RcBlock::new(move |_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                completed_inner.fetch_add(1, Ordering::SeqCst);
+            });
             unsafe {
                 encoder.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
             }
@@ -2619,11 +2713,17 @@ mod tests {
         encoder.commit_and_wait_completed();
 
         let final_value: u32 = unsafe {
-            let ptr = buffer.mapped_ptr().expect("shared buffer must be CPU-mapped");
+            let ptr = buffer
+                .mapped_ptr()
+                .expect("shared buffer must be CPU-mapped");
             *(ptr as *const u32)
         };
         assert_eq!(final_value, 30, "chunks must execute in order");
-        assert_eq!(completed.load(Ordering::SeqCst), 3, "expected 3 completed handlers");
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            3,
+            "expected 3 completed handlers"
+        );
     }
 }
 

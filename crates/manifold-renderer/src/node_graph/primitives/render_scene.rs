@@ -6234,6 +6234,7 @@ impl EffectNode for RenderScene {
                 if mask_sizes_differ {
                     tracer.dispatch_shadow_rays(
                         gpu.native_enc,
+                        gpu.device,
                         accel,
                         &mask_params,
                         mask_params_buffer,
@@ -6267,6 +6268,7 @@ impl EffectNode for RenderScene {
                 // and out_sv is written here (one dispatch, monolithic perf).
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
+                    gpu.device,
                     accel,
                     &lighting_params,
                     params_buffer,

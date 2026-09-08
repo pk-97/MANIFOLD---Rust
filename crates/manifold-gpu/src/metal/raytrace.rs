@@ -62,6 +62,10 @@ use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use super::device::GpuDevice;
 use super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::{GpuEncoder, Slot, SlotKind, SlotMap};
+use crate::trace_planner::{
+    DEFAULT_TRACE_WORK_LIMITS, TraceRegion, estimate_trace_query_units_per_pixel,
+    plan_trace_regions,
+};
 use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 // ─── Acceleration structure: per-object BLAS + one instance TLAS ───────
@@ -1709,10 +1713,10 @@ static float3 ortho_basis_x(float3 n) {
     return normalize(fabs(n.x) > 0.9 ? cross(n, float3(0, 1, 0)) : cross(n, float3(1, 0, 0)));
 }
 
-// In-register cap on reflection samples per pixel — bounds the fixed-size
-// sample array the firefly clamp's median needs. `REFL_SAMPLES_PER_PIXEL`'s
-// committed range (1-8) is what this has to hold.
-#define MAX_RT_REFL_SPP 8u
+// ABI storage bound for the reflection sample array. The CPU validates the
+// quality ladder (1/2/4/8/16/32); this mirrors its highest supported tier and
+// must never silently reduce the requested sample count.
+#define MAX_RT_REFL_SPP 32u
 
 // Median luminance of `n` radiance samples (n <= MAX_RT_REFL_SPP), by partial
 // selection — n is 4 in practice, so a sort network buys nothing. Even n takes
@@ -1937,6 +1941,7 @@ kernel void trace_shadow_rays(
     // discipline — the D7 fast path never reads it).
     device const RtAsInstanceDescriptor* emissive_descriptors [[buffer(6)]],
     device RtTraceDiagnostics* diagnostics [[buffer(7)]],
+    constant uint4& trace_region [[buffer(8)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
@@ -1967,8 +1972,11 @@ kernel void trace_shadow_rays(
     // has no env chain — the miss branch then reads the same nothing the
     // raster IBL would).
     texture2d<float>               prefiltered_env [[texture(69)]],
-    uint2 tid [[thread_position_in_grid]])
+    uint2 local_tid [[thread_position_in_grid]])
 {
+    uint2 region_extent = trace_region.zw;
+    if (local_tid.x >= region_extent.x || local_tid.y >= region_extent.y) return;
+    uint2 tid = trace_region.xy + local_tid;
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
     // RT_INSTANCING_DESIGN.md D11: the material/normal tables are ONE
     // buffer — canonical per-object rows at [0, N), per-slot rows at
@@ -2588,7 +2596,7 @@ kernel void trace_shadow_rays(
             // something very bright. Averaging `refl_spp` samples here
             // attacks the variance at the source; `RT_REFL_FIREFLY_GAIN`
             // below attacks the tail.
-            uint rspp = min(max(p.refl_spp, 1u), MAX_RT_REFL_SPP);
+            uint rspp = p.refl_spp;
             float3 rsamples[MAX_RT_REFL_SPP];
             float hit_dist_sum = 0.0;
             uint hit_count = 0u;
@@ -4496,6 +4504,9 @@ pub struct ShadowRayParams {
 /// file already uses for other cross-constant constants). RS-A (caster cap
 /// 4 -> 8): doubled from 4; the MSL mirror must stay in sync.
 pub const MAX_RT_CASTERS: usize = 8;
+/// Largest reflection tier accepted by the CPU and mirrored by the MSL
+/// private sample-array extent.
+pub const MAX_RT_REFLECTION_SPP: u32 = 32;
 
 /// RT-TL-C (section 16 TL5): sentinel for no designated sun caster —
 /// `out_svt` reads white (1,1,1) everywhere and fs_pbr keeps the luma channel.
@@ -6005,6 +6016,7 @@ pub trait ShadowRayTracer {
     fn dispatch_shadow_rays(
         &self,
         encoder: &mut GpuEncoder,
+        device: &GpuDevice,
         accel: &Self::Accel,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
@@ -6337,6 +6349,7 @@ impl RtPipelines {
             (5, SlotKind::Buffer), // RS-C: emissive_aliases, MSL [[buffer(5)]]
             (6, SlotKind::Buffer), // D8: instance descriptors, MSL [[buffer(6)]]
             (7, SlotKind::Buffer), // diagnostics record, MSL [[buffer(7)]]
+            (8, SlotKind::Buffer), // CPU-planned spatial tile, MSL [[buffer(8)]]
             (0, SlotKind::Texture),
             (1, SlotKind::Texture),
             (2, SlotKind::Texture),
@@ -7061,6 +7074,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     fn dispatch_shadow_rays(
         &self,
         encoder: &mut GpuEncoder,
+        device: &GpuDevice,
         accel: &Self::Accel,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
@@ -7083,41 +7097,26 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         has_translucency: bool,
         label: &str,
     ) {
+        assert!(
+            params.refl_spp <= MAX_RT_REFLECTION_SPP,
+            "reflection spp {} exceeds the supported quality ladder maximum {}",
+            params.refl_spp,
+            MAX_RT_REFLECTION_SPP,
+        );
         params_buffer.upload(bytemuck_bytes(params));
         let diagnostic_slot = if super::gpu_fault::diagnostics_enabled() {
             self.rt_diagnostics.busy.iter().position(|busy|
                 busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok())
         } else { None };
-        if let Some(slot) = diagnostic_slot {
-            let pool = Arc::clone(&self.rt_diagnostics);
+        if diagnostic_slot.is_some() {
             let frame = params.frame_index;
             log::info!("[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={}",
                 params.trace_size, params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp);
-            let block = block2::RcBlock::new(move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                let cb = unsafe { cb.as_ref() };
-                if unsafe { cb.status() } == MTLCommandBufferStatus::Completed {
-                    // This slot cannot be submitted again until we release it.
-                    // Metal completion makes all writes visible, including
-                    // relaxed-atomic publication within this completed buffer.
-                    let ptr = pool.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
-                    let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
-                    if d.state == 2 {
-                        log::error!("[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true", d.first_stage, d.first_pixel, d.raw_origin, d.raw_direction, d.raw_min_distance, d.raw_max_distance);
-                    } else {
-                        log::info!("[RT-DIAG] frame={frame} slot={slot} record_state={} (0=no invalid recorded,1=incomplete)", d.state);
-                    }
-                } else {
-                    log::error!("[RT-DIAG] frame={frame} slot={slot} validation=unavailable command did not complete");
-                }
-                pool.busy[slot].store(false, Ordering::Release);
-            });
-            unsafe { encoder.cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)); }
         } else if super::gpu_fault::diagnostics_enabled() {
             log::warn!("[RT-DIAG] validation=unavailable all diagnostic slots in flight");
         }
         let diagnostic_buffer = diagnostic_slot.map(|slot| &self.rt_diagnostics.buffers[slot])
             .unwrap_or(&self.rt_diagnostics.disabled);
-        let groups = dispatch_groups_2d(params.trace_size, SHADOW_WORKGROUP);
         let mut bindings = vec![
             GpuBinding::Buffer {
                 binding: 1,
@@ -7208,14 +7207,69 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 7 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_svt,
         });
-        encoder.dispatch_compute_with_accel(
-            if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
-            0,
-            accel,
-            &bindings,
-            groups,
-            label,
-        );
+        let caster_count = params.caster_count.min(MAX_RT_CASTERS as u32);
+        let sun_count = params.casters[..caster_count as usize]
+            .iter()
+            .filter(|caster| caster.kind == 0)
+            .count() as u32;
+        let query_units = estimate_trace_query_units_per_pixel(
+            caster_count,
+            sun_count,
+            params.shadow_spp,
+            params.ao_spp,
+            params.gi_spp,
+            params.refl_spp,
+            params.emissive_table_count != 0,
+        )
+        .expect("validated RT quality must have a finite query estimate");
+        let mut regions = plan_trace_regions(
+            params.trace_size[0],
+            params.trace_size[1],
+            SHADOW_WORKGROUP[0],
+            SHADOW_WORKGROUP[1],
+            query_units,
+            DEFAULT_TRACE_WORK_LIMITS,
+        )
+        .expect("validated RT trace dimensions must produce a tile plan")
+        .peekable();
+        while let Some(region) = regions.next() {
+            encoder.dispatch_compute_with_accel(
+                if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
+                0,
+                accel,
+                &bindings,
+                Some((8, trace_region_bytes(&region))),
+                dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
+                label,
+            );
+            if regions.peek().is_some() {
+                encoder.commit_and_continue(device);
+            }
+        }
+
+        // A diagnostic record spans every tile. Attach its readback to the
+        // final command buffer; same-queue completion implies all earlier
+        // tile buffers have finished before this callback runs.
+        if let Some(slot) = diagnostic_slot {
+            let pool = Arc::clone(&self.rt_diagnostics);
+            let frame = params.frame_index;
+            let block = block2::RcBlock::new(move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                let cb = unsafe { cb.as_ref() };
+                if unsafe { cb.status() } == MTLCommandBufferStatus::Completed {
+                    let ptr = pool.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
+                    let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
+                    if d.state == 2 {
+                        log::error!("[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true", d.first_stage, d.first_pixel, d.raw_origin, d.raw_direction, d.raw_min_distance, d.raw_max_distance);
+                    } else {
+                        log::info!("[RT-DIAG] frame={frame} slot={slot} record_state={} (0=no invalid recorded,1=incomplete)", d.state);
+                    }
+                } else {
+                    log::error!("[RT-DIAG] frame={frame} slot={slot} validation=unavailable command did not complete");
+                }
+                pool.busy[slot].store(false, Ordering::Release);
+            });
+            unsafe { encoder.cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)); }
+        }
     }
 
     fn upsample_shadow(
@@ -7754,6 +7808,16 @@ fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
         std::slice::from_raw_parts(
             (params as *const ShadowRayParams) as *const u8,
             std::mem::size_of::<ShadowRayParams>(),
+        )
+    }
+}
+
+fn trace_region_bytes(region: &TraceRegion) -> &[u8] {
+    const _: () = assert!(std::mem::size_of::<TraceRegion>() == 16);
+    unsafe {
+        std::slice::from_raw_parts(
+            (region as *const TraceRegion).cast::<u8>(),
+            std::mem::size_of::<TraceRegion>(),
         )
     }
 }
