@@ -7097,6 +7097,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         has_translucency: bool,
         label: &str,
     ) {
+        let diagnostic_params = diagnostic_trace_params(*params);
+        let params = &diagnostic_params;
         assert!(
             params.refl_spp <= MAX_RT_REFLECTION_SPP,
             "reflection spp {} exceeds the supported quality ladder maximum {}",
@@ -7851,6 +7853,85 @@ fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiagnosticTraceTerm {
+    Ao,
+    Gi,
+    Reflection,
+}
+
+/// Incident-only term isolation. `FRAME:TERM` keeps the full export history,
+/// scene state, dimensions, frame index, and selected term's requested sample
+/// count, but disables the other fused terms for exactly one lighting frame.
+fn diagnostic_trace_params(mut params: ShadowRayParams) -> ShadowRayParams {
+    if !super::gpu_fault::diagnostics_enabled()
+        || (params.ao_spp == 0 && params.gi_spp == 0 && params.refl_spp == 0)
+    {
+        return params;
+    }
+    let Ok(spec) = std::env::var("MANIFOLD_RT_DIAGNOSTIC_TERM") else {
+        return params;
+    };
+    let Some((frame, term)) = parse_diagnostic_trace_term(&spec) else {
+        log::warn!(
+            "[RT-DIAG] ignored MANIFOLD_RT_DIAGNOSTIC_TERM={spec:?}; expected FRAME:ao|gi|reflection"
+        );
+        return params;
+    };
+    if frame != params.frame_index {
+        return params;
+    }
+
+    let requested_spp = match term {
+        DiagnosticTraceTerm::Ao => params.ao_spp,
+        DiagnosticTraceTerm::Gi => params.gi_spp,
+        DiagnosticTraceTerm::Reflection => params.refl_spp,
+    };
+    assert!(
+        requested_spp != 0,
+        "requested RT diagnostic term {term:?} is disabled at frame {frame}"
+    );
+    params = isolate_trace_term(params, term);
+    log::warn!(
+        "[RT-DIAG] frame={frame} isolated term={term:?} requested_spp={requested_spp}; other fused terms disabled for this frame"
+    );
+    params
+}
+
+fn isolate_trace_term(
+    mut params: ShadowRayParams,
+    term: DiagnosticTraceTerm,
+) -> ShadowRayParams {
+    params.shadow_spp = 0;
+    match term {
+        DiagnosticTraceTerm::Ao => {
+            params.gi_spp = 0;
+            params.refl_spp = 0;
+        }
+        DiagnosticTraceTerm::Gi => {
+            params.ao_spp = 0;
+            params.refl_spp = 0;
+        }
+        DiagnosticTraceTerm::Reflection => {
+            params.ao_spp = 0;
+            params.gi_spp = 0;
+        }
+    }
+    params
+}
+
+fn parse_diagnostic_trace_term(spec: &str) -> Option<(u32, DiagnosticTraceTerm)> {
+    let (frame, term) = spec.split_once(':')?;
+    let frame = frame.parse().ok()?;
+    let term = match term {
+        "ao" => DiagnosticTraceTerm::Ao,
+        "gi" => DiagnosticTraceTerm::Gi,
+        "reflection" => DiagnosticTraceTerm::Reflection,
+        _ => return None,
+    };
+    Some((frame, term))
+}
+
 /// Incident-only scheduler override. `FRAME:ROWS` applies finer row tiles to
 /// the lighting dispatch of exactly one frame while preserving every earlier
 /// frame, sample count, seed, scene update, and production kernel path.
@@ -7947,8 +8028,79 @@ impl UploadBytes for GpuBuffer {
 #[cfg(test)]
 mod tests {
     use super::blas_geometry_opaque;
-    use super::{GpuDevice, MetalShadowRayTracer};
+    use super::{
+        DiagnosticTraceTerm, GpuDevice, MetalShadowRayTracer, SVT_SLOT_NONE, ShadowRayParams,
+        isolate_trace_term, parse_diagnostic_trace_term,
+    };
     use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
+
+    fn diagnostic_params_fixture() -> ShadowRayParams {
+        ShadowRayParams::new(
+            &[],
+            8,
+            100,
+            [1080, 1920],
+            [1080, 1920],
+            10.0,
+            16,
+            16,
+            [0.0; 3],
+            [[0.0; 4]; 4],
+            16,
+            0.6,
+            0.1,
+            0.0,
+            0,
+            0.0,
+            SVT_SLOT_NONE,
+        )
+    }
+
+    #[test]
+    fn diagnostic_term_parser_is_exact() {
+        assert_eq!(
+            parse_diagnostic_trace_term("100:ao"),
+            Some((100, DiagnosticTraceTerm::Ao))
+        );
+        assert_eq!(
+            parse_diagnostic_trace_term("150:gi"),
+            Some((150, DiagnosticTraceTerm::Gi))
+        );
+        assert_eq!(
+            parse_diagnostic_trace_term("42:reflection"),
+            Some((42, DiagnosticTraceTerm::Reflection))
+        );
+        assert_eq!(parse_diagnostic_trace_term("100:all"), None);
+        assert_eq!(parse_diagnostic_trace_term("ao"), None);
+    }
+
+    #[test]
+    fn diagnostic_term_isolation_preserves_selected_sample_count_and_frame() {
+        let original = diagnostic_params_fixture();
+        let ao = isolate_trace_term(original, DiagnosticTraceTerm::Ao);
+        assert_eq!(
+            (ao.shadow_spp, ao.ao_spp, ao.gi_spp, ao.refl_spp),
+            (0, 16, 0, 0)
+        );
+        let gi = isolate_trace_term(original, DiagnosticTraceTerm::Gi);
+        assert_eq!(
+            (gi.shadow_spp, gi.ao_spp, gi.gi_spp, gi.refl_spp),
+            (0, 0, 16, 0)
+        );
+        let reflection = isolate_trace_term(original, DiagnosticTraceTerm::Reflection);
+        assert_eq!(
+            (
+                reflection.shadow_spp,
+                reflection.ao_spp,
+                reflection.gi_spp,
+                reflection.refl_spp,
+            ),
+            (0, 0, 0, 16)
+        );
+        assert_eq!(reflection.frame_index, original.frame_index);
+        assert_eq!(reflection.trace_size, original.trace_size);
+        assert_eq!(reflection.gbuffer_size, original.gbuffer_size);
+    }
 
     /// Executes the production normal-frame helper under production MSL options.
     #[cfg(feature = "gpu-proofs")]

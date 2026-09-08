@@ -21,6 +21,13 @@ The CPU rejects sample counts above the six-tier ladder instead of silently
 clamping them in the kernel. In particular, Extra High and Ultra reflections
 now execute their requested 16/32 spp rather than the old hidden 8 spp cap.
 
+Incident harness (2026-09-08): with `MANIFOLD_GPU_DIAGNOSTICS=1`,
+`MANIFOLD_RT_DIAGNOSTIC_TERM=FRAME:ao|gi|reflection` preserves the complete
+export history and isolates one requested term on exactly the named frame.
+`MANIFOLD_RT_DIAGNOSTIC_SUBTILE=FRAME:ROWS` can independently narrow that
+frame's lighting tiles. Both are diagnostics-only scheduler controls; neither
+changes serialized quality, normal rendering, or the live/export architecture.
+
 ## 1. Audit — what exists (verified 2026-08-17)
 
 | Piece | Where | State |
