@@ -287,6 +287,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

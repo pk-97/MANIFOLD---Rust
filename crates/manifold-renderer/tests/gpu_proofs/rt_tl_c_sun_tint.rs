@@ -246,6 +246,7 @@ fn run_tlc_fixture(
     let mut encoder = device.create_encoder("tlc-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

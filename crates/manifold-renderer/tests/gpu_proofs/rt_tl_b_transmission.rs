@@ -261,6 +261,7 @@ fn run_tl_fixture(
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

@@ -271,6 +271,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
@@ -534,6 +535,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

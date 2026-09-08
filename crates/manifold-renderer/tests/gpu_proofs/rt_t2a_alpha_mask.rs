@@ -257,6 +257,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

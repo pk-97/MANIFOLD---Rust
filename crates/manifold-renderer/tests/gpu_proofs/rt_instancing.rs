@@ -352,6 +352,7 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
     let mut encoder = device.create_encoder("rt-instancing-probe");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

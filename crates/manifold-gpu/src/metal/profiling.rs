@@ -94,6 +94,7 @@ pub struct GpuFrameProfile {
     pub overflow: usize,
     /// Spans whose samples resolved to `COUNTER_ERROR` (dropped).
     pub invalid: usize,
+    pub failed_command_buffers: usize,
 }
 
 impl GpuFrameProfile {
@@ -121,6 +122,7 @@ pub(crate) struct ProfileState {
     pub(crate) overflow: usize,
     /// Correlated (cpu mach ticks, gpu ticks) pair taken at enable time.
     pub(crate) calib_start: (u64, u64),
+    pub(crate) committed_buffers: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>>,
 }
 
 impl ProfileState {
@@ -233,6 +235,7 @@ pub(crate) fn resolve(
         spans: Vec::with_capacity(span_count),
         overflow: state.overflow,
         invalid: 0,
+        failed_command_buffers: 0,
     };
     if span_count == 0 {
         return profile;

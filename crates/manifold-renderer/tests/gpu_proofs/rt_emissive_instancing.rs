@@ -313,6 +313,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     let mut encoder = device.create_encoder("rt-emissive-instancing");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,

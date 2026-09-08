@@ -16,6 +16,8 @@
 
 pub mod types;
 pub use types::*;
+pub mod trace_planner;
+pub use trace_planner::*;
 
 // Backend-neutral shader compilation pipeline (WGSL → naga → SPIR-V).
 // Compiled on every platform; each backend's shader compiler consumes the
