@@ -41,6 +41,14 @@ def state_path(event):
     return directory / (key + ".json")
 
 
+def permit_path():
+    """Return project-scoped permit storage independent of hook session aliases."""
+    key = hashlib.sha256(str(ROOT).encode()).hexdigest()
+    directory = Path(tempfile.gettempdir()) / f"manifold-codex-{os.getuid()}"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    return directory / (key + ".permits.json")
+
+
 def patch_paths(command, cwd):
     paths = []
     for line in command.splitlines():
@@ -169,8 +177,24 @@ def expensive_checks(command):
                 yield "broad"
         if set(names) & {"trunk_health.py", "feature_matrix.py", "launch_live_ui.py"}:
             yield "broad"
-        if any(re.search(r"(?:render|snapshot|rt_matrix|gpu_proofs|ui_flows).*\.py$", n) for n in names):
+        if "gpu_proofs_gate.py" in names:
+            yield "focused"
+        elif any(re.search(r"(?:render|snapshot|rt_matrix|gpu_proofs|ui_flows).*\.py$", n) for n in names):
             yield "broad"
+
+
+def consume_permit(command, cwd):
+    path = permit_path()
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = json.loads(path.read_text()) if path.exists() else {}
+        key = budget_key(command, cwd)
+        permit = data.get(key, {})
+        if permit.get("remaining", 0) <= 0 or time.time() >= permit.get("expires", 0):
+            return False
+        permit["remaining"] -= 1
+        path.write_text(json.dumps(data))
+        return True
 
 
 def check_budget(event, command, cwd):
@@ -183,10 +207,7 @@ def check_budget(event, command, cwd):
         data = json.loads(path.read_text()) if path.exists() else {}
         key = budget_key(command, cwd)
         record = data.setdefault(key, {"attempts": 0})
-        permit = record.get("permit", {})
-        if permit.get("remaining", 0) > 0 and time.time() < permit.get("expires", 0):
-            permit["remaining"] -= 1
-        elif "broad" in kinds or record["attempts"] >= 2:
+        if ("broad" in kinds or record["attempts"] >= 2) and not consume_permit(command, cwd):
             return ("Execution budget stopped this check. Broad/visual probes need a named, bounded exception; "
                     "focused commands get two attempts per session. Report evidence instead of looping. "
                     "The lead may use guard.py permit-check with the exact command, workdir and reason; "
@@ -198,14 +219,16 @@ def check_budget(event, command, cwd):
 
 
 def permit_check(session_id, command, worktree, reason, attempts):
-    if not session_id or not command.strip() or not reason.strip() or not 1 <= attempts <= 3:
-        raise ValueError("A check exception needs session, exact command, reason and 1–3 attempts.")
-    path = state_path({"session_id": session_id}).with_suffix(".budget.json")
+    if not command.strip() or not reason.strip() or not 1 <= attempts <= 3:
+        raise ValueError("A check exception needs an exact command, reason and 1–3 attempts.")
+    path = permit_path()
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         data = json.loads(path.read_text()) if path.exists() else {}
-        record = data.setdefault(budget_key(command, worktree), {"attempts": 0})
-        record["permit"] = {"reason": reason, "remaining": attempts, "expires": time.time() + 1800}
+        data[budget_key(command, worktree)] = {
+            "reason": reason, "remaining": attempts, "expires": time.time() + 1800,
+            "requested_by": session_id or "unknown",
+        }
         path.write_text(json.dumps(data))
 
 

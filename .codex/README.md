@@ -16,14 +16,16 @@ file-scope checked. Keep task ownership and review responsibilities in briefs.
 
 ## Execution budget
 
-Recognized direct Cargo checks get two attempts per exact command and working
-directory per session, including successful attempts. Broad Cargo checks,
-nightly/feature sweeps, perf soaks and recognized visual/GPU probe scripts need
-a bounded exception. Common env/build-lock wrappers are recognized. Required
-checks run inside `land_branch.py` and `landing_gate.py` remain unchanged.
+Recognized direct Cargo checks and the required `gpu_proofs_gate.py` get two
+attempts per exact command and working directory per session, including
+successful attempts. Broad Cargo checks, nightly/feature sweeps, perf soaks and
+other recognized visual/GPU probe scripts need a bounded exception. Common
+env/build-lock wrappers are recognized. Required checks run inside
+`land_branch.py` and `landing_gate.py` remain unchanged.
 
 The lead can register an exact command for 1–3 attempts (default one), expiring
-after 30 minutes:
+after 30 minutes. Permits are project-scoped so the desktop hook and CLI can use
+different session identifiers without losing the exact-command match:
 
 ```sh
 python3 -B .codex/hooks/guard.py permit-check --worktree '/absolute/worktree' --command 'cargo test -p manifold-ui mapping' --reason 'Changed mapping dispatch; verify regression'

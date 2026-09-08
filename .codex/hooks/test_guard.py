@@ -47,6 +47,9 @@ class Guards(unittest.TestCase):
         state = patch.object(guard, "state_path", return_value=self.root / "scope.json")
         state.start()
         self.addCleanup(state.stop)
+        permits = patch.object(guard, "permit_path", return_value=self.root / "permits.json")
+        permits.start()
+        self.addCleanup(permits.stop)
 
     def event(self, tool, args, worker=False, cwd=None):
         return {"hook_event_name": "PreToolUse", "session_id": "test",
@@ -124,12 +127,17 @@ class Guards(unittest.TestCase):
                         "RUSTC_WRAPPER= cargo clippy --workspace",
                         "bash .claude/scripts/with-build-lock.sh cargo test --workspace",
                         "python3 -B scripts/trunk_health.py",
-                        "python3 scripts/launch_live_ui.py",
-                        "scripts/gpu_proofs_gate.py", "cargo xtask perf-soak"):
+                        "python3 scripts/launch_live_ui.py", "cargo xtask perf-soak"):
             with self.subTest(command=command):
                 self.assertIn("Execution budget", self.shell_call(command))
         self.assertIsNone(self.shell_call("python3 scripts/landing_gate.py"))
         self.assertIsNone(self.shell_call("rg 'cargo test' docs"))
+
+    def test_required_gpu_proof_gate_has_normal_bounded_attempts(self):
+        command = "python3 -B scripts/gpu_proofs_gate.py"
+        self.assertIsNone(self.shell_call(command))
+        self.assertIsNone(self.shell_call(command))
+        self.assertIn("Execution budget", self.shell_call(command))
 
     def test_exception_is_exact_bounded_and_expiring(self):
         command = "cargo test --workspace"
@@ -144,6 +152,14 @@ class Guards(unittest.TestCase):
             self.assertTrue(self.shell_call(command))
         with self.assertRaises(ValueError):
             guard.permit_check("test", command, str(self.root), "", 1)
+
+    def test_exception_survives_hook_session_alias_mismatch(self):
+        command = "cargo test --workspace"
+        guard.permit_check("cli-thread-id", command, str(self.root), "Required regression", 1)
+        event = self.event("exec_command", {"cmd": command, "workdir": str(self.root)})
+        event["session_id"] = "desktop-hook-session-id"
+        self.assertIsNone(guard.evaluate(event))
+        self.assertIn("Execution budget", guard.evaluate(event))
 
     def test_exec_command_uses_budget(self):
         matcher = json.loads((REAL_ROOT / ".codex/hooks.json").read_text())["hooks"]["PreToolUse"][0]["matcher"]
