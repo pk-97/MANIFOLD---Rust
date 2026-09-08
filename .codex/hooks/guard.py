@@ -155,7 +155,9 @@ def evaluate(event):
         return check_patch(event, command, cwd, paths_guard)
     if tool in {"Bash", "exec_command"}:
         shell_guard = load("cc_shell", ROOT / ".claude/hooks/preToolUseBash.py")
-        return check_shell(event, command, cwd, shell_guard) or check_budget(event, command, cwd)
+        missing_exec_workdir = tool == "exec_command" and not args.get("workdir")
+        return (check_shell(event, command, cwd, shell_guard)
+                or check_budget(event, command, cwd, missing_exec_workdir))
     return None
 
 
@@ -183,21 +185,31 @@ def expensive_checks(command):
             yield "broad"
 
 
-def consume_permit(command, cwd):
+def consume_permit(command, cwd, allow_cwd_fallback=False):
     path = permit_path()
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         data = json.loads(path.read_text()) if path.exists() else {}
         key = budget_key(command, cwd)
-        permit = data.get(key, {})
-        if permit.get("remaining", 0) <= 0 or time.time() >= permit.get("expires", 0):
+        permit = data.get(key)
+        if permit is None and allow_cwd_fallback:
+            # Codex desktop currently omits exec_command's requested workdir
+            # from some hook events. Fall back only when one live permit has
+            # the exact command; multiple worktrees with the same command are
+            # intentionally ambiguous and remain denied.
+            matches = [candidate for candidate in data.values()
+                       if candidate.get("command") == command.strip()
+                       and candidate.get("remaining", 0) > 0
+                       and time.time() < candidate.get("expires", 0)]
+            permit = matches[0] if len(matches) == 1 else None
+        if permit is None or permit.get("remaining", 0) <= 0 or time.time() >= permit.get("expires", 0):
             return False
         permit["remaining"] -= 1
         path.write_text(json.dumps(data))
         return True
 
 
-def check_budget(event, command, cwd):
+def check_budget(event, command, cwd, allow_cwd_fallback=False):
     kinds = list(expensive_checks(command))
     if not kinds:
         return None
@@ -207,7 +219,8 @@ def check_budget(event, command, cwd):
         data = json.loads(path.read_text()) if path.exists() else {}
         key = budget_key(command, cwd)
         record = data.setdefault(key, {"attempts": 0})
-        if ("broad" in kinds or record["attempts"] >= 2) and not consume_permit(command, cwd):
+        if ("broad" in kinds or record["attempts"] >= 2) and not consume_permit(
+                command, cwd, allow_cwd_fallback):
             return ("Execution budget stopped this check. Broad/visual probes need a named, bounded exception; "
                     "focused commands get two attempts per session. Report evidence instead of looping. "
                     "The lead may use guard.py permit-check with the exact command, workdir and reason; "
@@ -227,7 +240,8 @@ def permit_check(session_id, command, worktree, reason, attempts):
         data = json.loads(path.read_text()) if path.exists() else {}
         data[budget_key(command, worktree)] = {
             "reason": reason, "remaining": attempts, "expires": time.time() + 1800,
-            "requested_by": session_id or "unknown",
+            "requested_by": session_id or "unknown", "command": command.strip(),
+            "worktree": str(Path(worktree).resolve()),
         }
         path.write_text(json.dumps(data))
 

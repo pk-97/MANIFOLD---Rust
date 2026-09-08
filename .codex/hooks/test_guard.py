@@ -155,11 +155,17 @@ class Guards(unittest.TestCase):
 
     def test_exception_survives_hook_session_alias_mismatch(self):
         command = "cargo test --workspace"
-        guard.permit_check("cli-thread-id", command, str(self.root), "Required regression", 1)
-        event = self.event("exec_command", {"cmd": command, "workdir": str(self.root)})
+        guard.permit_check("cli-thread-id", command, str(self.slot), "Required regression", 1)
+        event = self.event("exec_command", {"cmd": command})
         event["session_id"] = "desktop-hook-session-id"
         self.assertIsNone(guard.evaluate(event))
         self.assertIn("Execution budget", guard.evaluate(event))
+
+    def test_missing_workdir_fallback_refuses_ambiguous_permits(self):
+        command = "cargo test --workspace"
+        guard.permit_check("one", command, str(self.slot), "Slot regression", 1)
+        guard.permit_check("two", command, str(self.root / "other-slot"), "Other regression", 1)
+        self.assertIn("Execution budget", self.shell_call(command))
 
     def test_exec_command_uses_budget(self):
         matcher = json.loads((REAL_ROOT / ".codex/hooks.json").read_text())["hooks"]["PreToolUse"][0]["matcher"]

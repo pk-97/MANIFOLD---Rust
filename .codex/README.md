@@ -25,7 +25,9 @@ env/build-lock wrappers are recognized. Required checks run inside
 
 The lead can register an exact command for 1–3 attempts (default one), expiring
 after 30 minutes. Permits are project-scoped so the desktop hook and CLI can use
-different session identifiers without losing the exact-command match:
+different session identifiers without losing the exact-command match. If a
+desktop hook event omits the requested worktree, the guard accepts only one
+unambiguous live permit for that exact command:
 
 ```sh
 python3 -B .codex/hooks/guard.py permit-check --worktree '/absolute/worktree' --command 'cargo test -p manifold-ui mapping' --reason 'Changed mapping dispatch; verify regression'
