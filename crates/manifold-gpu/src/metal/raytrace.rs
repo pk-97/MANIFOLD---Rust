@@ -7097,8 +7097,18 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         has_translucency: bool,
         label: &str,
     ) {
-        let diagnostic_params = diagnostic_trace_params(*params);
+        let diagnostic_sequence = diagnostic_trace_sequence_enabled(params);
+        let diagnostic_params = if diagnostic_sequence {
+            *params
+        } else {
+            diagnostic_trace_params(*params)
+        };
         let params = &diagnostic_params;
+        let diagnostic_probe_params = [
+            isolate_trace_term(*params, DiagnosticTraceTerm::Ao),
+            isolate_trace_term(*params, DiagnosticTraceTerm::Gi),
+            isolate_trace_term(*params, DiagnosticTraceTerm::Reflection),
+        ];
         assert!(
             params.refl_spp <= MAX_RT_REFLECTION_SPP,
             "reflection spp {} exceeds the supported quality ladder maximum {}",
@@ -7268,6 +7278,55 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         .expect("validated RT trace dimensions must produce a tile plan")
         .peekable();
         while let Some(region) = regions.next() {
+            if diagnostic_sequence {
+                for (term, probe_params) in [
+                    DiagnosticTraceTerm::Ao,
+                    DiagnosticTraceTerm::Gi,
+                    DiagnosticTraceTerm::Reflection,
+                ]
+                .into_iter()
+                .zip(diagnostic_probe_params.iter())
+                {
+                    let requested_spp = term.sample_count(params);
+                    if requested_spp == 0 {
+                        log::warn!(
+                            "[RT-DIAG] frame={} probe term={term:?} skipped because it is disabled",
+                            params.frame_index,
+                        );
+                        continue;
+                    }
+                    bindings[0] = GpuBinding::Bytes {
+                        binding: 1,
+                        data: bytemuck_bytes(probe_params),
+                    };
+                    let probe_label = format!(
+                        "{label} probe={term:?} tile origin={},{} extent={}x{}",
+                        region.origin[0], region.origin[1], region.extent[0], region.extent[1],
+                    );
+                    encoder.dispatch_compute_with_accel(
+                        if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
+                        0,
+                        accel,
+                        &bindings,
+                        Some((8, trace_region_bytes(&region))),
+                        dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
+                        &probe_label,
+                    );
+                    let completion_label = probe_label.clone();
+                    encoder.add_gpu_time_handler(move |gpu_seconds| {
+                        log::warn!(
+                            "[RT-DIAG] completed {completion_label} gpu_ms={:.3}",
+                            gpu_seconds * 1000.0,
+                        );
+                    });
+                    encoder.commit_and_continue(device);
+                }
+                bindings[0] = GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: params_buffer,
+                    offset: 0,
+                };
+            }
             let diagnostic_label = super::gpu_fault::diagnostics_enabled().then(|| {
                 format!(
                     "{label} tile origin={},{} extent={}x{}",
@@ -7858,6 +7917,48 @@ enum DiagnosticTraceTerm {
     Ao,
     Gi,
     Reflection,
+}
+
+impl DiagnosticTraceTerm {
+    fn sample_count(self, params: &ShadowRayParams) -> u32 {
+        match self {
+            Self::Ao => params.ao_spp,
+            Self::Gi => params.gi_spp,
+            Self::Reflection => params.refl_spp,
+        }
+    }
+}
+
+/// One-run incident probe: execute each active lighting term separately for
+/// every tile of exactly one frame, then execute the unchanged fused tile.
+/// Completion timings are WARN-level so the session log retains them even when
+/// the app's normal info logging is filtered.
+fn diagnostic_trace_sequence_enabled(params: &ShadowRayParams) -> bool {
+    if !super::gpu_fault::diagnostics_enabled()
+        || (params.ao_spp == 0 && params.gi_spp == 0 && params.refl_spp == 0)
+    {
+        return false;
+    }
+    let Ok(spec) = std::env::var("MANIFOLD_RT_DIAGNOSTIC_SEQUENCE_FRAME") else {
+        return false;
+    };
+    let Ok(frame) = spec.parse::<u32>() else {
+        log::warn!(
+            "[RT-DIAG] ignored MANIFOLD_RT_DIAGNOSTIC_SEQUENCE_FRAME={spec:?}; expected a frame number"
+        );
+        return false;
+    };
+    if frame != params.frame_index {
+        return false;
+    }
+    assert!(
+        std::env::var_os("MANIFOLD_RT_DIAGNOSTIC_TERM").is_none(),
+        "MANIFOLD_RT_DIAGNOSTIC_SEQUENCE_FRAME and MANIFOLD_RT_DIAGNOSTIC_TERM are mutually exclusive"
+    );
+    log::warn!(
+        "[RT-DIAG] frame={frame} term sequence enabled; AO, GI, and reflection probes run before each unchanged fused tile"
+    );
+    true
 }
 
 /// Incident-only term isolation. `FRAME:TERM` keeps the full export history,

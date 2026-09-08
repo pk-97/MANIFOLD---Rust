@@ -24,6 +24,10 @@ now execute their requested 16/32 spp rather than the old hidden 8 spp cap.
 Incident harness (2026-09-08): with `MANIFOLD_GPU_DIAGNOSTICS=1`,
 `MANIFOLD_RT_DIAGNOSTIC_TERM=FRAME:ao|gi|reflection` preserves the complete
 export history and isolates one requested term on exactly the named frame.
+`MANIFOLD_RT_DIAGNOSTIC_SEQUENCE_FRAME=FRAME` is the higher-information
+one-run probe: each tile runs labelled AO-only, GI-only, and reflection-only
+command buffers with completion timing, followed by the unchanged fused tile.
+The first failing label distinguishes a term failure from fused pressure.
 `MANIFOLD_RT_DIAGNOSTIC_SUBTILE=FRAME:ROWS` can independently narrow that
 frame's lighting tiles. Both are diagnostics-only scheduler controls; neither
 changes serialized quality, normal rendering, or the live/export architecture.
