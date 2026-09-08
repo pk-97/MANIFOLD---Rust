@@ -259,6 +259,16 @@ impl FrameTimer {
         self.frame_clock_seconds += dt;
         self.update_fps(dt);
     }
+
+    /// Test-only: backdate `last_tick_time` so `should_tick` sees exactly
+    /// `elapsed` since the last tick. Sleep-then-assert-negative timing
+    /// tests flake under workspace-wide parallel load (BUG-kedy
+    /// (trunk-health red: nextest workspace): a 17ms sleep overshot the
+    /// 33ms 30fps interval on a loaded machine).
+    #[cfg(test)]
+    fn inject_elapsed_since_tick(&mut self, elapsed: Duration) {
+        self.last_tick_time = Instant::now() - elapsed;
+    }
 }
 
 #[cfg(test)]
@@ -294,9 +304,10 @@ mod tests {
         let mut timer = FrameTimer::new(60.0);
         timer.set_target_fps(30.0);
         assert_eq!(timer.target_fps(), 30.0);
-        thread::sleep(Duration::from_millis(17));
+        // 30fps interval is 33.3ms: 17ms elapsed must not tick, 40ms must.
+        timer.inject_elapsed_since_tick(Duration::from_millis(17));
         assert!(!timer.should_tick());
-        thread::sleep(Duration::from_millis(20));
+        timer.inject_elapsed_since_tick(Duration::from_millis(40));
         assert!(timer.should_tick());
     }
 
