@@ -695,17 +695,32 @@ impl GpuEncoder {
                 let () = msg_send![&enc, useResource: &**geo, usage: MTLResourceUsage::Read];
             }
         }
-        // Same contract for the direct bindings.
+        // Same contract for the direct bindings. Textures with SHADER_WRITE
+        // are declared Read|Write so Metal's hazard tracker sees RT outputs.
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { buffer, .. } => {
+                GpuBinding::Buffer { binding: b, buffer, .. } => {
+                    // RT trace binding 7 is the optional diagnostics record.
+                    // The kernel updates its atomics and first-invalid fields;
+                    // declaring it Read-only would leave those writes outside
+                    // Metal's hazard tracking.
+                    let usage = if *b == 7 {
+                        MTLResourceUsage::Read | MTLResourceUsage::Write
+                    } else {
+                        MTLResourceUsage::Read
+                    };
                     unsafe {
-                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: usage];
                     }
                 }
                 GpuBinding::Texture { texture, .. } => {
+                    let usage = if unsafe { texture.raw.usage() }.contains(MTLTextureUsage::ShaderWrite) {
+                        MTLResourceUsage::Read | MTLResourceUsage::Write
+                    } else {
+                        MTLResourceUsage::Read
+                    };
                     unsafe {
-                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                        let () = msg_send![&enc, useResource: &*texture.raw, usage: usage];
                     }
                 }
                 GpuBinding::Bytes { .. } => {} // inline data, no resource
