@@ -96,9 +96,11 @@ pub(crate) fn trace_buffer(cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let started = std::time::Instant::now();
-    let label = unsafe { cb.label() };
-    let tagged = objc2_foundation::NSString::from_str(&format!("diag#{id} {}", label.as_ref().map(|v| v.to_string()).unwrap_or_default()));
-    unsafe { cb.setLabel(Some(&tagged)); }
+    let label = unsafe { cb.label() }.map(|value| value.to_string());
+    // Keep the command-buffer label stable. `commit_and_continue` carries it
+    // onto the next buffer; prefixing the ID here recursively grew the label
+    // once per RT tile and eventually made the incident log unreadable. The
+    // separately logged ID already provides correlation.
     log::info!("[GPU-DIAG] created id={id} label={label:?}");
     let scheduled = RcBlock::new(move |_cb: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
         log::info!("[GPU-DIAG] scheduled id={id} elapsed_us={}", started.elapsed().as_micros());

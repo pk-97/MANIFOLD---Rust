@@ -63,8 +63,8 @@ use super::device::GpuDevice;
 use super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::{GpuEncoder, Slot, SlotKind, SlotMap};
 use crate::trace_planner::{
-    DEFAULT_TRACE_WORK_LIMITS, TraceRegion, estimate_trace_query_units_per_pixel,
-    plan_trace_regions,
+    DEFAULT_TRACE_WORK_LIMITS, TraceRegion, TraceWorkLimits,
+    estimate_trace_query_units_per_pixel, plan_trace_regions,
 };
 use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
@@ -7103,6 +7103,38 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             params.refl_spp,
             MAX_RT_REFLECTION_SPP,
         );
+        if super::gpu_fault::diagnostics_enabled() {
+            let required_rows = u64::from(params.slot_row_base)
+                .checked_add(u64::from(accel.instance_slot_total))
+                .expect("RT table row count overflow");
+            let required_normal_bytes = required_rows
+                .checked_mul(std::mem::size_of::<RtNormalSource>() as u64)
+                .expect("RT normal table byte count overflow");
+            let required_material_bytes = required_rows
+                .checked_mul(std::mem::size_of::<GiMaterial>() as u64)
+                .expect("RT material table byte count overflow");
+            assert!(
+                normal_sources.size() >= required_normal_bytes,
+                "RT normal table is too small: {} bytes for {required_rows} rows",
+                normal_sources.size(),
+            );
+            assert!(
+                gi_materials.size() >= required_material_bytes,
+                "RT material table is too small: {} bytes for {required_rows} rows",
+                gi_materials.size(),
+            );
+            let descriptor_count = u64::from(accel.instance_slot_total).max(1);
+            let required_descriptor_bytes = descriptor_count
+                .checked_mul(
+                    std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                )
+                .expect("RT descriptor table byte count overflow");
+            assert!(
+                accel.instance_buffer.size() >= required_descriptor_bytes,
+                "RT instance descriptor table is too small: {} bytes for {descriptor_count} descriptors",
+                accel.instance_buffer.size(),
+            );
+        }
         params_buffer.upload(bytemuck_bytes(params));
         let diagnostic_slot = if super::gpu_fault::diagnostics_enabled() {
             self.rt_diagnostics.busy.iter().position(|busy|
@@ -7222,13 +7254,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             params.emissive_table_count != 0,
         )
         .expect("validated RT quality must have a finite query estimate");
+        let work_limits = diagnostic_trace_work_limits(params, query_units);
         let mut regions = plan_trace_regions(
             params.trace_size[0],
             params.trace_size[1],
             SHADOW_WORKGROUP[0],
             SHADOW_WORKGROUP[1],
             query_units,
-            DEFAULT_TRACE_WORK_LIMITS,
+            work_limits,
         )
         .expect("validated RT trace dimensions must produce a tile plan")
         .peekable();
@@ -7816,6 +7849,62 @@ fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
             std::mem::size_of::<ShadowRayParams>(),
         )
     }
+}
+
+/// Incident-only scheduler override. `FRAME:ROWS` applies finer row tiles to
+/// the lighting dispatch of exactly one frame while preserving every earlier
+/// frame, sample count, seed, scene update, and production kernel path.
+fn diagnostic_trace_work_limits(
+    params: &ShadowRayParams,
+    query_units_per_pixel: u64,
+) -> TraceWorkLimits {
+    if !super::gpu_fault::diagnostics_enabled()
+        || params.shadow_spp != 0
+        || (params.ao_spp == 0 && params.gi_spp == 0 && params.refl_spp == 0)
+    {
+        return DEFAULT_TRACE_WORK_LIMITS;
+    }
+    let Ok(spec) = std::env::var("MANIFOLD_RT_DIAGNOSTIC_SUBTILE") else {
+        return DEFAULT_TRACE_WORK_LIMITS;
+    };
+    let Some((frame, rows)) = parse_diagnostic_subtile(&spec) else {
+        log::warn!(
+            "[RT-DIAG] ignored MANIFOLD_RT_DIAGNOSTIC_SUBTILE={spec:?}; expected FRAME:ROWS"
+        );
+        return DEFAULT_TRACE_WORK_LIMITS;
+    };
+    if frame != params.frame_index {
+        return DEFAULT_TRACE_WORK_LIMITS;
+    }
+
+    let rows = rows.min(params.trace_size[1]);
+    let Some(max_pixels_per_tile) = u64::from(params.trace_size[0]).checked_mul(u64::from(rows))
+    else {
+        return DEFAULT_TRACE_WORK_LIMITS;
+    };
+    let Some(max_query_units_per_tile) =
+        max_pixels_per_tile.checked_mul(query_units_per_pixel)
+    else {
+        return DEFAULT_TRACE_WORK_LIMITS;
+    };
+    log::info!(
+        "[RT-DIAG] frame={} lighting subtile rows={} max_pixels={} query_units_per_pixel={}",
+        params.frame_index,
+        rows,
+        max_pixels_per_tile,
+        query_units_per_pixel,
+    );
+    TraceWorkLimits {
+        max_query_units_per_tile,
+        max_pixels_per_tile,
+    }
+}
+
+fn parse_diagnostic_subtile(spec: &str) -> Option<(u32, u32)> {
+    let (frame, rows) = spec.split_once(':')?;
+    let frame = frame.parse().ok()?;
+    let rows = rows.parse::<u32>().ok()?;
+    (rows != 0).then_some((frame, rows))
 }
 
 fn trace_region_bytes(region: &TraceRegion) -> &[u8] {
