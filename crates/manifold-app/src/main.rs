@@ -111,6 +111,8 @@ mod rt_capture;
 // ── bridge-probe: headless SharedTextureBridge tear detector (BUG-xaw4) ──
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod bridge_probe;
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod export_repro;
 mod project_io;
 mod session_log;
 #[cfg(target_os = "macos")]
@@ -171,6 +173,14 @@ fn main() {
         }
     }
 
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("export-repro") {
+            crate::export_repro::run(&args[1..]);
+        }
+    }
+
     // Headless perf-soak subcommand (feature `perf-soak`): headless,
     // real-time-paced content-thread soak of a real project against the
     // frame-budget gate (docs/PERF_BUDGET_GATE_DESIGN.md P1).
@@ -212,7 +222,7 @@ fn main() {
         if !known_gui_argv {
             eprintln!(
                 "manifold: unrecognized argument {:?} — refusing to launch the GUI.\n\
-                 Headless subcommands: ui-snap (feature ui-snapshot), perf-soak / rt-capture / bridge-probe \
+                 Headless subcommands: ui-snap (feature ui-snapshot), perf-soak / export-repro / rt-capture / bridge-probe \
                  (feature perf-soak, macOS). GUI: no args, or --resume <breadcrumb-path>.",
                 args[1]
             );
