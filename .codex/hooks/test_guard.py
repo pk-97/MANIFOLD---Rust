@@ -156,7 +156,7 @@ class Guards(unittest.TestCase):
     def test_exception_survives_hook_session_alias_mismatch(self):
         command = "cargo test --workspace"
         guard.permit_check("cli-thread-id", command, str(self.slot), "Required regression", 1)
-        event = self.event("exec_command", {"cmd": command, "workdir": str(self.root)})
+        event = self.event("Bash", {"command": command, "workdir": str(self.root)})
         event["session_id"] = "desktop-hook-session-id"
         self.assertIsNone(guard.evaluate(event))
         self.assertIn("Execution budget", guard.evaluate(event))

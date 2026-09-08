@@ -155,14 +155,13 @@ def evaluate(event):
         return check_patch(event, command, cwd, paths_guard)
     if tool in {"Bash", "exec_command"}:
         shell_guard = load("cc_shell", ROOT / ".claude/hooks/preToolUseBash.py")
-        # Desktop may omit exec_command's requested workdir or replace it with
-        # the main checkout. An exact, unique permit still identifies the
-        # intended worktree command; Bash events retain strict cwd matching.
-        desktop_exec_cwd_fallback = (tool == "exec_command"
-                                     and (not args.get("workdir")
-                                          or Path(cwd).resolve() == ROOT))
+        # Desktop may report a tool alias and omit the requested workdir or
+        # replace it with the main checkout. An exact, unique permit still
+        # identifies the intended worktree check. Non-root cwd mismatches
+        # retain strict matching.
+        desktop_cwd_fallback = Path(cwd).resolve() == ROOT
         return (check_shell(event, command, cwd, shell_guard)
-                or check_budget(event, command, cwd, desktop_exec_cwd_fallback))
+                or check_budget(event, command, cwd, desktop_cwd_fallback))
     return None
 
 
