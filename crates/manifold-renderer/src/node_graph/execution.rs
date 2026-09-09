@@ -1577,6 +1577,33 @@ impl Executor {
             .with_simulation_frame(self.simulation_frame);
             inst.node.late_capture(&mut ctx);
             let swap_request = ctx.texture_swap_request.take();
+            // Drain typed writes exactly as run_step_core does after
+            // `evaluate`. Without this a `late_capture` scalar write lands
+            // in the scratch and is silently dropped — tolerable when the
+            // only capturers moved state via swap/GPU-copy, but a substep
+            // boundary's per-iteration accept writes through its typed
+            // output ports and needs the same channel.
+            for (slot, value) in self.scalar_write_scratch.drain(..) {
+                self.backend.set_scalar(slot, value);
+            }
+            for (slot, value) in self.camera_write_scratch.drain(..) {
+                self.backend.set_camera(slot, value);
+            }
+            for (slot, value) in self.light_write_scratch.drain(..) {
+                self.backend.set_light(slot, value);
+            }
+            for (slot, value) in self.material_write_scratch.drain(..) {
+                self.backend.set_material(slot, value);
+            }
+            for (slot, value) in self.transform_write_scratch.drain(..) {
+                self.backend.set_transform(slot, value);
+            }
+            for (slot, value) in self.atmosphere_write_scratch.drain(..) {
+                self.backend.set_atmosphere(slot, value);
+            }
+            for (slot, value) in self.object_write_scratch.drain(..) {
+                self.backend.set_object(slot, value);
+            }
             for msg in self.error_scratch.drain(..) {
                 eprintln!(
                     "[graph error] node {:?} ({}) late_capture: {msg}",

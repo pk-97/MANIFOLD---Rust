@@ -1704,14 +1704,16 @@ mod tests {
         let log = fx.increment_log.lock().unwrap();
         assert_eq!(log.len(), 6);
         assert_eq!(
-            log[3].value_in, Some(10.0),
-            "epoch change re-arms the seed path — the body must read the re-seeded state"
+            log.iter().map(|r| r.value_in).skip(3).collect::<Vec<_>>(),
+            vec![Some(10.0), Some(11.0), Some(12.0)],
+            "epoch change re-arms the seed path — the body reads the \
+             re-seeded state and each tick chains off the last accept"
         );
         drop(log);
         let shared = fx.boundary_shared.lock().unwrap();
         assert_eq!(
-            shared.accepted, 11.0,
-            "accepted state seeds from the new seed (10) and advances once"
+            shared.accepted, 13.0,
+            "accepted state seeds from the new seed (10) and advances three ticks"
         );
         assert_eq!(shared.epoch, 1);
     }
