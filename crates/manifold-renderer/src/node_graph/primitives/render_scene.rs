@@ -2054,6 +2054,230 @@ impl RenderScene {
         Some((draws, has_transmission))
     }
 
+    /// BUG-trh7 stage 2, pass 2: resolve resident RT topology BEFORE
+    /// authoring any consumer flag — build the AS object list, run
+    /// `accel.check_topology` (reject path included), then write the
+    /// per-draw RT consumer flags and rebuild Blend pipelines aux-free
+    /// when glass routes the Blend group to Pass B. The ordering is the
+    /// source-order test's guarantee: a late check would leave uploaded
+    /// flags inconsistent with trace suppression. Returns the AS object
+    /// list, topology_valid, and rt_just_resumed (both consumed by the
+    /// RT block).
+    fn validate_topology_and_author_flags<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        rt_ready: &mut bool,
+        draws: &mut [ObjectDraw<'ctx>],
+        has_transmission: bool,
+    ) -> (Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>>, bool, bool, bool) {
+        let FramePrelude {
+            ref casters,
+            rt_enabled, rt_reflections, rt_shadows_enabled, rt_ao_enabled,
+            rt_gi_enabled, velocity_wired, ao_mask_wired, ..
+        } = *pre;
+        // Resolve resident topology before authoring RT consumer flags or
+        // selecting raster fallback. Reuse this exact object list for AS work.
+        let rt_objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> =
+            draws.iter()
+                .filter(|d| rt_enabled && d.alpha_mode != AlphaMode::Blend)
+                .map(|d| {
+                    let rt_instances_wired =
+                        matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
+                    manifold_gpu::raytrace::RtObjectGeometry {
+                    vertex_buffer: d.vertices,
+                    vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
+                    vertex_offset: 0,
+                    index_buffer: None,
+                    triangle_count: (d.vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3,
+                    transform: d.uniforms.model,
+                    // RT-T1-B: `MeshVertex`'s normal field offset (position
+                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
+                    // `MeshVertex` layout.
+                    normal_offset: 16,
+                    // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4):
+                    // `MeshVertex`'s UV field offset (position 16 + normal
+                    // 16 = 32).
+                    uv_offset: 32,
+                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                    // Translucency is material state: visibility queries
+                    // override opacity, while BLAS opacity follows alpha mask.
+                    translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
+                    alpha_cutoff: d.uniforms.alpha_params[1],
+                    base_color_texture: d.base_color_map,
+                    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
+                    // "None = unwired, flat factor fallback" shape as
+                    // `base_color_texture` above.
+                    mr_texture: d.mr_map,
+                    // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
+                    // reaches the RT kernel exactly the way the MR map does —
+                    // "None = unwired, vertex normal stands" shape. The kernel
+                    // samples it at the primary hit to perturb the reflection
+                    // lobe's R and the AO/GI hemisphere normal.
+                    normal_texture: d.normal_map,
+                    // BUG-1gqt: the emissive map + its KHR_texture_transform
+                    // fold reach the trace kernels (factor × sample at the
+                    // hit), mirroring the raster's `resolve_emissive`.
+                    emissive_texture: d.emissive_map,
+                    emissive_uv_m: d.uniforms.emissive_uv_m,
+                    emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
+                    cast_shadows: d.cast_shadows,
+                    // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
+                    // instance binding from `d.instances` /
+                    // `d.instance_count` — the buffer's GPU address (the
+                    // same bindless-address accessor `vertex_base_addr`
+                    // uses) plus its CAPACITY. `instance_count` is
+                    // buffer_size / 32 (D2/INV-RTI5, BUG-757c discipline:
+                    // the live count is in-band — dead slots carry
+                    // pos_scale.w == 0 — and a param change never resizes
+                    // the buffer), so a capacity change is topology (topo
+                    // key below) and rebuilds the accel; content changes
+                    // ride the accel key via `instances_generation` (D9).
+                    // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
+                    // buffer (instance_count == 0 is a legal raster no-op)
+                    // normalizes to UNWIRED — the descriptor kernel would
+                    // otherwise read slot 0 of a zero-byte allocation (OOB
+                    // GPU read) and trace a ghost copy the raster never
+                    // draws. Unwired keeps the D7 fast path (single
+                    // identity-slot descriptor per object).
+                    instances_addr: if rt_instances_wired {
+                        d.instances.map_or(0, |b| b.gpu_address())
+                    } else {
+                        0
+                    },
+                    instances_buffer: if rt_instances_wired { d.instances } else { None },
+                    instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
+                }
+                })
+                .collect();
+            let topology_time = ctx.time;
+            let mut topology_valid = true;
+            if rt_enabled
+                && let Some(accel) = self.rt_accel.as_ref()
+                && let Err(mismatch) = accel.check_topology(&rt_objects)
+            {
+                topology_valid = false;
+                *rt_ready = false;
+                let first_rejection = reject_topology(
+                    &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                    &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                    &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                    &mut self.rt_topology_rejected,
+                );
+                if first_rejection && !self.rt_topology_mismatch_logged {
+                    log::warn!(
+                        "node.render_scene: RT topology mismatch: object={} category={:?} time={:?}",
+                        mismatch.object, mismatch.category, topology_time
+                    );
+                    self.rt_topology_mismatch_logged = true;
+                }
+            }
+
+        let will_rt_accumulate_this_frame = rt_enabled && *rt_ready;
+        let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
+        self.rt_prev_accumulating = will_rt_accumulate_this_frame;
+        for draw in draws.iter_mut() {
+            let uniforms = &mut draw.uniforms;
+            // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
+            // a permanently-zero reserved slot (see the field's doc
+            // comment) — repurposed as the RT-active flag `shadow_factor`,
+            // `rt_or_flat_ambient` (GI/AO), and the reflection substitution
+            // all branch on, same reuse doctrine as `alpha_params.zw`
+            // (clearcoat) and `pbr_metallic_roughness.zw`
+            // (ior/specular_factor). BUG-17r3: no longer gated on
+            // `!casters.is_empty()` — a zero-light emissive-only scene
+            // still needs RT GI/AO/reflections; `shadow_factor`'s own
+            // caster-slot lookup already no-ops when the light loop has no
+            // caster slot to hand it (`slot_f < 0.0` returns fully lit),
+            // so this flag is safe to raise with zero casters too.
+            uniforms.scene_params[3] = if rt_enabled && *rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 9 RD9/RD1: the reflection-substitution
+            // gate — stricter than scene_params.w: the raster may only
+            // read `rt_reflection` (binding 43) when the trace dispatch
+            // actually ran WITH refl_spp > 0 this frame, i.e. the
+            // rt_reflections param is also on. Same per-object write
+            // (scene-wide value, like scene_params.w). BUG-17r3: reflections
+            // trace against the scene geometry, not toward a light — never
+            // caster-gated.
+            uniforms.rt_flags[0] = if rt_reflections && *rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
+            // diffuse substitution gate — the raster may only read the RT
+            // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
+            // gather actually ran this frame. BUG-majv: that condition is
+            // `gi_spp > 0` on the trace dispatch, which since the per-term
+            // toggles means `rt_gi_enabled` too — this gate used to be
+            // `will_rt_accumulate_this_frame` alone, so RT-on + GI-off read
+            // an `.rgb` channel the kernel never wrote (stale or
+            // reset-to-zero across an off->on cycle: black diffuse with
+            // sparse residue). Mirrors the reflection fallback discipline
+            // (`rt_refl.a < 0` keeping the raster prefiltered fetch). No new
+            // scene param (MB4).
+            uniforms.rt_flags[1] = if rt_gi_enabled && *rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
+            // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
+            // light substitutes rt_sun_tint for the luma vis channel.
+            // BUG-majv: gate on rt_shadows_enabled, not bare rt_ready — the
+            // svt texture is only written by the mask/lighting dispatches at
+            // shadow_spp > 0, and `rt_ready` is latched (stays true with RT
+            // toggled off), so the old gate read a stale rt_sun_tint with RT
+            // off or with the shadow kernel disabled — a zeroed texture
+            // zeroed the sun's entire direct contribution.
+            uniforms.rt_flags[2] = if rt_shadows_enabled && *rt_ready { rt_svt_slot(casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            // RT term toggles: rt_flags.w = RT shadow mask read gate. When
+            // rt_shadows is off, shadow_factor falls through to raster shadow
+            // maps. The kernel still dispatches (for AO/GI/refl), but the sv
+            // textures are not written (shadow_spp=0 gated in-kernel) and the
+            // WGSL never reads them (gated here).
+            uniforms.rt_flags[3] = if rt_shadows_enabled && *rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
+            // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
+            // the value the EMIT_AO_MASK fragment variants write to the
+            // ao_mask attachment. 0 for unlit-kind materials (baked_look)
+            // and scene-wide whenever RT is providing AO (RT on + RT AO on);
+            // 1 for every lit raster pixel and whenever RT AO is toggled off
+            // (so the downstream GTAO masked_mix darkens with screen-space
+            // occlusion instead of reading the unwritten RT AO channel).
+            // Same reserved-slot reuse doctrine as `scene_params.w` above.
+            // Written unconditionally — non-mask pipelines never read it.
+            uniforms.fog_params[2] =
+                if draw.kind == MaterialKind::Unlit || (rt_enabled && *rt_ready && rt_ao_enabled)
+                {
+                    0.0
+                } else {
+                    1.0
+                };
+            // BUG-majv: `fog_params.w` (was permanently-zero reserved) = the
+            // RT AO read gate for `rt_or_flat_ambient`. The irradiance
+            // texture's `.a` is only written when the trace dispatch ran
+            // with ao_spp > 0 (or gi_spp > 0, which writes a neutral 1.0);
+            // gating on scene_params.w alone read a stale/zeroed `.a` with
+            // the AO kernel off, killing the ambient term after an
+            // off->on cycle. AO off also restores the raster's
+            // full-strength flat ambient (the 0.15 RT ceiling only applies
+            // when RT AO is actually providing the occlusion term).
+            uniforms.fog_params[3] = if rt_ao_enabled && *rt_ready { 1.0 } else { 0.0 };
+        }
+
+        // RAYTRACING_DESIGN.md section 12 AM1: when `has_transmission`
+        // routes the Blend group to Pass B (single color attachment, no
+        // MSAA, no aux MRT — see the E2a seam below), those draws must not
+        // carry a velocity/ao_mask-emitting pipeline: Metal requires the
+        // pipeline's color-attachment layout to match the pass. Rebuild
+        // Blend pipelines aux-free here — the first point `has_transmission`
+        // is fully known. This also closes the latent velocity variant of
+        // the same mismatch (rt_enabled forces velocity consumed, so an
+        // RT + glass scene hit it too).
+        if has_transmission && (velocity_wired || ao_mask_wired) {
+            let gpu = ctx.gpu_encoder();
+            for draw in draws.iter_mut().filter(|d| d.alpha_mode == AlphaMode::Blend) {
+                draw.pipeline =
+                    self.pipeline_for(gpu.device, draw.kind, false, false, false, true).clone();
+            }
+        }
+
+        (rt_objects, topology_valid, rt_just_resumed, will_rt_accumulate_this_frame)
+    }
+
     fn frame_preliminaries<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -5198,214 +5422,18 @@ impl EffectNode for RenderScene {
             return;
         };
 
-        // Resolve resident topology before authoring RT consumer flags or
-        // selecting raster fallback. Reuse this exact object list for AS work.
-        let rt_objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> =
-            draws.iter()
-                .filter(|d| rt_enabled && d.alpha_mode != AlphaMode::Blend)
-                .map(|d| {
-                    let rt_instances_wired =
-                        matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
-                    manifold_gpu::raytrace::RtObjectGeometry {
-                    vertex_buffer: d.vertices,
-                    vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
-                    vertex_offset: 0,
-                    index_buffer: None,
-                    triangle_count: (d.vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3,
-                    transform: d.uniforms.model,
-                    // RT-T1-B: `MeshVertex`'s normal field offset (position
-                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
-                    // `MeshVertex` layout.
-                    normal_offset: 16,
-                    // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4):
-                    // `MeshVertex`'s UV field offset (position 16 + normal
-                    // 16 = 32).
-                    uv_offset: 32,
-                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                    // Translucency is material state: visibility queries
-                    // override opacity, while BLAS opacity follows alpha mask.
-                    translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
-                    alpha_cutoff: d.uniforms.alpha_params[1],
-                    base_color_texture: d.base_color_map,
-                    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
-                    // "None = unwired, flat factor fallback" shape as
-                    // `base_color_texture` above.
-                    mr_texture: d.mr_map,
-                    // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
-                    // reaches the RT kernel exactly the way the MR map does —
-                    // "None = unwired, vertex normal stands" shape. The kernel
-                    // samples it at the primary hit to perturb the reflection
-                    // lobe's R and the AO/GI hemisphere normal.
-                    normal_texture: d.normal_map,
-                    // BUG-1gqt: the emissive map + its KHR_texture_transform
-                    // fold reach the trace kernels (factor × sample at the
-                    // hit), mirroring the raster's `resolve_emissive`.
-                    emissive_texture: d.emissive_map,
-                    emissive_uv_m: d.uniforms.emissive_uv_m,
-                    emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
-                    cast_shadows: d.cast_shadows,
-                    // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
-                    // instance binding from `d.instances` /
-                    // `d.instance_count` — the buffer's GPU address (the
-                    // same bindless-address accessor `vertex_base_addr`
-                    // uses) plus its CAPACITY. `instance_count` is
-                    // buffer_size / 32 (D2/INV-RTI5, BUG-757c discipline:
-                    // the live count is in-band — dead slots carry
-                    // pos_scale.w == 0 — and a param change never resizes
-                    // the buffer), so a capacity change is topology (topo
-                    // key below) and rebuilds the accel; content changes
-                    // ride the accel key via `instances_generation` (D9).
-                    // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
-                    // buffer (instance_count == 0 is a legal raster no-op)
-                    // normalizes to UNWIRED — the descriptor kernel would
-                    // otherwise read slot 0 of a zero-byte allocation (OOB
-                    // GPU read) and trace a ghost copy the raster never
-                    // draws. Unwired keeps the D7 fast path (single
-                    // identity-slot descriptor per object).
-                    instances_addr: if rt_instances_wired {
-                        d.instances.map_or(0, |b| b.gpu_address())
-                    } else {
-                        0
-                    },
-                    instances_buffer: if rt_instances_wired { d.instances } else { None },
-                    instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
-                }
-                })
-                .collect();
-            let topology_time = ctx.time;
-            let mut topology_valid = true;
-            if rt_enabled
-                && let Some(accel) = self.rt_accel.as_ref()
-                && let Err(mismatch) = accel.check_topology(&rt_objects)
-            {
-                topology_valid = false;
-                rt_ready = false;
-                let first_rejection = reject_topology(
-                    &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                    &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                    &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                    &mut self.rt_topology_rejected,
-                );
-                if first_rejection && !self.rt_topology_mismatch_logged {
-                    log::warn!(
-                        "node.render_scene: RT topology mismatch: object={} category={:?} time={:?}",
-                        mismatch.object, mismatch.category, topology_time
-                    );
-                    self.rt_topology_mismatch_logged = true;
-                }
-            }
+        // Resolve resident topology before authoring RT consumer flags
+        // (BUG-trh7 stage 2, `validate_topology_and_author_flags`) — the
+        // check textually precedes every consumer decision, the guarantee
+        // the source-order test now proves inside the method.
+        let (rt_objects, topology_valid, rt_just_resumed, will_rt_accumulate_this_frame) = self
+            .validate_topology_and_author_flags(ctx, &pre, &mut rt_ready, &mut draws, has_transmission);
 
-        let will_rt_accumulate_this_frame = rt_enabled && rt_ready;
-        let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
-        self.rt_prev_accumulating = will_rt_accumulate_this_frame;
-        for draw in &mut draws {
-            let uniforms = &mut draw.uniforms;
-            // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
-            // a permanently-zero reserved slot (see the field's doc
-            // comment) — repurposed as the RT-active flag `shadow_factor`,
-            // `rt_or_flat_ambient` (GI/AO), and the reflection substitution
-            // all branch on, same reuse doctrine as `alpha_params.zw`
-            // (clearcoat) and `pbr_metallic_roughness.zw`
-            // (ior/specular_factor). BUG-17r3: no longer gated on
-            // `!casters.is_empty()` — a zero-light emissive-only scene
-            // still needs RT GI/AO/reflections; `shadow_factor`'s own
-            // caster-slot lookup already no-ops when the light loop has no
-            // caster slot to hand it (`slot_f < 0.0` returns fully lit),
-            // so this flag is safe to raise with zero casters too.
-            uniforms.scene_params[3] = if rt_enabled && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 9 RD9/RD1: the reflection-substitution
-            // gate — stricter than scene_params.w: the raster may only
-            // read `rt_reflection` (binding 43) when the trace dispatch
-            // actually ran WITH refl_spp > 0 this frame, i.e. the
-            // rt_reflections param is also on. Same per-object write
-            // (scene-wide value, like scene_params.w). BUG-17r3: reflections
-            // trace against the scene geometry, not toward a light — never
-            // caster-gated.
-            uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
-            // diffuse substitution gate — the raster may only read the RT
-            // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
-            // gather actually ran this frame. BUG-majv: that condition is
-            // `gi_spp > 0` on the trace dispatch, which since the per-term
-            // toggles means `rt_gi_enabled` too — this gate used to be
-            // `will_rt_accumulate_this_frame` alone, so RT-on + GI-off read
-            // an `.rgb` channel the kernel never wrote (stale or
-            // reset-to-zero across an off->on cycle: black diffuse with
-            // sparse residue). Mirrors the reflection fallback discipline
-            // (`rt_refl.a < 0` keeping the raster prefiltered fetch). No new
-            // scene param (MB4).
-            uniforms.rt_flags[1] = if rt_gi_enabled && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
-            // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
-            // light substitutes rt_sun_tint for the luma vis channel.
-            // BUG-majv: gate on rt_shadows_enabled, not bare rt_ready — the
-            // svt texture is only written by the mask/lighting dispatches at
-            // shadow_spp > 0, and `rt_ready` is latched (stays true with RT
-            // toggled off), so the old gate read a stale rt_sun_tint with RT
-            // off or with the shadow kernel disabled — a zeroed texture
-            // zeroed the sun's entire direct contribution.
-            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
-            // RT term toggles: rt_flags.w = RT shadow mask read gate. When
-            // rt_shadows is off, shadow_factor falls through to raster shadow
-            // maps. The kernel still dispatches (for AO/GI/refl), but the sv
-            // textures are not written (shadow_spp=0 gated in-kernel) and the
-            // WGSL never reads them (gated here).
-            uniforms.rt_flags[3] = if rt_shadows_enabled && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
-            // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
-            // the value the EMIT_AO_MASK fragment variants write to the
-            // ao_mask attachment. 0 for unlit-kind materials (baked_look)
-            // and scene-wide whenever RT is providing AO (RT on + RT AO on);
-            // 1 for every lit raster pixel and whenever RT AO is toggled off
-            // (so the downstream GTAO masked_mix darkens with screen-space
-            // occlusion instead of reading the unwritten RT AO channel).
-            // Same reserved-slot reuse doctrine as `scene_params.w` above.
-            // Written unconditionally — non-mask pipelines never read it.
-            uniforms.fog_params[2] =
-                if draw.kind == MaterialKind::Unlit || (rt_enabled && rt_ready && rt_ao_enabled)
-                {
-                    0.0
-                } else {
-                    1.0
-                };
-            // BUG-majv: `fog_params.w` (was permanently-zero reserved) = the
-            // RT AO read gate for `rt_or_flat_ambient`. The irradiance
-            // texture's `.a` is only written when the trace dispatch ran
-            // with ao_spp > 0 (or gi_spp > 0, which writes a neutral 1.0);
-            // gating on scene_params.w alone read a stale/zeroed `.a` with
-            // the AO kernel off, killing the ambient term after an
-            // off->on cycle. AO off also restores the raster's
-            // full-strength flat ambient (the 0.15 RT ceiling only applies
-            // when RT AO is actually providing the occlusion term).
-            uniforms.fog_params[3] = if rt_ao_enabled && rt_ready { 1.0 } else { 0.0 };
-        }
-
-        // RAYTRACING_DESIGN.md section 12 AM1: when `has_transmission`
-        // routes the Blend group to Pass B (single color attachment, no
-        // MSAA, no aux MRT — see the E2a seam below), those draws must not
-        // carry a velocity/ao_mask-emitting pipeline: Metal requires the
-        // pipeline's color-attachment layout to match the pass. Rebuild
-        // Blend pipelines aux-free here — the first point `has_transmission`
-        // is fully known. This also closes the latent velocity variant of
-        // the same mismatch (rt_enabled forces velocity consumed, so an
-        // RT + glass scene hit it too).
-        if has_transmission && (velocity_wired || ao_mask_wired) {
-            let gpu = ctx.gpu_encoder();
-            for draw in draws.iter_mut().filter(|d| d.alpha_mode == AlphaMode::Blend) {
-                draw.pipeline =
-                    self.pipeline_for(gpu.device, draw.kind, false, false, false, true).clone();
-            }
-        }
-
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek `color`'s format
-        // (idempotent lookup, already called multiple times elsewhere in
-        // this fn — see the magenta-clear error paths above) BEFORE the
-        // `gpu_encoder()` block below, whose live `&mut GpuEncoder` borrows
-        // `ctx` for the whole block and would conflict with a `ctx.outputs`
-        // access from inside it.
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek `color`'s format BEFORE the
+        // `gpu_encoder()` block below, whose live `&mut GpuEncoder` borrows `ctx`
+        // for the whole block.
         let opaque_scene_color_target_format =
             has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
-
         // ---- Ensure cached GPU resources (mutable phase). ----
         let has_casters = !casters.is_empty();
         {
