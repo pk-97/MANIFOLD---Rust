@@ -76,6 +76,16 @@ is the authoritative timeline. Buffer states and missing GPU timestamps are
 reported as evidence, not inferred causes. Resource metadata does not prove
 lifetime safety, and driver-internal traversal is not observable here.
 
+With diagnostics enabled, `MANIFOLD_GI_PROBE=first-bounce` removes only GI's
+second bounce; `no-sun` removes only GI's sun-visibility queries; and
+`first-bounce-no-sun` combines those exclusions. Omit the variable (or use
+`normal`) for normal rendering. Modes are fixed at startup and logged on each
+diagnostic trace. Samples, ray seeds, tile planning, other RT terms, and direct
+emissive sampling remain unchanged. These probes intentionally change GI
+lighting and are for diagnosis, not final exports. A successful probe can
+reflect reduced work or changed shader specialization, not just exclusion of
+a faulty operation. Unknown modes or use without diagnostics fail explicitly.
+
 ## Phase Roadmap
 
 | Phase                  | What                                                                                             | Status          |

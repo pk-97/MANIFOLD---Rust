@@ -35,7 +35,7 @@
 //! equivalent) needs a new `GpuEncoder` method,
 //! `dispatch_compute_with_accel` in `encoder.rs`.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::AnyThread;
@@ -1069,6 +1069,9 @@ constant uint MAX_RT_CASTERS = 8;
 // at index 100.
 constant bool HAS_TRANSLUCENCY [[function_constant(100)]];
 constant uint TRACE_PASS [[function_constant(101)]];
+// Diagnostic-only GI isolation: 0=normal, 1=first bounce, 2=no sun,
+// 3=first bounce without sun. Other lighting passes are unchanged.
+constant uint GI_PROBE [[function_constant(102)]];
 constant uint TRACE_SHADOW = 0u;
 constant uint TRACE_DIFFUSE = 1u;
 constant uint TRACE_REFLECTION = 2u;
@@ -2363,7 +2366,7 @@ kernel void trace_shadow_rays(
     // MB4 (RAYTRACING_DESIGN.md section 11.2): fixed path depth + per-extension
     // energy. MB-B: depth 2 — one extension bounce carrying intermediate
     // albedo (colour bleed). Range 1-3.
-    const uint RT_GI_MAX_BOUNCES = 2u;
+    const uint RT_GI_MAX_BOUNCES = (GI_PROBE == 1u || GI_PROBE == 3u) ? 1u : 2u;
     // ED5 (RAYTRACING_DESIGN.md section 14.2): per-sample env firefly cap. An
     // HDRI sun disk at mip 0 through 2 spp is the sparkle regime the
     // reflection path needed its clamp for; capping each env sample at
@@ -2437,10 +2440,13 @@ kernel void trace_shadow_rays(
                 float3 hit_albedo = float3(slot_materials[oi].albedo);
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
                 float3 hit_n = fetch_interpolated_normal(slot_sources, oi, gi_pid, gi_bary);
-                float3 bounce_term = sun_bounce_at_hit(
-                    accel, slot_sources, slot_materials, material_textures, p, n_casters,
-                    hit_pos, hit_n, hit_albedo, bias_eps, tid,
-                    400u + s * MAX_RT_CASTERS, diagnostics);
+                float3 bounce_term = float3(0.0);
+                if (GI_PROBE != 2u && GI_PROBE != 3u) {
+                    bounce_term = sun_bounce_at_hit(
+                        accel, slot_sources, slot_materials, material_textures, p, n_casters,
+                        hit_pos, hit_n, hit_albedo, bias_eps, tid,
+                        400u + s * MAX_RT_CASTERS, diagnostics);
+                }
                 // RS7: the bounce-0 direct-emissive term is owned by the
                 // emissive direct-light sampler when active (substitution,
                 // never addition — the 818a06b0 double-count trap).
@@ -6310,7 +6316,55 @@ struct TraceDiagnosticPool {
 
 const TRACE_TRANSLUCENCY_CONSTANT_INDEX: usize = 100;
 const TRACE_PASS_CONSTANT_INDEX: usize = 101;
+const TRACE_GI_PROBE_CONSTANT_INDEX: usize = 102;
 const MAX_RT_REFLECTION_SPP: u32 = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+enum GiProbe {
+    Normal = 0,
+    FirstBounce = 1,
+    NoSun = 2,
+    FirstBounceNoSun = 3,
+}
+
+impl GiProbe {
+    fn parse(value: Option<&str>, diagnostics: bool) -> Result<Self, &'static str> {
+        let Some(value) = value else { return Ok(Self::Normal); };
+        if !diagnostics {
+            return Err("MANIFOLD_GI_PROBE requires MANIFOLD_GPU_DIAGNOSTICS=1");
+        }
+        match value {
+            "normal" => Ok(Self::Normal),
+            "first-bounce" => Ok(Self::FirstBounce),
+            "no-sun" => Ok(Self::NoSun),
+            "first-bounce-no-sun" => Ok(Self::FirstBounceNoSun),
+            _ => Err("MANIFOLD_GI_PROBE must be normal, first-bounce, no-sun, or first-bounce-no-sun"),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::FirstBounce => "first-bounce",
+            Self::NoSun => "no-sun",
+            Self::FirstBounceNoSun => "first-bounce-no-sun",
+        }
+    }
+}
+
+fn gi_probe() -> GiProbe {
+    static PROBE: OnceLock<GiProbe> = OnceLock::new();
+    *PROBE.get_or_init(|| {
+        let value = match std::env::var("MANIFOLD_GI_PROBE") {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => panic!("Invalid MANIFOLD_GI_PROBE: {error}"),
+        };
+        GiProbe::parse(value.as_deref(), super::gpu_fault::diagnostics_enabled())
+            .unwrap_or_else(|error| panic!("{error}"))
+    })
+}
 
 fn trace_region_bytes(region: &TraceRegion) -> &[u8] {
     const _: () = assert!(std::mem::size_of::<TraceRegion>() == 16);
@@ -6471,7 +6525,12 @@ impl RtPipelines {
         trace_slots.push((7 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         trace_slots.push((8, SlotKind::Buffer));
         // Three trace passes crossed with binary/translucent ray semantics.
-        // Both constants are supplied before compilation; SPP is unchanged.
+        // Constants are supplied before compilation; SPP and tile planning
+        // stay unchanged even when a diagnostic GI stage is removed.
+        let gi_probe_value = gi_probe() as u32;
+        if gi_probe() != GiProbe::Normal {
+            log::warn!("[GI-PROBE] mode={} changes GI lighting for diagnosis; samples, tile budget, AO, shadows, reflections and direct emissive sampling are unchanged", gi_probe().name());
+        }
         let trace_slot_map = identity_slot_map(&trace_slots);
         let trace_pipelines = TracePass::ALL.map(|pass| [false, true].map(|translucent| {
             let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
@@ -6480,6 +6539,7 @@ impl RtPipelines {
             unsafe {
                 cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&has).cast(), MTLDataType::Bool, TRACE_TRANSLUCENCY_CONSTANT_INDEX);
                 cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&value).cast(), MTLDataType::UInt, TRACE_PASS_CONSTANT_INDEX);
+                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&gi_probe_value).cast(), MTLDataType::UInt, TRACE_GI_PROBE_CONSTANT_INDEX);
             }
             let mut pipeline = compile_pipeline_with_constants(device, &library, "trace_shadow_rays", trace_slot_map.clone(), Some(&cv));
             pipeline.label = pass.pipeline_label(translucent).into();
@@ -7182,8 +7242,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         let diagnostic_callback = if let Some(slot) = diagnostic_slot {
             let pool = Arc::clone(&self.rt_diagnostics);
             let frame = params.frame_index;
-            log::info!("[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={}",
-                params.trace_size, params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp);
+            log::info!("[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={} gi_probe={}",
+                params.trace_size, params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp, gi_probe().name());
             let block = block2::RcBlock::new(move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                 let cb = unsafe { cb.as_ref() };
                 if unsafe { cb.status() } == MTLCommandBufferStatus::Completed {
@@ -7917,6 +7977,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gi_probe_requires_diagnostics_and_explicit_valid_mode() {
+        assert_eq!(GiProbe::parse(None, false), Ok(GiProbe::Normal));
+        for mode in [GiProbe::Normal, GiProbe::FirstBounce, GiProbe::NoSun, GiProbe::FirstBounceNoSun] {
+            assert_eq!(GiProbe::parse(Some(mode.name()), true), Ok(mode));
+            assert!(GiProbe::parse(Some(mode.name()), false).is_err());
+        }
+        assert!(GiProbe::parse(Some(""), true).is_err());
+        assert!(GiProbe::parse(Some("first_bounce"), true).is_err());
+    }
+
+    #[test]
     fn wired_instance_source_address_contract() {
         assert!(validate_instance_source_address(0, None).is_ok());
         assert!(validate_instance_source_address(0, Some(7)).is_ok());
@@ -7965,6 +8036,7 @@ mod tests {
     fn trace_specialization_constants_and_region_abi() {
         assert_eq!(TRACE_TRANSLUCENCY_CONSTANT_INDEX, 100);
         assert_eq!(TRACE_PASS_CONSTANT_INDEX, 101);
+        assert_eq!(TRACE_GI_PROBE_CONSTANT_INDEX, 102);
         assert_eq!(MAX_RT_REFLECTION_SPP, 32);
         let mut labels = std::collections::HashSet::new();
         for (index, pass) in TracePass::ALL.into_iter().enumerate() {
