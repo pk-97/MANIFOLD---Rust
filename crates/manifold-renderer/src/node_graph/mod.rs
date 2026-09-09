@@ -63,6 +63,7 @@ pub mod temporal_reset;
 pub mod trigger_shadow_lint;
 pub mod validate;
 mod validation;
+pub mod water;
 
 /// Canonical channel-name registry for the Channel type system. The
 /// `well_known_channels!` macro generates the constants and the
