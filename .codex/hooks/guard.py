@@ -98,6 +98,23 @@ def segments(command):
         yield current
 
 
+def prepared_slot_merge(target, args):
+    """Git cannot pathspec-commit a merge. Permit only its staged slot index."""
+    target = Path(target).resolve()
+    pool = ROOT / ".claude/worktrees"
+    if target.parent != pool or not target.name.startswith("slot-"):
+        return False
+    if args != ["--no-edit"]:
+        return False
+    try:
+        git(target, "rev-parse", "--verify", "MERGE_HEAD")
+        # Refuse conflicts or tracked changes outside the staged merge.
+        # Untracked handoff files are never committed.
+        return not git(target, "ls-files", "--unmerged") and not git(target, "diff", "--name-only")
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def check_shell(event, command, cwd, shell_guard):
     # Reuse established detection; a Codex hook never returns CC's allow/ask.
     for check in (shell_guard.worktree_add_guard, shell_guard.destructive_outward_guard):
@@ -121,6 +138,8 @@ def check_shell(event, command, cwd, shell_guard):
         if sub == "add" and ("--" not in args or any(a in {".", "-A", "--all", "-u", ":/"} for a in args)):
             return "Stage exact paths with git add -- <paths>."
         if sub == "commit":
+            if prepared_slot_merge(target, args):
+                continue
             if "--" not in args or any(a in {"-a", "--all", "--amend"} for a in args):
                 return "Commit exact paths with git commit -m '...' -- <paths>."
             selected = args[args.index("--") + 1:]

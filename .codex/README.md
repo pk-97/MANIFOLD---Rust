@@ -8,6 +8,11 @@ The hook checks both paths of moves, blocks app patches in main, reuses CC's
 read-only git/path detection, and requires app landings through
 `scripts/land_branch.py`. Claude settings and hook registration are separate.
 
+Normal commits require exact paths. Git does not support pathspec commits
+during a merge, so `git commit --no-edit` is allowed in a slot with a pending
+merge, no unresolved conflicts, and no unstaged tracked changes. This does
+not permit main-checkout merge commits or bypass the landing gate.
+
 Run `python3 -B .codex/hooks/test_guard.py` after changes.
 
 Limits: this is workflow enforcement on supported tool calls, not a security
