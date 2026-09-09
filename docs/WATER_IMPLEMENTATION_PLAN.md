@@ -217,7 +217,9 @@ accumulated while hidden. Fresh seed on generator replacement is explicit.
 
 **Gate:** focused `water_` lib tests in `manifold-playback`, `manifold-renderer` and
 `manifold-app` using the same `cargo test --manifest-path ... -p <crate> --lib water_`
-form; clippy `-p manifold-playback -p manifold-renderer -p manifold-app --tests`.
+form — except `manifold-app`, which is a bin-only crate: use
+`cargo test --manifest-path ... -p manifold-app --bin manifold water_` there.
+clippy `-p manifold-playback -p manifold-renderer -p manifold-app --tests`.
 `water_lifecycle_seek_stop_export` must test both <1-beat and >1-beat seeks.
 **Demo: none — L1** until S8 exercises the controls through the real app.
 
