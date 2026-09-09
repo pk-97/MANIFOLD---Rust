@@ -545,6 +545,10 @@ pub struct SceneSetupVm {
     /// P2 slice 2a: the REAL P1 section string(s) covering the camera family
     /// (the camera atom + its lens, if wired) — see `ObjectKnownRow::sections`.
     pub camera_sections: Vec<String>,
+    /// Custom/loop cameras expose only their shared lens and cinematic tail.
+    /// Ownership disambiguates rows sharing the importer's "Camera" section.
+    /// None preserves the full section for ordinary camera sources.
+    pub camera_param_doc_ids: Option<Vec<u32>>,
     /// P2 slice 2a: the REAL P1 section string(s) covering World (the
     /// environment/bake node + the atmosphere/fog node, whichever are
     /// wired) — see `ObjectKnownRow::sections`.
@@ -1699,8 +1703,19 @@ impl ScenePanel {
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
-        mut cy: f32,
+        cy: f32,
         sections: &[String],
+    ) -> f32 {
+        self.build_filtered_properties_owned(tree, inner_x, inner_w, cy, (sections, None))
+    }
+
+    fn build_filtered_properties_owned(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        (sections, owner_ids): (&[String], Option<&[u32]>),
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
@@ -1721,7 +1736,13 @@ impl ScenePanel {
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
-                if p.spec.section.as_deref() == Some(section.as_str()) && !retained.contains(&i) {
+                // Scene exposure IDs are stamped as {owner_doc_id}_{param}.
+                let owned = owner_ids.is_none_or(|ids| {
+                    p.id.as_ref().split('_').next()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .is_some_and(|id| ids.contains(&id))
+                });
+                if p.spec.section.as_deref() == Some(section.as_str()) && owned && !retained.contains(&i) {
                     retained.push(i);
                 }
             }
@@ -2286,13 +2307,24 @@ impl ScenePanel {
     /// `SceneSetupVm::camera_sections`'s doc comment). Custom/None fallback
     /// messaging (no camera vocabulary matched, or the port is unwired)
     /// stays panel-shaped, unchanged.
-    fn build_camera_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, cy: f32, vm: &SceneSetupVm) -> f32 {
+    fn build_camera_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
         match &vm.camera {
             CameraRowVm::Orbit(_) | CameraRowVm::Free(_) | CameraRowVm::LookAt(_) => {
                 self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections)
             }
             CameraRowVm::Custom => {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Custom (edit in graph)", label_style());
+                if !vm.camera_sections.is_empty() {
+                    cy = self.build_filtered_properties_owned(
+                        tree, inner_x, inner_w, cy,
+                        (&vm.camera_sections, vm.camera_param_doc_ids.as_deref()),
+                    );
+                }
+                let message = if vm.camera_sections.is_empty() {
+                    "Custom (edit in graph)"
+                } else {
+                    "Movement: controlled by camera graph"
+                };
+                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, message, label_style());
                 cy + ROW_H
             }
             CameraRowVm::None => {
@@ -3057,7 +3089,7 @@ mod tests {
             objects: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
-            camera_sections: Vec::new(), world_sections: Vec::new(),
+            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         })));
         let mut tree = UITree::new();
@@ -3154,7 +3186,7 @@ mod tests {
                     exposure_ev: mrow(RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false, exposed: false }),
                 }),
             })),
-            camera_sections: Vec::new(), world_sections: Vec::new(),
+            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         }
     }
@@ -3999,6 +4031,42 @@ mod tests {
             panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
             assert!(tree.count() > 0);
         }
+    }
+
+    #[test]
+    fn camera_custom_shared_controls_exclude_inactive_movement_and_keep_dispatch() {
+        let (mut vm, mut surface) = world_transform_vm();
+        vm.camera = CameraRowVm::Custom;
+        vm.camera_sections = vec!["Camera".into()];
+        vm.camera_param_doc_ids = Some(vec![71, 72, 73]);
+        let template = surface.rows[0].clone();
+        surface.rows = ["70_distance", "71_focus_distance", "72_enabled", "73_enabled"]
+            .into_iter().map(|id| {
+                let mut row = template.clone();
+                row.id = id.into();
+                row.spec.section = Some("Camera".into());
+                row.spec.name = id.into();
+                row
+            }).collect();
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure_params(Some(surface));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+        let ids: Vec<&str> = panel.properties_card.rows.iter().map(|r| r.id.as_ref()).collect();
+        assert_eq!(ids, ["71_focus_distance", "72_enabled", "73_enabled"]);
+        let value_cell = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().value_text;
+        let (_, actions) = panel.handle_event(
+            &UIEvent::DoubleClick { node_id: value_cell, pos: Vec2::ZERO, modifiers: Modifiers::default() },
+            &tree,
+        );
+        assert!(matches!(actions.as_slice(),
+            [PanelAction::Root(RootAction::BeginParamTextInput { target, param_id, .. })]
+                if *target == GraphParamTarget::GeneratorOf(LayerId::new("layer-1"))
+                    && param_id.as_ref() == "71_focus_distance"
+        ));
     }
 
     // scene-panel-ux lane fold behavior tests
