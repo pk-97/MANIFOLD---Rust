@@ -36,14 +36,15 @@
         }
         assert_eq!(method.matches("let rt_objects:").count(), 1);
         // The dispatcher: the validate call textually precedes every later
-        // consumer of the topology decision.
+        // consumer of the topology decision — the ensure call (which owns
+        // denoise_wanted and the shadow-map ensures) and the remaining
+        // inline consumers.
         let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1;
         let validate_call = evaluate
             .find(".validate_topology_and_author_flags(ctx")
             .unwrap();
         for marker in [
-            "let denoise_wanted =",
-            "self.ensure_shadow_map(gpu.device",
+            ".ensure_gpu_resources(",
             "if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled)",
             "let objects = rt_objects;",
         ] {
