@@ -67,6 +67,13 @@ struct TexturePoolInner {
     /// pipeline's native event). When set, recycling is fence-aware; when
     /// None, the frame-counter fallback applies.
     completion_event: Option<GpuEvent>,
+    /// Drop-retirement mark stamped onto every texture this pool hands out
+    /// (BUG-l7t4 class fix): bare drops of pool textures — pool eviction,
+    /// runtime teardown — retire through the completion fence instead of
+    /// releasing while an in-flight command buffer references them. Entries
+    /// acquired before this is set keep `None` (immediate release), the same
+    /// pre-attach discipline as `completion_event`.
+    retire: Option<std::sync::Arc<crate::metal::retire::RetireMark>>,
     /// New allocations via device.create_texture().
     stats_allocated: u64,
     /// Textures recycled from pool (avoided allocation).
@@ -93,6 +100,7 @@ impl TexturePool {
                 current_frame: 0,
                 frames_in_flight,
                 completion_event: None,
+                retire: None,
                 stats_allocated: 0,
                 stats_recycled: 0,
             }),
@@ -107,6 +115,17 @@ impl TexturePool {
         let inner = unsafe { &mut *self.inner.get() };
         inner.completion_event = Some(event.second_handle());
         log::info!("TexturePool: fence-aware recycling attached");
+    }
+
+    /// Attach the drop-retirement mark (BUG-l7t4 class fix). Textures handed
+    /// out after this call carry the mark: a bare drop enqueues a
+    /// fence-stamped retirement instead of releasing immediately. Entries
+    /// already in the pool keep unmarked textures (immediate release) —
+    /// set this at pipeline init, before any rendering.
+    pub fn set_retire_mark(&self, mark: std::sync::Arc<crate::metal::retire::RetireMark>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        inner.retire = Some(mark);
+        log::info!("TexturePool: fence-stamped drop retirement attached");
     }
 
     /// Mark the start of a new frame.
@@ -151,7 +170,9 @@ impl TexturePool {
         };
         if let Some(idx) = idx {
             inner.stats_recycled += 1;
-            return inner.available.get_mut(&key).unwrap().swap_remove(idx).texture;
+            let mut texture = inner.available.get_mut(&key).unwrap().swap_remove(idx).texture;
+            texture.retire = inner.retire.clone();
+            return texture;
         }
 
         // No safe recycled texture — allocate fresh via device.
@@ -177,6 +198,7 @@ impl TexturePool {
             height,
             depth: 1,
             format,
+            retire: inner.retire.clone(),
         }
     }
 

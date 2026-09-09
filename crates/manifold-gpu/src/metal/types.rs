@@ -25,10 +25,33 @@ pub struct GpuTexture {
     pub height: u32,
     pub depth: u32,
     pub format: GpuTextureFormat,
+    /// Fence-retirement mark (BUG-l7t4 class fix): `Some` for textures
+    /// manifold-gpu allocated (device/pool/heap paths) and for IOSurface
+    /// imports — drops are stamped and retired through the completion fence
+    /// instead of releasing while an in-flight command buffer may still
+    /// reference them. `None` for textures whose owner manages lifetime
+    /// (CAMetalLayer drawable wraps, mip views of a marked parent) — those
+    /// release immediately, as before.
+    pub(crate) retire: Option<std::sync::Arc<super::retire::RetireMark>>,
 }
 
 unsafe impl Send for GpuTexture {}
 unsafe impl Sync for GpuTexture {}
+
+impl Drop for GpuTexture {
+    fn drop(&mut self) {
+        if let Some(mark) = &self.retire {
+            mark.retire_texture(&self.raw);
+        }
+        // TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): env-gated deferred
+        // destruction. Disabled unless MANIFOLD_DEFER_DROP_FRAMES is set —
+        // the default path releases at the same point the old automatic
+        // `Retained` drop did. The clone is one atomic retain; the deferred
+        // clone holds the Metal object alive past the struct's own release
+        // until the probe pump drains it. Kept as the regression oracle.
+        super::defer_drop::drop_texture(self.raw.clone());
+    }
+}
 
 impl GpuTexture {
     /// CPU uploads require CPU-visible storage, including on unified-memory
@@ -56,6 +79,7 @@ impl GpuTexture {
             height,
             depth,
             format,
+            retire: None,
         }
     }
 
@@ -137,12 +161,18 @@ impl GpuTexture {
             )
         }
         .expect("newTextureViewWithPixelFormat_textureType_levels_slices failed");
+        // The view shares the parent's storage — mark it too so a bare view
+        // drop retires through the fence (the parent's own mark may already
+        // be gone if the parent was dropped first; the view's mark holds the
+        // storage independently either way).
+        let retire = self.retire.clone();
         GpuTexture {
             raw: view,
             width: mip_width,
             height: mip_height,
             depth: 1,
             format: self.format,
+            retire,
         }
     }
 }
@@ -156,10 +186,26 @@ pub struct GpuBuffer {
     /// Persistent mapped pointer for shared-memory buffers.
     /// Some for MTLStorageMode::Shared, None for Private.
     pub(super) mapped_ptr: Option<*mut u8>,
+    /// Fence-retirement mark (BUG-l7t4 class fix) — same contract as
+    /// `GpuTexture::retire`: `Some` for manifold-gpu-allocated buffers,
+    /// stamped and retired through the completion fence on drop; `None`
+    /// for external wraps, which release immediately.
+    pub(crate) retire: Option<std::sync::Arc<super::retire::RetireMark>>,
 }
 
 unsafe impl Send for GpuBuffer {}
 unsafe impl Sync for GpuBuffer {}
+
+impl Drop for GpuBuffer {
+    fn drop(&mut self) {
+        if let Some(mark) = &self.retire {
+            mark.retire_buffer(&self.raw);
+        }
+        // TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): see the GpuTexture
+        // Drop impl above.
+        super::defer_drop::drop_buffer(self.raw.clone());
+    }
+}
 
 impl GpuBuffer {
     /// Wrap an existing Metal buffer.
@@ -170,6 +216,7 @@ impl GpuBuffer {
             raw,
             size,
             mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
+            retire: None,
         }
     }
 
@@ -454,6 +501,10 @@ impl GpuEvent {
 /// Sub-allocates textures without per-allocation kernel calls.
 pub struct GpuHeap {
     heap: Retained<ProtocolObject<dyn MTLHeap>>,
+    /// Retirement mark sub-allocated textures carry (same fence-stamped
+    /// drop retirement as pool/device allocations; `None` when the heap was
+    /// created before retirement wiring).
+    retire: Option<std::sync::Arc<super::retire::RetireMark>>,
 }
 
 unsafe impl Send for GpuHeap {}
@@ -461,8 +512,11 @@ unsafe impl Sync for GpuHeap {}
 
 impl GpuHeap {
     /// Create a new GpuHeap wrapping a Metal heap.
-    pub(crate) fn new(heap: Retained<ProtocolObject<dyn MTLHeap>>) -> Self {
-        Self { heap }
+    pub(crate) fn new(
+        heap: Retained<ProtocolObject<dyn MTLHeap>>,
+        retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+    ) -> Self {
+        Self { heap, retire }
     }
 
     /// Sub-allocate a texture from this heap.
@@ -479,6 +533,7 @@ impl GpuHeap {
             height: desc.height,
             depth: desc.depth,
             format: desc.format,
+            retire: self.retire.clone(),
         })
     }
 

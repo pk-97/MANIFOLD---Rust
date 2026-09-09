@@ -1072,6 +1072,14 @@ pub struct ContentPipeline {
     /// `"Compositor"`. Drained by [`Self::take_gpu_profiles`].
     #[cfg(target_os = "macos")]
     last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
+    /// Fence-stamped drop-retirement queue (BUG-l7t4 class fix). Drained once
+    /// per frame in `render_content_native`; its `Drop` flushes at teardown.
+    /// FIELD ORDER MATTERS: this must be the LAST field to drop — sibling
+    /// fields (compositor, texture_pool, audition cells) enqueue their
+    /// marked-texture teardown onto it on the way out, and the queue's own
+    /// `Drop` waits out the GPU before releasing those late entries.
+    #[cfg(target_os = "macos")]
+    retire_queue: Option<manifold_gpu::RetireQueue>,
 }
 
 /// The semantic node-preview render pipelines, borrowed as one bundle so the
@@ -1218,6 +1226,8 @@ impl ContentPipeline {
             profiling_enabled: false,
             #[cfg(target_os = "macos")]
             last_gpu_profiles: Vec::new(),
+            #[cfg(target_os = "macos")]
+            retire_queue: None,
         }
     }
 
@@ -1288,10 +1298,18 @@ impl ContentPipeline {
     /// Initialize the native Metal GPU device, event, and texture pool.
     /// Called once at startup after the content pipeline is created.
     #[cfg(target_os = "macos")]
+    /// Test-only access to the native device the pipeline renders on
+    /// (BUG-l7t4 diagnosis harness: queue-drain probes must wait on the
+    /// SAME command queue the pipeline submits to).
+    #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+    pub(crate) fn native_gpu_for_tests(&self) -> Option<&std::sync::Arc<manifold_gpu::GpuDevice>> {
+        self.native_device.as_ref()
+    }
+
+    #[cfg(target_os = "macos")]
     /// Set a pre-created native GPU device (transfers ownership).
     /// Used when the device must exist before the content pipeline (e.g. for
     /// compositor native pipeline creation).
-    #[cfg(target_os = "macos")]
     pub fn set_native_gpu(&mut self, device: std::sync::Arc<manifold_gpu::GpuDevice>) {
         // BUG-j8gy: the chain-fusion worker prewarms fused-kernel pipelines
         // against this device so an edit-time fused swap-in never pays the
@@ -1305,6 +1323,17 @@ impl ContentPipeline {
         // assumption, so unpaced encodes (export, headless) can't recycle a
         // texture an in-flight pass still samples.
         pool.set_completion_event(&event);
+        // BUG-l7t4 class fix: fence-stamped drop retirement. Every texture
+        // the device and pool allocate from here on carries the mark; bare
+        // drops (runtime teardown, pool eviction, realloc) retire through
+        // the completion fence instead of releasing while an in-flight
+        // command buffer still references them. The queue drains per frame
+        // in render_content_native and flushes at teardown.
+        let (retire_sender, retire_queue) = manifold_gpu::RetireQueue::new();
+        let retire_mark = manifold_gpu::RetireMark::new(event.second_handle(), retire_sender);
+        device.set_retirement(std::sync::Arc::clone(&retire_mark));
+        pool.set_retire_mark(retire_mark);
+        self.retire_queue = Some(retire_queue);
         let preview_shader = r#"
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
@@ -2133,6 +2162,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // the frame; the readback runs after the compositor CB commits.
         let pending_dump = self.pending_graph_dump.take();
         let native_device = self.native_device.as_ref().unwrap();
+
+        // BUG-l7t4 class fix: drain the fence-stamped drop-retirement queue.
+        // Releases marked textures whose dropping frame's commit the GPU has
+        // retired (signaled_value >= stamp). One try_recv sweep + host-side
+        // counter reads — no allocation, no GPU round trip.
+        if let Some(queue) = self.retire_queue.as_mut() {
+            queue.drain();
+        }
 
         // Spike-triggered sub-phase trace (BUG-035): with MANIFOLD_RENDER_TRACE=1,
         // any content frame over 20ms prints a per-section breakdown to stderr.

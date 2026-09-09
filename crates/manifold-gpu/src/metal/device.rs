@@ -166,6 +166,11 @@ pub struct GpuDevice {
     /// section 17.7 DN-K). `None` when MTL4 command infrastructure is not
     /// available on this system.
     mtl4_bridge: std::sync::OnceLock<Option<Arc<super::metalfx_m4::MTL4Bridge>>>,
+    /// Fence-stamped drop retirement for this device's allocations
+    /// (BUG-l7t4 class fix). Set once at pipeline init via `set_retirement`;
+    /// every texture this device allocates afterwards carries the mark.
+    /// `OnceLock` — set-once config, read on the allocation path.
+    retirement: std::sync::OnceLock<Arc<super::retire::RetireMark>>,
 }
 
 // Safety: MTLDevice and MTLCommandQueue are thread-safe (Metal guarantee).
@@ -199,6 +204,7 @@ impl GpuDevice {
             linear_sampler: std::sync::OnceLock::new(),
             capture_scope: std::sync::OnceLock::new(),
             mtl4_bridge: std::sync::OnceLock::new(),
+            retirement: std::sync::OnceLock::new(),
         }
     }
 
@@ -338,6 +344,7 @@ impl GpuDevice {
             height: desc.height,
             depth: desc.depth,
             format: desc.format,
+            retire: self.retirement_mark(),
         }
     }
 
@@ -356,6 +363,7 @@ impl GpuDevice {
             raw,
             size,
             mapped_ptr: None,
+            retire: self.retirement_mark(),
         }
     }
 
@@ -379,6 +387,7 @@ impl GpuDevice {
             raw,
             size,
             mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
+            retire: self.retirement_mark(),
         }
     }
 
@@ -1683,6 +1692,25 @@ impl GpuDevice {
         GpuEvent::new(raw)
     }
 
+    /// Attach fence-stamped drop retirement to this device (BUG-l7t4 class
+    /// fix). Call once at pipeline init, before any rendering: every texture
+    /// this device allocates afterwards (direct, pool, or heap) carries the
+    /// mark and retires through the completion fence on drop instead of
+    /// releasing while a command buffer may still reference it. Later calls
+    /// are ignored (the first wiring wins) — mirrors `TexturePool`'s
+    /// set-once event discipline.
+    pub fn set_retirement(&self, mark: Arc<super::retire::RetireMark>) {
+        if self.retirement.set(mark).is_err() {
+            log::warn!("GpuDevice::set_retirement called twice — keeping the first mark");
+        }
+    }
+
+    /// The retirement mark, if wired. Allocation paths stamp new textures
+    /// with a clone of this `Arc`.
+    fn retirement_mark(&self) -> Option<Arc<super::retire::RetireMark>> {
+        self.retirement.get().map(Arc::clone)
+    }
+
     /// Create a GPU heap for sub-allocation.
     pub fn create_heap(&self, size: u64, storage_mode: GpuStorageMode) -> GpuHeap {
         if alloc_log_enabled() {
@@ -1702,7 +1730,7 @@ impl GpuDevice {
             .newHeapWithDescriptor(&desc)
             .expect("newHeapWithDescriptor failed");
         unsafe { heap.setLabel(Some(&NSString::from_str("MANIFOLD TexturePool Heap"))) };
-        GpuHeap::new(heap)
+        GpuHeap::new(heap, self.retirement_mark())
     }
 
     /// Query the heap size and alignment needed for a texture with the given
@@ -1751,6 +1779,7 @@ impl GpuDevice {
             height: desc.height,
             depth: desc.depth,
             format: desc.format,
+            retire: self.retirement_mark(),
         }
     }
 
@@ -1789,6 +1818,7 @@ impl GpuDevice {
             height,
             depth: 1,
             format,
+            retire: self.retirement_mark(),
         }
     }
 
@@ -1962,7 +1992,16 @@ impl GpuDevice {
             let mtl_texture: Retained<ProtocolObject<dyn objc2_metal::MTLTexture>> =
                 Retained::from_raw(raw_mtl_texture.cast())
                     .expect("newTextureWithDescriptor:iosurface:plane: returned nil");
-            GpuTexture::from_raw(mtl_texture, width, height, 1, format)
+            // Fence-stamped drop retirement applies here too (BUG-l7t4 class
+            // fix): the audition surface, preview bridge, and clip-atlas
+            // imports are sampled by in-flight Compositor command buffers —
+            // when the owning surface re-creates, the replaced wrap must not
+            // release the IOSurface backing while the GPU still reads it.
+            // (CAMetalLayer drawable textures go through `GpuSurface` and are
+            // presentation-owned — deliberately NOT marked.)
+            let mut texture = GpuTexture::from_raw(mtl_texture, width, height, 1, format);
+            texture.retire = self.retirement_mark();
+            texture
         }
     }
 }
