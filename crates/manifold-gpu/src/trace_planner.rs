@@ -9,7 +9,7 @@ pub struct TraceWorkLimits {
 /// One scheduling policy for every RT trace, independent of whether the
 /// caller is rendering interactively or exporting.
 pub const DEFAULT_TRACE_WORK_LIMITS: TraceWorkLimits = TraceWorkLimits {
-    max_query_units_per_tile: 1 << 24,
+    max_query_units_per_tile: 1 << 22,
     max_pixels_per_tile: 1 << 18,
 };
 
