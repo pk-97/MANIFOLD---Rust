@@ -19,7 +19,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use std::borrow::Cow;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`inject_index` Int → i32, `inject_force` f32, `inject_phase` f32,
@@ -151,9 +151,7 @@ impl Primitive for ApplyRadialBurst3DToParticles {
         };
         let _ = out;
 
-        let particle_size = std::mem::size_of::<Particle>() as u64;
-        let capacity = (particles.size / particle_size) as u32;
-        let active_count = active_count.min(capacity);
+        let active_count = active_elements::<Particle>(particles.size, active_count);
         // Idle skip: a negative zone index disables the burst and the push scales
         // by inject_force, so either makes every thread a no-op write-back — skip
         // the dispatch. The in/out alias means the executor's stale-output guard

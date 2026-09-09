@@ -23,7 +23,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use std::borrow::Cow;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`point_x`,
 /// `point_y`, `amplitude`, `envelope`, `radius`, `active_count` Int → i32), then
@@ -181,9 +181,7 @@ impl Primitive for ApplyRadialBurstToParticles {
         };
         let _ = out;
 
-        let particle_size = std::mem::size_of::<Particle>() as u64;
-        let capacity = (particles.size / particle_size) as u32;
-        let active_count = active_count.min(capacity);
+        let active_count = active_elements::<Particle>(particles.size, active_count);
         // Idle skip: the kernel's own first guard returns the particle unchanged
         // when `amplitude * envelope < 1e-4`, so the whole dispatch is a no-op —
         // skip it CPU-side with the identical threshold. The in/out alias means

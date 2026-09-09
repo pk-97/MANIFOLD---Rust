@@ -50,6 +50,12 @@ inventory::submit! {
 // `scale` → `ring_spacing` and `clip_trigger_mode` → `trigger_mode`
 // via the JSON's paramAliases.
 
+// Concentric Tunnel: twin RETAINED (BUG-eiur) — manifold-core's
+// generator_param_count_concentric_tunnel resolves CONCENTRIC_TUNNEL through
+// the core-only inventory (renderer-less binaries), so this submission is
+// still load-bearing unlike the five deleted below. JSON stays canonical;
+// this must match it field-for-field.
+
 inventory::submit! {
     GeneratorMetadata {
         id: PresetTypeId::CONCENTRIC_TUNNEL,
@@ -298,58 +304,19 @@ inventory::submit! {
 
 // ── Metallic Glass ─────────────────────────────────────────────────────
 
-inventory::submit! {
-    GeneratorMetadata {
-        id: PresetTypeId::METALLIC_GLASS,
-        display_name: "Metallic Glass",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "metallicGlass",
-        legacy_discriminant: Some(23),
-        params: &[
-            ParamSpec::continuous("feedback", "Feedback", 0.5, 1.0, 0.98, "F2", "feedback"),
-            ParamSpec::continuous("noise_scale", "Noise Scale", 0.1, 2.0, 0.75, "F2", "noiseScale"),
-            ParamSpec::continuous("noise_speed", "Noise Speed", 0.01, 1.0, 0.1, "F3", "noiseSpeed"),
-            ParamSpec::continuous("edge_str", "Edge Strength", 0.5, 20.0, 5.0, "F1", "edgeStr"),
-            ParamSpec::continuous("mirror", "Mirror", 0.0, 90.0, 45.0, "F0", "mirror"),
-            ParamSpec::continuous("displace", "Displace", 0.0, 0.5, 0.2, "F3", "displace"),
-            ParamSpec::continuous("roughness", "Roughness", 0.01, 1.0, 0.05, "F3", "roughness"),
-            ParamSpec::continuous("light_int", "Light Intensity", 0.1, 10.0, 3.5, "F1", "lightInt"),
-            ParamSpec::continuous("cam_dist", "Camera Distance", 0.5, 10.0, 2.5, "F2", "camDist"),
-            ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
-            ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, -10.0, "F0", "camTilt"),
-            ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 54.0, "F0", "camFov"),
-            ParamSpec::continuous("look_y", "Look Y", -2.0, 2.0, 0.0, "F2", "lookY"),
-        ],    }
-}
+// Metallic Glass: Rust twin deleted (BUG-eiur) — canonical schema is
+// `assets/generator-presets/MetallicGlass.json`'s presetMetadata (params, defaults,
+// value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
+// against this submission before deletion. Same pattern as BasicShapes above.
+
 
 // ── Oily Fluid ─────────────────────────────────────────────────────────
 
-inventory::submit! {
-    GeneratorMetadata {
-        id: PresetTypeId::OILY_FLUID,
-        display_name: "Oily Fluid",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "oilyFluid",
-        legacy_discriminant: Some(24),
-        params: &[
-            ParamSpec::continuous("speed", "Speed", 0.1, 4.0, 1.0, "F2", "speed"),
-            ParamSpec::continuous("feedback", "Feedback", 0.95, 0.9999, 0.998, "F4", "feedback"),
-            ParamSpec::continuous("noise", "Noise", 0.0, 0.02, 0.002, "F4", "noise"),
-            ParamSpec::continuous("vel_damp", "Velocity Damp", 0.85, 0.999, 0.98, "F3", "veldamp"),
-            ParamSpec::continuous("curl", "Curl", 0.0, 1.0, 0.2, "F2", "curl"),
-            ParamSpec::continuous("relief", "Relief", 0.05, 2.0, 0.5, "F2", "relief"),
-            ParamSpec::continuous("chroma", "Chroma", 0.0, 8.0, 2.0, "F2", "chroma"),
-            ParamSpec::continuous("contrast", "Contrast", 0.5, 3.0, 1.4, "F2", "contrast"),
-            ParamSpec::continuous("hue", "Hue", 0.0, 1.0, 0.0, "F2", "hue"),
-            ParamSpec::continuous("sat", "Saturation", 0.0, 2.0, 1.0, "F2", "sat"),
-            ParamSpec::continuous("bright", "Brightness", 0.0, 2.0, 1.0, "F2", "bright"),
-            ParamSpec::continuous("vel_disp", "Velocity Displace", 0.1, 10.0, 1.0, "F2", "velDisp"),
-            ParamSpec::continuous("col_disp", "Color Displace", 0.1, 10.0, 1.0, "F2", "colDisp"),
-            ParamSpec::whole_labels("mode", "Mode", 0.0, 4.0, 0.0, &["Oil Slick", "Flow Field", "Height Map", "PBR", "Lines"], "mode"),
-        ],    }
-}
+// Oily Fluid: Rust twin deleted (BUG-eiur) — canonical schema is
+// `assets/generator-presets/OilyFluid.json`'s presetMetadata (params, defaults,
+// value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
+// against this submission before deletion. Same pattern as BasicShapes above.
+
 
 // ── MRI Volume ─────────────────────────────────────────────────────────
 //
@@ -419,25 +386,11 @@ inventory::submit! {
 // NOTE: Another agent may be modifying the text generator. This metadata
 // is the baseline; the text generator agent should update it here if params change.
 
-inventory::submit! {
-    GeneratorMetadata {
-        id: PresetTypeId::TEXT,
-        display_name: "Text",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "text",
-        legacy_discriminant: None,
-        params: &[
-            ParamSpec::continuous("size", "Size", 0.02, 1.0, 0.25, "F2", "size"),
-            ParamSpec::continuous("position_x", "Position X", -1.0, 1.0, 0.0, "F2", "posX"),
-            ParamSpec::continuous("position_y", "Position Y", -1.0, 1.0, 0.0, "F2", "posY"),
-            ParamSpec::continuous("scale", "Scale", 0.1, 5.0, 1.0, "F2", "scale"),
-            ParamSpec::whole_labels("h_align", "H Align", 0.0, 2.0, 1.0, &["Left", "Center", "Right"], "hAlign"),
-            ParamSpec::whole_labels("v_align", "V Align", 0.0, 2.0, 1.0, &["Top", "Center", "Bottom"], "vAlign"),
-            ParamSpec::continuous("letter_spacing", "Letter Spacing", -0.5, 2.0, 0.0, "F2", "letterSpacing"),
-            ParamSpec::continuous("line_spacing", "Line Spacing", 0.5, 3.0, 1.2, "F1", "lineSpacing"),
-        ],    }
-}
+// Text: Rust twin deleted (BUG-eiur) — canonical schema is
+// `assets/generator-presets/Text.json`'s presetMetadata (params, defaults,
+// value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
+// against this submission before deletion. Same pattern as BasicShapes above.
+
 
 // ── Particle Text ───────────────────────────────────────────────────
 
@@ -470,31 +423,11 @@ inventory::submit! {
 
 // ── Digital Plants ────────────────────────────────────────────────────
 
-inventory::submit! {
-    GeneratorMetadata {
-        id: PresetTypeId::DIGITAL_PLANTS,
-        display_name: "Digital Plants",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "digitalPlants",
-        legacy_discriminant: None,
-        params: &[
-            ParamSpec::continuous("noise_scale", "Noise Scale", 0.1, 5.0, 1.5, "F2", "noiseScale"),
-            ParamSpec::continuous("anim_speed", "Animation Speed", 0.0, 1.0, 0.5, "F2", "animSpeed"),
-            ParamSpec::continuous("morph", "Morph", 0.0, 1.0, 0.0, "F2", "morph"),
-            ParamSpec::continuous("base_radius", "Base Radius", 0.1, 2.0, 0.6, "F2", "baseRadius"),
-            ParamSpec::continuous("height", "Height", 0.5, 4.0, 2.0, "F2", "height"),
-            ParamSpec::continuous("taper", "Taper", 0.0, 3.0, 1.5, "F2", "taper"),
-            ParamSpec::continuous("torus_radius", "Torus Radius", 0.5, 3.0, 1.2, "F2", "torusRadius"),
-            ParamSpec::continuous("petal_amp", "Petal Amplitude", 0.0, 80.0, 60.0, "F0", "petalAmp"),
-            ParamSpec::continuous("rot_speed", "Rotation Speed", 0.0, 3.0, 0.3, "F2", "rotSpeed"),
-            ParamSpec::continuous("box_scale", "Box Scale", 0.005, 0.08, 0.025, "F3", "boxScale"),
-            ParamSpec::continuous("cam_dist", "Camera Distance", 0.5, 10.0, 3.5, "F1", "camDist"),
-            ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
-            ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, 15.0, "F0", "camTilt"),
-            ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 50.0, "F0", "camFov"),
-        ],    }
-}
+// Digital Plants: Rust twin deleted (BUG-eiur) — canonical schema is
+// `assets/generator-presets/DigitalPlants.json`'s presetMetadata (params, defaults,
+// value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
+// against this submission before deletion. Same pattern as BasicShapes above.
+
 
 // ── Param aliases ─────────────────────────────────────────────────────
 //

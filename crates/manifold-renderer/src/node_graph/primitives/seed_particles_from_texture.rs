@@ -37,6 +37,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::active_elements;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -178,9 +179,7 @@ impl Primitive for SeedParticlesFromTexture {
         let Some(out_buf) = ctx.outputs.array("particles") else {
             return;
         };
-        let particle_size = std::mem::size_of::<Particle>() as u64;
-        let capacity = (out_buf.size / particle_size) as u32;
-        let active_count = active_count.min(capacity);
+        let active_count = active_elements::<Particle>(out_buf.size, active_count);
 
         let mask_width = mask.width;
         let mask_height = mask.height;

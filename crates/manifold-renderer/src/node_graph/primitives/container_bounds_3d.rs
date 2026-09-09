@@ -21,7 +21,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 use super::container_repel_force_3d::CONTAINER_3D_MODES;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`container`
 /// Enum → u32, `ctr_scale` f32, `active_count` Int → i32) then the codegen-
@@ -129,9 +129,7 @@ impl Primitive for ContainerBounds3D {
         };
         let _ = out;
 
-        let particle_size = std::mem::size_of::<Particle>() as u64;
-        let capacity = (particles.size / particle_size) as u32;
-        let active_count = active_count.min(capacity);
+        let active_count = active_elements::<Particle>(particles.size, active_count);
         if active_count == 0 {
             return;
         }

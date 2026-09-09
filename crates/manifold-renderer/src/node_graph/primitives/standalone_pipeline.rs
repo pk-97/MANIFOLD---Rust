@@ -28,3 +28,13 @@ pub fn standalone_pipeline<'a, P: Primitive>(
         )
     })
 }
+
+/// Elements of type `T` that fit in `bytes`, clamped to `requested` — the
+/// particle-atom sizing prologue (BUG-uwgn): replaces
+/// `let sz = size_of::<T>() as u64; let cap = (buf.size / sz) as u32;
+/// let n = n.min(cap);`. A zero result means the caller should
+/// early-return before dispatching (the guard stays at the call site —
+/// some atoms skip, some fall through to a clear).
+pub fn active_elements<T>(bytes: u64, requested: u32) -> u32 {
+    requested.min((bytes / std::mem::size_of::<T>() as u64) as u32)
+}

@@ -16,7 +16,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`active_count` Int → i32, `speed` f32), then the derived `dt_scaled`
@@ -127,9 +127,7 @@ impl Primitive for EulerStepParticles3D {
         };
         let _ = out;
 
-        let particle_size = std::mem::size_of::<Particle>() as u64;
-        let capacity = (particles.size / particle_size) as u32;
-        let active_count = active_count.min(capacity);
+        let active_count = active_elements::<Particle>(particles.size, active_count);
         if active_count == 0 {
             return;
         }
