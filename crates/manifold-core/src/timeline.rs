@@ -465,29 +465,6 @@ impl Timeline {
             .find(|(_, l)| l.layer_id == layer_id)
     }
 
-    /// Move layer from one index to another. Unity Timeline.cs lines 250-266.
-    pub fn move_layer(&mut self, from: usize, to: usize) {
-        if from >= self.layers.len() || to >= self.layers.len() || from == to {
-            return;
-        }
-        let layer = self.layers.remove(from);
-        self.layers.insert(to, layer);
-        self.reindex_layers();
-    }
-
-    /// Get duration in seconds. Unity Timeline.cs lines 105-108.
-    pub fn get_duration_seconds(&self, seconds_per_beat: f32) -> f32 {
-        (self.duration_beats().0 * seconds_per_beat as f64) as f32
-    }
-
-    /// Clear all clips on all layers. Unity Timeline.cs lines 439-445.
-    pub fn clear_all_clips(&mut self) {
-        for layer in &mut self.layers {
-            layer.clear_clips();
-        }
-        self.mark_clip_lookup_dirty();
-    }
-
     /// Insert an existing pre-built layer at index. Unity Timeline.cs lines 190-196.
     pub fn insert_existing_layer(&mut self, index: usize, layer: Layer) {
         let idx = index.min(self.layers.len());

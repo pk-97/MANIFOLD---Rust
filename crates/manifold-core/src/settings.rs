@@ -348,9 +348,6 @@ impl ProjectSettings {
     pub fn set_bpm(&mut self, v: f32) {
         self.bpm = Bpm::clamped(v);
     }
-    pub fn set_output_width(&mut self, v: i32) {
-        self.output_width = v.max(1);
-    }
     pub fn set_output_height(&mut self, v: i32) {
         self.output_height = v.max(1);
     }
@@ -387,9 +384,6 @@ impl ProjectSettings {
         // defensively; `self.bpm` is clamped at construction/deserialize, so
         // this can never divide by zero.
         crate::tempo::TempoMapConverter::seconds_per_beat_from_bpm(self.bpm.0)
-    }
-    pub fn seconds_per_bar(&self) -> f32 {
-        self.seconds_per_beat() * self.time_signature_numerator as f32
     }
     pub fn get_frame_duration(&self) -> f32 {
         1.0 / self.frame_rate

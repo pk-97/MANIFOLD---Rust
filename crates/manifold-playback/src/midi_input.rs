@@ -57,7 +57,7 @@ const MAX_NATIVE_CLOCK_EVENTS_PER_FRAME: usize = 512;
 /// Holds the live connection (dropping it closes the port) and the port name.
 struct MidiDevice {
     /// midir connection — kept alive by ownership.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "ownership-only field (Drop closes the port); un-suppress: never — remove only if MidiDevice stops owning the connection")]
     connection: midir::MidiInputConnection<()>,
     /// Display name of the port.
     name: String,

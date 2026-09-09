@@ -18,7 +18,7 @@
 // they're dead; the handler in `app.rs` was left untouched. Converting
 // in place will require dropping `Copy` from the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "arms revive when the app.rs handler converts usize→ParamId per the phase-2 wire-format rule (comment above); un-suppress: that migration")]
 pub enum TextInputField {
     Bpm,
     Fps,

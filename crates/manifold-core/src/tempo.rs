@@ -174,11 +174,6 @@ impl TempoMap {
         self.ensure_sorted();
         &self.points
     }
-
-    pub fn set_points(&mut self, points: Vec<TempoPoint>) {
-        self.points = points;
-        self.is_sorted = false;
-    }
 }
 
 /// Pure tempo math — beat↔seconds conversion via piecewise integration.

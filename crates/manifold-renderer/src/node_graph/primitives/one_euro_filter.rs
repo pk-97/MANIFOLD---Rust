@@ -301,7 +301,7 @@ mod tests {
         let cutoff = min_cutoff + beta * dx.abs();
         let alpha = one_euro_alpha(dt, cutoff);
         let smoothed = prev + alpha * (raw - prev);
-        #[allow(unused_assignments)]
+        #[expect(unused_assignments, reason = "loop-carried filter state in the test — the read is the next iteration; un-suppress: never")]
         { prev = smoothed; }
 
         // Should converge further toward 1.0.

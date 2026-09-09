@@ -917,11 +917,6 @@ impl Layer {
         gp.restore(old_type.clone(), params, drivers, envelopes);
     }
 
-    /// Set opacity with clamp. Unity Layer.cs line 140.
-    pub fn set_opacity(&mut self, v: f32) {
-        self.opacity = v.clamp(0.0, 1.0);
-    }
-
     /// Set MIDI note. Unity Layer.cs lines 264-265.
     pub fn set_midi_note(&mut self, v: i32) {
         self.midi_note = if v < 0 { -1 } else { v.clamp(0, 127) };
@@ -949,14 +944,6 @@ impl Layer {
     pub fn clear_clips(&mut self) {
         self.clips.clear();
         self.mark_clips_unsorted();
-    }
-
-    /// Get duration in beats (max end_beat across all clips). Unity Layer.cs line 530.
-    pub fn get_duration_beats(&self) -> Beats {
-        self.clips
-            .iter()
-            .map(|c| c.end_beat())
-            .fold(Beats::ZERO, |a, b| a.max(b))
     }
 
     /// Deep-clone this layer with all nested IDs regenerated.
