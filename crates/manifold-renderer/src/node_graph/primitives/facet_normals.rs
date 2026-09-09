@@ -21,6 +21,7 @@ use manifold_gpu::GpuBinding;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: no params, so just the codegen-injected
 /// `dispatch_count` (= vertex count; one thread per vertex) padded to a 16-byte
@@ -91,18 +92,7 @@ impl Primitive for FacetNormals {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (design D#10): the runtime kernel is generated from
-            // `wgsl_body` (buffer gather standalone). facet_normals.wgsl is
-            // retained only as the gpu_tests parity oracle. Bindings match:
-            // uniform(0), buf_in(1), buf_out(2). One thread PER VERTEX.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.facet_normals standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.facet_normals",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = FacetUniforms {
             dispatch_count: vertex_count,

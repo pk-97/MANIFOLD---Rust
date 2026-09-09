@@ -13,6 +13,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`amount`,
 /// `cell_size` f32), then the derived `weights_len` (u32), then the codegen-
@@ -113,17 +114,7 @@ impl Primitive for VoxelizeMesh {
         let weights_len = weights_wired.map(|b| (b.size / 4) as u32).unwrap_or(0);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path: the runtime kernel is generated from `wgsl_body`
-            // so this atom stays pointwise/fusable in the graph compiler.
-            // Bindings: uniform(0), buf_in(1), buf_weights(2), buf_out(3).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.voxelize_mesh standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.voxelize_mesh",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = VoxelizeUniforms {
             amount,

@@ -15,6 +15,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,19 +114,7 @@ impl Primitive for Convolution2D9Tap {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: `in` is a Gather input (3×3 neighbourhood). Generated
-            // kernel binds uniform(0)/tex(1)/samp(2)/dst(3); the 11 scalar params
-            // (k0..k8, bias, normalise) match the hand uniform order exactly and
-            // the body recovers the texel step from `dims`.
-            // convolution_2d_9tap.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.custom_convolution standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.custom_convolution",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

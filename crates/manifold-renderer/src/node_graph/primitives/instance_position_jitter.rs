@@ -27,6 +27,7 @@ use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`frequency`,
 /// `amplitude`, `time_uvx_drift`, `z_coord`, `axis_seed`), then the codegen-
@@ -162,17 +163,7 @@ impl Primitive for InstancePositionJitter {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path; noise_common prepended via wgsl_includes for
-            // simplex3d).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.position_jitter standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.position_jitter",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = Uniforms {
             frequency,

@@ -44,6 +44,7 @@ use crate::node_graph::freeze::classify::FusionKind;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
+use super::standalone_pipeline::standalone_pipeline;
 
 pub struct TestCameraPointwise {
     pub pipeline: Option<GpuComputePipeline>,
@@ -145,19 +146,7 @@ impl Primitive for TestCameraPointwise {
         let (w, h) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (mandatory): the runtime kernel is generated from
-            // `wgsl_body`, so this fixture proves the SAME standalone-codegen
-            // path (with derived_uniforms) any real camera-derived texture
-            // atom (coc_from_depth, P1) will use.
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("test.camera_pointwise standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "test.camera_pointwise",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

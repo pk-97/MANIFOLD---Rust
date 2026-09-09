@@ -12,6 +12,7 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: no params, just the codegen-injected
 /// `dispatch_count` (u32, the element-count guard) + 16-byte pad. 1 word + 3
@@ -87,18 +88,7 @@ impl Primitive for ArrayUnpackVec2 {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // MULTI-OUTPUT — the body returns a BufferOutputs struct the wrapper
-            // unpacks into buf_x[idx] / buf_y[idx]). array_unpack_vec2.wgsl is the
-            // parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.split_xy standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.split_xy",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = UnpackUniforms {
             dispatch_count: count,

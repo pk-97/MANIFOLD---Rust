@@ -37,6 +37,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -162,20 +163,7 @@ impl Primitive for BilateralBlur {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Two-source MultiInputCoincident: `in` is Gather (stencil-fetch,
-            // fetch_in(uv)), `depth` is GatherTexel (raw handle, manual
-            // textureLoad). Generated bindings are uniform(0)/tex_in(1)/
-            // tex_depth(2)/samp(3, for `in`'s Gather reads)/dst(4).
-            // bilateral_blur.wgsl is the parity oracle.
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.bilateral_blur standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.bilateral_blur",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

@@ -18,6 +18,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `fixed_point_scale` param (f32) + pad
 /// to 16 bytes. The generated kernel derives its dims (and thus the dispatch
@@ -86,18 +87,7 @@ impl Primitive for ResolveAccumulator {
         let height = density_out.height.max(1);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (BUFFER→TEXTURE
-            // resolve — dims/idx from textureDimensions(dst), the body reads +
-            // zeros the atomic accumulator and returns the density vec4).
-            // resolve_accumulator.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.resolve_scatter standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.resolve_scatter",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = ResolveUniforms {
             fixed_point_scale,

@@ -20,6 +20,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 crate::primitive! {
     name: ColorLut,
@@ -97,18 +98,7 @@ impl Primitive for ColorLut {
         let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // `in` is coincident (centre sample); `lut` is a Gather input sampled
-            // at a luminance-indexed 1D coord, so the body receives it as a
-            // texture+sampler arg. Generated kernel binds uniform(0)/in(1)/lut(2)/
-            // samp(3)/dst(4), matching the set below. lut1d.wgsl is the oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.color_lut standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.color_lut",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

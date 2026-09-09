@@ -16,6 +16,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param →
 /// 4 consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -158,15 +159,7 @@ impl Primitive for DrawConnections {
         // texture region via the `BufferIndex` read path — this atom
         // exercises TWO BufferIndex-tagged array inputs (detections + edges),
         // the generic mechanism P4a built, not just one.
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.draw_connections standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.draw_connections",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

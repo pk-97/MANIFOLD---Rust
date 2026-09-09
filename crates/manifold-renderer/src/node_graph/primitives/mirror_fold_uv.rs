@@ -17,6 +17,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Mirror/fold modes, indexed by the `mode` enum. Mirrors the legacy
 /// `TransformFX` table (the affine-only `Identity` plus eight
@@ -89,14 +90,7 @@ impl Primitive for MirrorFoldUv {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.mirror standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.mirror",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = MirrorFoldUvUniforms {
             mode,

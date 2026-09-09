@@ -22,6 +22,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Number of triangle vertices in the flat plane (2 triangles × 3 vertices).
 pub const PLANE_VERTEX_COUNT: u32 = 6;
@@ -110,16 +111,7 @@ impl Primitive for GeneratePlaneMesh {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // source path).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.plane_mesh standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.plane_mesh",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = PlaneUniforms {
             max_capacity,

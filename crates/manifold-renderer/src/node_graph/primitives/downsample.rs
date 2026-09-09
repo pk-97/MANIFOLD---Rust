@@ -28,6 +28,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const DOWNSAMPLE_FACTORS: &[&str] = &["2x", "4x", "8x"];
 
@@ -159,19 +160,7 @@ impl Primitive for Downsample {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // `in` is a Gather input (the body reads it via textureLoad at input-
-            // pixel coords, deriving the box factor from in_dims/out_dims). The
-            // generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3) — the sampler
-            // is bound but unused (textureLoad), matching the hand shader.
-            // downsample.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.downsample standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.downsample",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

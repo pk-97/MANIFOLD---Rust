@@ -23,6 +23,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use std::borrow::Cow;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`point_x`,
 /// `point_y`, `amplitude`, `envelope`, `radius`, `active_count` Int → i32), then
@@ -197,17 +198,7 @@ impl Primitive for ApplyRadialBurstToParticles {
         let dt_scaled = ctx.time.delta.0 as f32 * 60.0;
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path; two derived fields). The bespoke simplex is inlined
-            // in the body.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.add_burst standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.add_burst",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = BurstUniforms {
             point_x,

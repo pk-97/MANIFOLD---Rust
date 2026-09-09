@@ -23,6 +23,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 // Standalone-codegen uniform layout: PARAMS order (amount, block_size, speed,
 // time) then the injected multi-output write flags (write_offset, write_hash),
@@ -147,18 +148,7 @@ impl Primitive for BlockDisplaceField {
         };
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Multi-output Source: the generated kernel binds uniform(0)/dst_offset
-            // (1)/dst_hash(2), the body returns both in BodyOutputs, and each store
-            // is gated on the injected write flag. block_displace_field.wgsl is the
-            // parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.block_displace_field standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.block_displace_field",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = BlockDisplaceUniforms {
             amount,

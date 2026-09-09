@@ -27,6 +27,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`diffusion`
 /// f32, `active_count` Int → i32) then the derived `frame_count` (u32, exact
@@ -156,16 +157,7 @@ impl Primitive for DiffuseForce3DAtParticles {
         let frame_count = ctx.time.frame_count as u32;
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident multi-input + Texture3D + derived frame_count).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.spread_out_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.spread_out_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

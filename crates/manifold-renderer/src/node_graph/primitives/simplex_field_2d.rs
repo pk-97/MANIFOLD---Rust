@@ -21,6 +21,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const SIMPLEX_FIELD_OUTPUT_CHANNELS: &[&str] = &["R", "G", "B", "A"];
 
@@ -165,14 +166,7 @@ impl Primitive for SimplexField2D {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.simplex_field_2d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.simplex_field_2d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = SimplexFieldUniforms {
             scale_x,

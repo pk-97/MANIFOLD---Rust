@@ -34,6 +34,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Same generous headroom as `node.gltf_morph_weights::MAX_TARGETS` —
 /// duplicated rather than shared across the two small A3 primitives (no
@@ -135,14 +136,7 @@ impl Primitive for MorphTargetsBlend {
         let weights_len = (weights_buf.size / std::mem::size_of::<f32>() as u64) as u32;
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.morph_targets_blend standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.morph_targets_blend",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = MorphTargetsBlendUniforms {
             target_count,

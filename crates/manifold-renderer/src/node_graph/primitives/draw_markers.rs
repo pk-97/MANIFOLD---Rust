@@ -21,6 +21,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: PARAMS order — `symbol` (Enum → u32),
 /// `color` (Color param → 4 consecutive f32 fields, reassembled as
@@ -148,15 +149,7 @@ impl Primitive for DrawMarkers {
         // Codegen path (mandatory for per-element GPU atoms, D3/BUG-114): the
         // kernel is generated from `wgsl_body` so the atom fuses into a
         // texture region via the `BufferIndex` read path.
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.draw_markers standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.draw_markers",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

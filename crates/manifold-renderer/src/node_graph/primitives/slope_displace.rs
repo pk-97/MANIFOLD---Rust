@@ -14,6 +14,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -101,18 +102,7 @@ impl Primitive for SlopeDisplace {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // `base` + `image` are both Gather inputs (neighbour taps + a final
-            // dependent sample of image at the displaced UV). Generated kernel binds
-            // uniform(0)/base(1)/image(2)/samp(3)/dst(4). slope_displace.wgsl is the
-            // parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.slope_displace standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.slope_displace",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

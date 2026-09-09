@@ -12,6 +12,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -116,20 +117,7 @@ impl Primitive for TrigTexture {
         let (w, h) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // 3 coincident texture inputs (in + optional freq_tex/phase_tex). The
-            // generated kernel binds uniform(0)/in(1)/freq_tex(2)/phase_tex(3)/
-            // samp(4)/dst(5) — textures-then-sampler-then-output, which reorders the
-            // hand layout (output was at 3). The injected use_freq_tex/use_phase_tex
-            // flags select per-pixel texture vs scalar. trig_texture.wgsl is the
-            // parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.sine_cosine standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.sine_cosine",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

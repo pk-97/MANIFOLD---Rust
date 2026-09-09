@@ -20,6 +20,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `active_count` param (Int → i32) then
 /// the codegen-injected `dispatch_count`, padded to 16 bytes.
@@ -110,17 +111,7 @@ impl Primitive for SampleTexture3DAtParticles {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident + Texture3D path). sample_texture_3d_at_particles.wgsl is
-            // the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.sample_volume_at_particles standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.sample_volume_at_particles",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

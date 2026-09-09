@@ -13,6 +13,7 @@ use crate::generators::mesh_common::{CurvePoint, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`proj_scale`,
 /// `proj_dist`), then the derived `active_count` (declared `derived_uniforms`,
@@ -112,18 +113,7 @@ impl Primitive for Project4D {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path, type-changing in/out + derived active_count).
-            // project_4d.wgsl is the parity oracle (and the existing executor
-            // test compares against generator_math::project_4d).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.flatten_4d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.flatten_4d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = Project4DUniforms {
             proj_scale,

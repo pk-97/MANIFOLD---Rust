@@ -27,6 +27,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Maximum number of gradient stops packed into the uniform. Covers every
 /// legacy Infrared palette (max 6 explicit stops) with headroom for
@@ -163,18 +164,7 @@ impl Primitive for GradientRamp {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Source generator with a Table param: the generated kernel binds
-            // uniform(0)/dst(1); the `stops` Table expands to a count word + a
-            // 16-entry vec4 array. The body recovers the column t from uv.x.
-            // gradient_ramp.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.gradient standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.gradient",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = GradientRampUniforms {
             domain,

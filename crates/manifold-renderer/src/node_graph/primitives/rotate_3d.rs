@@ -13,6 +13,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the three Angle params (f32) in PARAMS
 /// order, then the codegen-injected `dispatch_count` (= vertex capacity, the
@@ -117,16 +118,7 @@ impl Primitive for Rotate3D {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.rotate_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.rotate_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let _ = active_count;
 
         let uniforms = Rotate3DUniforms {
