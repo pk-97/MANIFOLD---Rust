@@ -102,6 +102,16 @@ pub enum GraphError {
         material_kind: crate::node_graph::material::MaterialKind,
         missing_input: String,
     },
+    /// A bounded substep region failed derivation or validation at plan
+    /// compile time (`docs/WATER_SIMULATION_DESIGN.md` section 4). Carries
+    /// the boundary node and the offending node so the editor can
+    /// highlight both; `reason` names the broken rule. A malformed region
+    /// is a compile error, never a fallback to ordinary traversal.
+    MalformedSubstepRegion {
+        boundary: NodeInstanceId,
+        node: NodeInstanceId,
+        reason: String,
+    },
 }
 
 /// Payload for [`GraphError::ChannelMismatch`]. Boxed inside the
@@ -309,6 +319,14 @@ impl std::fmt::Display for GraphError {
                 f,
                 "node {node:?}: conditional input `{missing_input}` is required when the \
                  wired material has kind {material_kind:?}, but no wire is connected to that port."
+            ),
+            Self::MalformedSubstepRegion {
+                boundary,
+                node,
+                reason,
+            } => write!(
+                f,
+                "malformed substep region at boundary {boundary:?} (node {node:?}): {reason}"
             ),
         }
     }
@@ -1294,6 +1312,7 @@ mod tests {
             GraphError::CycleDetected { .. } => "CycleDetected",
             GraphError::PortFormatMismatch { .. } => "PortFormatMismatch",
             GraphError::ConditionalRequirementUnmet { .. } => "ConditionalRequirementUnmet",
+            GraphError::MalformedSubstepRegion { .. } => "MalformedSubstepRegion",
             GraphError::ChannelMismatch(_) => "ChannelMismatch",
             GraphError::TextureChannelMismatch(_) => "TextureChannelMismatch",
         }

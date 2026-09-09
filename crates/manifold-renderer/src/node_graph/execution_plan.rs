@@ -282,6 +282,10 @@ impl ExecutionPlan {
         p.steps.truncate(k);
         p.hoistable_steps.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
+        // A region only survives truncation whole: a prefix that cuts
+        // through a body has no valid repeat semantics, so it reverts to
+        // ordinary linear steps (profiling-only path, never live render).
+        p.substep_regions.retain(|r| r.steps.iter().all(|&i| i < k));
         p
     }
 }
@@ -347,6 +351,15 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     } else {
         full_order
     };
+
+    // Bounded substep regions: derive membership, reject malformed
+    // regions with a compile error, and contract each region to a
+    // contiguous block (boundary first) so the outer plan treats it as
+    // one vertex. Runs before resource assignment so every downstream
+    // pass sees the contracted order. Empty work for graphs without a
+    // substep boundary.
+    let mut order = order;
+    let region_nodes = crate::node_graph::substeps::derive_regions(graph, &mut order)?;
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.
@@ -670,7 +683,11 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             .get_node(node_id)
             .expect("topo order references existing node");
         let state_capture_ports = inst.node.state_capture_input_ports();
-        if !state_capture_ports.is_empty() {
+        // Substep boundaries declare state-capture ports but are excluded
+        // from the frame-end late pass: the executor's region path runs
+        // their capture once per ITERATION, and running it again at frame
+        // end would double-accept the candidate state.
+        if !state_capture_ports.is_empty() && inst.node.substep_boundary().is_none() {
             late_capture_steps.push(step_idx);
         }
 
@@ -906,6 +923,48 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         last_reader.remove(res_id);
     }
 
+    // Map derived regions to step indices and compute their held
+    // resources: wires produced AND last-read inside the region. Those
+    // are excluded from `free_after` — the executor's region path holds
+    // them for the entire repeat (no per-iteration pool churn) and
+    // releases them when the region completes. Wires read OUTSIDE the
+    // region (the boundary's final outputs) keep ordinary lifetime:
+    // their last reader is an outside step and frees normally. Region
+    // steps are contiguous by construction (the contraction above), so
+    // `steps` records the boundary index followed by the body indices.
+    let mut substep_regions: Vec<crate::node_graph::substeps::SubstepRegion> = Vec::new();
+    for region in &region_nodes {
+        let step_indices: Vec<usize> = region
+            .body
+            .iter()
+            .map(|id| {
+                order
+                    .iter()
+                    .position(|n| n == id)
+                    .expect("region node is in the contracted order")
+            })
+            .collect();
+        let member: std::collections::HashSet<usize> = step_indices.iter().copied().collect();
+        let mut held_resources: Vec<ResourceId> = Vec::new();
+        for &idx in &step_indices {
+            for &(_, res) in &steps[idx].outputs {
+                if last_reader.get(&res).is_some_and(|r| member.contains(r)) {
+                    held_resources.push(res);
+                }
+            }
+        }
+        held_resources.sort();
+        held_resources.dedup();
+        for res in &held_resources {
+            last_reader.remove(res);
+        }
+        substep_regions.push(crate::node_graph::substeps::SubstepRegion {
+            boundary: region.boundary,
+            steps: step_indices,
+            held_resources,
+        });
+    }
+
     // Third pass — Part B: bucket resources by their last_reader
     // step (now reflecting any skip-passthrough extensions) and
     // attach to the corresponding step's free_after list. Sort
@@ -952,7 +1011,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         held_resources: held,
         hoistable_steps,
         late_capture_steps,
-        substep_regions: Vec::new(),
+        substep_regions,
     })
 }
 
