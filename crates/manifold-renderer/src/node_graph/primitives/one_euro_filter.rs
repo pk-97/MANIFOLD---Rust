@@ -170,10 +170,8 @@ impl Primitive for OneEuroFilter {
         // pass through unsmoothed. Easing from the old scene's values
         // after a cut reads as lag; the cut signal means the input
         // stream has legitimately jumped.
-        let cut_threshold = match ctx.params.get("cut_threshold") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.25,
-        };
+        let cut_threshold = ctx.param_f32("cut_threshold", 0.25);
+
         if ctx.scalar_or_param("cut", 0.0) > cut_threshold {
             self.prev.copy_from_slice(in_slice);
             self.dx.fill(0.0);

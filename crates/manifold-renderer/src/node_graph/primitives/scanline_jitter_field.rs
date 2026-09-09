@@ -181,23 +181,17 @@ impl Primitive for ScanlineJitterField {
             Some(ParamValue::Float(f)) => *f as i32,
             _ => 0,
         };
-        let bands = match ctx.params.get("bands") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let spread = match ctx.params.get("spread") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let bands = ctx.param_f32("bands", 0.0);
+
+        let spread = ctx.param_f32("spread", 0.0);
+
         let spread_mode = match ctx.params.get("spread_mode") {
             Some(ParamValue::Enum(n)) => *n as i32,
             Some(ParamValue::Float(f)) => *f as i32,
             _ => 0,
         };
-        let angle = match ctx.params.get("angle") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let angle = ctx.param_f32("angle", 0.0);
+
         let time = match ctx.inputs.scalar("time") {
             Some(ParamValue::Float(f)) => f,
             _ => ctx.time.seconds.0 as f32,

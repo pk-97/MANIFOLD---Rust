@@ -225,10 +225,8 @@ impl Primitive for SceneArray {
             Some(ParamValue::Enum(n)) => *n,
             _ => 4, // +Z
         };
-        let cell_size = match ctx.params.get("cell_size") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 10.0,
-        };
+        let cell_size = ctx.param_f32("cell_size", 10.0);
+
         let jitter_seed = ctx.params.get("jitter_seed").and_then(|v| v.as_u32_clamped(0)).unwrap_or(0);
         let jitter_amount = ctx.scalar_or_param("jitter_amount", 0.0).clamp(0.0, 1.0);
 

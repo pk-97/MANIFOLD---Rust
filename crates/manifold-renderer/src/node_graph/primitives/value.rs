@@ -49,10 +49,8 @@ crate::primitive! {
 
 impl Primitive for Value {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let value = match ctx.params.get("value") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let value = ctx.param_f32("value", 0.0);
+
         ctx.outputs.set_scalar("out", ParamValue::Float(value));
     }
 }

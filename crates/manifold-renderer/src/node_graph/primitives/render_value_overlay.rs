@@ -348,14 +348,10 @@ impl Primitive for RenderValueOverlay {
             Some(ParamValue::Float(f)) => f.round().max(0.0) as usize,
             _ => 32,
         };
-        let offset_x = match ctx.params.get("offset_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let offset_y = match ctx.params.get("offset_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let offset_x = ctx.param_f32("offset_x", 0.0);
+
+        let offset_y = ctx.param_f32("offset_y", 0.0);
+
         let anchor_idx = match ctx.params.get("anchor") {
             Some(ParamValue::Enum(v)) => *v,
             Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,

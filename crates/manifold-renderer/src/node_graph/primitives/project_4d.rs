@@ -88,14 +88,9 @@ impl Primitive for Project4D {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let proj_scale = match ctx.params.get("proj_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.25,
-        };
-        let proj_dist = match ctx.params.get("proj_dist") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 3.0,
-        };
+        let proj_scale = ctx.param_f32("proj_scale", 0.25);
+
+        let proj_dist = ctx.param_f32("proj_dist", 3.0);
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;

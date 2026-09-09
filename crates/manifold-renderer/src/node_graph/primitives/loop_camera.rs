@@ -252,10 +252,8 @@ crate::primitive! {
 
 impl Primitive for LoopCamera {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cell_size = match ctx.params.get("cell_size") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 10.0,
-        };
+        let cell_size = ctx.param_f32("cell_size", 10.0);
+
         let axis = match ctx.params.get("axis") {
             Some(ParamValue::Enum(n)) => *n,
             _ => 4, // +Z
@@ -266,14 +264,9 @@ impl Primitive for LoopCamera {
         // D4 gap rule); standalone default 0 starts at the origin.
         let home = ctx.scalar_or_param("home", 0.0);
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
-        let near = match ctx.params.get("near") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.05,
-        };
-        let far = match ctx.params.get("far") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 200.0,
-        };
+        let near = ctx.param_f32("near", 0.05);
+
+        let far = ctx.param_f32("far", 200.0);
 
         // P4 loop controls — all phase-periodic (see the ParamDef block
         // above). Unset/absent reads as "off": flow 0 = linear travel,

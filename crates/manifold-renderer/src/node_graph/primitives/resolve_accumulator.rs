@@ -69,10 +69,7 @@ crate::primitive! {
 
 impl Primitive for ResolveAccumulator {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let fixed_point_scale = match ctx.params.get("fixed_point_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 4096.0,
-        };
+        let fixed_point_scale = ctx.param_f32("fixed_point_scale", 4096.0);
 
         let Some(accum) = ctx.inputs.array("accum") else {
             return;

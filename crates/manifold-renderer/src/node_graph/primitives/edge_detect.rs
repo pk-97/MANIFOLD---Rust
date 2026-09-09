@@ -77,14 +77,9 @@ struct EdgeDetectUniforms {
 
 impl Primitive for EdgeDetect {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let amount = match ctx.params.get("amount") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let threshold = match ctx.params.get("threshold") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.1,
-        };
+        let amount = ctx.param_f32("amount", 0.0);
+
+        let threshold = ctx.param_f32("threshold", 0.1);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;

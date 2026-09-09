@@ -167,14 +167,9 @@ inventory::submit! {
 
 impl Primitive for CocFromDepth {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let max_radius = match ctx.params.get("max_radius") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 24.0,
-        };
-        let world_to_mm = match ctx.params.get("world_to_mm") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1000.0,
-        };
+        let max_radius = ctx.param_f32("max_radius", 24.0);
+
+        let world_to_mm = ctx.param_f32("world_to_mm", 1000.0);
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far, focus_distance, f_stop] = derive_lens_scalars(&cam);

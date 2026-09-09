@@ -173,34 +173,19 @@ impl Primitive for GenerateInstanceTransforms {
             Some(ParamValue::Float(n)) => n.round() as u32,
             _ => 0,
         };
-        let extent_x = match ctx.params.get("extent_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 4.0,
-        };
-        let extent_y = match ctx.params.get("extent_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 4.0,
-        };
-        let extent_z = match ctx.params.get("extent_z") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 4.0,
-        };
-        let base_scale = match ctx.params.get("base_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let rot_x = match ctx.params.get("rot_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let rot_y = match ctx.params.get("rot_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let rot_z = match ctx.params.get("rot_z") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let extent_x = ctx.param_f32("extent_x", 4.0);
+
+        let extent_y = ctx.param_f32("extent_y", 4.0);
+
+        let extent_z = ctx.param_f32("extent_z", 4.0);
+
+        let base_scale = ctx.param_f32("base_scale", 1.0);
+
+        let rot_x = ctx.param_f32("rot_x", 0.0);
+
+        let rot_y = ctx.param_f32("rot_y", 0.0);
+
+        let rot_z = ctx.param_f32("rot_z", 0.0);
 
         let Some(out_buf) = ctx.outputs.array("instances") else {
             return;

@@ -113,14 +113,9 @@ impl EffectNode for Threshold {
         Some(include_str!("shaders/threshold_body.wgsl"))
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let level = match ctx.params.get("level") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
-        let softness = match ctx.params.get("softness") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let level = ctx.param_f32("level", 0.5);
+
+        let softness = ctx.param_f32("softness", 0.0);
 
         let Some(source) = ctx.inputs.texture_2d("source") else {
             return;
@@ -273,10 +268,8 @@ impl EffectNode for Blur {
         &BLUR_PARAMS
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let radius = match ctx.params.get("radius") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 4.0,
-        };
+        let radius = ctx.param_f32("radius", 4.0);
+
         let mode = match ctx.params.get("mode") {
             Some(ParamValue::Enum(i)) => *i,
             _ => 0,

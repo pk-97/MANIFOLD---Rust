@@ -63,14 +63,9 @@ crate::primitive! {
 
 impl Primitive for PolarField {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cx = match ctx.params.get("cx") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
-        let cy = match ctx.params.get("cy") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
+        let cx = ctx.param_f32("cx", 0.5);
+
+        let cy = ctx.param_f32("cy", 0.5);
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;

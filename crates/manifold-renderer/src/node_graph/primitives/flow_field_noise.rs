@@ -132,14 +132,10 @@ impl Primitive for FlowFieldNoise {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let z_scale = match ctx.params.get("z_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.01,
-        };
-        let warp_scale = match ctx.params.get("warp_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
+        let z_scale = ctx.param_f32("z_scale", 0.01);
+
+        let warp_scale = ctx.param_f32("warp_scale", 0.5);
+
         let time = ctx.time.seconds.0 as f32;
 
         let Some(flow) = ctx.outputs.texture_2d("flow") else {

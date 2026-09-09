@@ -310,14 +310,10 @@ impl Primitive for BlobDetectFfi {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.last_output_count = None;
-        let threshold = match ctx.params.get("threshold") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
-        let sensitivity = match ctx.params.get("sensitivity") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
+        let threshold = ctx.param_f32("threshold", 0.5);
+
+        let sensitivity = ctx.param_f32("sensitivity", 0.5);
+
         let analysis_max_dim = match ctx.params.get("analysis_max_dim") {
             Some(ParamValue::Float(i)) => i.round().max(64_f32) as u32,
             _ => 360,

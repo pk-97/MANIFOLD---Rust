@@ -105,14 +105,10 @@ impl Primitive for BlobOverlayRender {
             Some(ParamValue::Color(c)) => [c[0], c[1], c[2], 1.0],
             _ => [0.0, 1.0, 0.5, 1.0],
         };
-        let alpha = match ctx.params.get("alpha") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.8,
-        };
-        let border_width = match ctx.params.get("border_width") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.003,
-        };
+        let alpha = ctx.param_f32("alpha", 0.8);
+
+        let border_width = ctx.param_f32("border_width", 0.003);
+
         let blob_count = match ctx.params.get("blob_count") {
             Some(ParamValue::Float(i)) => i.round().max(0_f32) as i32,
             _ => 32,

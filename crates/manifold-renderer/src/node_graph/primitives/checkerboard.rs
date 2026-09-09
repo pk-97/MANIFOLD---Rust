@@ -68,18 +68,11 @@ crate::primitive! {
 
 impl Primitive for Checkerboard {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let scale = match ctx.params.get("scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 8.0,
-        };
-        let offset_x = match ctx.params.get("offset_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let offset_y = match ctx.params.get("offset_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let scale = ctx.param_f32("scale", 8.0);
+
+        let offset_x = ctx.param_f32("offset_x", 0.0);
+
+        let offset_y = ctx.param_f32("offset_y", 0.0);
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;

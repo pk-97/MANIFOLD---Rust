@@ -75,10 +75,8 @@ crate::primitive! {
 
 impl Primitive for GenerateCubeMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let size = match ctx.params.get("size") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let size = ctx.param_f32("size", 1.0);
+
         // Allocation-only param — not used by the shader, but the generated
         // uniform lays out every PARAM, so pack it (the body ignores it).
         let max_capacity = match ctx.params.get("max_capacity") {

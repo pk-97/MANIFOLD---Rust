@@ -93,18 +93,11 @@ impl Primitive for SampleVolume2D {
             Some(ParamValue::Float(f)) => f.clamp(0.0, 1.0),
             _ => 0.5,
         };
-        let uv_scale = match ctx.params.get("uv_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let center_x = match ctx.params.get("center_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let center_y = match ctx.params.get("center_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let uv_scale = ctx.param_f32("uv_scale", 1.0);
+
+        let center_x = ctx.param_f32("center_x", 0.0);
+
+        let center_y = ctx.param_f32("center_y", 0.0);
 
         let Some(volume) = ctx.inputs.texture_3d("in") else {
             return;
