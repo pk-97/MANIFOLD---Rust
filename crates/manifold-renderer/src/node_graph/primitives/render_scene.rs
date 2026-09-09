@@ -4505,6 +4505,225 @@ impl RenderScene {
         ))
     }
 
+    /// BUG-trh7 stage 2, pass 9: the light-shaft march + depth-aware
+    /// bilateral upsample + additive composite. Gates on wants_shafts_now
+    /// internally — when off, none of these textures/pipelines exist and
+    /// the method is one branch. Binds its own caster table and shadow
+    /// maps (the ensure block guarantees them). Consumes the shaft-light
+    /// table the RT block appended its emissive pseudo-lights to.
+    #[allow(clippy::too_many_arguments, reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape")]
+    fn shafts_pass<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        resolve_target: &manifold_gpu::GpuTexture,
+        depth_resolve_target: Option<&manifold_gpu::GpuTexture>,
+        mut shaft_light_data: Vec<[f32; 4]>,
+        shaft_light_count: u32,
+        rt_ready: bool,
+    ) {
+        let FramePrelude { ref caster_table, cam, atmosphere, aspect, rt_enabled, wants_shafts_now, .. } = *pre;
+        let caster_bytes: &[u8] = bytemuck::cast_slice(caster_table);
+        let dummy = self.dummy_texture.as_ref().expect("just inserted");
+        let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
+        let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        const _: () = assert!(
+            MAX_SHADOW_CASTING_LIGHTS == 4,
+            "shadow-map bindings + shader switch are hand-unrolled for K=4"
+        );
+        let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
+            self.shadow_maps[slot]
+                .as_ref()
+                .map(|(_, t)| t)
+                .unwrap_or(dummy_depth)
+        };
+        let shadow_0 = shadow_tex(0);
+        let shadow_1 = shadow_tex(1);
+        let shadow_2 = shadow_tex(2);
+        let shadow_3 = shadow_tex(3);
+
+        // depth-aware bilateral upsample + additive composite. Runs ONLY
+        // when `wants_shafts_now` (the V1/D1 gate) — the default
+        // `shaft_intensity == 0` never reaches this block, so the rest of
+        // this function's behavior (and every byte it produces) is
+        // untouched when shafts are off. ----
+        if wants_shafts_now {
+            let half_w = self.shaft_half_width;
+            let half_h = self.shaft_half_height;
+            let full_depth = depth_resolve_target.expect("ensured above: wants_shafts_now => Some");
+            let half_depth = self.shaft_depth_half.as_ref().expect("ensured above");
+            let inscatter = self.shaft_inscatter.as_ref().expect("ensured above");
+            let downsample_pipeline = self.shaft_downsample_pipeline.as_ref().expect("ensured above");
+            let march_pipeline = self.shaft_march_pipeline.as_ref().expect("ensured above");
+            let composite_pipeline = self.shaft_composite_pipeline.as_ref().expect("ensured above");
+
+            {
+                let gpu = ctx.gpu_encoder();
+                gpu.native_enc.dispatch_compute(
+                    downsample_pipeline,
+                    &[
+                        GpuBinding::Texture { binding: 0, texture: full_depth },
+                        GpuBinding::Texture { binding: 1, texture: half_depth },
+                    ],
+                    [half_w.div_ceil(16), half_h.div_ceil(16), 1],
+                    "node.render_scene shaft downsample",
+                );
+            }
+
+            let fov_y = match cam.mode {
+                crate::node_graph::camera::CameraMode::Perspective { fov_y } => fov_y,
+                crate::node_graph::camera::CameraMode::Orthographic { .. } => {
+                    std::f32::consts::FRAC_PI_3
+                }
+            };
+            let steps = shaft_step_count(atmosphere.shaft_quality) as f32;
+            let march_uniforms = ShaftMarchUniforms {
+                camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], cam.near],
+                camera_right: [cam.right[0], cam.right[1], cam.right[2], cam.far],
+                camera_up: [cam.up[0], cam.up[1], cam.up[2], fov_y],
+                camera_fwd: [cam.fwd[0], cam.fwd[1], cam.fwd[2], aspect],
+                fog_shaft: [
+                    atmosphere.fog_density,
+                    atmosphere.height_falloff,
+                    atmosphere.shaft_anisotropy,
+                    atmosphere.shaft_intensity,
+                ],
+                // RAYTRACING_DESIGN.md section 5.2 P3/D5: `rt_shadow_mask` (below)
+                // is only meaningfully populated when RT is on AND its
+                // accel structure is ready (same `rt_ready` gate the
+                // surface pass uses) — a stale/never-written mask read with
+                // the flag on would corrupt the Sun term, so the flag
+                // mirrors that exact condition, not `rt_enabled` alone.
+                misc: [
+                    steps,
+                    shaft_light_count as f32,
+                    cam.lens.exposure_ev,
+                    if rt_enabled && rt_ready { 1.0 } else { 0.0 },
+                ],
+            };
+            // D4 always-bind discipline: the march's `shaft_lights` binding
+            // must be a valid (non-zero-length) buffer even at 0 lights
+            // (`shaft_light_count` gates the shader's loop, not the
+            // binding's presence) — checked HERE, after every append
+            // (real lights above, RT-P3's emissive pseudo-lights in the RT
+            // block above) has already happened, so a stub only gets added
+            // when the buffer is genuinely still empty. 3 vec4s = one
+            // zeroed light-shaped stub.
+            if shaft_light_data.is_empty() {
+                shaft_light_data.extend([[0.0f32; 4]; 3]);
+            }
+            let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
+            {
+                let gpu = ctx.gpu_encoder();
+                gpu.native_enc.dispatch_compute(
+                    march_pipeline,
+                    &[
+                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
+                        GpuBinding::Texture { binding: 1, texture: half_depth },
+                        GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
+                        GpuBinding::Bytes { binding: 3, data: caster_bytes },
+                        GpuBinding::Texture { binding: 4, texture: shadow_0 },
+                        GpuBinding::Texture { binding: 5, texture: shadow_1 },
+                        GpuBinding::Texture { binding: 6, texture: shadow_2 },
+                        GpuBinding::Texture { binding: 7, texture: shadow_3 },
+                        GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
+                        GpuBinding::Texture { binding: 9, texture: inscatter },
+                        GpuBinding::Texture { binding: 10, texture: rt_mask_tex },
+                    ],
+                    [half_w.div_ceil(16), half_h.div_ceil(16), 1],
+                    "node.render_scene shaft march",
+                );
+            }
+
+            let composite_uniforms = ShaftCompositeUniforms {
+                near_far: [cam.near, cam.far, 0.0, 0.0],
+            };
+            let gpu = ctx.gpu_encoder();
+            gpu.native_enc.draw_instanced(
+                composite_pipeline,
+                resolve_target,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&composite_uniforms),
+                    },
+                    GpuBinding::Texture { binding: 1, texture: inscatter },
+                    GpuBinding::Texture { binding: 2, texture: half_depth },
+                    GpuBinding::Texture { binding: 3, texture: full_depth },
+                ],
+                3,
+                1,
+                manifold_gpu::GpuLoadAction::Load,
+                "node.render_scene shaft composite",
+            );
+        }
+
+    }
+
+    /// BUG-trh7 stage 2, pass 10: the firefly clamp on the fully
+    /// composited resolve_target, writing `target`, so the upscale/denoise
+    /// tail reads the clamped color. Depth guide is the internal
+    /// single-sample opaque_depth_snapshot. Gates on
+    /// rt_rendered_this_frame && rt_firefly_clamp_enabled && !denoise_active
+    /// — clamping when RT did not render is a forbidden move.
+    fn firefly_clamp_pass<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        resolve_target: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
+        rt_rendered_this_frame: bool,
+        denoise_active: bool,
+        emissive_table_mean_power: f32,
+    ) {
+        let FramePrelude { width, height, rt_firefly_clamp_enabled, .. } = *pre;
+        // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the fully
+        // composited `resolve_target` (Pass A + transmissive Pass B + shafts)
+        // and writes `target`, so the upscale/denoise tail below reads the
+        // clamped color. Depth guide is the internal single-sample
+        // `opaque_depth_snapshot` (the SAME depth `atrous_filter`/
+        // `accumulate_irradiance` read) — NOT `self.depth_texture`, which is
+        // the 4x-MSAA memoryless Pass-2 target and unreadable in a compute
+        // pass, and NOT the lazy graph `depth` output, which is `None` when
+        // unwired. `opaque_depth_snapshot` is ensured whenever `rt_enabled`,
+        // so it is resident on every frame `rt_rendered_this_frame` can be
+        // true.
+        let firefly_clamp_active = rt_rendered_this_frame
+            && rt_firefly_clamp_enabled
+            && !denoise_active;
+        if firefly_clamp_active {
+            let tracer = self
+                .rt_tracer
+                .as_ref()
+                .expect("rt_rendered_this_frame implies rt_tracer ensured");
+            let firefly_params_buffer = self
+                .rt_firefly_params_buffer
+                .as_ref()
+                .expect("ensured above");
+            let firefly_depth = self
+                .opaque_depth_snapshot
+                .as_ref()
+                .expect("ensured above: rt_enabled implies opaque depth snapshot");
+            let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new(
+                [width, height],
+                FIREFLY_MEDIAN_GAIN,
+                FIREFLY_ABS_FLOOR_MIN.max(emissive_table_mean_power),
+            );
+            tracer.firefly_clamp(
+                ctx.gpu_encoder().native_enc,
+                &firefly_params,
+                firefly_params_buffer,
+                firefly_depth,
+                resolve_target,
+                target,
+                "node.render_scene RT firefly_clamp",
+            );
+        }
+
+    }
+
+
 
 
 
@@ -7843,19 +8062,19 @@ impl EffectNode for RenderScene {
             return;
         };
         let FramePrelude {
-            probe_t0: _probe_t0, objects: _, cam, envmap_wired: _, atmosphere,
+            probe_t0: _probe_t0, objects: _, cam: _, envmap_wired: _, atmosphere: _,
             light_data: _, light_count: _, ref casters,
-            ref caster_table,
-            native_width, native_height, width, height, aspect, temporal_upscale,
+            caster_table: _,
+            native_width, native_height, width, height, aspect: _, temporal_upscale,
             view_proj: _, prev_view_proj: _, jitter_px, jitter_ndc: _, prev_jitter_ndc: _,
             cam_motion: _, rt_enabled, rt_reflections: _, rt_shadows_enabled: _,
-            rt_ao_enabled: _, rt_gi_enabled: _, rt_firefly_clamp_enabled, rtq: _,
+            rt_ao_enabled: _, rt_gi_enabled: _, rt_firefly_clamp_enabled: _, rtq: _,
             denoise_strength: _, denoise_iterations: _, rt_trace_w: _, rt_trace_h: _,
             toggle_flipped: _, reset_decision, upscale_just_resumed, velocity_wired: _,
             ao_mask_wired: _, denoise_feed: _, denoise_aux_ready: _, spec_hit_dist_out,
             normals_resolve_target, roughness_resolve_target,
             diffuse_albedo_resolve_target, specular_albedo_resolve_target,
-            reactive_resolve_target, wants_shafts_now, depth_wired: _,
+            reactive_resolve_target, wants_shafts_now: _, depth_wired: _,
         } = pre;
         let FrameRtState {
             mut rt_ready,
@@ -8008,188 +8227,29 @@ impl EffectNode for RenderScene {
         let depth_resolve_target = depth_resolve_target.as_ref();
         let velocity_resolve_target = velocity_resolve_target.as_ref();
 
-        // Shafts binds its own caster table + shadow maps (each pass binds
-        // what it needs since the stage-2 carve — the ensure block
-        // guarantees them; the K=4 unroll assert is unchanged).
-        let caster_bytes: &[u8] = bytemuck::cast_slice(caster_table);
-        let dummy = self.dummy_texture.as_ref().expect("just inserted");
-        let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
-        let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
-        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        const _: () = assert!(
-            MAX_SHADOW_CASTING_LIGHTS == 4,
-            "shadow-map bindings + shader switch are hand-unrolled for K=4"
+        // ---- Light-shaft march + composite (BUG-trh7 stage 2,
+        // `shafts_pass`) — one branch when wants_shafts_now is off.
+        self.shafts_pass(
+            ctx,
+            &pre,
+            resolve_target,
+            depth_resolve_target,
+            shaft_light_data,
+            shaft_light_count,
+            rt_ready,
         );
-        let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
-            self.shadow_maps[slot]
-                .as_ref()
-                .map(|(_, t)| t)
-                .unwrap_or(dummy_depth)
-        };
-        let shadow_0 = shadow_tex(0);
-        let shadow_1 = shadow_tex(1);
-        let shadow_2 = shadow_tex(2);
-        let shadow_3 = shadow_tex(3);
 
-        // ---- VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): light-shaft march +
-        // depth-aware bilateral upsample + additive composite. Runs ONLY
-        // when `wants_shafts_now` (the V1/D1 gate) — the default
-        // `shaft_intensity == 0` never reaches this block, so the rest of
-        // this function's behavior (and every byte it produces) is
-        // untouched when shafts are off. ----
-        if wants_shafts_now {
-            let half_w = self.shaft_half_width;
-            let half_h = self.shaft_half_height;
-            let full_depth = depth_resolve_target.expect("ensured above: wants_shafts_now => Some");
-            let half_depth = self.shaft_depth_half.as_ref().expect("ensured above");
-            let inscatter = self.shaft_inscatter.as_ref().expect("ensured above");
-            let downsample_pipeline = self.shaft_downsample_pipeline.as_ref().expect("ensured above");
-            let march_pipeline = self.shaft_march_pipeline.as_ref().expect("ensured above");
-            let composite_pipeline = self.shaft_composite_pipeline.as_ref().expect("ensured above");
-
-            {
-                let gpu = ctx.gpu_encoder();
-                gpu.native_enc.dispatch_compute(
-                    downsample_pipeline,
-                    &[
-                        GpuBinding::Texture { binding: 0, texture: full_depth },
-                        GpuBinding::Texture { binding: 1, texture: half_depth },
-                    ],
-                    [half_w.div_ceil(16), half_h.div_ceil(16), 1],
-                    "node.render_scene shaft downsample",
-                );
-            }
-
-            let fov_y = match cam.mode {
-                crate::node_graph::camera::CameraMode::Perspective { fov_y } => fov_y,
-                crate::node_graph::camera::CameraMode::Orthographic { .. } => {
-                    std::f32::consts::FRAC_PI_3
-                }
-            };
-            let steps = shaft_step_count(atmosphere.shaft_quality) as f32;
-            let march_uniforms = ShaftMarchUniforms {
-                camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], cam.near],
-                camera_right: [cam.right[0], cam.right[1], cam.right[2], cam.far],
-                camera_up: [cam.up[0], cam.up[1], cam.up[2], fov_y],
-                camera_fwd: [cam.fwd[0], cam.fwd[1], cam.fwd[2], aspect],
-                fog_shaft: [
-                    atmosphere.fog_density,
-                    atmosphere.height_falloff,
-                    atmosphere.shaft_anisotropy,
-                    atmosphere.shaft_intensity,
-                ],
-                // RAYTRACING_DESIGN.md section 5.2 P3/D5: `rt_shadow_mask` (below)
-                // is only meaningfully populated when RT is on AND its
-                // accel structure is ready (same `rt_ready` gate the
-                // surface pass uses) — a stale/never-written mask read with
-                // the flag on would corrupt the Sun term, so the flag
-                // mirrors that exact condition, not `rt_enabled` alone.
-                misc: [
-                    steps,
-                    shaft_light_count as f32,
-                    cam.lens.exposure_ev,
-                    if rt_enabled && rt_ready { 1.0 } else { 0.0 },
-                ],
-            };
-            // D4 always-bind discipline: the march's `shaft_lights` binding
-            // must be a valid (non-zero-length) buffer even at 0 lights
-            // (`shaft_light_count` gates the shader's loop, not the
-            // binding's presence) — checked HERE, after every append
-            // (real lights above, RT-P3's emissive pseudo-lights in the RT
-            // block above) has already happened, so a stub only gets added
-            // when the buffer is genuinely still empty. 3 vec4s = one
-            // zeroed light-shaped stub.
-            if shaft_light_data.is_empty() {
-                shaft_light_data.extend([[0.0f32; 4]; 3]);
-            }
-            let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
-            {
-                let gpu = ctx.gpu_encoder();
-                gpu.native_enc.dispatch_compute(
-                    march_pipeline,
-                    &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
-                        GpuBinding::Texture { binding: 1, texture: half_depth },
-                        GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
-                        GpuBinding::Bytes { binding: 3, data: caster_bytes },
-                        GpuBinding::Texture { binding: 4, texture: shadow_0 },
-                        GpuBinding::Texture { binding: 5, texture: shadow_1 },
-                        GpuBinding::Texture { binding: 6, texture: shadow_2 },
-                        GpuBinding::Texture { binding: 7, texture: shadow_3 },
-                        GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
-                        GpuBinding::Texture { binding: 9, texture: inscatter },
-                        GpuBinding::Texture { binding: 10, texture: rt_mask_tex },
-                    ],
-                    [half_w.div_ceil(16), half_h.div_ceil(16), 1],
-                    "node.render_scene shaft march",
-                );
-            }
-
-            let composite_uniforms = ShaftCompositeUniforms {
-                near_far: [cam.near, cam.far, 0.0, 0.0],
-            };
-            let gpu = ctx.gpu_encoder();
-            gpu.native_enc.draw_instanced(
-                composite_pipeline,
-                resolve_target,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&composite_uniforms),
-                    },
-                    GpuBinding::Texture { binding: 1, texture: inscatter },
-                    GpuBinding::Texture { binding: 2, texture: half_depth },
-                    GpuBinding::Texture { binding: 3, texture: full_depth },
-                ],
-                3,
-                1,
-                manifold_gpu::GpuLoadAction::Load,
-                "node.render_scene shaft composite",
-            );
-        }
-
-        // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the fully
-        // composited `resolve_target` (Pass A + transmissive Pass B + shafts)
-        // and writes `target`, so the upscale/denoise tail below reads the
-        // clamped color. Depth guide is the internal single-sample
-        // `opaque_depth_snapshot` (the SAME depth `atrous_filter`/
-        // `accumulate_irradiance` read) — NOT `self.depth_texture`, which is
-        // the 4x-MSAA memoryless Pass-2 target and unreadable in a compute
-        // pass, and NOT the lazy graph `depth` output, which is `None` when
-        // unwired. `opaque_depth_snapshot` is ensured whenever `rt_enabled`,
-        // so it is resident on every frame `rt_rendered_this_frame` can be
-        // true.
-        let firefly_clamp_active = rt_rendered_this_frame
-            && rt_firefly_clamp_enabled
-            && !denoise_active;
-        if firefly_clamp_active {
-            let tracer = self
-                .rt_tracer
-                .as_ref()
-                .expect("rt_rendered_this_frame implies rt_tracer ensured");
-            let firefly_params_buffer = self
-                .rt_firefly_params_buffer
-                .as_ref()
-                .expect("ensured above");
-            let firefly_depth = self
-                .opaque_depth_snapshot
-                .as_ref()
-                .expect("ensured above: rt_enabled implies opaque depth snapshot");
-            let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new(
-                [width, height],
-                FIREFLY_MEDIAN_GAIN,
-                FIREFLY_ABS_FLOOR_MIN.max(emissive_table_mean_power),
-            );
-            tracer.firefly_clamp(
-                ctx.gpu_encoder().native_enc,
-                &firefly_params,
-                firefly_params_buffer,
-                firefly_depth,
-                resolve_target,
-                target,
-                "node.render_scene RT firefly_clamp",
-            );
-        }
+        // ---- Firefly clamp (BUG-trh7 stage 2, `firefly_clamp_pass`) —
+        // resolve_target -> target when RT actually rendered.
+        self.firefly_clamp_pass(
+            ctx,
+            &pre,
+            resolve_target,
+            target,
+            rt_rendered_this_frame,
+            denoise_active,
+            emissive_table_mean_power,
+        );
 
         // RAYTRACING_DESIGN.md section 8.2 D22 (T2-B): everything above (Pass A/B,
         // shafts) has now resolved into `target` — the render-res color
