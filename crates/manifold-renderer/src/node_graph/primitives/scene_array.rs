@@ -72,7 +72,9 @@ fn window_ahead(far: f32, cell_size: f32) -> u32 {
 /// pattern_length (Int→i32), axis (Enum→u32), cell_size (f32),
 /// jitter_seed (Int→i32), jitter_amount (f32) — then the derived fields
 /// base_cell (i32), behind (u32), ahead (u32), use_camera (u32), then the
-/// codegen-injected dispatch_count (= output capacity). 10 words = 40 bytes.
+/// codegen-injected dispatch_count (= output capacity), then the codegen's
+/// 16-byte-alignment pad. 12 words = 48 bytes (BUG-gx6i: the proof caught
+/// this struct missing the pad — the WGSL Params is 48 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SceneArrayUniforms {
@@ -86,6 +88,8 @@ struct SceneArrayUniforms {
     ahead: u32,
     use_camera: u32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 /// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
@@ -294,6 +298,8 @@ impl Primitive for SceneArray {
             ahead,
             use_camera: use_camera as u32,
             dispatch_count: capacity,
+            _pad0: 0,
+            _pad1: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -531,6 +537,8 @@ mod gpu_tests {
             ahead,
             use_camera: 1,
             dispatch_count: capacity,
+            _pad0: 0,
+            _pad1: 0,
         };
         enc.dispatch_compute(
             pipeline,
