@@ -162,12 +162,13 @@ fn dispatch_tail_census_is_stable() {
 #[test]
 fn canonical_kernels_match_dispatch_helper_slot_order() {
     use crate::node_graph::primitives::standalone_pipeline::{
-        standalone_2d_slots, StandaloneSlot,
+        standalone_2d_slots, StandaloneSlot, STANDALONE_2D_MAX_BINDINGS,
     };
     for (id, sig, qualifies) in census() {
         if !qualifies {
             continue;
         }
+        assert!(sig.len() <= STANDALONE_2D_MAX_BINDINGS, "{id}: kernel exceeds stack binding capacity");
         let n_textures = sig
             .iter()
             .filter(|&&(_, r)| matches!(r, Res::TexSampled2d | Res::TexSampled3d))
