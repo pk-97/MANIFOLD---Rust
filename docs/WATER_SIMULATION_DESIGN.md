@@ -2,7 +2,7 @@
 
 <!-- index: Dedicated MLS-MPM water: bounded graph substeps, persistent layer state, moving colliders, scene depth/refraction, and the pool-and-cube prototype. -->
 
-**Status:** PROPOSED implementation specification · 2026-09-09 · Astra. Peter approved the direction and MVP; the numerical defaults below are hypotheses to prove, not measured capability. No water implementation is claimed.
+**Status:** PROPOSED implementation specification · 2026-09-09 · Astra. Peter approved the direction and MVP; the numerical defaults below are hypotheses to prove, not measured capability. No water implementation is claimed. Execution review 2026-09-09 (Astra, via Peter): the k3 lead seat owns S2/S7 and all landing; Q=2^20 is the sole momentum encoding, conditional on S1 proof; c0=10 stays baseline, with softness classified as expected only after the half-timestep stability gate (sections 5 and 8).
 **Prerequisites:** existing scene renderer, material system and native Metal backend. No cloth, ropes, baked-cache import or generic physics engine prerequisite.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; executable assignments are in [WATER_IMPLEMENTATION_PLAN.md](WATER_IMPLEMENTATION_PLAN.md).
 
@@ -12,7 +12,9 @@ Peter: “I agree we should split between water and cloth and ropes”; “The �
 just be a basic cube for testing”. This supersedes the PBF-first water lane in
 [SIMULATIONS_DESIGN.md](SIMULATIONS_DESIGN.md); XPBD remains that document's cloth/rope
 solver. Astra authors the architecture; Sol High owns implementation, diagnosis,
-review and landing with bounded Luna Low assignments.
+review and landing with bounded Luna Low assignments. Seat mapping for execution
+(Astra review 2026-09-09): Sol is the k3 lead seat in this repo's fleet, Luna
+lanes are K2.7 with two concurrent maximum, and Astra reviews escalations only.
 
 ## 1. Audit — what exists (verified 2026-09-09)
 
@@ -315,8 +317,16 @@ these are not clamping controls. The rest-density CFL check at installation is
 `dt*(c0+v_max)/h<=0.25`; at the defaults it is about 0.233. This is a guard,
 not a mathematical guarantee of stability of the whole discretisation. The EOS
 wave speed grows as c0*(rho/rho0)^3; the rest-density check does not bound that
-growth. S1 must report compressed-state CFL values, and S4 must prove the supported
-motion remains stable; the density fault bound alone is not a stability guarantee.
+growth. At 1.15*rho0 the sound speed is about 15.2 m/s, which puts the default
+step at CFL ~0.32 — above the 0.25 rest-density guard. Zero fault bits plus a
+rest-density CFL pass is therefore not stability evidence. S1 implements and
+reports the density-dependent acoustic CFL `dt*(c(rho)+|v|)/h`. S4 adds a
+bounded half-timestep comparison: the default pool and impact fixtures rerun at
+dt/2 must agree with dt in density field, particle motion and settling outcome
+within recorded tolerances. Softness is classified as expected compressibility
+only after that comparison passes; a mismatch is a numerical failure escalated
+to Astra/Peter before S7, not a lane tuning task. The density fault bound alone
+is not a stability guarantee.
 
 GPU fault propagation and accepted-state retention are same-substep. CPU reporting
 uses a bounded ring and completed prior submissions only; never wait for same-frame
@@ -504,6 +514,9 @@ for accumulated grid vs particles. Closed-basin tests lose ZERO live particles a
 keep total particle mass unchanged. Interior hydrostatic density median within 5%
 of rest, p95 within 15% (exclude the two-cell free-surface/boundary band). Collider
 penetration <=0.1*h after projection. No fault bits in the default 10-second sequence.
+Half-timestep comparison passes on the pool and impact fixtures: density field,
+particle motion and settling outcome at dt/2 agree with dt within recorded
+tolerances (thresholds recorded from the first passing run, then held).
 Record actual values. Thresholds are acceptance targets, not observed results; a
 failing target is evidence for Astra, not permission for Luna to loosen it.
 
@@ -517,6 +530,7 @@ failing target is evidence for Astra, not permission for Luna to loosen it.
 | Correct final-state visibility and resource lifetime | `substeps_final_state_and_zero_steps`, `substeps_no_recycle_between_iterations` |
 | Freeze preserves step semantics | `substeps_frozen_unfrozen_match`, existing GPU proof gate |
 | No signed overflow or invalid state committed | `water_signed_scatter_and_overflow`, `water_fault_retains_last_valid_state` |
+| Fixed dt resolves supported motion | `water_timestep_halving_stability` |
 | New typed layouts match WGSL | `water_channel_layouts_match` |
 | Shared cube geometry and collision | `water_cube_transform_and_collision_match` |
 | Opaque occlusion and scene depth include water | `water_scene_occlusion_and_depth`, no-water parity test |

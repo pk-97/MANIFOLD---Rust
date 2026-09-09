@@ -9,8 +9,9 @@
 
 Sol High owns the workstream, diagnoses failures, reviews edits and lands. Luna Low
 implements independently bounded assignments with the exact brief and relevant source,
-not the full chat. Astra reviews only a numerical/architecture conflict or the first
-integrated prototype evidence. Peter judges visual realism. Do not wait for Astra on
+not the full chat. Seat mapping (Astra review 2026-09-09): Sol is the k3 lead seat
+in this repo's fleet; Luna lanes are K2.7, two concurrent maximum; Astra reviews
+escalations only. Peter judges visual realism. Do not wait for Astra on
 routine naming, private helpers, test implementation or a straightforward repair that
 preserves the contract.
 
@@ -159,7 +160,10 @@ P2G, stress and G2P. Keep production math specified in the design, not delegated
 the reference. Declare it under `#[cfg(test)]` in `water.rs` so the S1 lib test command
 executes it; later GPU proof tests reuse that source via a test-only path module.
 Sol owns the parent module registration. Pure Rust tests in `water.rs` establish mass/affine transfer, pressure
-sign, guard-shell indexing, Q quantisation error and CFL arithmetic. Include one
+sign, guard-shell indexing, Q quantisation error and CFL arithmetic. Include the
+density-dependent acoustic CFL `dt*(c(rho)+|v|)/h` with `c(rho)=c0*(rho/rho0)^3`,
+and one fixture at 1.15*rho0 showing the default step above the 0.25 rest-density
+guard. Include one
 non-lattice particle fixture and negative velocities; use an analytically affine
 velocity field so the reference cannot merely agree with itself.
 
@@ -234,6 +238,10 @@ status/readback ring; tests under `tests/gpu_proofs/water_*.rs`, joined by Sol i
 existing GPU proof harness. No cube/emitter production code owned here. Use static
 basin boundaries for the first fluid proof. Tests: layout, analytic transfers, signed
 momentum, forced overflow, candidate fault rejection and default static pool density.
+Add `water_timestep_halving_stability`: the default pool and impact fixtures rerun
+at dt/2 must agree with dt in density field, particle motion and settling outcome
+within recorded tolerances. A mismatch is escalated numerical evidence for
+Astra/Peter before S7, not a tuning task.
 
 **Gate:** `gpu_proofs_gate.py --filter water_` with the manifest as above; renderer
 clippy. Compare GPU output to f64/analytic expected values, not a duplicate WGSL oracle.
