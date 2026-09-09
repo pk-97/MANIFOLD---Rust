@@ -161,6 +161,13 @@ pub struct ExecutionPlan {
     /// non-stateful nodes here keeps the late pass cost proportional
     /// to the number of feedback / accumulator nodes in the graph.
     late_capture_steps: Vec<usize>,
+    /// Bounded substep repeat regions, derived at compile time from
+    /// nodes declaring
+    /// [`substep_boundary`](crate::node_graph::effect_node::EffectNode::substep_boundary).
+    /// Empty for every graph without a substep boundary. Region member
+    /// steps still appear once in [`steps`] — the executor runs them
+    /// through the region path and skips them in the ordinary pass.
+    substep_regions: Vec<crate::node_graph::substeps::SubstepRegion>,
 }
 
 impl ExecutionPlan {
@@ -246,6 +253,12 @@ impl ExecutionPlan {
     /// see [`late_capture_steps`](Self::late_capture_steps) field docs.
     pub fn late_capture_step_indices(&self) -> &[usize] {
         &self.late_capture_steps
+    }
+
+    /// Bounded substep repeat regions derived at compile time — see
+    /// [`substep_regions`](Self::substep_regions) field docs.
+    pub fn substep_regions(&self) -> &[crate::node_graph::substeps::SubstepRegion] {
+        &self.substep_regions
     }
 
     /// Profiling-only: a sub-plan containing just the first `k` execution
@@ -939,6 +952,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         held_resources: held,
         hoistable_steps,
         late_capture_steps,
+        substep_regions: Vec::new(),
     })
 }
 

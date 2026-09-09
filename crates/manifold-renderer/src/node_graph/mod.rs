@@ -59,6 +59,7 @@ pub mod scene_modifier;
 pub mod scene_vm;
 mod snapshot;
 mod state_store;
+pub mod substeps;
 pub mod temporal_reset;
 pub mod trigger_shadow_lint;
 pub mod validate;

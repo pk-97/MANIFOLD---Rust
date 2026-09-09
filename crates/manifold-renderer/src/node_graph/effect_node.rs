@@ -878,6 +878,18 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// If `Some`, this node is a bounded-substep boundary
+    /// (`node.water_state`): the plan compiler contracts the nodes between
+    /// its state outputs and its capture producers into a
+    /// [`crate::node_graph::substeps::SubstepRegion`], and the executor
+    /// repeats that body under the boundary's clock instead of running it
+    /// once per frame. Default: `None` (ordinary once-per-frame node).
+    fn substep_boundary(
+        &self,
+    ) -> Option<crate::node_graph::substeps::SubstepBoundaryPorts> {
+        None
+    }
+
     /// If `Some(port_name)`, this node is a branch-selector: only the
     /// upstream subgraph feeding the named input port needs to run
     /// this frame. The executor uses this to prune unselected branches
