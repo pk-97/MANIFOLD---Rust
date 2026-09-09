@@ -109,14 +109,13 @@ fn parse_source(text: &str) -> (Vec<String>, Vec<HandStruct>) {
     let mut type_ids = Vec::new();
     for line in text.lines() {
         let t = line.trim();
-        if let Some(rest) = t.strip_prefix("type_id:") {
-            if let Some(q1) = rest.find('"') {
-                if let Some(q2) = rest[q1 + 1..].find('"') {
-                    let tid = rest[q1 + 1..q1 + 1 + q2].to_string();
-                    if !type_ids.contains(&tid) {
-                        type_ids.push(tid);
-                    }
-                }
+        if let Some(rest) = t.strip_prefix("type_id:")
+            && let Some(q1) = rest.find('"')
+            && let Some(q2) = rest[q1 + 1..].find('"')
+        {
+            let tid = rest[q1 + 1..q1 + 1 + q2].to_string();
+            if !type_ids.contains(&tid) {
+                type_ids.push(tid);
             }
         }
     }
@@ -125,11 +124,11 @@ fn parse_source(text: &str) -> (Vec<String>, Vec<HandStruct>) {
     let mut lines = text.lines().enumerate().peekable();
     while let Some((idx, line)) = lines.next() {
         let trimmed = line.trim();
-        if depth == 0 {
-            if trimmed.starts_with("struct ")
-                && trimmed.ends_with('{')
-                && !trimmed.contains('(')
-            {
+        if depth == 0
+            && trimmed.starts_with("struct ")
+            && trimmed.ends_with('{')
+            && !trimmed.contains('(')
+        {
                 let name = trimmed
                     .trim_start_matches("struct ")
                     .trim_end_matches('{')
@@ -170,7 +169,6 @@ fn parse_source(text: &str) -> (Vec<String>, Vec<HandStruct>) {
                     structs.push(HandStruct { name, fields, line: idx + 1 });
                 }
                 continue;
-            }
         }
         // Crude but adequate brace tracking (runs only on lines not consumed
         // by the struct reader). String/comment braces would fool it; the
