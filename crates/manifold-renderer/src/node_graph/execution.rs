@@ -354,6 +354,22 @@ pub struct Executor {
     /// [`EffectNodeContext::scalar_or_param`](crate::node_graph::effect_node::EffectNodeContext::scalar_or_param)
     /// (wire first, param second). Cleared and rebuilt every frame.
     live_scalar_inputs: Vec<(NodeInstanceId, &'static str, f32)>,
+    /// The host simulation clock for this frame, installed via
+    /// [`set_simulation_frame`](Self::set_simulation_frame) before
+    /// `execute_frame_*`. Forwarded into every step's context and consumed
+    /// by substep boundary nodes to resolve their tick clock. A plan that
+    /// HAS substep regions running without it is a host integration error
+    /// — reported once per frame, region runs zero iterations.
+    simulation_frame: Option<crate::node_graph::substeps::SimulationFrame>,
+    /// Step index → substep region index, parallel to `plan.steps()`.
+    /// Rebuilt alongside the memo structures when the plan shape changes.
+    /// Region member steps are skipped by the ordinary pass (the region
+    /// path runs them under the boundary's clock); the boundary's own
+    /// entry is the region's first step.
+    region_of_step: Vec<Option<usize>>,
+    /// Per-frame dedup for the missing-simulation-frame error so a host
+    /// bug logs once per frame, not once per region.
+    logged_missing_sim_frame: bool,
 }
 
 /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — process-global source for
@@ -367,6 +383,15 @@ struct StepMemo {
     param_epoch: u64,
     /// Aligned with the step's `inputs` order.
     input_epochs: Vec<u64>,
+}
+
+/// Outcome of one step's core processing — see
+/// [`Executor::run_step_core`]. The caller counts evaluated steps and
+/// runs its per-frame diagnostics (preview/dump) on both arms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StepOutcome {
+    Evaluated,
+    Skipped,
 }
 
 /// One step's CPU-side cost from a profiled frame: acquire + evaluate
@@ -440,7 +465,22 @@ impl Executor {
             empty_resources_prev: ahash::AHashSet::default(),
             live_scalar_inputs: Vec::new(),
             layer_skin_registry: None,
+            simulation_frame: None,
+            region_of_step: Vec::new(),
+            logged_missing_sim_frame: false,
         }
+    }
+
+    /// Install the host simulation clock for subsequent frames. Forwarded
+    /// into every step's [`EffectNodeContext::simulation_frame`] and
+    /// consumed by substep boundary nodes; `FrameTime` semantics for
+    /// existing effects are unchanged. Hosts (live, headless, export,
+    /// warmup, tests) must call this before running a plan that contains
+    /// substep regions — running one without it is a reported error and
+    /// the region iterates zero times.
+    pub fn set_simulation_frame(&mut self, frame: crate::node_graph::substeps::SimulationFrame) {
+        self.logged_missing_sim_frame = false;
+        self.simulation_frame = Some(frame);
     }
 
     /// BUG-318: drop all memoized-dataflow state so the next frame
@@ -878,6 +918,865 @@ impl Executor {
         }
     }
 
+    /// One step's core processing: memo/data skip decisions, output
+    /// acquire, input binding, evaluate (or skip-passthrough alias),
+    /// scalar/typed-write drains, empty-output reporting, generation and
+    /// epoch bookkeeping, memo snapshot, profiling close. Extracted from
+    /// the frame loop so the ordinary pass AND the substep region repeat
+    /// share exactly one evaluation/binding implementation — the region
+    /// path must never grow a duplicate executor.
+    ///
+    /// Not included (caller concerns): the live-wire scalar tap, liveness
+    /// gating, preview capture, dump capture and `free_after` release.
+    /// The region path skips those: region resources are held for the
+    /// whole repeat and released when the region completes.
+    #[allow(clippy::too_many_arguments)]
+    fn run_step_core(
+        &mut self,
+        idx: usize,
+        step: &ExecutionStep,
+        plan: &ExecutionPlan,
+        graph: &mut Graph,
+        time: FrameTime,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+        state: &mut Option<&mut StateStore>,
+        owner_key: OwnerKey,
+        canvas_dims: (u32, u32),
+        layer_skin_registry: Option<&LayerSkinRegistry>,
+    ) -> StepOutcome {
+        // Memoized-dataflow skip (constant-subgraph hoisting): a PURE
+        // step whose params and input resources are unchanged since its
+        // last execute re-emits its held output slots without running.
+        // Skipped exactly like the mux short-circuit above — no acquire,
+        // no evaluate, no free_after — so consumers read the prior write.
+        // Diagnostic modes force-dirty: attribution profiling wants real
+        // per-step cost, and the preview path resolves its capture inside
+        // the execute body. Dump mode does NOT force-dirty — a memoized
+        // step's held output slot still holds the valid texture, so the
+        // skip records it from that slot (below) instead of paying a
+        // re-execute just to capture an unchanged thumbnail.
+        let force_dirty = self.profile_force_all_live
+            || self.profiling
+            || self.preview_target == Some(step.node);
+        self.wired_scratch.clear();
+        for &(port_name, _) in &step.inputs {
+            self.wired_scratch.push(port_name);
+        }
+        if !force_dirty
+            && plan.step_hoistable(idx)
+            && let Some(inst) = graph.get_node(step.node)
+            && inst.node.skip_passthrough(&inst.params, &self.wired_scratch).is_none()
+            && let Some(memo) = &self.step_memo[idx]
+            && memo.param_epoch == inst.param_epoch
+            && memo.input_epochs.len() == step.inputs.len()
+            && step
+                .inputs
+                .iter()
+                .zip(&memo.input_epochs)
+                .all(|(&(_, res), &epoch)| {
+                    self.resource_epoch.get(&res).copied().unwrap_or(0) == epoch
+                })
+            && step
+                .outputs
+                .iter()
+                .all(|&(_, res)| self.backend.slot_for(res).is_some())
+        {
+            // The held output is unchanged but still valid — capture it for
+            // the dump so a static subgraph keeps its zero-cost skip yet
+            // shows a current thumbnail. Slots are guaranteed bound here:
+            // the memo guard above required slot_for(res).is_some(). Safe
+            // against the feedback-swap hazard because only PURE nodes reach
+            // this skip (step_hoistable → is_pure), so the held slot is this
+            // frame's content — a stateful/feedback node, whose held slot can
+            // be the pre-swap buffer, never memo-skips.
+            if self.should_dump(step.node) {
+                self.record_dump_outputs(plan, step);
+            }
+            return StepOutcome::Skipped;
+        }
+
+        // Data-driven skip (zero blobs / zero spawned particles): a step
+        // that declared its data input ports skips when EVERY declared
+        // port is wired and its resource was marked empty BOTH last frame
+        // and this frame (the one-frame guard — the node executed the
+        // first empty frame and wrote out its empty state, so the held
+        // outputs consumers read are the empty content, never the last
+        // non-empty frame's). Its outputs are marked empty too, so the
+        // skip propagates through a declaring chain. Diagnostic modes
+        // force-dirty, same as the memo skip above.
+        let mut data_skip = false;
+        if !force_dirty
+            && let Some(inst) = graph.get_node(step.node)
+        {
+            let empty_ports = inst.node.empty_skip_input_ports();
+            if !empty_ports.is_empty()
+                && empty_ports.iter().all(|p| {
+                    step.inputs.iter().any(|&(name, res)| {
+                        name == *p
+                            && self.empty_resources.contains(&res)
+                            && self.empty_resources_prev.contains(&res)
+                    })
+                })
+            {
+                // A node that composites onto a source texture can't
+                // just be skipped — its held output would be a STALE
+                // copy of the source, freezing the video underneath.
+                // When it declares `skip_passthrough_ports`, fall
+                // through to the evaluate section, which aliases the
+                // live input texture onto the output slot (zero GPU
+                // work) instead of evaluating. Pure data-shapers
+                // (no passthrough declaration) keep the zero-cost
+                // early skip: their held outputs already carry the
+                // empty content from the first empty frame.
+                if inst.node.skip_passthrough_ports().is_some() {
+                    data_skip = true;
+                } else {
+                    for &(_, res) in &step.outputs {
+                        self.empty_resources.insert(res);
+                    }
+                    // Held outputs carry this node's empty state — still
+                    // record them so the dump stays complete across the
+                    // data-driven skip (matches the memo-skip above). Slots
+                    // are bound here too: the two-frame empty guard (empty
+                    // this frame AND last) means the node executed and wrote
+                    // its outputs on the first empty frame before it could
+                    // start skipping. No explicit slot-bound check is needed
+                    // — if one were somehow unbound, record_dump_outputs
+                    // reads None (a blank cell), never a panic.
+                    if self.should_dump(step.node) {
+                        self.record_dump_outputs(plan, step);
+                    }
+                    return StepOutcome::Skipped;
+                }
+            }
+        }
+
+        // Attribution profiling: stamp the step tag onto the GPU encoder
+        // so counter-sampled spans join back to this step, and start the
+        // CPU encode clock. Both gated on `profiling` (off on the live
+        // path).
+        let prof_start = self.profiling.then(std::time::Instant::now);
+        if self.profiling
+            && let Some(g) = gpu.as_deref_mut()
+        {
+            g.native_enc
+                .set_profile_tag(&format!("{}:s{idx}", self.profile_scope));
+        }
+
+        // 1. Acquire output slots.
+        self.output_scratch.clear();
+        for &(port_name, res_id) in &step.outputs {
+            let ty = plan
+                .resource_type(res_id)
+                .expect("resource type known from compile()");
+            let fmt = plan.resource_format(res_id);
+            let dims = resolve_dims(plan, res_id, canvas_dims);
+            let slot = self.backend.acquire(res_id, ty, fmt, dims);
+            self.output_scratch.push((port_name, slot));
+        }
+
+        // 2. Look up input slots. A wired input whose producer
+        // step was pruned (mux short-circuit) has no slot bound
+        // this frame — drop it from the input scratch so the
+        // node's `NodeInputs` accessor returns `None`. Mux
+        // primitives tolerate this via their port-shadows-param
+        // fallback (selector resolves to a port whose `in_N` IS
+        // bound); other nodes wouldn't legitimately end up with
+        // a pruned input because the live-set walk only prunes
+        // mux branches (the unselected `in_K`s on the mux's own
+        // input list).
+        self.input_scratch.clear();
+        for &(port_name, res_id) in &step.inputs {
+            if let Some(slot) = self.backend.slot_for(res_id) {
+                self.input_scratch.push((port_name, slot));
+            }
+        }
+
+        // 3. Evaluate (or skip-passthrough alias). The context holds
+        // an immutable backend ref for typed accessor resolution and
+        // (optionally) a per-step mutable reborrow of the host's
+        // GpuEncoder + StateStore. Scoped tightly so the borrows end
+        // before the release loop's mutable borrow below.
+        // Set when this step is hoistable and it executed (evaluate or
+        // skip-alias) — the memo snapshot is recorded after the node
+        // borrow ends. `None` leaves any prior memo cleared (non-
+        // hoistable or missing node).
+        let mut executed_pure_epoch: Option<u64> = None;
+        if let Some(inst) = graph.get_node_mut(step.node) {
+            if plan.step_hoistable(idx) {
+                executed_pure_epoch = Some(inst.param_epoch);
+            }
+            // Query skip-passthrough BEFORE building the full context.
+            // If the node declares itself a no-op, alias the input
+            // slot's texture onto the output slot — zero GPU work
+            // — and skip evaluate. Matches the legacy chain
+            // dispatch's "skip + don't swap" semantic without the
+            // per-skip blit a naive fix would require.
+            // A data-skipped draw node aliases unconditionally via its
+            // STATIC port declaration (the live source flows through at
+            // zero cost); otherwise the node's per-frame param-driven
+            // declaration decides.
+            let skip_alias = if data_skip {
+                inst.node.skip_passthrough_ports()
+            } else {
+                self.wired_scratch.clear();
+                for &(port_name, _) in &step.inputs {
+                    self.wired_scratch.push(port_name);
+                }
+                inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
+            };
+            let mut performed_alias = false;
+            let mut copied_passthrough = false;
+            if let Some((in_port, out_port)) = skip_alias {
+                let in_slot = self
+                    .input_scratch
+                    .iter()
+                    .find(|(name, _)| *name == in_port)
+                    .map(|(_, s)| *s);
+                let out_slot = self
+                    .output_scratch
+                    .iter()
+                    .find(|(name, _)| *name == out_port)
+                    .map(|(_, s)| *s);
+                // The alias makes downstream readers see the INPUT texture
+                // verbatim, so the dynamic (param-driven) path is only
+                // legal when the output slot would have matched it exactly
+                // — same dims, same format. A mismatch (mux resampling a
+                // 256×1 LUT up to canvas) falls through to evaluate, which
+                // performs the real resample. The data-skip path keeps its
+                // established declaration-only contract (draw atoms
+                // composite onto their source at identical shape).
+                let compatible = |i: Slot, o: Slot| {
+                    if data_skip {
+                        return true;
+                    }
+                    let res_of = |list: &[(&'static str, ResourceId)], port: &str| {
+                        list.iter().find(|&&(n, _)| n == port).map(|&(_, r)| r)
+                    };
+                    let (Some(r_in), Some(r_out)) = (
+                        res_of(&step.inputs, in_port),
+                        res_of(&step.outputs, out_port),
+                    ) else {
+                        return false;
+                    };
+                    let plan_compatible = resolve_dims(plan, r_in, canvas_dims)
+                        == resolve_dims(plan, r_out, canvas_dims)
+                        && plan.resource_format(r_in) == plan.resource_format(r_out);
+                    // The plan's format declaration can be absent on an
+                    // inherited/default edge while the allocated textures
+                    // still have the same concrete format. Prefer the
+                    // bound textures when both are exposed by the backend.
+                    match (self.backend.texture_2d(i), self.backend.texture_2d(o)) {
+                        (Some(src), Some(dst)) => {
+                            src.width == dst.width
+                                && src.height == dst.height
+                                && src.format == dst.format
+                        }
+                        _ => plan_compatible,
+                    }
+                };
+                let compatible = match (in_slot, out_slot) {
+                    (Some(i), Some(o)) => compatible(i, o),
+                    _ => false,
+                };
+                if let (Some(i), Some(o)) = (in_slot, out_slot)
+                    && compatible
+                    && self.backend.alias_2d(i, o)
+                {
+                    performed_alias = true;
+                    // Propagate the empty mark through a data-skip alias
+                    // so a chain of declaring draw nodes each skips.
+                    if data_skip {
+                        for &(_, res) in &step.outputs {
+                            self.empty_resources.insert(res);
+                        }
+                    } else {
+                        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/
+                        // BUG-197: a param-driven (skip_passthrough)
+                        // alias is a per-pixel identity onto a STABLE
+                        // choice of input WIRE — when this frame's
+                        // aliased-from RESOURCE (the compiled edge
+                        // `skip_passthrough` selected — stable across
+                        // frames unless the node's param-driven branch
+                        // choice itself changes, e.g. a mux selector
+                        // flip) matches last frame's, the destination
+                        // SLOT matches last frame's (pool recycling can
+                        // legitimately hand the same resource a
+                        // DIFFERENT physical slot between frames — the
+                        // `last_mip_identity` precedent this file's own
+                        // comments cite elsewhere; the generation
+                        // bookkeeping below is slot-indexed, so a slot
+                        // reassignment invalidates it and must fall
+                        // through to a conservative bump), AND the
+                        // in-resource's write generation hasn't moved
+                        // since, this step's output is provably
+                        // unchanged, so declare it (propagating the
+                        // input's generation through the alias instead
+                        // of conservatively bumping). Fenced to
+                        // `!data_skip` — the data-skip alias above keeps
+                        // its established conservative bump.
+                        let r_in = step
+                            .inputs
+                            .iter()
+                            .find(|&&(n, _)| n == in_port)
+                            .map(|&(_, r)| r);
+                        let in_generation = self
+                            .slot_generations
+                            .get(i.0 as usize)
+                            .copied()
+                            .unwrap_or(0);
+                        let prev = self.alias_propagation_state[idx];
+                        self.alias_propagation_state[idx] = r_in.map(|r| (r, o, in_generation));
+                        if let Some(r) = r_in
+                            && prev == Some((r, o, in_generation))
+                        {
+                            self.node_declared_unchanged[idx] = true;
+                        }
+                    }
+                }
+                if !performed_alias
+                    && !data_skip
+                    && let (Some(i), Some(o), Some(g)) = (in_slot, out_slot, gpu.as_deref_mut())
+                    && compatible
+                    && let (Some(src), Some(dst)) =
+                        (self.backend.texture_2d(i), self.backend.texture_2d(o))
+                {
+                    // A real backend can refuse aliasing when the
+                    // destination is borrowed by the host. Preserve the
+                    // no-op contract with a same-format blit, while
+                    // retaining evaluation for genuine resampling cases.
+                    g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                    copied_passthrough = true;
+                }
+            }
+            if !performed_alias || data_skip {
+                // Any step that didn't take the param-driven alias path
+                // this frame must not carry a stale prior-frame match
+                // forward into some future frame that does.
+                self.alias_propagation_state[idx] = None;
+            }
+
+            if !performed_alias && !copied_passthrough {
+                self.scalar_write_scratch.clear();
+                self.camera_write_scratch.clear();
+                self.light_write_scratch.clear();
+                self.material_write_scratch.clear();
+                self.transform_write_scratch.clear();
+                self.atmosphere_write_scratch.clear();
+                self.object_write_scratch.clear();
+                self.error_scratch.clear();
+                {
+                    let backend_ref: &dyn Backend = &*self.backend;
+                    let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                        .with_pending(&self.slot_pending);
+                    let outputs = NodeOutputs::new(
+                        &self.output_scratch,
+                        backend_ref,
+                        &mut self.scalar_write_scratch,
+                        &mut self.camera_write_scratch,
+                        &mut self.light_write_scratch,
+                        &mut self.material_write_scratch,
+                        &mut self.transform_write_scratch,
+                        &mut self.atmosphere_write_scratch,
+                        &mut self.object_write_scratch,
+                    );
+                    // Canvas dims are no longer hung off the
+                    // context as a side-channel. Primitives that
+                    // need them (`scatter_particles` and friends)
+                    // declare `width`/`height` as required scalar
+                    // input ports and the JSON preset wires them
+                    // from `system.generator_input.output_width /
+                    // output_height` — the value is visible in the
+                    // graph editor and the chain validator catches
+                    // missing wires at preset-load instead of at
+                    // runtime via a sub-rect render bug.
+                    let mut ctx = EffectNodeContext::with_state(
+                        time,
+                        &inst.params,
+                        inputs,
+                        outputs,
+                        gpu.as_deref_mut(),
+                        state.as_deref_mut(),
+                        step.node,
+                        owner_key,
+                        self.rebuild_epoch,
+                        self.rt_quality,
+                        layer_skin_registry,
+                    )
+                    .with_errors(&mut self.error_scratch)
+            .with_simulation_frame(self.simulation_frame);
+                    let has_gpu_binding = ctx.gpu.is_some();
+                    inst.node.evaluate(&mut ctx);
+                    // Aliased-output contract: a primitive that
+                    // declares `aliased_array_io = [(in, out)]`
+                    // promises its dispatch writes to the aliased
+                    // buffer. If it returned without touching the
+                    // GPU at all (early-return path skipped the
+                    // dispatch), downstream consumers of `out`
+                    // read whatever was in the buffer last frame —
+                    // stale data with no error signal. Debug
+                    // builds panic loudly; release builds skip
+                    // the check (per-frame cost stays off the hot
+                    // path). The primitive surface uses either
+                    // `ctx.gpu_encoder()` or
+                    // `ctx.mark_gpu_accessed()` to flip the flag.
+                    debug_assert!(
+                        !(has_gpu_binding
+                            && !ctx.gpu_accessed
+                            && !inst.node.aliased_array_io().is_empty()),
+                        "primitive `{}` declared aliased_array_io {:?} \
+                         but its `evaluate` returned without accessing \
+                         the GPU. Downstream consumers of the aliased \
+                         output will read stale data. Fix: either drop \
+                         the aliased_array_io declaration (the primitive \
+                         isn't actually in-place mutating), or call \
+                         `ctx.gpu_encoder()` / `ctx.mark_gpu_accessed()` \
+                         on every code path through `evaluate` and \
+                         ensure each one dispatches at least one \
+                         compute pass through the encoder.",
+                        inst.node.type_id().as_str(),
+                        inst.node.aliased_array_io(),
+                    );
+                    // D5: record this step's declaration for the
+                    // frame. `idx` indexes `plan.steps()`, which
+                    // `node_declared_unchanged` is sized to match.
+                    self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
+                    // Content availability: rewrite this step's output
+                    // slots from its latest declaration (default ready).
+                    // A slot's producer is the single writer of its
+                    // flag, so a stale `true` can only survive while
+                    // the producer itself is skipped.
+                    let declared_pending = ctx.outputs_pending;
+                    for &(_, res) in &step.outputs {
+                        if let Some(slot) = self.backend.slot_for(res) {
+                            let slot_idx = slot.0 as usize;
+                            if self.slot_pending.len() <= slot_idx {
+                                self.slot_pending.resize(slot_idx + 1, false);
+                            }
+                            self.slot_pending[slot_idx] = declared_pending;
+                        }
+                    }
+                }
+                // Drain scalar writes back into the backend so
+                // downstream readers in the same frame see them via
+                // `NodeInputs::scalar`. Synchronous — control wires
+                // evaluate in topological order, so producers always
+                // precede consumers.
+                for (slot, value) in self.scalar_write_scratch.drain(..) {
+                    self.backend.set_scalar(slot, value);
+                }
+                // Camera writes use the same drain shape.
+                for (slot, value) in self.camera_write_scratch.drain(..) {
+                    self.backend.set_camera(slot, value);
+                }
+                // Light writes use the same drain shape.
+                for (slot, value) in self.light_write_scratch.drain(..) {
+                    self.backend.set_light(slot, value);
+                }
+                // Material writes use the same drain shape.
+                for (slot, value) in self.material_write_scratch.drain(..) {
+                    self.backend.set_material(slot, value);
+                }
+                // Transform writes use the same drain shape.
+                for (slot, value) in self.transform_write_scratch.drain(..) {
+                    self.backend.set_transform(slot, value);
+                }
+                // Atmosphere writes use the same drain shape.
+                for (slot, value) in self.atmosphere_write_scratch.drain(..) {
+                    self.backend.set_atmosphere(slot, value);
+                }
+                // Object writes use the same drain shape.
+                for (slot, value) in self.object_write_scratch.drain(..) {
+                    self.backend.set_object(slot, value);
+                }
+                // Structured errors reported via `ctx.error(...)` —
+                // log once per occurrence. Primitives are expected
+                // to ALSO emit a deterministic fallback (e.g. magenta
+                // clear) alongside the error report, so downstream
+                // consumers don't read garbage.
+                for msg in self.error_scratch.drain(..) {
+                    eprintln!(
+                        "[graph error] node {:?} ({}): {msg}",
+                        step.node,
+                        inst.node.type_id().as_str(),
+                    );
+                }
+                // Data-driven skip, reporter side: an evaluate that
+                // produced EMPTY output (zero blobs, zero spawned
+                // particles) marks its output resources so downstream
+                // `empty_skip_input_ports` declarers can skip. Queried
+                // only on real evaluates — an aliased passthrough never
+                // reports.
+                if inst.node.reports_empty_output() {
+                    for &(_, res) in &step.outputs {
+                        self.empty_resources.insert(res);
+                    }
+                }
+            }
+        }
+
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5: bump every output
+        // slot's write generation — the SINGLE choke point for this
+        // signal (same site `resource_epoch` bumps at, immediately
+        // below) — UNLESS this step declared its outputs unchanged this
+        // frame. A step that never calls `mark_outputs_unchanged` (every
+        // node today except R1's gated sources) always lands in this
+        // branch, so its consumers' cached generations always change —
+        // provably never-stale by construction (I3's contract is the
+        // node's side of this; a false declaration is the only way this
+        // could go wrong, and that's per-node-tested, not this site's
+        // job). Now a param-driven alias
+        // (`performed_alias && !data_skip`, e.g. `mux_texture`'s
+        // inline-selector fast path) CAN set it — fenced to that exact
+        // case just above, where `alias_propagation_state[idx]` proves
+        // this frame's (in_slot, out_slot) pair and the in_slot's write
+        // generation both match last frame's. The data-driven
+        // (`data_skip`) passthrough alias is unchanged and still always
+        // conservatively bumps — its aliased identity can flip between
+        // different pruned producers frame to frame with no generation
+        // signal to trust.
+        if !self.node_declared_unchanged[idx] {
+            for &(_, res) in &step.outputs {
+                if let Some(slot) = self.backend.slot_for(res) {
+                    let slot_idx = slot.0 as usize;
+                    if self.slot_generations.len() <= slot_idx {
+                        self.slot_generations.resize(slot_idx + 1, 0);
+                    }
+                    self.slot_generations[slot_idx] += 1;
+                }
+            }
+        }
+
+        // Memoized-dataflow bookkeeping: this step executed, so every
+        // output resource is new content — bump its epoch so consumers'
+        // memos see the change. Pure steps then snapshot the epochs they
+        // ran with (the clean-skip compares against this next frame);
+        // non-pure steps clear any stale memo. The input-epoch Vec only
+        // allocates on dirty executes of pure steps — never on the
+        // steady-state (clean) path.
+        for &(_, res) in &step.outputs {
+            *self.resource_epoch.entry(res).or_insert(0) += 1;
+        }
+        self.step_memo[idx] = executed_pure_epoch.map(|param_epoch| StepMemo {
+            param_epoch,
+            input_epochs: step
+                .inputs
+                .iter()
+                .map(|&(_, res)| self.resource_epoch.get(&res).copied().unwrap_or(0))
+                .collect(),
+        });
+
+        // Attribution profiling: close the step's CPU encode clock.
+        if let Some(t0) = prof_start {
+            let type_id = graph
+                .get_node(step.node)
+                .map(|i| i.node.type_id().as_str().to_string())
+                .unwrap_or_default();
+            self.step_profiles.push(StepProfile {
+                step_idx: idx,
+                node: step.node,
+                type_id,
+                cpu_nanos: u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                tag: format!("{}:s{idx}", self.profile_scope),
+            });
+        }
+        StepOutcome::Evaluated
+    }
+
+    /// Late-capture one stateful step: rebuild its input bindings
+    /// (persistent slots now hold this frame's producer writes), invoke
+    /// [`EffectNode::late_capture`], perform any requested feedback
+    /// texture swap (with the copy fallback), and drain errors. Shared
+    /// by the frame-end late pass AND the substep region path, which
+    /// captures once per iteration — one implementation for both.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_step(
+        &mut self,
+        plan: &ExecutionPlan,
+        graph: &mut Graph,
+        step_idx: usize,
+        time: FrameTime,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+        state: &mut Option<&mut StateStore>,
+        owner_key: OwnerKey,
+        layer_skin_registry: Option<&LayerSkinRegistry>,
+    ) {
+        let step = &plan.steps()[step_idx];
+        // Attribution profiling: late-capture GPU work (a feedback node's
+        // state-snapshot blit) belongs to ITS node's row, not whichever
+        // step happened to set the tag last (final_output — the
+        // "final_output burns 2-3 dispatches" red herring).
+        if self.profiling
+            && let Some(g) = gpu.as_deref_mut()
+        {
+            g.native_enc
+                .set_profile_tag(&format!("{}:s{step_idx}", self.profile_scope));
+        }
+        // Re-resolve input slot bindings. State-capture inputs are
+        // backed by persistent resources whose slots stay bound
+        // across the frame, so the same slot the main pass saw is
+        // still live and now holds the producer's frame-N write.
+        self.input_scratch.clear();
+        for &(port_name, res_id) in &step.inputs {
+            if let Some(slot) = self.backend.slot_for(res_id) {
+                self.input_scratch.push((port_name, slot));
+            }
+        }
+        // Output scratch carries ONLY this node's PERSISTENT outputs —
+        // those slots are never pool-released, so a late_capture write
+        // (feedback's direct state landing: swap for same-format,
+        // cross-format bridge otherwise) can't corrupt a recycled
+        // slot. Pooled outputs stay unbound: any erroneous write
+        // attempt resolves to `None` exactly as before.
+        self.output_scratch.clear();
+        for &(port_name, res_id) in &step.outputs {
+            if plan.persistent_resources().contains(&res_id)
+                && let Some(slot) = self.backend.slot_for(res_id)
+            {
+                self.output_scratch.push((port_name, slot));
+            }
+        }
+
+        if let Some(inst) = graph.get_node_mut(step.node) {
+            self.scalar_write_scratch.clear();
+            self.camera_write_scratch.clear();
+            self.light_write_scratch.clear();
+            self.material_write_scratch.clear();
+            self.transform_write_scratch.clear();
+            self.atmosphere_write_scratch.clear();
+            self.object_write_scratch.clear();
+            self.error_scratch.clear();
+            let backend_ref: &dyn Backend = &*self.backend;
+            let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                .with_pending(&self.slot_pending);
+            let outputs = NodeOutputs::new(
+                &self.output_scratch,
+                backend_ref,
+                &mut self.scalar_write_scratch,
+                &mut self.camera_write_scratch,
+                &mut self.light_write_scratch,
+                &mut self.material_write_scratch,
+                &mut self.transform_write_scratch,
+                &mut self.atmosphere_write_scratch,
+                &mut self.object_write_scratch,
+            );
+            let mut ctx = EffectNodeContext::with_state(
+                time,
+                &inst.params,
+                inputs,
+                outputs,
+                gpu.as_deref_mut(),
+                state.as_deref_mut(),
+                step.node,
+                owner_key,
+                self.rebuild_epoch,
+                self.rt_quality,
+                layer_skin_registry,
+            )
+            .with_errors(&mut self.error_scratch)
+            .with_simulation_frame(self.simulation_frame);
+            inst.node.late_capture(&mut ctx);
+            let swap_request = ctx.texture_swap_request.take();
+            for msg in self.error_scratch.drain(..) {
+                eprintln!(
+                    "[graph error] node {:?} ({}) late_capture: {msg}",
+                    step.node,
+                    inst.node.type_id().as_str(),
+                );
+            }
+            // Zero-copy feedback ping-pong: perform a requested
+            // texture swap between one of this node's output slots
+            // and one of its input slots (both persistent). The
+            // node verified eligibility (matching dims + format)
+            // before requesting; a failed swap here (slot missing /
+            // borrowed shadow) is loud because silently dropping it
+            // would freeze the feedback loop on one frame.
+            if let Some((out_port, in_port)) = swap_request {
+                let out_slot = step
+                    .outputs
+                    .iter()
+                    .find(|(p, _)| *p == out_port)
+                    .and_then(|&(_, res)| self.backend.slot_for(res));
+                let in_slot = step
+                    .inputs
+                    .iter()
+                    .find(|(p, _)| *p == in_port)
+                    .and_then(|&(_, res)| self.backend.slot_for(res));
+                let swapped = match (out_slot, in_slot) {
+                    (Some(a), Some(b)) => self.backend.swap_texture_2d(a, b),
+                    _ => false,
+                };
+                // BUG-216: the swap refuses whenever `in_slot` (or
+                // `out_slot`) carries a borrowed shadow — the common
+                // shape is a boundary output (`system.final_output`)
+                // pre-binding the SAME resource a feedback loop wires
+                // into its `in` port (mix → final_output AND mix →
+                // feedback.in share one ResourceId/slot). Swapping
+                // there would change final_output's physical texture
+                // identity mid-frame, which is exactly what the
+                // refusal protects against — but the loop's state
+                // still needs to land somewhere. Fall back to a
+                // format-bridge COPY (`node.feedback`'s own
+                // `Feedback::copy_with_format_bridge`, `temporal.rs`,
+                // is the same blit-or-resize contract): copy `in`'s
+                // CONTENT (this frame's fresh producer write) into
+                // `out`'s persistent texture — `in`'s physical
+                // identity is untouched (final_output keeps pointing
+                // at the same texture), but next frame's `run()`
+                // reads `out` and now sees this frame's trail. One
+                // dispatch, same as the dims-mismatch mode already
+                // proven there.
+                if !swapped {
+                    let landed = match (out_slot, in_slot, gpu.as_deref_mut()) {
+                        (Some(out_s), Some(in_s), Some(g)) => {
+                            match (self.backend.texture_2d(in_s), self.backend.texture_2d(out_s)) {
+                                (Some(src), Some(dst)) if src.format == dst.format => {
+                                    if src.width == dst.width && src.height == dst.height {
+                                        g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                                    } else {
+                                        g.resize_sample(src, dst);
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+                    if !landed {
+                        eprintln!(
+                            "[graph error] node {:?} ({}): texture swap \
+                             {out_port}<->{in_port} failed AND no copy \
+                             fallback was possible (missing texture or \
+                             format mismatch) — feedback state did NOT \
+                             advance this frame",
+                            step.node,
+                            inst.node.type_id().as_str(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drive one substep region after its boundary's ordinary evaluate:
+    /// pull per-iteration scalars from the boundary's clock, write them
+    /// into the declared step scalar slots, run the body once per
+    /// iteration through [`run_step_core`](Self::run_step_core), then
+    /// capture the candidate into the persistent accepted state via
+    /// [`capture_step`](Self::capture_step). Region resources stay bound
+    /// for the whole repeat and are released when it completes — no
+    /// per-iteration pool churn. Zero iterations (a paused or exhausted
+    /// clock) still leaves the boundary's `out` exposing the accepted
+    /// state from its evaluate.
+    #[allow(clippy::too_many_arguments)]
+    fn run_region_repeat(
+        &mut self,
+        region_idx: usize,
+        plan: &ExecutionPlan,
+        graph: &mut Graph,
+        time: FrameTime,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+        state: &mut Option<&mut StateStore>,
+        owner_key: OwnerKey,
+        canvas_dims: (u32, u32),
+        layer_skin_registry: Option<&LayerSkinRegistry>,
+    ) {
+        let region = &plan.substep_regions()[region_idx];
+        let boundary_step = &plan.steps()[region.steps[0]];
+        let Some(ports) = graph
+            .get_node(region.boundary)
+            .and_then(|inst| inst.node.substep_boundary())
+        else {
+            return;
+        };
+        if self.simulation_frame.is_none() {
+            if !self.logged_missing_sim_frame {
+                self.logged_missing_sim_frame = true;
+                eprintln!(
+                    "[graph error] substep boundary {:?}: the plan has substep \
+                     regions but no SimulationFrame is installed — call \
+                     Executor::set_simulation_frame before execute; the region \
+                     iterates zero times",
+                    region.boundary,
+                );
+            }
+            return;
+        }
+        let step_scalar = |port: &str| {
+            boundary_step
+                .outputs
+                .iter()
+                .find(|(name, _)| *name == port)
+                .map(|&(_, res)| res)
+        };
+        let scalar_slots = [
+            step_scalar(ports.delta),
+            step_scalar(ports.time),
+            step_scalar(ports.index),
+        ];
+        let mut iteration = 0u32;
+        while let Some([dt, step_time, _idx]) = graph
+            .get_node_mut(region.boundary)
+            .and_then(|inst| inst.node.substep_iteration(iteration))
+        {
+            let values = [dt, step_time, iteration as f32];
+            for (res, value) in scalar_slots.iter().zip(values) {
+                if let Some(res) = res
+                    && let Some(slot) = self.backend.slot_for(*res)
+                {
+                    self.backend.set_scalar(slot, ParamValue::Float(value));
+                    *self.resource_epoch.entry(*res).or_insert(0) += 1;
+                }
+            }
+            for &body_idx in &region.steps[1..] {
+                if !self.live_steps[body_idx] {
+                    continue;
+                }
+                let body_step = &plan.steps()[body_idx];
+                self.run_step_core(
+                    body_idx,
+                    body_step,
+                    plan,
+                    graph,
+                    time,
+                    gpu,
+                    state,
+                    owner_key,
+                    canvas_dims,
+                    layer_skin_registry,
+                );
+            }
+            // Per-iteration capture: accept the candidate into the
+            // persistent state the boundary's `out` exposes, then bump
+            // every boundary output epoch so region consumers never
+            // memo-skip on a stale input epoch.
+            self.capture_step(
+                plan,
+                graph,
+                region.steps[0],
+                time,
+                gpu,
+                state,
+                owner_key,
+                layer_skin_registry,
+            );
+            for &(_, res) in &boundary_step.outputs {
+                *self.resource_epoch.entry(res).or_insert(0) += 1;
+            }
+            iteration += 1;
+        }
+        // Region resources were held for the entire repeat (excluded
+        // from `free_after` at compile time); release them now.
+        for &res in &region.held_resources {
+            let ty = plan
+                .resource_type(res)
+                .expect("region resource type known from compile()");
+            let fmt = plan.resource_format(res);
+            let dims = resolve_dims(plan, res, canvas_dims);
+            self.backend.release(res, ty, fmt, dims);
+        }
+    }
     /// Shared implementation. For each step in plan order:
     ///   1. Acquire a slot for every output port (so distinct slots from inputs).
     ///   2. Look up slots for every wired input port.
@@ -921,6 +1820,13 @@ impl Executor {
             self.node_declared_unchanged.resize(plan.steps().len(), false);
             self.alias_propagation_state.clear();
             self.alias_propagation_state.resize_with(plan.steps().len(), || None);
+            self.region_of_step.clear();
+            self.region_of_step.resize(plan.steps().len(), None);
+            for (region_idx, region) in plan.substep_regions().iter().enumerate() {
+                for &idx in &region.steps {
+                    self.region_of_step[idx] = Some(region_idx);
+                }
+            }
         }
         // D5: reset every frame (not sticky like `step_memo`) — a node
         // must re-declare on every frame it wants to skip; the executor
@@ -1032,541 +1938,48 @@ impl Executor {
                 continue;
             }
 
-            // Memoized-dataflow skip (constant-subgraph hoisting): a PURE
-            // step whose params and input resources are unchanged since its
-            // last execute re-emits its held output slots without running.
-            // Skipped exactly like the mux short-circuit above — no acquire,
-            // no evaluate, no free_after — so consumers read the prior write.
-            // Diagnostic modes force-dirty: attribution profiling wants real
-            // per-step cost, and the preview path resolves its capture inside
-            // the execute body. Dump mode does NOT force-dirty — a memoized
-            // step's held output slot still holds the valid texture, so the
-            // skip records it from that slot (below) instead of paying a
-            // re-execute just to capture an unchanged thumbnail.
-            let force_dirty = self.profile_force_all_live
-                || self.profiling
-                || self.preview_target == Some(step.node);
-            self.wired_scratch.clear();
-            for &(port_name, _) in &step.inputs {
-                self.wired_scratch.push(port_name);
-            }
-            if !force_dirty
-                && plan.step_hoistable(idx)
-                && let Some(inst) = graph.get_node(step.node)
-                && inst.node.skip_passthrough(&inst.params, &self.wired_scratch).is_none()
-                && let Some(memo) = &self.step_memo[idx]
-                && memo.param_epoch == inst.param_epoch
-                && memo.input_epochs.len() == step.inputs.len()
-                && step
-                    .inputs
-                    .iter()
-                    .zip(&memo.input_epochs)
-                    .all(|(&(_, res), &epoch)| {
-                        self.resource_epoch.get(&res).copied().unwrap_or(0) == epoch
-                    })
-                && step
-                    .outputs
-                    .iter()
-                    .all(|&(_, res)| self.backend.slot_for(res).is_some())
+            // Substep region membership: body steps run only inside the
+            // region repeat driven at the boundary's step; the ordinary
+            // pass skips them here.
+            let region_of = self.region_of_step.get(idx).copied().flatten();
+            if let Some(r) = region_of
+                && plan.substep_regions()[r].steps.first() != Some(&idx)
             {
-                // The held output is unchanged but still valid — capture it for
-                // the dump so a static subgraph keeps its zero-cost skip yet
-                // shows a current thumbnail. Slots are guaranteed bound here:
-                // the memo guard above required slot_for(res).is_some(). Safe
-                // against the feedback-swap hazard because only PURE nodes reach
-                // this skip (step_hoistable → is_pure), so the held slot is this
-                // frame's content — a stateful/feedback node, whose held slot can
-                // be the pre-swap buffer, never memo-skips.
-                if self.should_dump(step.node) {
-                    self.record_dump_outputs(plan, step);
-                }
                 continue;
             }
 
-            // Data-driven skip (zero blobs / zero spawned particles): a step
-            // that declared its data input ports skips when EVERY declared
-            // port is wired and its resource was marked empty BOTH last frame
-            // and this frame (the one-frame guard — the node executed the
-            // first empty frame and wrote out its empty state, so the held
-            // outputs consumers read are the empty content, never the last
-            // non-empty frame's). Its outputs are marked empty too, so the
-            // skip propagates through a declaring chain. Diagnostic modes
-            // force-dirty, same as the memo skip above.
-            let mut data_skip = false;
-            if !force_dirty
-                && let Some(inst) = graph.get_node(step.node)
-            {
-                let empty_ports = inst.node.empty_skip_input_ports();
-                if !empty_ports.is_empty()
-                    && empty_ports.iter().all(|p| {
-                        step.inputs.iter().any(|&(name, res)| {
-                            name == *p
-                                && self.empty_resources.contains(&res)
-                                && self.empty_resources_prev.contains(&res)
-                        })
-                    })
-                {
-                    // A node that composites onto a source texture can't
-                    // just be skipped — its held output would be a STALE
-                    // copy of the source, freezing the video underneath.
-                    // When it declares `skip_passthrough_ports`, fall
-                    // through to the evaluate section, which aliases the
-                    // live input texture onto the output slot (zero GPU
-                    // work) instead of evaluating. Pure data-shapers
-                    // (no passthrough declaration) keep the zero-cost
-                    // early skip: their held outputs already carry the
-                    // empty content from the first empty frame.
-                    if inst.node.skip_passthrough_ports().is_some() {
-                        data_skip = true;
-                    } else {
-                        for &(_, res) in &step.outputs {
-                            self.empty_resources.insert(res);
-                        }
-                        // Held outputs carry this node's empty state — still
-                        // record them so the dump stays complete across the
-                        // data-driven skip (matches the memo-skip above). Slots
-                        // are bound here too: the two-frame empty guard (empty
-                        // this frame AND last) means the node executed and wrote
-                        // its outputs on the first empty frame before it could
-                        // start skipping. No explicit slot-bound check is needed
-                        // — if one were somehow unbound, record_dump_outputs
-                        // reads None (a blank cell), never a panic.
-                        if self.should_dump(step.node) {
-                            self.record_dump_outputs(plan, step);
-                        }
-                        continue;
-                    }
-                }
+            let outcome = self.run_step_core(
+                idx,
+                step,
+                plan,
+                graph,
+                time,
+                &mut gpu,
+                &mut state,
+                owner_key,
+                canvas_dims,
+                layer_skin_registry,
+            );
+            if matches!(outcome, StepOutcome::Evaluated) {
+                evaluated_steps += 1;
             }
 
-            // Attribution profiling: stamp the step tag onto the GPU encoder
-            // so counter-sampled spans join back to this step, and start the
-            // CPU encode clock. Both gated on `profiling` (off on the live
-            // path).
-            let prof_start = self.profiling.then(std::time::Instant::now);
-            if self.profiling
-                && let Some(g) = gpu.as_deref_mut()
-            {
-                g.native_enc
-                    .set_profile_tag(&format!("{}:s{idx}", self.profile_scope));
-            }
-
-            // 1. Acquire output slots.
-            self.output_scratch.clear();
-            for &(port_name, res_id) in &step.outputs {
-                let ty = plan
-                    .resource_type(res_id)
-                    .expect("resource type known from compile()");
-                let fmt = plan.resource_format(res_id);
-                let dims = resolve_dims(plan, res_id, canvas_dims);
-                let slot = self.backend.acquire(res_id, ty, fmt, dims);
-                self.output_scratch.push((port_name, slot));
-            }
-
-            // 2. Look up input slots. A wired input whose producer
-            // step was pruned (mux short-circuit) has no slot bound
-            // this frame — drop it from the input scratch so the
-            // node's `NodeInputs` accessor returns `None`. Mux
-            // primitives tolerate this via their port-shadows-param
-            // fallback (selector resolves to a port whose `in_N` IS
-            // bound); other nodes wouldn't legitimately end up with
-            // a pruned input because the live-set walk only prunes
-            // mux branches (the unselected `in_K`s on the mux's own
-            // input list).
-            self.input_scratch.clear();
-            for &(port_name, res_id) in &step.inputs {
-                if let Some(slot) = self.backend.slot_for(res_id) {
-                    self.input_scratch.push((port_name, slot));
-                }
-            }
-
-            // 3. Evaluate (or skip-passthrough alias). The context holds
-            // an immutable backend ref for typed accessor resolution and
-            // (optionally) a per-step mutable reborrow of the host's
-            // GpuEncoder + StateStore. Scoped tightly so the borrows end
-            // before the release loop's mutable borrow below.
-            // Set when this step is hoistable and it executed (evaluate or
-            // skip-alias) — the memo snapshot is recorded after the node
-            // borrow ends. `None` leaves any prior memo cleared (non-
-            // hoistable or missing node).
-            let mut executed_pure_epoch: Option<u64> = None;
-            if let Some(inst) = graph.get_node_mut(step.node) {
-                if plan.step_hoistable(idx) {
-                    executed_pure_epoch = Some(inst.param_epoch);
-                }
-                // Query skip-passthrough BEFORE building the full context.
-                // If the node declares itself a no-op, alias the input
-                // slot's texture onto the output slot — zero GPU work
-                // — and skip evaluate. Matches the legacy chain
-                // dispatch's "skip + don't swap" semantic without the
-                // per-skip blit a naive fix would require.
-                // A data-skipped draw node aliases unconditionally via its
-                // STATIC port declaration (the live source flows through at
-                // zero cost); otherwise the node's per-frame param-driven
-                // declaration decides.
-                let skip_alias = if data_skip {
-                    inst.node.skip_passthrough_ports()
-                } else {
-                    self.wired_scratch.clear();
-                    for &(port_name, _) in &step.inputs {
-                        self.wired_scratch.push(port_name);
-                    }
-                    inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
-                };
-                let mut performed_alias = false;
-                let mut copied_passthrough = false;
-                if let Some((in_port, out_port)) = skip_alias {
-                    let in_slot = self
-                        .input_scratch
-                        .iter()
-                        .find(|(name, _)| *name == in_port)
-                        .map(|(_, s)| *s);
-                    let out_slot = self
-                        .output_scratch
-                        .iter()
-                        .find(|(name, _)| *name == out_port)
-                        .map(|(_, s)| *s);
-                    // The alias makes downstream readers see the INPUT texture
-                    // verbatim, so the dynamic (param-driven) path is only
-                    // legal when the output slot would have matched it exactly
-                    // — same dims, same format. A mismatch (mux resampling a
-                    // 256×1 LUT up to canvas) falls through to evaluate, which
-                    // performs the real resample. The data-skip path keeps its
-                    // established declaration-only contract (draw atoms
-                    // composite onto their source at identical shape).
-                    let compatible = |i: Slot, o: Slot| {
-                        if data_skip {
-                            return true;
-                        }
-                        let res_of = |list: &[(&'static str, ResourceId)], port: &str| {
-                            list.iter().find(|&&(n, _)| n == port).map(|&(_, r)| r)
-                        };
-                        let (Some(r_in), Some(r_out)) = (
-                            res_of(&step.inputs, in_port),
-                            res_of(&step.outputs, out_port),
-                        ) else {
-                            return false;
-                        };
-                        let plan_compatible = resolve_dims(plan, r_in, canvas_dims)
-                            == resolve_dims(plan, r_out, canvas_dims)
-                            && plan.resource_format(r_in) == plan.resource_format(r_out);
-                        // The plan's format declaration can be absent on an
-                        // inherited/default edge while the allocated textures
-                        // still have the same concrete format. Prefer the
-                        // bound textures when both are exposed by the backend.
-                        match (self.backend.texture_2d(i), self.backend.texture_2d(o)) {
-                            (Some(src), Some(dst)) => {
-                                src.width == dst.width
-                                    && src.height == dst.height
-                                    && src.format == dst.format
-                            }
-                            _ => plan_compatible,
-                        }
-                    };
-                    let compatible = match (in_slot, out_slot) {
-                        (Some(i), Some(o)) => compatible(i, o),
-                        _ => false,
-                    };
-                    if let (Some(i), Some(o)) = (in_slot, out_slot)
-                        && compatible
-                        && self.backend.alias_2d(i, o)
-                    {
-                        performed_alias = true;
-                        // Propagate the empty mark through a data-skip alias
-                        // so a chain of declaring draw nodes each skips.
-                        if data_skip {
-                            for &(_, res) in &step.outputs {
-                                self.empty_resources.insert(res);
-                            }
-                        } else {
-                            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/
-                            // BUG-197: a param-driven (skip_passthrough)
-                            // alias is a per-pixel identity onto a STABLE
-                            // choice of input WIRE — when this frame's
-                            // aliased-from RESOURCE (the compiled edge
-                            // `skip_passthrough` selected — stable across
-                            // frames unless the node's param-driven branch
-                            // choice itself changes, e.g. a mux selector
-                            // flip) matches last frame's, the destination
-                            // SLOT matches last frame's (pool recycling can
-                            // legitimately hand the same resource a
-                            // DIFFERENT physical slot between frames — the
-                            // `last_mip_identity` precedent this file's own
-                            // comments cite elsewhere; the generation
-                            // bookkeeping below is slot-indexed, so a slot
-                            // reassignment invalidates it and must fall
-                            // through to a conservative bump), AND the
-                            // in-resource's write generation hasn't moved
-                            // since, this step's output is provably
-                            // unchanged, so declare it (propagating the
-                            // input's generation through the alias instead
-                            // of conservatively bumping). Fenced to
-                            // `!data_skip` — the data-skip alias above keeps
-                            // its established conservative bump.
-                            let r_in = step
-                                .inputs
-                                .iter()
-                                .find(|&&(n, _)| n == in_port)
-                                .map(|&(_, r)| r);
-                            let in_generation = self
-                                .slot_generations
-                                .get(i.0 as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            let prev = self.alias_propagation_state[idx];
-                            self.alias_propagation_state[idx] = r_in.map(|r| (r, o, in_generation));
-                            if let Some(r) = r_in
-                                && prev == Some((r, o, in_generation))
-                            {
-                                self.node_declared_unchanged[idx] = true;
-                            }
-                        }
-                    }
-                    if !performed_alias
-                        && !data_skip
-                        && let (Some(i), Some(o), Some(g)) = (in_slot, out_slot, gpu.as_deref_mut())
-                        && compatible
-                        && let (Some(src), Some(dst)) =
-                            (self.backend.texture_2d(i), self.backend.texture_2d(o))
-                    {
-                        // A real backend can refuse aliasing when the
-                        // destination is borrowed by the host. Preserve the
-                        // no-op contract with a same-format blit, while
-                        // retaining evaluation for genuine resampling cases.
-                        g.copy_texture_to_texture(src, dst, dst.width, dst.height);
-                        copied_passthrough = true;
-                    }
-                }
-                if !performed_alias || data_skip {
-                    // Any step that didn't take the param-driven alias path
-                    // this frame must not carry a stale prior-frame match
-                    // forward into some future frame that does.
-                    self.alias_propagation_state[idx] = None;
-                }
-
-                if !performed_alias && !copied_passthrough {
-                    self.scalar_write_scratch.clear();
-                    self.camera_write_scratch.clear();
-                    self.light_write_scratch.clear();
-                    self.material_write_scratch.clear();
-                    self.transform_write_scratch.clear();
-                    self.atmosphere_write_scratch.clear();
-                    self.object_write_scratch.clear();
-                    self.error_scratch.clear();
-                    {
-                        let backend_ref: &dyn Backend = &*self.backend;
-                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
-                            .with_pending(&self.slot_pending);
-                        let outputs = NodeOutputs::new(
-                            &self.output_scratch,
-                            backend_ref,
-                            &mut self.scalar_write_scratch,
-                            &mut self.camera_write_scratch,
-                            &mut self.light_write_scratch,
-                            &mut self.material_write_scratch,
-                            &mut self.transform_write_scratch,
-                            &mut self.atmosphere_write_scratch,
-                            &mut self.object_write_scratch,
-                        );
-                        // Canvas dims are no longer hung off the
-                        // context as a side-channel. Primitives that
-                        // need them (`scatter_particles` and friends)
-                        // declare `width`/`height` as required scalar
-                        // input ports and the JSON preset wires them
-                        // from `system.generator_input.output_width /
-                        // output_height` — the value is visible in the
-                        // graph editor and the chain validator catches
-                        // missing wires at preset-load instead of at
-                        // runtime via a sub-rect render bug.
-                        let mut ctx = EffectNodeContext::with_state(
-                            time,
-                            &inst.params,
-                            inputs,
-                            outputs,
-                            gpu.as_deref_mut(),
-                            state.as_deref_mut(),
-                            step.node,
-                            owner_key,
-                            self.rebuild_epoch,
-                            self.rt_quality,
-                            layer_skin_registry,
-                        )
-                        .with_errors(&mut self.error_scratch);
-                        let has_gpu_binding = ctx.gpu.is_some();
-                        inst.node.evaluate(&mut ctx);
-                        evaluated_steps += 1;
-                        // Aliased-output contract: a primitive that
-                        // declares `aliased_array_io = [(in, out)]`
-                        // promises its dispatch writes to the aliased
-                        // buffer. If it returned without touching the
-                        // GPU at all (early-return path skipped the
-                        // dispatch), downstream consumers of `out`
-                        // read whatever was in the buffer last frame —
-                        // stale data with no error signal. Debug
-                        // builds panic loudly; release builds skip
-                        // the check (per-frame cost stays off the hot
-                        // path). The primitive surface uses either
-                        // `ctx.gpu_encoder()` or
-                        // `ctx.mark_gpu_accessed()` to flip the flag.
-                        debug_assert!(
-                            !(has_gpu_binding
-                                && !ctx.gpu_accessed
-                                && !inst.node.aliased_array_io().is_empty()),
-                            "primitive `{}` declared aliased_array_io {:?} \
-                             but its `evaluate` returned without accessing \
-                             the GPU. Downstream consumers of the aliased \
-                             output will read stale data. Fix: either drop \
-                             the aliased_array_io declaration (the primitive \
-                             isn't actually in-place mutating), or call \
-                             `ctx.gpu_encoder()` / `ctx.mark_gpu_accessed()` \
-                             on every code path through `evaluate` and \
-                             ensure each one dispatches at least one \
-                             compute pass through the encoder.",
-                            inst.node.type_id().as_str(),
-                            inst.node.aliased_array_io(),
-                        );
-                        // D5: record this step's declaration for the
-                        // frame. `idx` indexes `plan.steps()`, which
-                        // `node_declared_unchanged` is sized to match.
-                        self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
-                        // Content availability: rewrite this step's output
-                        // slots from its latest declaration (default ready).
-                        // A slot's producer is the single writer of its
-                        // flag, so a stale `true` can only survive while
-                        // the producer itself is skipped.
-                        let declared_pending = ctx.outputs_pending;
-                        for &(_, res) in &step.outputs {
-                            if let Some(slot) = self.backend.slot_for(res) {
-                                let slot_idx = slot.0 as usize;
-                                if self.slot_pending.len() <= slot_idx {
-                                    self.slot_pending.resize(slot_idx + 1, false);
-                                }
-                                self.slot_pending[slot_idx] = declared_pending;
-                            }
-                        }
-                    }
-                    // Drain scalar writes back into the backend so
-                    // downstream readers in the same frame see them via
-                    // `NodeInputs::scalar`. Synchronous — control wires
-                    // evaluate in topological order, so producers always
-                    // precede consumers.
-                    for (slot, value) in self.scalar_write_scratch.drain(..) {
-                        self.backend.set_scalar(slot, value);
-                    }
-                    // Camera writes use the same drain shape.
-                    for (slot, value) in self.camera_write_scratch.drain(..) {
-                        self.backend.set_camera(slot, value);
-                    }
-                    // Light writes use the same drain shape.
-                    for (slot, value) in self.light_write_scratch.drain(..) {
-                        self.backend.set_light(slot, value);
-                    }
-                    // Material writes use the same drain shape.
-                    for (slot, value) in self.material_write_scratch.drain(..) {
-                        self.backend.set_material(slot, value);
-                    }
-                    // Transform writes use the same drain shape.
-                    for (slot, value) in self.transform_write_scratch.drain(..) {
-                        self.backend.set_transform(slot, value);
-                    }
-                    // Atmosphere writes use the same drain shape.
-                    for (slot, value) in self.atmosphere_write_scratch.drain(..) {
-                        self.backend.set_atmosphere(slot, value);
-                    }
-                    // Object writes use the same drain shape.
-                    for (slot, value) in self.object_write_scratch.drain(..) {
-                        self.backend.set_object(slot, value);
-                    }
-                    // Structured errors reported via `ctx.error(...)` —
-                    // log once per occurrence. Primitives are expected
-                    // to ALSO emit a deterministic fallback (e.g. magenta
-                    // clear) alongside the error report, so downstream
-                    // consumers don't read garbage.
-                    for msg in self.error_scratch.drain(..) {
-                        eprintln!(
-                            "[graph error] node {:?} ({}): {msg}",
-                            step.node,
-                            inst.node.type_id().as_str(),
-                        );
-                    }
-                    // Data-driven skip, reporter side: an evaluate that
-                    // produced EMPTY output (zero blobs, zero spawned
-                    // particles) marks its output resources so downstream
-                    // `empty_skip_input_ports` declarers can skip. Queried
-                    // only on real evaluates — an aliased passthrough never
-                    // reports.
-                    if inst.node.reports_empty_output() {
-                        for &(_, res) in &step.outputs {
-                            self.empty_resources.insert(res);
-                        }
-                    }
-                }
-            }
-
-            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5: bump every output
-            // slot's write generation — the SINGLE choke point for this
-            // signal (same site `resource_epoch` bumps at, immediately
-            // below) — UNLESS this step declared its outputs unchanged this
-            // frame. A step that never calls `mark_outputs_unchanged` (every
-            // node today except R1's gated sources) always lands in this
-            // branch, so its consumers' cached generations always change —
-            // provably never-stale by construction (I3's contract is the
-            // node's side of this; a false declaration is the only way this
-            // could go wrong, and that's per-node-tested, not this site's
-            // job). Now a param-driven alias
-            // (`performed_alias && !data_skip`, e.g. `mux_texture`'s
-            // inline-selector fast path) CAN set it — fenced to that exact
-            // case just above, where `alias_propagation_state[idx]` proves
-            // this frame's (in_slot, out_slot) pair and the in_slot's write
-            // generation both match last frame's. The data-driven
-            // (`data_skip`) passthrough alias is unchanged and still always
-            // conservatively bumps — its aliased identity can flip between
-            // different pruned producers frame to frame with no generation
-            // signal to trust.
-            if !self.node_declared_unchanged[idx] {
-                for &(_, res) in &step.outputs {
-                    if let Some(slot) = self.backend.slot_for(res) {
-                        let slot_idx = slot.0 as usize;
-                        if self.slot_generations.len() <= slot_idx {
-                            self.slot_generations.resize(slot_idx + 1, 0);
-                        }
-                        self.slot_generations[slot_idx] += 1;
-                    }
-                }
-            }
-
-            // Memoized-dataflow bookkeeping: this step executed, so every
-            // output resource is new content — bump its epoch so consumers'
-            // memos see the change. Pure steps then snapshot the epochs they
-            // ran with (the clean-skip compares against this next frame);
-            // non-pure steps clear any stale memo. The input-epoch Vec only
-            // allocates on dirty executes of pure steps — never on the
-            // steady-state (clean) path.
-            for &(_, res) in &step.outputs {
-                *self.resource_epoch.entry(res).or_insert(0) += 1;
-            }
-            self.step_memo[idx] = executed_pure_epoch.map(|param_epoch| StepMemo {
-                param_epoch,
-                input_epochs: step
-                    .inputs
-                    .iter()
-                    .map(|&(_, res)| self.resource_epoch.get(&res).copied().unwrap_or(0))
-                    .collect(),
-            });
-
-            // Attribution profiling: close the step's CPU encode clock.
-            if let Some(t0) = prof_start {
-                let type_id = graph
-                    .get_node(step.node)
-                    .map(|i| i.node.type_id().as_str().to_string())
-                    .unwrap_or_default();
-                self.step_profiles.push(StepProfile {
-                    step_idx: idx,
-                    node: step.node,
-                    type_id,
-                    cpu_nanos: u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX),
-                    tag: format!("{}:s{idx}", self.profile_scope),
-                });
+            // Bounded substep repeat: the boundary step just emitted its
+            // accepted state and resolved its clock through the ordinary
+            // path above; now run the region body under that clock. Body
+            // steps are skipped by this loop (the membership check above).
+            if let Some(region_idx) = region_of {
+                self.run_region_repeat(
+                    region_idx,
+                    plan,
+                    graph,
+                    time,
+                    &mut gpu,
+                    &mut state,
+                    owner_key,
+                    canvas_dims,
+                    layer_skin_registry,
+                );
             }
 
             // Preview capture: if this is the node being previewed, remember
@@ -1706,161 +2119,16 @@ impl Executor {
             if !self.live_steps[step_idx] {
                 continue;
             }
-            let step = &plan.steps()[step_idx];
-            // Attribution profiling: late-capture GPU work (a feedback node's
-            // state-snapshot blit) belongs to ITS node's row, not whichever
-            // step happened to set the tag last (final_output — the
-            // "final_output burns 2-3 dispatches" red herring).
-            if self.profiling
-                && let Some(g) = gpu.as_deref_mut()
-            {
-                g.native_enc
-                    .set_profile_tag(&format!("{}:s{step_idx}", self.profile_scope));
-            }
-            // Re-resolve input slot bindings. State-capture inputs are
-            // backed by persistent resources whose slots stay bound
-            // across the frame, so the same slot the main pass saw is
-            // still live and now holds the producer's frame-N write.
-            self.input_scratch.clear();
-            for &(port_name, res_id) in &step.inputs {
-                if let Some(slot) = self.backend.slot_for(res_id) {
-                    self.input_scratch.push((port_name, slot));
-                }
-            }
-            // Output scratch carries ONLY this node's PERSISTENT outputs —
-            // those slots are never pool-released, so a late_capture write
-            // (feedback's direct state landing: swap for same-format,
-            // cross-format bridge otherwise) can't corrupt a recycled
-            // slot. Pooled outputs stay unbound: any erroneous write
-            // attempt resolves to `None` exactly as before.
-            self.output_scratch.clear();
-            for &(port_name, res_id) in &step.outputs {
-                if plan.persistent_resources().contains(&res_id)
-                    && let Some(slot) = self.backend.slot_for(res_id)
-                {
-                    self.output_scratch.push((port_name, slot));
-                }
-            }
-
-            if let Some(inst) = graph.get_node_mut(step.node) {
-                self.scalar_write_scratch.clear();
-                self.camera_write_scratch.clear();
-                self.light_write_scratch.clear();
-                self.material_write_scratch.clear();
-                self.transform_write_scratch.clear();
-                self.atmosphere_write_scratch.clear();
-                self.object_write_scratch.clear();
-                self.error_scratch.clear();
-                let backend_ref: &dyn Backend = &*self.backend;
-                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
-                    .with_pending(&self.slot_pending);
-                let outputs = NodeOutputs::new(
-                    &self.output_scratch,
-                    backend_ref,
-                    &mut self.scalar_write_scratch,
-                    &mut self.camera_write_scratch,
-                    &mut self.light_write_scratch,
-                    &mut self.material_write_scratch,
-                    &mut self.transform_write_scratch,
-                    &mut self.atmosphere_write_scratch,
-                    &mut self.object_write_scratch,
-                );
-                let mut ctx = EffectNodeContext::with_state(
-                    time,
-                    &inst.params,
-                    inputs,
-                    outputs,
-                    gpu.as_deref_mut(),
-                    state.as_deref_mut(),
-                    step.node,
-                    owner_key,
-                    self.rebuild_epoch,
-                    self.rt_quality,
-                    layer_skin_registry,
-                )
-                .with_errors(&mut self.error_scratch);
-                inst.node.late_capture(&mut ctx);
-                let swap_request = ctx.texture_swap_request.take();
-                for msg in self.error_scratch.drain(..) {
-                    eprintln!(
-                        "[graph error] node {:?} ({}) late_capture: {msg}",
-                        step.node,
-                        inst.node.type_id().as_str(),
-                    );
-                }
-                // Zero-copy feedback ping-pong: perform a requested
-                // texture swap between one of this node's output slots
-                // and one of its input slots (both persistent). The
-                // node verified eligibility (matching dims + format)
-                // before requesting; a failed swap here (slot missing /
-                // borrowed shadow) is loud because silently dropping it
-                // would freeze the feedback loop on one frame.
-                if let Some((out_port, in_port)) = swap_request {
-                    let out_slot = step
-                        .outputs
-                        .iter()
-                        .find(|(p, _)| *p == out_port)
-                        .and_then(|&(_, res)| self.backend.slot_for(res));
-                    let in_slot = step
-                        .inputs
-                        .iter()
-                        .find(|(p, _)| *p == in_port)
-                        .and_then(|&(_, res)| self.backend.slot_for(res));
-                    let swapped = match (out_slot, in_slot) {
-                        (Some(a), Some(b)) => self.backend.swap_texture_2d(a, b),
-                        _ => false,
-                    };
-                    // BUG-216: the swap refuses whenever `in_slot` (or
-                    // `out_slot`) carries a borrowed shadow — the common
-                    // shape is a boundary output (`system.final_output`)
-                    // pre-binding the SAME resource a feedback loop wires
-                    // into its `in` port (mix → final_output AND mix →
-                    // feedback.in share one ResourceId/slot). Swapping
-                    // there would change final_output's physical texture
-                    // identity mid-frame, which is exactly what the
-                    // refusal protects against — but the loop's state
-                    // still needs to land somewhere. Fall back to a
-                    // format-bridge COPY (`node.feedback`'s own
-                    // `Feedback::copy_with_format_bridge`, `temporal.rs`,
-                    // is the same blit-or-resize contract): copy `in`'s
-                    // CONTENT (this frame's fresh producer write) into
-                    // `out`'s persistent texture — `in`'s physical
-                    // identity is untouched (final_output keeps pointing
-                    // at the same texture), but next frame's `run()`
-                    // reads `out` and now sees this frame's trail. One
-                    // dispatch, same as the dims-mismatch mode already
-                    // proven there.
-                    if !swapped {
-                        let landed = match (out_slot, in_slot, gpu.as_deref_mut()) {
-                            (Some(out_s), Some(in_s), Some(g)) => {
-                                match (self.backend.texture_2d(in_s), self.backend.texture_2d(out_s)) {
-                                    (Some(src), Some(dst)) if src.format == dst.format => {
-                                        if src.width == dst.width && src.height == dst.height {
-                                            g.copy_texture_to_texture(src, dst, dst.width, dst.height);
-                                        } else {
-                                            g.resize_sample(src, dst);
-                                        }
-                                        true
-                                    }
-                                    _ => false,
-                                }
-                            }
-                            _ => false,
-                        };
-                        if !landed {
-                            eprintln!(
-                                "[graph error] node {:?} ({}): texture swap \
-                                 {out_port}<->{in_port} failed AND no copy \
-                                 fallback was possible (missing texture or \
-                                 format mismatch) — feedback state did NOT \
-                                 advance this frame",
-                                step.node,
-                                inst.node.type_id().as_str(),
-                            );
-                        }
-                    }
-                }
-            }
+            self.capture_step(
+                plan,
+                graph,
+                step_idx,
+                time,
+                &mut gpu,
+                &mut state,
+                owner_key,
+                layer_skin_registry,
+            );
         }
     }
 }

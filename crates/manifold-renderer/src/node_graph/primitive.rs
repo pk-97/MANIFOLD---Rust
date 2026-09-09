@@ -457,6 +457,13 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::substep_iteration`](crate::node_graph::effect_node::EffectNode::substep_iteration).
+    /// Default: `None`.
+    fn substep_iteration(&mut self, _iteration: u32) -> Option<[f32; 3]> {
+        None
+    }
+
+    /// Mirror of
     /// [`EffectNode::fusion_register_heavy`](crate::node_graph::effect_node::EffectNode::fusion_register_heavy).
     /// A register-heavy `wgsl_body` (big inlined noise) that pessimizes any
     /// fused region it joins overrides this to `true` and stays a fusion
@@ -737,6 +744,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         &self,
     ) -> Option<crate::node_graph::substeps::SubstepBoundaryPorts> {
         Primitive::substep_boundary(self)
+    }
+    fn substep_iteration(&mut self, iteration: u32) -> Option<[f32; 3]> {
+        Primitive::substep_iteration(self, iteration)
     }
     fn selected_input_branch(
         &self,

@@ -302,6 +302,13 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// `node.layer_source` primitive emits the fallback when this is
     /// absent or when the requested layer id is missing.
     pub layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
+    /// The host simulation clock for this output frame, present only
+    /// when the executor was given one via
+    /// [`Executor::set_simulation_frame`](crate::node_graph::execution::Executor::set_simulation_frame).
+    /// Substep boundary nodes (`node.water_state`) read it to resolve
+    /// their tick clock; every other node ignores it. `FrameTime` is
+    /// untouched — existing effects see no semantic change.
+    pub simulation_frame: Option<crate::node_graph::substeps::SimulationFrame>,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -329,6 +336,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
             layer_skin_registry: None,
+            simulation_frame: None,
         }
     }
 
@@ -365,7 +373,18 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch,
             rt_quality,
             layer_skin_registry,
+            simulation_frame: None,
         }
+    }
+
+    /// Attach the host simulation clock (executor installs this from its
+    /// own `set_simulation_frame` value; tests do the same explicitly).
+    pub fn with_simulation_frame(
+        mut self,
+        frame: Option<crate::node_graph::substeps::SimulationFrame>,
+    ) -> Self {
+        self.simulation_frame = frame;
+        self
     }
 
     /// Zero-copy feedback ping-pong (called from `late_capture` only):
@@ -887,6 +906,19 @@ pub trait EffectNode: Send {
     fn substep_boundary(
         &self,
     ) -> Option<crate::node_graph::substeps::SubstepBoundaryPorts> {
+        None
+    }
+
+    /// Substep boundary only (`substep_boundary` is `Some`): after
+    /// `evaluate` resolved this frame's tick clock from the context's
+    /// `simulation_frame`, the executor calls this before EACH region body
+    /// iteration and writes the returned values into the declared
+    /// delta/time/index scalar output slots. Returns
+    /// `[step_dt, step_time, step_index]` (seconds, seconds, count) or
+    /// `None` when the clock is exhausted — including the zero-iteration
+    /// case, where `out` must still expose the accepted/seed state.
+    /// Default: `None` (never a boundary).
+    fn substep_iteration(&mut self, _iteration: u32) -> Option<[f32; 3]> {
         None
     }
 

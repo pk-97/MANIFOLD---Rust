@@ -924,14 +924,16 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     }
 
     // Map derived regions to step indices and compute their held
-    // resources: wires produced AND last-read inside the region. Those
-    // are excluded from `free_after` — the executor's region path holds
-    // them for the entire repeat (no per-iteration pool churn) and
-    // releases them when the region completes. Wires read OUTSIDE the
-    // region (the boundary's final outputs) keep ordinary lifetime:
-    // their last reader is an outside step and frees normally. Region
-    // steps are contiguous by construction (the contraction above), so
-    // `steps` records the boundary index followed by the body indices.
+    // resources: every wire whose LAST READER is a region step. Those
+    // are excluded from `free_after` — body steps never run in the
+    // ordinary pass, so a free attached there would never fire; the
+    // executor's region path holds them for the entire repeat (no
+    // per-iteration pool churn) and releases them when the region
+    // completes. Wires read OUTSIDE the region (the boundary's final
+    // outputs) keep ordinary lifetime: their last reader is an outside
+    // step and frees normally. Region steps are contiguous by
+    // construction (the contraction above), so `steps` records the
+    // boundary index followed by the body indices.
     let mut substep_regions: Vec<crate::node_graph::substeps::SubstepRegion> = Vec::new();
     for region in &region_nodes {
         let step_indices: Vec<usize> = region
@@ -945,14 +947,15 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             })
             .collect();
         let member: std::collections::HashSet<usize> = step_indices.iter().copied().collect();
-        let mut held_resources: Vec<ResourceId> = Vec::new();
-        for &idx in &step_indices {
-            for &(_, res) in &steps[idx].outputs {
-                if last_reader.get(&res).is_some_and(|r| member.contains(r)) {
-                    held_resources.push(res);
-                }
-            }
-        }
+        // Persistent wires (boundary outputs, capture inputs) are
+        // excluded: their slots are pre-acquired and never released, so
+        // the region path must not free them at region end either.
+        let mut held_resources: Vec<ResourceId> = last_reader
+            .iter()
+            .filter_map(|(&res, &reader)| {
+                (member.contains(&reader) && !persistent.contains(&res)).then_some(res)
+            })
+            .collect();
         held_resources.sort();
         held_resources.dedup();
         for res in &held_resources {
