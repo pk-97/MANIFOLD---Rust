@@ -95,7 +95,12 @@ use crate::node_graph::primitive::PrimitiveDescription;
 //   Harness drains queue after commit_and_wait, reads back via
 //   headless_readback::readback_raw_halves, computes stats, writes PNG.
 //   COPY_SRC on ensure_rt_irradiance textures makes GPU readback possible.
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+fn rt_source_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MANIFOLD_RT_SOURCE_TRACE").as_deref() == Ok("1"))
+}
 pub struct RtCaptureSlot {
     pub label: String,
     pub tex: manifold_gpu::GpuTexture,
@@ -701,6 +706,9 @@ pub struct RenderScene {
     /// resolves out to the single-sample output.
     msaa_color: Option<manifold_gpu::GpuTexture>,
     depth_texture: Option<manifold_gpu::GpuTexture>,
+    /// Native MSAA depth resolves require a matching depth format. Reused
+    /// only when depth is consumed, then copied to the graph's R32Float output.
+    depth_resolve_scratch: Option<manifold_gpu::GpuTexture>,
     depth_width: u32,
     depth_height: u32,
     /// Memoryless 4x-MSAA `Rg16Float` velocity aux-MRT target
@@ -845,7 +853,7 @@ pub struct RenderScene {
     /// change, so their bands widen with this magnitude — without it a
     /// rotating camera snapped the gates every frame and the
     /// snap→rebuild→retrip cycle boiled the image.
-    prev_cam_state: Option<([f32; 3], [f32; 3])>,
+    prev_cam_state: Option<Camera>,
     /// Previous frame's camera jitter as an NDC offset (0,0 when
     /// `temporal_upscale` is off) — paired with this frame's in
     /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
@@ -862,7 +870,7 @@ pub struct RenderScene {
     /// history does.
     jitter_frame_index: u32,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
-    /// RS-C: 1-byte shared buffer bound as a dummy emissive-triangle/alias
+    /// RS-C: ABI-sized zero buffer bound as a dummy emissive-triangle/alias
     /// buffer when no emissive table exists (entry_count=0 in ShadowRayParams
     /// skips the kernel block — same discipline as the dummy texture for
     /// the prefiltered-env chain).
@@ -993,9 +1001,9 @@ pub struct RenderScene {
     /// prepass (reuses `shadow_pipeline`, fed the camera's `view_proj`
     /// instead of a light's) so Pass B can depth-test against it as an
     /// actual Metal depth ATTACHMENT. The existing MSAA pass's
-    /// `depth_resolve` mechanism (`R32Float`) can't serve this: `R32Float`
-    /// is a legal depth *resolve* destination but not a legal depth-
-    /// ATTACHMENT pixel format. `None` when no transmissive object is in
+    /// graph depth (`R32Float`) cannot serve as a depth attachment. Its
+    /// native depth resolve also happens later than this prepass is needed.
+    /// `None` when no transmissive object is in
     /// the scene this frame.
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
@@ -1048,6 +1056,9 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
+    rt_topology_rejected: bool,
+    rt_topology_mismatch_logged: bool,
+    rt_source_trace_last_admission: Option<(u64, u64)>,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1504,6 +1515,47 @@ struct ShaftCompositeUniforms {
 }
 const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
+#[inline]
+fn rt_trace_gate(rt_ready: bool, resident_topo_key: Option<u64>, topo_key: u64) -> bool {
+    rt_ready && resident_topo_key == Some(topo_key)
+}
+
+#[inline]
+fn rt_refit_eligible(topology_valid: bool, resident_accel_key: Option<u64>, accel_key: u64) -> bool {
+    topology_valid && resident_accel_key != Some(accel_key)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RtBuildDecision { Defer, Build { content_trigger_fired: bool } }
+
+fn rt_deferred_build_decision(
+    resident_topo: Option<u64>, resident_content: Option<u64>,
+    pending_topo: &mut Option<u64>, pending_content: &mut Option<u64>,
+    topo_key: u64, content_key: u64,
+) -> RtBuildDecision {
+    let mut build = false;
+    let mut content_trigger_fired = false;
+    if resident_topo != Some(topo_key) {
+        if *pending_topo == Some(topo_key) { build = true; } else { *pending_topo = Some(topo_key); }
+    }
+    if resident_topo == Some(topo_key) && resident_content != Some(content_key) {
+        if *pending_content == Some(content_key) { build = true; content_trigger_fired = true; }
+        else { *pending_content = Some(content_key); }
+    }
+    if build { RtBuildDecision::Build { content_trigger_fired } } else { RtBuildDecision::Defer }
+}
+
+fn reject_topology(
+    topo_key: &mut Option<u64>, accel_key: &mut Option<u64>, content_key: &mut Option<u64>,
+    pending_topo: &mut Option<u64>, pending_content: &mut Option<u64>, built: &mut bool,
+    rejected: &mut bool,
+) -> bool {
+    *built = false;
+    if *rejected { return false; }
+    *topo_key = None; *accel_key = None; *content_key = None;
+    *pending_topo = None; *pending_content = None; *rejected = true; true
+}
+
 impl RenderScene {
     pub fn new() -> Self {
         let mut s = Self {
@@ -1516,6 +1568,7 @@ impl RenderScene {
             blend_depth_stencil: None,
             msaa_color: None,
             depth_texture: None,
+            depth_resolve_scratch: None,
             depth_width: 0,
             depth_height: 0,
             velocity_msaa: None,
@@ -1600,6 +1653,9 @@ impl RenderScene {
             rt_accel_content_key: None,
             rt_accel_content_pending_key: None,
             rt_accel_built: false,
+            rt_topology_rejected: false,
+            rt_topology_mismatch_logged: false,
+            rt_source_trace_last_admission: None,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_half2: None,
@@ -1921,6 +1977,22 @@ impl RenderScene {
         self.depth_height = height;
     }
 
+    fn ensure_depth_resolve_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.depth_resolve_scratch.as_ref().is_some_and(|t| t.width == width && t.height == height) {
+            return;
+        }
+        self.depth_resolve_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Depth32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene native depth resolve",
+            mip_levels: 1,
+        }));
+    }
+
     /// Ensure the memoryless MSAA `Rg16Float` velocity aux-MRT target
     /// matches the render target size (GBUFFER_DESIGN.md section 2 D5, P2). Called
     /// ONLY when `evaluate` finds `velocity` wired this frame (D1 lazy
@@ -2113,7 +2185,8 @@ impl RenderScene {
                 depth: 1,
                 format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
                 label: "node.render_scene dummy",
                 mip_levels: 1,
             });
@@ -2130,11 +2203,14 @@ impl RenderScene {
 
     fn ensure_dummy_emissive_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.dummy_emissive_buffer.is_none() {
-            // 1-byte shared buffer — Metal requires a non-null buffer handle
-            // when the kernel declares a `device const` pointer binding, even
-            // when the kernel logically never reads it (entry_count=0 skips
-            // the sampler block).
-            let buf = device.create_buffer_shared(1);
+            // Metal validates one complete pointee even when entry_count=0
+            // skips the sampler block. Size from both shared GPU ABI types.
+            let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>()
+                .max(std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>());
+            let buf = device.create_buffer_shared(bytes as u64);
+            // The newly allocated buffer is exclusively owned and not yet
+            // submitted, and the write covers exactly its allocation.
+            unsafe { std::ptr::write_bytes(buf.mapped_ptr().expect("shared buffer"), 0, bytes); }
             self.dummy_emissive_buffer = Some(buf);
         }
     }
@@ -2273,8 +2349,8 @@ impl RenderScene {
     /// depth-resolve target used ONLY when shafts are on and the graph's
     /// `depth` output is unwired this frame — "shafts-on forces the
     /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
-    /// `RENDER_TARGET` because it is a resolve target of the MSAA depth
-    /// pass; `SHADER_READ` because the downsample kernel reads it.
+    /// The native depth resolve is converted into this R32Float texture by
+    /// compute, then read by the shaft downsample kernel.
     fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.shaft_depth_internal_width == width
             && self.shaft_depth_internal_height == height
@@ -2288,7 +2364,7 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::R32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+            usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
                 | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "node.render_scene shaft depth internal",
             mip_levels: 1,
@@ -4205,20 +4281,26 @@ impl EffectNode for RenderScene {
         // two things that must stay at the TRUE canvas size: the
         // upscaler's dst dims and the final blit destination.
         let temporal_upscale_param = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        // BUG-319: the reduced-res path is only viable when the compiled
-        // plan actually carries the stored depth/velocity targets MetalFX
-        // needs. A LIVE toggle can't change the plan (the in-place
-        // recompile is retracted — see PresetRuntime::refresh_plan_if_
-        // forced_outputs_changed), so a param=true / targets-absent frame
-        // renders natively — correct image, loud log, zero corruption —
-        // until the runtime rebuilds with the param baked in.
-        let temporal_upscale = temporal_upscale_param
-            && ctx.outputs.texture_2d("depth").is_some()
-            && ctx.outputs.texture_2d("velocity").is_some();
-        if temporal_upscale_param && !temporal_upscale && !self.rt_temporal_unavailable_logged {
+        // A live toggle cannot resize the compiled depth/velocity attachments
+        // (see PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
+        // dimensions, rather than the pending parameter, determine whether
+        // this frame uses MetalFX's reduced-resolution render path.
+        let reduced_dims = (
+            scale_dim(width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+            scale_dim(height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+        );
+        // A live toggle does not resize the compiled graph's attachments.
+        // Keep drawing at their committed resolution until the host rebuilds,
+        // in BOTH directions (native -> reduced and reduced -> native).
+        let temporal_upscale = (temporal_upscale_param || reduced_dims != (width, height))
+            && ["depth", "velocity"].iter().all(|port| {
+                ctx.outputs.texture_2d(port)
+                    .is_some_and(|t| (t.width, t.height) == reduced_dims)
+            });
+        if temporal_upscale_param != temporal_upscale && !self.rt_temporal_unavailable_logged {
             self.rt_temporal_unavailable_logged = true;
             log::warn!(
-                "node.render_scene: temporal_upscale is on but this runtime's plan has no stored depth/velocity targets (live toggle — BUG-319); rendering natively until the scene runtime rebuilds"
+                "node.render_scene: temporal_upscale changed but the compiled depth/velocity size has not; retaining the compiled render resolution until the scene runtime rebuilds"
             );
         }
         let native_width = width;
@@ -4340,7 +4422,7 @@ impl EffectNode for RenderScene {
                 .as_ref()
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         }
-        let rt_ready = self.rt_accel_built;
+        let mut rt_ready = self.rt_accel_built && !self.rt_topology_rejected;
         // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2, section 8.2 D22 (T2-B): the ONE
         // `detect_reset` call site for every temporal consumer in this node
         // (negative-`rg` gate: no second reset path). Unconditional, once
@@ -4353,7 +4435,6 @@ impl EffectNode for RenderScene {
         // max_blur_px. Consumer off→on resumes now force a reset explicitly
         // via the `*_just_resumed` latches below — that used to fall out of
         // the gated detector's time-jump.
-        let will_rt_accumulate_this_frame = rt_enabled && rt_ready;
         let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time);
         // A cut/seek means this node's velocity history is stale too: clear
         // it so the first post-cut frame takes the "no history yet"
@@ -4364,8 +4445,6 @@ impl EffectNode for RenderScene {
             self.prev_view_proj = None;
             self.prev_cam_state = None;
         }
-        let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
-        self.rt_prev_accumulating = will_rt_accumulate_this_frame;
         let upscale_just_resumed = temporal_upscale && !self.prev_temporal_upscale;
         self.prev_temporal_upscale = temporal_upscale;
         // D22: whether the scratch/upscaler are actually live this frame —
@@ -4457,7 +4536,21 @@ impl EffectNode for RenderScene {
         // so history is tracked continuously: if velocity is wired mid-
         // session, the first wired frame sees the object's REAL prior
         // motion, not a spurious first-frame zero.
-        let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
+        // Periodic sources identify the equivalent copy across a coordinate
+        // wrap. Share that correspondence across velocity, RT reprojection
+        // and motion conditioning instead of clearing valid temporal history.
+        let world_offset = self.prev_cam_state.map_or([0.0; 3], |previous| {
+            cam.previous_world_offset(previous.pos, previous.world_period)
+        });
+        let prev_view_proj = self.prev_view_proj.map_or(view_proj, |previous| {
+            let translation = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [world_offset[0], world_offset[1], world_offset[2], 1.0],
+            ];
+            if world_offset == [0.0; 3] { previous } else { mat4_mul(previous, translation) }
+        });
         self.prev_view_proj = Some(view_proj);
         // Camera-motion magnitude for the accumulator's change gates
         // (`AccumulateParams::cam_motion`): radians of view-direction turn
@@ -4467,7 +4560,9 @@ impl EffectNode for RenderScene {
         // 0 — a held camera feeds the gates exactly 0, keeping the static
         // path byte-identical.
         let cam_motion = match self.prev_cam_state {
-            Some((ppos, pfwd)) => {
+            Some(previous) => {
+                let ppos = std::array::from_fn::<_, 3, _>(|i| previous.pos[i] - world_offset[i]);
+                let pfwd = previous.fwd;
                 let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
                     .clamp(-1.0, 1.0);
                 let rot = d.acos();
@@ -4479,7 +4574,7 @@ impl EffectNode for RenderScene {
             }
             None => 0.0,
         };
-        self.prev_cam_state = Some((cam.pos, cam.fwd));
+        self.prev_cam_state = Some(cam);
         if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
             eprintln!(
                 "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
@@ -4631,6 +4726,18 @@ impl EffectNode for RenderScene {
                 continue;
             }
             let mesh_slot = object.mesh;
+            // Async mesh content still in flight (node.gltf_mesh_source
+            // parsing/uploading): the slot's buffer is allocated at full
+            // capacity but holds no geometry — consuming it builds and
+            // traces a garbage BLAS (the Corrosion warmup GPU hang). Treat
+            // exactly like `visible == false`: no draw, no shadow cast.
+            // The object's arrival flips the topo key (object count +
+            // buffer identity), so the first published frame rebuilds the
+            // accel fresh through the one-frame defer — never a refit of
+            // the garbage state.
+            if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
+                continue;
+            }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.error(format!(
                     "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
@@ -4730,57 +4837,6 @@ impl EffectNode for RenderScene {
                 prev_view_proj,
                 prev_model_n,
             );
-            // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
-            // a permanently-zero reserved slot (see the field's doc
-            // comment) — repurposed as the RT-active flag `shadow_factor`,
-            // `rt_or_flat_ambient` (GI/AO), and the reflection substitution
-            // all branch on, same reuse doctrine as `alpha_params.zw`
-            // (clearcoat) and `pbr_metallic_roughness.zw`
-            // (ior/specular_factor). BUG-17r3: no longer gated on
-            // `!casters.is_empty()` — a zero-light emissive-only scene
-            // still needs RT GI/AO/reflections; `shadow_factor`'s own
-            // caster-slot lookup already no-ops when the light loop has no
-            // caster slot to hand it (`slot_f < 0.0` returns fully lit),
-            // so this flag is safe to raise with zero casters too.
-            uniforms.scene_params[3] = if rt_enabled && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 9 RD9/RD1: the reflection-substitution
-            // gate — stricter than scene_params.w: the raster may only
-            // read `rt_reflection` (binding 43) when the trace dispatch
-            // actually ran WITH refl_spp > 0 this frame, i.e. the
-            // rt_reflections param is also on. Same per-object write
-            // (scene-wide value, like scene_params.w). BUG-17r3: reflections
-            // trace against the scene geometry, not toward a light — never
-            // caster-gated.
-            uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
-            // diffuse substitution gate — the raster may only read the RT
-            // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
-            // gather actually ran this frame. BUG-majv: that condition is
-            // `gi_spp > 0` on the trace dispatch, which since the per-term
-            // toggles means `rt_gi_enabled` too — this gate used to be
-            // `will_rt_accumulate_this_frame` alone, so RT-on + GI-off read
-            // an `.rgb` channel the kernel never wrote (stale or
-            // reset-to-zero across an off->on cycle: black diffuse with
-            // sparse residue). Mirrors the reflection fallback discipline
-            // (`rt_refl.a < 0` keeping the raster prefiltered fetch). No new
-            // scene param (MB4).
-            uniforms.rt_flags[1] = if rt_gi_enabled && rt_ready { 1.0 } else { 0.0 };
-            // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
-            // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
-            // light substitutes rt_sun_tint for the luma vis channel.
-            // BUG-majv: gate on rt_shadows_enabled, not bare rt_ready — the
-            // svt texture is only written by the mask/lighting dispatches at
-            // shadow_spp > 0, and `rt_ready` is latched (stays true with RT
-            // toggled off), so the old gate read a stale rt_sun_tint with RT
-            // off or with the shadow kernel disabled — a zeroed texture
-            // zeroed the sun's entire direct contribution.
-            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
-            // RT term toggles: rt_flags.w = RT shadow mask read gate. When
-            // rt_shadows is off, shadow_factor falls through to raster shadow
-            // maps. The kernel still dispatches (for AO/GI/refl), but the sv
-            // textures are not written (shadow_spp=0 gated in-kernel) and the
-            // WGSL never reads them (gated here).
-            uniforms.rt_flags[3] = if rt_shadows_enabled && rt_ready { 1.0 } else { 0.0 };
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
             // clip varyings. Zero whenever temporal_upscale is off.
@@ -4790,33 +4846,6 @@ impl EffectNode for RenderScene {
                 prev_jitter_ndc.0,
                 prev_jitter_ndc.1,
             ];
-            // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
-            // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
-            // the value the EMIT_AO_MASK fragment variants write to the
-            // ao_mask attachment. 0 for unlit-kind materials (baked_look)
-            // and scene-wide whenever RT is providing AO (RT on + RT AO on);
-            // 1 for every lit raster pixel and whenever RT AO is toggled off
-            // (so the downstream GTAO masked_mix darkens with screen-space
-            // occlusion instead of reading the unwritten RT AO channel).
-            // Same reserved-slot reuse doctrine as `scene_params.w` above.
-            // Written unconditionally — non-mask pipelines never read it.
-            uniforms.fog_params[2] =
-                if material.kind == MaterialKind::Unlit || (rt_enabled && rt_ready && rt_ao_enabled)
-                {
-                    0.0
-                } else {
-                    1.0
-                };
-            // BUG-majv: `fog_params.w` (was permanently-zero reserved) = the
-            // RT AO read gate for `rt_or_flat_ambient`. The irradiance
-            // texture's `.a` is only written when the trace dispatch ran
-            // with ao_spp > 0 (or gi_spp > 0, which writes a neutral 1.0);
-            // gating on scene_params.w alone read a stale/zeroed `.a` with
-            // the AO kernel off, killing the ambient term after an
-            // off->on cycle. AO off also restores the raster's
-            // full-strength flat ambient (the 0.15 RT ceiling only applies
-            // when RT AO is actually providing the occlusion term).
-            uniforms.fog_params[3] = if rt_ao_enabled && rt_ready { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -4969,6 +4998,188 @@ impl EffectNode for RenderScene {
             return;
         }
 
+        // Resolve resident topology before authoring RT consumer flags or
+        // selecting raster fallback. Reuse this exact object list for AS work.
+        let rt_objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> =
+            draws.iter()
+                .filter(|d| rt_enabled && d.alpha_mode != AlphaMode::Blend)
+                .map(|d| {
+                    let rt_instances_wired =
+                        matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
+                    manifold_gpu::raytrace::RtObjectGeometry {
+                    vertex_buffer: d.vertices,
+                    vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
+                    vertex_offset: 0,
+                    index_buffer: None,
+                    triangle_count: (d.vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3,
+                    transform: d.uniforms.model,
+                    // RT-T1-B: `MeshVertex`'s normal field offset (position
+                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
+                    // `MeshVertex` layout.
+                    normal_offset: 16,
+                    // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4):
+                    // `MeshVertex`'s UV field offset (position 16 + normal
+                    // 16 = 32).
+                    uv_offset: 32,
+                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                    // Translucency is material state: visibility queries
+                    // override opacity, while BLAS opacity follows alpha mask.
+                    translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
+                    alpha_cutoff: d.uniforms.alpha_params[1],
+                    base_color_texture: d.base_color_map,
+                    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
+                    // "None = unwired, flat factor fallback" shape as
+                    // `base_color_texture` above.
+                    mr_texture: d.mr_map,
+                    // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
+                    // reaches the RT kernel exactly the way the MR map does —
+                    // "None = unwired, vertex normal stands" shape. The kernel
+                    // samples it at the primary hit to perturb the reflection
+                    // lobe's R and the AO/GI hemisphere normal.
+                    normal_texture: d.normal_map,
+                    // BUG-1gqt: the emissive map + its KHR_texture_transform
+                    // fold reach the trace kernels (factor × sample at the
+                    // hit), mirroring the raster's `resolve_emissive`.
+                    emissive_texture: d.emissive_map,
+                    emissive_uv_m: d.uniforms.emissive_uv_m,
+                    emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
+                    cast_shadows: d.cast_shadows,
+                    // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
+                    // instance binding from `d.instances` /
+                    // `d.instance_count` — the buffer's GPU address (the
+                    // same bindless-address accessor `vertex_base_addr`
+                    // uses) plus its CAPACITY. `instance_count` is
+                    // buffer_size / 32 (D2/INV-RTI5, BUG-757c discipline:
+                    // the live count is in-band — dead slots carry
+                    // pos_scale.w == 0 — and a param change never resizes
+                    // the buffer), so a capacity change is topology (topo
+                    // key below) and rebuilds the accel; content changes
+                    // ride the accel key via `instances_generation` (D9).
+                    // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
+                    // buffer (instance_count == 0 is a legal raster no-op)
+                    // normalizes to UNWIRED — the descriptor kernel would
+                    // otherwise read slot 0 of a zero-byte allocation (OOB
+                    // GPU read) and trace a ghost copy the raster never
+                    // draws. Unwired keeps the D7 fast path (single
+                    // identity-slot descriptor per object).
+                    instances_addr: if rt_instances_wired {
+                        d.instances.map_or(0, |b| b.gpu_address())
+                    } else {
+                        0
+                    },
+                    instances_buffer: if rt_instances_wired { d.instances } else { None },
+                    instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
+                }
+                })
+                .collect();
+            let topology_time = ctx.time;
+            let mut topology_valid = true;
+            if rt_enabled
+                && let Some(accel) = self.rt_accel.as_ref()
+                && let Err(mismatch) = accel.check_topology(&rt_objects)
+            {
+                topology_valid = false;
+                rt_ready = false;
+                let first_rejection = reject_topology(
+                    &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                    &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                    &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                    &mut self.rt_topology_rejected,
+                );
+                if first_rejection && !self.rt_topology_mismatch_logged {
+                    log::warn!(
+                        "node.render_scene: RT topology mismatch: object={} category={:?} time={:?}",
+                        mismatch.object, mismatch.category, topology_time
+                    );
+                    self.rt_topology_mismatch_logged = true;
+                }
+            }
+
+        let will_rt_accumulate_this_frame = rt_enabled && rt_ready;
+        let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
+        self.rt_prev_accumulating = will_rt_accumulate_this_frame;
+        for draw in &mut draws {
+            let uniforms = &mut draw.uniforms;
+            // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
+            // a permanently-zero reserved slot (see the field's doc
+            // comment) — repurposed as the RT-active flag `shadow_factor`,
+            // `rt_or_flat_ambient` (GI/AO), and the reflection substitution
+            // all branch on, same reuse doctrine as `alpha_params.zw`
+            // (clearcoat) and `pbr_metallic_roughness.zw`
+            // (ior/specular_factor). BUG-17r3: no longer gated on
+            // `!casters.is_empty()` — a zero-light emissive-only scene
+            // still needs RT GI/AO/reflections; `shadow_factor`'s own
+            // caster-slot lookup already no-ops when the light loop has no
+            // caster slot to hand it (`slot_f < 0.0` returns fully lit),
+            // so this flag is safe to raise with zero casters too.
+            uniforms.scene_params[3] = if rt_enabled && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 9 RD9/RD1: the reflection-substitution
+            // gate — stricter than scene_params.w: the raster may only
+            // read `rt_reflection` (binding 43) when the trace dispatch
+            // actually ran WITH refl_spp > 0 this frame, i.e. the
+            // rt_reflections param is also on. Same per-object write
+            // (scene-wide value, like scene_params.w). BUG-17r3: reflections
+            // trace against the scene geometry, not toward a light — never
+            // caster-gated.
+            uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
+            // diffuse substitution gate — the raster may only read the RT
+            // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
+            // gather actually ran this frame. BUG-majv: that condition is
+            // `gi_spp > 0` on the trace dispatch, which since the per-term
+            // toggles means `rt_gi_enabled` too — this gate used to be
+            // `will_rt_accumulate_this_frame` alone, so RT-on + GI-off read
+            // an `.rgb` channel the kernel never wrote (stale or
+            // reset-to-zero across an off->on cycle: black diffuse with
+            // sparse residue). Mirrors the reflection fallback discipline
+            // (`rt_refl.a < 0` keeping the raster prefiltered fetch). No new
+            // scene param (MB4).
+            uniforms.rt_flags[1] = if rt_gi_enabled && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
+            // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
+            // light substitutes rt_sun_tint for the luma vis channel.
+            // BUG-majv: gate on rt_shadows_enabled, not bare rt_ready — the
+            // svt texture is only written by the mask/lighting dispatches at
+            // shadow_spp > 0, and `rt_ready` is latched (stays true with RT
+            // toggled off), so the old gate read a stale rt_sun_tint with RT
+            // off or with the shadow kernel disabled — a zeroed texture
+            // zeroed the sun's entire direct contribution.
+            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            // RT term toggles: rt_flags.w = RT shadow mask read gate. When
+            // rt_shadows is off, shadow_factor falls through to raster shadow
+            // maps. The kernel still dispatches (for AO/GI/refl), but the sv
+            // textures are not written (shadow_spp=0 gated in-kernel) and the
+            // WGSL never reads them (gated here).
+            uniforms.rt_flags[3] = if rt_shadows_enabled && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
+            // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
+            // the value the EMIT_AO_MASK fragment variants write to the
+            // ao_mask attachment. 0 for unlit-kind materials (baked_look)
+            // and scene-wide whenever RT is providing AO (RT on + RT AO on);
+            // 1 for every lit raster pixel and whenever RT AO is toggled off
+            // (so the downstream GTAO masked_mix darkens with screen-space
+            // occlusion instead of reading the unwritten RT AO channel).
+            // Same reserved-slot reuse doctrine as `scene_params.w` above.
+            // Written unconditionally — non-mask pipelines never read it.
+            uniforms.fog_params[2] =
+                if draw.kind == MaterialKind::Unlit || (rt_enabled && rt_ready && rt_ao_enabled)
+                {
+                    0.0
+                } else {
+                    1.0
+                };
+            // BUG-majv: `fog_params.w` (was permanently-zero reserved) = the
+            // RT AO read gate for `rt_or_flat_ambient`. The irradiance
+            // texture's `.a` is only written when the trace dispatch ran
+            // with ao_spp > 0 (or gi_spp > 0, which writes a neutral 1.0);
+            // gating on scene_params.w alone read a stale/zeroed `.a` with
+            // the AO kernel off, killing the ambient term after an
+            // off->on cycle. AO off also restores the raster's
+            // full-strength flat ambient (the 0.15 RT ceiling only applies
+            // when RT AO is actually providing the occlusion term).
+            uniforms.fog_params[3] = if rt_ao_enabled && rt_ready { 1.0 } else { 0.0 };
+        }
+
         // RAYTRACING_DESIGN.md section 12 AM1: when `has_transmission`
         // routes the Blend group to Pass B (single color attachment, no
         // MSAA, no aux MRT — see the E2a seam below), those draws must not
@@ -5018,6 +5229,9 @@ impl EffectNode for RenderScene {
                 ));
             }
             self.ensure_msaa_targets(gpu.device, width, height);
+            if depth_wired || wants_shafts_now {
+                self.ensure_depth_resolve_scratch(gpu.device, width, height);
+            }
             // GBUFFER_DESIGN.md section 2 D1/D5 (P2): the velocity aux-MRT
             // memoryless target is allocated ONLY when wired this frame —
             // this call site (not `ensure_msaa_targets`, which always runs)
@@ -5479,62 +5693,12 @@ impl EffectNode for RenderScene {
         // `ShadowRayParams::new` is well-formed with that (`caster_count
         // = 0`, kernel's `n_casters` loop is zero-iteration, every
         // `shadow_factor` caster-slot lookup already returns fully-lit
-        // for a light with no caster slot). KNOWN LIMITATION: the accel
-        // structure below uses each object's single `model` transform —
-        // instanced objects (`instances_n` wired) get ONE ray-traced copy
-        // at that base transform, not one per instance (photoscanned-
-        // hero-object scenes, this design's whole framing, are not
-        // instanced; a scene that instances RT-shadowed geometry gets
-        // wrong per-instance shadow positions — escalate if this becomes
-        // load-bearing, per the P1 brief's own escalation line). ----
+        // for a light with no caster slot). RT_INSTANCING_DESIGN.md D1/D2:
+        // the accel below is instance-aware — one TLAS slot per wired
+        // instance capacity, composed GPU-side (descriptor-build kernel),
+        // so instanced objects trace one copy per live raster slot. ----
         if rt_enabled {
-            let vsize = std::mem::size_of::<MeshVertex>() as u32;
-            let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
-                .iter()
-                .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
-                    vertex_buffer: d.vertices,
-                    vertex_stride: vsize,
-                    vertex_offset: 0,
-                    index_buffer: None,
-                    triangle_count: vcount(d.vertices) / 3,
-                    transform: d.uniforms.model,
-                    // RT-T1-B: `MeshVertex`'s normal field offset (position
-                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
-                    // `MeshVertex` layout.
-                    normal_offset: 16,
-                    // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4):
-                    // `MeshVertex`'s UV field offset (position 16 + normal
-                    // 16 = 32).
-                    uv_offset: 32,
-                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                    // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): nonzero
-                    // translucency also leaves the BLAS opaque fast path.
-                    // Read from the SAME material uniform the raster forward
-                    // term and the GiMaterial factor below read — one source
-                    // of truth. Folded into the topo key so a live 0→nonzero
-                    // flip triggers the bounded async rebuild (D17).
-                    translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
-                    alpha_cutoff: d.uniforms.alpha_params[1],
-                    base_color_texture: d.base_color_map,
-                    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
-                    // "None = unwired, flat factor fallback" shape as
-                    // `base_color_texture` above.
-                    mr_texture: d.mr_map,
-                    // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
-                    // reaches the RT kernel exactly the way the MR map does —
-                    // "None = unwired, vertex normal stands" shape. The kernel
-                    // samples it at the primary hit to perturb the reflection
-                    // lobe's R and the AO/GI hemisphere normal.
-                    normal_texture: d.normal_map,
-                    // BUG-1gqt: the emissive map + its KHR_texture_transform
-                    // fold reach the trace kernels (factor × sample at the
-                    // hit), mirroring the raster's `resolve_emissive`.
-                    emissive_texture: d.emissive_map,
-                    emissive_uv_m: d.uniforms.emissive_uv_m,
-                    emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
-                    cast_shadows: d.cast_shadows,
-                })
-                .collect();
+            let objects = rt_objects;
 
             // RS-B: build gi_materials alongside objects (SAME order) for
             // the emissive light table at accel-build time. Reused below
@@ -5595,21 +5759,41 @@ impl EffectNode for RenderScene {
             for o in &objects {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
-                // RT-TL-B (TL6): BLAS opacity is baked at build time, so a
-                // translucency 0↔nonzero flip needs a full rebuild, not a
-                // refit — the flag rides the TOPO key (BUG-308's one-frame
-                // defer gives the bounded raster-presenting transition).
-                hasher.write_u8(o.translucent as u8);
+                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
+                // CAPACITY is topology — the TLAS slot count is baked at
+                // build time, so a capacity change rebuilds through
+                // BUG-308's one-frame defer. Same rule as manifold-gpu's
+                // `effective_instance_slots` (P1.5: any WIRED object takes
+                // the GPU path, 1-capacity included — its TRS is GPU-side).
+                // The wired buffer's IDENTITY deliberately does NOT ride
+                // here (D9: the descriptor kernel reads whatever buffer is
+                // wired each refit); content changes ride the accel key
+                // below.
+                hasher.write_u32(if o.instances_addr != 0 {
+                    o.instance_slots.max(1)
+                } else {
+                    1
+                });
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
-            for o in &objects {
+            for (o, d) in objects.iter().zip(opaque_draws.iter()) {
                 hasher.write(bytemuck::bytes_of(&o.transform));
                 // Per-object cast_shadows toggle rewrites only the instance
                 // mask (see `refit_accel`), same cheap path as a transform
                 // change — folded into the SAME key so a toggle with no
                 // transform change still triggers a refit.
                 hasher.write_u8(o.cast_shadows as u8);
+                // RT_INSTANCING_DESIGN.md D9/INV-RTI4: a wired instances
+                // buffer's CONTENT changes refit (descriptor-build
+                // re-dispatch + TLAS refit in one command buffer). Static
+                // loop/mirror buffers never bump the generation, so the
+                // common case is zero per-frame cost. Deliberately NOT in
+                // the content-settle key: a re-scattering producer bumps
+                // every frame and would never settle, suppressing its
+                // rebuilds. `None` (unwired) hashes as a distinct state,
+                // mirroring the vertices_generation Option discipline.
+                d.instances_generation.hash(&mut hasher);
             }
             let accel_key = hasher.finish();
             // Content key: topo key plus every draw's slot generation, on a
@@ -5625,16 +5809,30 @@ impl EffectNode for RenderScene {
             }
             let content_key = content_hasher.finish();
 
+            let rt_source_trace_generation = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
             // buffers above are ensured before `opaque_draws`'
             // long-lived immutable borrow starts.
+            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
+            // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
+            // `ensure_normal_sources` — object-indexed readers (n4.w
+            // roughness, RS-C sampler) use the canonical rows,
+            // instance_id-indexed readers add N via params.slot_row_base.
+            // A wired draw contributes `instance_count` (buffer capacity —
+            // D2) slot rows; unwired draws contribute their one identity
+            // slot.
+            let rt_gi_slot_count: usize = objects
+                .iter()
+                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
+                .sum::<usize>()
+                + objects.len();
             ensure_rt_gi_materials(
                 &mut self.rt_gi_materials,
                 &mut self.rt_gi_materials_capacity,
                 gpu.device,
-                objects.len(),
+                rt_gi_slot_count,
             );
             // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
             // placement as `ensure_rt_gi_materials` above.
@@ -5689,44 +5887,32 @@ impl EffectNode for RenderScene {
             // accel_key changes under an UNCHANGED topo key) fires only
             // when neither trigger has work to do — a content rebuild
             // subsumes any pending refit.
-            let mut build_this_frame = false;
-            let mut content_trigger_fired = false;
-
-            // ── Topo trigger ──
-            if self.rt_accel_topo_key != Some(topo_key) {
-                if self.rt_accel_pending_key == Some(topo_key) {
-                    build_this_frame = true;
-                } else {
-                    self.rt_accel_pending_key = Some(topo_key);
-                    // BUG-oqta repro knob (probe-only, production-inert):
-                    // stretch the one-frame defer's WALL time so async mesh
-                    // content lands inside the window on any machine — the
-                    // natural race is timing-dependent (7/7 healthy runs on
-                    // one box, 3/4 failing on another). With the window
-                    // open, unfixed code builds once (content key swallowed)
-                    // and fixed code builds twice (settle trigger fires).
-                    if let Ok(ms) = std::env::var("MANIFOLD_PROBE_RT_ACCEL_DEFER_MS")
-                        && let Ok(ms) = ms.parse::<u64>()
-                    {
-                        eprintln!("MANIFOLD_PROBE_RT_ACCEL: defer-window sleep {ms}ms");
-                        std::thread::sleep(std::time::Duration::from_millis(ms));
-                    }
-                }
-            }
-            // ── Content-settle trigger (only when topo is stable) ──
-            if self.rt_accel_topo_key == Some(topo_key)
-                && self.rt_accel_content_key != Some(content_key)
-            {
-                if self.rt_accel_content_pending_key == Some(content_key) {
-                    build_this_frame = true;
-                    content_trigger_fired = true;
-                } else {
-                    self.rt_accel_content_pending_key = Some(content_key);
-                }
-            }
+            let (build_this_frame, content_trigger_fired) = match rt_deferred_build_decision(
+                self.rt_accel_topo_key, self.rt_accel_content_key,
+                &mut self.rt_accel_pending_key, &mut self.rt_accel_content_pending_key,
+                topo_key, content_key,
+            ) {
+                RtBuildDecision::Defer => (false, false),
+                RtBuildDecision::Build { content_trigger_fired } => (true, content_trigger_fired),
+            };
 
             if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                if rt_source_trace_enabled() {
+                    log::info!(
+                        "[RT-SOURCE] accel-build action=build rebuild_epoch={} topo_key={topo_key:#x} content_key={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                        rt_source_trace_generation, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                    );
+                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                        log::info!(
+                            "[RT-SOURCE] accel-object action=build index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                            object.instance_slots, object.instances_addr
+                        );
+                        log::info!("[RT-SOURCE] accel-generations action=build index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                    }
+                }
                 // Q1 probe: what did build_accel see?
                 if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
                     eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
@@ -5754,10 +5940,12 @@ impl EffectNode for RenderScene {
                 // before tracing resumes — the old accel is dropped
                 // (self-retiring Drop) and no longer traced against.
                 self.rt_accel_built = false;
+                rt_ready = false;
+                self.rt_topology_rejected = false;
                 log::info!(
                     "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"
                 );
-            } else if self.rt_accel_key != Some(accel_key) {
+            } else if rt_refit_eligible(topology_valid, self.rt_accel_key, accel_key) {
                 // BUG-320: same topology, moved transforms — refit the
                 // TLAS in place. Safe same-frame (transforms are
                 // CPU-authored; no upstream GPU write to race — the
@@ -5774,8 +5962,37 @@ impl EffectNode for RenderScene {
                     && accel.ready.load(std::sync::atomic::Ordering::Acquire)
                 {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    tracer.refit_accel(gpu.device, accel, &objects);
-                    self.rt_accel_key = Some(accel_key);
+                    if let Err(mismatch) = tracer.refit_accel(gpu.device, accel, &objects) {
+                        rt_ready = false;
+                        let first_rejection = reject_topology(
+                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                            &mut self.rt_topology_rejected,
+                        );
+                        if first_rejection && !self.rt_topology_mismatch_logged {
+                            log::warn!("node.render_scene: RT topology mismatch before refit: object={} category={:?}", mismatch.object, mismatch.category);
+                            self.rt_topology_mismatch_logged = true;
+                        }
+                    } else {
+                        if rt_source_trace_enabled() {
+                            log::info!(
+                                "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                                rt_source_trace_generation, accel as *const _ as usize, self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                            );
+                            for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                                log::info!(
+                                    "[RT-SOURCE] accel-object action=refit index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                                    index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                                    object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                                    object.instance_slots, object.instances_addr
+                                );
+                                log::info!("[RT-SOURCE] accel-generations action=refit index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                            }
+                        }
+                        self.rt_accel_key = Some(accel_key);
+                        self.rt_topology_mismatch_logged = false;
+                    }
                 }
             }
 
@@ -5799,7 +6016,28 @@ impl EffectNode for RenderScene {
             // the current frame's topo key closes that hole: during the
             // defer frame the keys don't match, tracing is blocked, and
             // the raster shadow-map path serves the transition.
-            if rt_ready && self.rt_accel_topo_key == Some(topo_key) {
+            // Content generations may continue using the resident AS while
+            // the existing two-observation content rebuild settles. Strict
+            // dynamic-content freshness is outside this landing.
+            if rt_trace_gate(rt_ready, self.rt_accel_topo_key, topo_key) {
+                if rt_source_trace_enabled()
+                    && self.rt_source_trace_last_admission != Some((topo_key, content_key))
+                {
+                    log::info!(
+                        "[RT-SOURCE] trace-admission action=trace rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                        rt_source_trace_generation, self.rt_accel.as_ref().map(|accel| accel as *const _ as usize).unwrap_or(0), self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                    );
+                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                        log::info!(
+                            "[RT-SOURCE] trace-object index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                            object.instance_slots, object.instances_addr
+                        );
+                        log::info!("[RT-SOURCE] trace-generations index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                    }
+                    self.rt_source_trace_last_admission = Some((topo_key, content_key));
+                }
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
                 // emissive geometry. Hoisted to the evaluate scope (mut
@@ -5811,6 +6049,16 @@ impl EffectNode for RenderScene {
                     .and_then(|a| a.emissive_table.as_ref())
                     .map(|t| t.mean_power)
                     .unwrap_or(0.0);
+                // RT_INSTANCING_DESIGN.md D8: the kernel composes emissive
+                // entries from the TLAS descriptor buffer when the table is
+                // local-space (instanced mode); the D7 fast path uploads
+                // world entries (flag 0, byte-identical data path).
+                let emissive_entries_are_local = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.entries_are_local)
+                    .unwrap_or(false);
                 let emissive_table_entry_count = self
                     .rt_accel
                     .as_ref()
@@ -5931,7 +6179,11 @@ impl EffectNode for RenderScene {
                     emissive_table_entry_count,
                     emissive_table_total_area,
                     svt_slot,
-                );
+                )
+                // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+                // normal/gi-material reads land in the slot rows [N, N+Σ).
+                .with_slot_row_base(objects.len() as u32)
+                .with_emissive_entries_local(emissive_entries_are_local);
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
@@ -5971,9 +6223,21 @@ impl EffectNode for RenderScene {
                     emissive_table_entry_count,
                     emissive_table_total_area,
                     svt_slot,
-                );
+                )
+                // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+                // normal/gi-material reads land in the slot rows [N, N+Σ).
+                .with_slot_row_base(objects.len() as u32)
+                .with_emissive_entries_local(emissive_entries_are_local);
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
+                // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
+                // [0, N) (the built block, one memcpy) + per-slot rows at
+                // [N, N+Σ) duplicating each object's row object-major
+                // (same slot addressing as `ensure_normal_sources`), so
+                // instance_id-indexed kernel reads via params.slot_row_base
+                // land on the slot rows while object-indexed readers use
+                // the canonical block. With every object at ≤ 1 slot the
+                // slot region is a verbatim copy of the canonical block.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
                 {
                     // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
@@ -5981,17 +6245,36 @@ impl EffectNode for RenderScene {
                     // `bytemuck_bytes` (bytemuck isn't a manifold-gpu
                     // dependency, so this crate can't derive `Pod` on it;
                     // a raw byte view is the same shape without adding one).
-                    let bytes: &[u8] = unsafe {
+                    const GI_SIZE: usize =
+                        std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>();
+                    let ptr = gi_materials_buffer
+                        .mapped_ptr()
+                        .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
+                    // Canonical block [0, N).
+                    let canonical_bytes: &[u8] = unsafe {
                         std::slice::from_raw_parts(
                             gi_materials_data.as_ptr() as *const u8,
                             std::mem::size_of_val(gi_materials_data.as_slice()),
                         )
                     };
-                    let ptr = gi_materials_buffer
-                        .mapped_ptr()
-                        .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
                     unsafe {
-                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                        std::ptr::copy_nonoverlapping(canonical_bytes.as_ptr(), ptr, canonical_bytes.len());
+                    }
+                    // Slot region [N, N+Σ): per-slot duplicates.
+                    let mut slot_row = 0usize;
+                    for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
+                        let slots =
+                            if o.instances_addr != 0 { o.instance_slots.max(1) } else { 1 };
+                        for _ in 0..slots {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    mat as *const manifold_gpu::raytrace::GiMaterial as *const u8,
+                                    ptr.add((objects.len() + slot_row) * GI_SIZE),
+                                    GI_SIZE,
+                                );
+                            }
+                            slot_row += 1;
+                        }
                     }
                 }
                 // RT-T2-C: per-object world→prev-world motion delta
@@ -6054,11 +6337,13 @@ impl EffectNode for RenderScene {
                 if mask_sizes_differ {
                     tracer.dispatch_shadow_rays(
                         gpu.native_enc,
+                        gpu.device,
                         accel,
                         &mask_params,
                         mask_params_buffer,
                         gi_materials_buffer,
                         normal_sources_buffer,
+                        &objects,
                         &alpha_textures,
                         depth_tex,
                         mask_half,
@@ -6087,11 +6372,13 @@ impl EffectNode for RenderScene {
                 // and out_sv is written here (one dispatch, monolithic perf).
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
+                    gpu.device,
                     accel,
                     &lighting_params,
                     params_buffer,
                     gi_materials_buffer,
                     normal_sources_buffer,
+                    &objects,
                     &alpha_textures,
                     depth_tex,
                     mask_half,
@@ -7182,7 +7469,9 @@ impl EffectNode for RenderScene {
             msaa_color,
             resolve_target,
             msaa_depth: depth_tex,
-            depth_resolve: depth_resolve_target,
+            depth_resolve: depth_resolve_target.map(|_| {
+                self.depth_resolve_scratch.as_ref().expect("depth consumer ensured native resolve")
+            }),
             aux_color,
             depth_stencil_state: depth_stencil,
             second_pass,
@@ -7190,6 +7479,12 @@ impl EffectNode for RenderScene {
         ctx.gpu_encoder()
             .native_enc
             .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
+
+        if let Some(output) = depth_resolve_target {
+            ctx.gpu_encoder().native_enc.copy_depth_to_float(
+                self.depth_resolve_scratch.as_ref().expect("native resolve ensured"), output,
+            );
+        }
 
         // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the snapshot + Pass B
         // seam. Pass A above just resolved the fully-shaded opaque scene
@@ -7667,6 +7962,97 @@ mod tests {
     use super::*;
     use crate::node_graph::ports::ArrayType;
     use crate::node_graph::transform::Transform;
+
+    #[test]
+    fn rejected_topology_cannot_refit() {
+        assert!(!rt_refit_eligible(false, Some(1), 2));
+        assert!(rt_refit_eligible(true, Some(1), 2));
+    }
+
+    #[test]
+    fn rt_topology_validation_precedes_all_consumer_decisions() {
+        // Production source-order contract: no duplicated topology model or
+        // synthetic GPU buffers. A late check would leave uploaded flags and
+        // skipped fallback passes inconsistent with trace suppression.
+        let source = include_str!("render_scene.rs");
+        let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1
+            .split_once("#[cfg(test)]").unwrap().0;
+        let check = evaluate.find("accel.check_topology(&rt_objects)").unwrap();
+        let reject = evaluate[check..].find("rt_ready = false;").unwrap() + check;
+        for marker in [
+            "let will_rt_accumulate_this_frame =", "uniforms.scene_params[3] =",
+            "uniforms.rt_flags[0] =", "uniforms.rt_flags[1] =",
+            "uniforms.rt_flags[2] =", "uniforms.rt_flags[3] =",
+            "uniforms.fog_params[2] =", "uniforms.fog_params[3] =",
+            "let denoise_wanted =", "self.ensure_shadow_map(gpu.device",
+            "if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled)",
+        ] {
+            assert!(evaluate.find(marker).unwrap() > reject, "consumer precedes topology rejection: {marker}");
+        }
+        assert_eq!(evaluate.matches("let rt_objects:").count(), 1);
+        assert!(evaluate.contains("let objects = rt_objects;"));
+        let build = evaluate.split_once("self.rt_accel = Some(tracer.build_accel").unwrap().1
+            .split_once("} else if rt_refit_eligible").unwrap().0;
+        assert!(build.contains("self.rt_accel_built = false;"));
+        assert!(build.contains("rt_ready = false;"));
+    }
+
+    #[test]
+    fn topology_rejection_is_idempotent_and_clears_once() {
+        let mut s = RenderScene::new();
+        s.rt_accel_topo_key = Some(1); s.rt_accel_key = Some(2); s.rt_accel_content_key = Some(3);
+        s.rt_accel_pending_key = Some(4); s.rt_accel_content_pending_key = Some(5); s.rt_accel_built = true;
+        assert!(reject_topology(&mut s.rt_accel_topo_key, &mut s.rt_accel_key, &mut s.rt_accel_content_key,
+            &mut s.rt_accel_pending_key, &mut s.rt_accel_content_pending_key, &mut s.rt_accel_built,
+            &mut s.rt_topology_rejected));
+        assert!(!s.rt_accel_built && s.rt_accel_topo_key.is_none() && s.rt_accel_key.is_none()
+            && s.rt_accel_content_key.is_none() && s.rt_accel_pending_key.is_none()
+            && s.rt_accel_content_pending_key.is_none());
+        s.rt_accel_pending_key = Some(9); s.rt_accel_content_pending_key = Some(10);
+        assert!(!reject_topology(&mut s.rt_accel_topo_key, &mut s.rt_accel_key, &mut s.rt_accel_content_key,
+            &mut s.rt_accel_pending_key, &mut s.rt_accel_content_pending_key, &mut s.rt_accel_built,
+            &mut s.rt_topology_rejected));
+        assert_eq!(s.rt_accel_pending_key, Some(9));
+        assert!(!s.rt_accel_built && !rt_refit_eligible(false, s.rt_accel_key, 11));
+    }
+
+    #[test]
+    fn deferred_state_defers_builds_and_changed_keys() {
+        let mut pt = None; let mut pc = None;
+        assert_eq!(rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2), RtBuildDecision::Defer);
+        assert_eq!(rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2), RtBuildDecision::Build { content_trigger_fired: false });
+        assert_eq!(rt_deferred_build_decision(Some(1), Some(2), &mut pt, &mut pc, 2, 3), RtBuildDecision::Defer);
+        assert!(!rt_trace_gate(false, Some(1), 1));
+    }
+
+    #[test]
+    fn new_install_resets_rejection_but_not_readiness() {
+        let mut s = RenderScene::new();
+        s.rt_topology_rejected = true; s.rt_accel_built = false;
+        s.rt_topology_rejected = false;
+        assert!(!s.rt_accel_built);
+        assert!(!rt_trace_gate(s.rt_accel_built && !s.rt_topology_rejected, Some(1), 1));
+    }
+
+    #[test]
+    fn fresh_build_forces_local_trace_readiness_off() {
+        let mut local_ready = true;
+        let build_this_frame = true;
+        if build_this_frame { local_ready = false; }
+        assert!(!local_ready);
+        assert!(!rt_trace_gate(local_ready, Some(1), 1));
+    }
+
+    #[test]
+    fn content_settle_does_not_starve_resident_trace_admission() {
+        let mut pending_topo = None;
+        let mut pending_content = None;
+        assert_eq!(rt_deferred_build_decision(Some(1), Some(1), &mut pending_topo, &mut pending_content, 1, 2), RtBuildDecision::Defer);
+        assert!(rt_trace_gate(true, Some(1), 1));
+        assert_eq!(rt_deferred_build_decision(Some(1), Some(1), &mut pending_topo, &mut pending_content, 1, 3), RtBuildDecision::Defer);
+        assert!(rt_trace_gate(true, Some(1), 1));
+        assert!(!rt_trace_gate(true, Some(2), 1));
+    }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`

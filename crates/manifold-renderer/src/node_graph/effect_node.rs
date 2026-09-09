@@ -272,6 +272,12 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// API is always treated as having produced fresh output this frame,
     /// which is the safe (never-stale) direction.
     pub outputs_unchanged: bool,
+    /// Set by [`Self::mark_outputs_pending`], read by the executor after
+    /// `run`/`evaluate` returns and recorded per output slot. `false` by
+    /// default: a node that never calls the API always reports ready —
+    /// only async producers (a source whose upload is still in flight)
+    /// declare pending.
+    pub outputs_pending: bool,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — the evaluating
     /// [`Executor`](crate::node_graph::execution::Executor)'s rebuild epoch:
     /// a process-global monotonic counter assigned once at `Executor::new()`
@@ -319,6 +325,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             errors: None,
             texture_swap_request: None,
             outputs_unchanged: false,
+            outputs_pending: false,
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
             layer_skin_registry: None,
@@ -354,6 +361,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             errors: None,
             texture_swap_request: None,
             outputs_unchanged: false,
+            outputs_pending: false,
             rebuild_epoch,
             rt_quality,
             layer_skin_registry,
@@ -394,6 +402,25 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// fresh-executor frame 1 readback) are the enforcement (I3).
     pub fn mark_outputs_unchanged(&mut self) {
         self.outputs_unchanged = true;
+    }
+
+    /// Declare that this node's outputs this frame are allocated but not
+    /// yet valid — async content is still in flight (e.g.
+    /// `node.gltf_mesh_source` while its GLB parses and uploads). The
+    /// executor records the declaration per output slot; consumers query
+    /// [`NodeInputs::slot_content_ready`] and must treat not-ready bytes
+    /// as ABSENT — never derive sizes from them, build acceleration
+    /// structures from them, or trace against them (the Corrosion warmup
+    /// GPU hang: render_scene built a full-capacity BLAS from a mesh
+    /// buffer whose upload had not landed).
+    ///
+    /// Distinct from [`Self::mark_outputs_unchanged`]: "unchanged" says
+    /// the bytes match last frame's; "pending" says the bytes were never
+    /// content at all. A pending frame is never an unchanged frame. The
+    /// declaration is reset each time the step runs, so a producer that
+    /// stops declaring returns its slots to ready on its next evaluate.
+    pub fn mark_outputs_pending(&mut self) {
+        self.outputs_pending = true;
     }
 
     /// Attach a per-step error scratch buffer. The executor calls this
@@ -625,8 +652,12 @@ pub trait EffectNode: Send {
     /// `Some((input_port, output_port))` indicating which input the
     /// runtime should alias onto which output. The runtime then installs
     /// the input slot's texture into the output slot as a transient
-    /// borrowed override — **zero GPU work** — and skips `evaluate`
-    /// entirely.
+    /// borrowed override and skips `evaluate` entirely. Compatibility uses
+    /// the bound textures' actual dimensions and formats, so an inherited
+    /// default format matches an equivalent explicit fused output format.
+    /// If the host owns the destination binding and aliasing is refused,
+    /// the runtime copies compatible textures instead. Genuine shape or
+    /// format mismatches still evaluate (for example, a resampling mux).
     ///
     /// Default: `None` (always run `evaluate`).
     ///

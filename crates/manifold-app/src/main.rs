@@ -111,7 +111,10 @@ mod rt_capture;
 // ── bridge-probe: headless SharedTextureBridge tear detector (BUG-xaw4) ──
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod bridge_probe;
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod export_repro;
 mod project_io;
+mod session_log;
 #[cfg(target_os = "macos")]
 mod shared_texture;
 #[cfg(target_os = "macos")]
@@ -128,6 +131,8 @@ mod ui_translate;
 mod user_library;
 mod user_prefs;
 mod window_input;
+#[cfg(all(feature = "ui-automation", unix))]
+mod live_ui;
 mod viewport_input;
 // P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
 mod viewport_p5c_demo;
@@ -136,18 +141,34 @@ mod viewport_p6_demo;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;
-// Gap-start black-frame probe — real-pipeline fbTest drive (2026-08-27).
+// Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
+// D8.4 acceptance — deliberate native GPU journey with external reference projects.
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
+mod corridor_acceptance;
 mod window_registry;
 mod workspace;
 
 fn main() {
+    #[cfg(not(all(feature = "ui-automation", unix)))]
+    if std::env::var_os("MANIFOLD_UI_SOCKET").is_some() {
+        eprintln!("MANIFOLD_UI_SOCKET requires a Unix build with feature ui-automation");
+        std::process::exit(2);
+    }
     // UI motion layer OFF (experimental — evaluating whether the chrome
     // micro-animations earn their keep). Collapses every AnimF32/FlipList tween
     // to an instant snap; the motion code stays in place behind the flag, so
     // flipping this back to `true` restores it. See `manifold_ui::anim`.
     manifold_ui::anim::set_motion_enabled(false);
+
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("export-repro") {
+            crate::export_repro::run(&args[1..]);
+        }
+    }
 
     // Headless UI snapshot subcommand (feature `ui-snapshot`): render the real
     // UI tree to a PNG + tree dump with no window, then exit before winit.
@@ -254,6 +275,7 @@ fn main() {
             let _ = write_crash_log(&dir, &msg, timestamp);
             prune_crash_logs(&dir, CRASH_LOGS_KEPT);
         }
+        session_log::flush();
     }));
 
     // --- SIGPIPE handler (10.9) ---
@@ -268,7 +290,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     let _instance_lock = acquire_instance_lock();
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    session_log::init();
     log::info!("MANIFOLD starting...");
 
     // --- Unclean-exit detection (GIG_RESILIENCE_DESIGN section 6, G10) ---
@@ -291,6 +313,14 @@ fn main() {
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
     let mut application = app::Application::new();
+    #[cfg(all(feature = "ui-automation", unix))]
+    if let Some(path) = std::env::var_os("MANIFOLD_UI_SOCKET") {
+        application.live_ui = Some(live_ui::LiveUi::bind(std::path::Path::new(&path))
+            .unwrap_or_else(|err| {
+                eprintln!("live UI connection failed: {err}");
+                std::process::exit(2);
+            }));
+    }
     application.show_crash_notice = previous_session_uncleanly_exited;
     application.resume_breadcrumb_path = resume_breadcrumb_path;
     event_loop.run_app(&mut application).unwrap();
@@ -384,8 +414,60 @@ fn write_crash_log(
     unix_ts: u64,
 ) -> std::io::Result<std::path::PathBuf> {
     let path = dir.join(format!("crash-{unix_ts:010}.log"));
-    std::fs::write(&path, msg)?;
+    use std::io::Write;
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(msg.as_bytes())?;
+    file.sync_all()?;
     Ok(path)
+}
+
+/// A GPU-failed session cannot safely resume using its partially written resources.
+fn abort_gpu_work(reason: &str) -> ! {
+    log::error!("[GPU] Aborting session: {reason}; exit_code=70");
+    // Completion handlers own the final Metal error/encoder evidence. Give
+    // already-submitted buffers a bounded chance to publish it before the
+    // fatal report is sealed; normal completion never waits or polls.
+    let drained = manifold_gpu::gpu_fault::drain_completions(
+        std::time::Duration::from_millis(250),
+    );
+    if !drained {
+        log::error!("[GPU] Completion drain timed out; report may omit in-flight buffer evidence");
+    }
+    write_fatal_gpu_report(reason, 70);
+    std::process::exit(70);
+}
+
+/// Intentional GPU exits bypass the panic hook; preserve their own audit record.
+fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut msg = format!(
+        "MANIFOLD FATAL GPU EXIT at unix_ts={timestamp}\nexit_code={exit_code}\npid={}\ncurrent_beat={:?}\nsession_log={:?}\n{reason}\n",
+        std::process::id(),
+        breadcrumb::last_known_beat_for_crash_log(),
+        session_log::path(),
+    );
+    msg.push_str(&format!("diagnostic_mode={}\napp_version={}\narchitecture={}\n",
+        manifold_gpu::gpu_fault::diagnostics_enabled(), env!("CARGO_PKG_VERSION"), std::env::consts::ARCH));
+    msg.push_str("diagnostic_limitations=GPU timing may be unavailable on failed buffers; missing completion is not proof of a hang; shader counters may be incomplete after device failure; resource metadata does not prove lifetime or ordering safety; geometry hit-index bounds and driver-internal traversal are not fully instrumented.\n");
+    msg.push_str("--- recent session evidence (bounded; full session path above) ---\n");
+    msg.push_str(&session_log::crash_tail());
+    if let Some(dir) = crash_log_dir() {
+        match std::fs::create_dir_all(&dir)
+            .and_then(|()| write_crash_log(&dir, &msg, timestamp))
+        {
+            Ok(path) => {
+                log::error!("Fatal GPU report saved: {}", path.display());
+                prune_crash_logs(&dir, CRASH_LOGS_KEPT);
+            }
+            Err(err) => log::error!("Cannot save fatal GPU report: {err}; {msg}"),
+        }
+    } else {
+        log::error!("Cannot locate fatal GPU report directory; {msg}");
+    }
+    session_log::flush();
 }
 
 /// Delete the oldest `crash-*.log` files beyond `keep`. Best-effort — this
@@ -418,10 +500,34 @@ fn prune_crash_logs(dir: &std::path::Path, keep: usize) {
 /// exists while a session runs; removed by `clear_session_sentinel` on clean
 /// exit.
 fn session_sentinel_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|home| {
-        std::path::PathBuf::from(home)
-            .join("Library/Application Support/com.latentspace.manifold/session.active")
-    })
+    #[cfg(all(feature = "ui-automation", unix))]
+    let live_ui_socket = std::env::var_os("MANIFOLD_UI_SOCKET").map(std::path::PathBuf::from);
+    #[cfg(not(all(feature = "ui-automation", unix)))]
+    let live_ui_socket = None;
+    session_sentinel_for(std::env::var_os("HOME").map(std::path::PathBuf::from), live_ui_socket)
+}
+
+/// An isolated automation instance owns its recovery marker beside its socket.
+/// It must neither read nor clear the regular app's session marker.
+fn session_sentinel_for(
+    home: Option<std::path::PathBuf>,
+    live_ui_socket: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if let Some(socket) = live_ui_socket {
+        return Some(socket.with_extension("session.active"));
+    }
+    home.map(|home| home.join("Library/Application Support/com.latentspace.manifold/session.active"))
+}
+
+#[test]
+fn live_ui_session_sentinel_is_separate_from_regular_app() {
+    use std::path::PathBuf;
+    let home = Some(PathBuf::from("/Users/test"));
+    let regular = session_sentinel_for(home.clone(), None).unwrap();
+    assert_eq!(regular, PathBuf::from("/Users/test/Library/Application Support/com.latentspace.manifold/session.active"));
+    let isolated = session_sentinel_for(home, Some(PathBuf::from("/tmp/manifold-test/ui.sock"))).unwrap();
+    assert_eq!(isolated, PathBuf::from("/tmp/manifold-test/ui.session.active"));
+    assert_ne!(regular, isolated);
 }
 
 /// Returns true when the previous session left its sentinel behind (unclean
@@ -643,5 +749,3 @@ mod resume_arg_tests {
         );
     }
 }
-
-

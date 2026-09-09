@@ -322,6 +322,12 @@ struct ImageVertex {
     /// rounded-rect SDF convention `UI_SHADER`'s fragment stage uses for
     /// `rect_params`.
     rect_params: [f32; 4],
+    /// `[u0, v0, u1, v1]` atlas sub-rect `uv` samples. The mask MUST be
+    /// computed in quad-local space derived from this (see `fs_main`):
+    /// for sub-rect uvs, raw `uv` spans only the sub-range, so a mask in
+    /// uv space would round the corner matching the cell's ATLAS slot
+    /// instead of the drawn quad's corners.
+    uv_rect: [f32; 4],
 }
 
 /// Textured rounded-rect: samples `t_image` and masks it to the rounded-rect
@@ -338,11 +344,13 @@ struct VsIn {
     @location(0) position: vec2<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) rect_params: vec4<f32>,
+    @location(3) uv_rect: vec4<f32>,
 };
 struct VsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) rect_params: vec4<f32>,
+    @location(2) uv_rect: vec4<f32>,
 };
 
 @vertex
@@ -353,6 +361,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
     out.uv = in.uv;
     out.rect_params = in.rect_params;
+    out.uv_rect = in.uv_rect;
     return out;
 }
 
@@ -365,7 +374,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if radius <= 0.0 {
         return color;
     }
-    let pixel = in.uv * vec2<f32>(rect_w, rect_h);
+    // Mask space MUST be quad-local 0..1, never atlas uv: image nodes sample
+    // a sub-rect uv (audition cells), and raw uv spanning only that sub-range
+    // would round the corner matching the cell's ATLAS slot (col 0 →
+    // top-left, col 15 → top-right, interior → no clipping at all).
+    let local = (in.uv - in.uv_rect.xy) / (in.uv_rect.zw - in.uv_rect.xy);
+    let pixel = local * vec2<f32>(rect_w, rect_h);
     let center = vec2<f32>(rect_w, rect_h) * 0.5;
     let half_size = center - vec2<f32>(radius);
     let q = abs(pixel - center) - half_size;
@@ -615,6 +629,7 @@ impl UIRenderer {
                 GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 },
                 GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 8, shader_location: 1 },
                 GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 32, shader_location: 3 },
             ],
         };
         let image_pipeline = device.create_render_pipeline_with_vertex_layout(
@@ -1891,23 +1906,27 @@ impl UIRenderer {
             for cmd in self.image_commands.iter().take(MAX_IMAGE_QUADS) {
                 let rect_params = [cmd.w, cmd.h, cmd.corner_radius, 0.0];
                 let [u0, v0, u1, v1] = cmd.uv;
+                let uv_rect = cmd.uv;
                 let vertex_offset =
                     (image_vertices.len() * std::mem::size_of::<ImageVertex>()) as u64;
-                image_vertices.push(ImageVertex { position: [cmd.x, cmd.y], uv: [u0, v0], rect_params });
+                image_vertices.push(ImageVertex { position: [cmd.x, cmd.y], uv: [u0, v0], rect_params, uv_rect });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x + cmd.w, cmd.y],
                     uv: [u1, v0],
                     rect_params,
+                    uv_rect,
                 });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x + cmd.w, cmd.y + cmd.h],
                     uv: [u1, v1],
                     rect_params,
+                    uv_rect,
                 });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x, cmd.y + cmd.h],
                     uv: [u0, v1],
                     rect_params,
+                    uv_rect,
                 });
                 self.prepared_image_draws.push(PreparedImageDraw {
                     scissor: cmd.clip.map(to_physical),

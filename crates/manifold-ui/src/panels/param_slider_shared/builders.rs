@@ -2101,6 +2101,9 @@ pub(crate) fn build_param_row(
         tree.set_name(s.track, format!("param_row.{pid}.slider"));
         tree.set_name(s.value_text, format!("param_row.{pid}.value"));
     }
+    if let Some(trigger_btn) = ids.envelope_btn {
+        tree.set_name(trigger_btn, format!("param_row.{pid}.trigger_btn"));
+    }
     tree.set_name(ids.driver_btn, format!("param_row.{pid}.driver_btn"));
 
     cy += ROW_HEIGHT + ROW_SPACING;
@@ -2228,4 +2231,3 @@ pub(crate) fn build_param_row(
     ids.new_cy = cy;
     ids
 }
-

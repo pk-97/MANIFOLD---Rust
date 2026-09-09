@@ -260,8 +260,8 @@ pub enum ResolvedScrub {
     /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*`,
     /// BUG-262). NOT a `PanelAction::Scrub` family — dispatched from
     /// `app_render`'s pending-actions loop (the commit reads the new range back
-    /// via `watched_reshape`, so it needs the app's editor context, not the
-    /// dispatch ctx). Only the snapshot-stomp guard lives here: `baseline`/`live`
+    /// from the captured baseline/live pair in `dispatch_mapping_action`).
+    /// The snapshot-stomp guard lives here: `baseline`/`live`
     /// are `(min, max)` pairs; the restore re-stamps the in-flight range through
     /// the SAME `build_mapping_command` write `preview_mapping` lands each tick.
     MappingRange {
@@ -541,7 +541,7 @@ impl ResolvedScrub {
             // The two mapping families restore through the SAME command
             // `preview_mapping` executes each `*Changed` tick — build the reshape
             // edit and run it on the project so a mid-drag snapshot swap can't
-            // revert the def value the commit reads back via `watched_reshape`
+            // revert the manifest value shown by the mapping controls
             // (BUG-262).
             ResolvedScrub::MappingRange {
                 target,
@@ -692,29 +692,23 @@ pub(crate) fn dispatch_scrub(
                     }
                     let pid = param_id.clone();
                     let t = target.clone();
+                    let targets = match &ctx.scrub.active {
+                        Some(ResolvedScrub::Param { coupled, .. }) => coupled.clone(),
+                        _ => Vec::new(),
+                    };
+                    // A frame must never see the primary without its linked
+                    // values: apply the whole slider move in one content command.
                     ContentCommand::send(
                         ctx.content_tx,
                         ContentCommand::MutateProjectLive(Box::new(move |p| {
                             p.with_preset_graph_mut(&t, |inst| {
                                 inst.set_base_param(pid.as_ref(), val);
                             });
+                            for ct in &targets {
+                                super::project::apply_coupled_write_live(p, &t, ct, ct.live);
+                            }
                         })),
                     );
-                    // And the same live writes on the content thread.
-                    if let Some(ResolvedScrub::Param { coupled, .. }) = &ctx.scrub.active
-                        && !coupled.is_empty()
-                    {
-                        let t = target.clone();
-                        let targets: Vec<super::project::CoupledWriteTarget> = coupled.clone();
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::MutateProjectLive(Box::new(move |p| {
-                                for ct in &targets {
-                                    super::project::apply_coupled_write_live(p, &t, ct, ct.live);
-                                }
-                            })),
-                        );
-                    }
                 }
                 DispatchResult::handled()
             }

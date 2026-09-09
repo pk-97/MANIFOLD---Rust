@@ -8,7 +8,7 @@ use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
+    MTLBuffer, MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
@@ -160,8 +160,10 @@ pub struct DepthMsaaPassDesc<'a> {
     pub msaa_depth: &'a GpuTexture,
     /// `Some(tex)` → the depth attachment stores `MultisampleResolve`
     /// (filter `Sample0` — D2: deterministic, matches a single-sample
-    /// render, unlike `Min`/`Max`) into this single-sample `R32Float`
-    /// texture. `None` → `DontCare`, exactly today's memoryless depth.
+    /// render, unlike `Min`/`Max`) into this single-sample `Depth32Float`
+    /// texture. The resolve target must have the same `Depth32Float` format
+    /// as `msaa_depth`; callers can then copy it to an `R32Float` graph output.
+    /// `None` → `DontCare`, exactly today's memoryless depth.
     pub depth_resolve: Option<&'a GpuTexture>,
     /// Extra MRT color attachments (index 1..). Order must match the
     /// pipeline's `aux_color_formats` (velocity, then ao_mask). Empty slice
@@ -235,6 +237,7 @@ impl GpuEncoder {
             tag: String::new(),
             overflow: 0,
             calib_start,
+            committed_buffers: Vec::new(),
         });
     }
 
@@ -256,12 +259,23 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         let total_ms = unsafe {
             self.cmd_buf.waitUntilCompleted();
-            (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0) * 1000.0
+            let mut total = (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0);
+            if let Some(profile) = &self.profile {
+                total += profile.committed_buffers.iter()
+                    .map(|buf| (buf.GPUEndTime() - buf.GPUStartTime()).max(0.0)).sum::<f64>();
+            }
+            total * 1000.0
         };
         match self.profile.take() {
             Some(state) => {
                 let calib_end = profiling::sample_cpu_gpu(device.raw_device());
-                profiling::resolve(&state, calib_end, total_ms)
+                let mut profile = profiling::resolve(&state, calib_end, total_ms);
+                use objc2_metal::MTLCommandBufferStatus;
+                profile.failed_command_buffers = state.committed_buffers.iter()
+                    .chain(std::iter::once(&self.cmd_buf))
+                    .filter(|buf| unsafe { buf.status() } != MTLCommandBufferStatus::Completed)
+                    .count();
+                profile
             }
             None => GpuFrameProfile {
                 total_ms,
@@ -375,13 +389,25 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        let isolate_rt_stage = label.starts_with("node.render_scene RT");
+        if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] dispatch stage={label} groups={workgroups:?} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
+        }
+        if isolate_rt_stage {
+            self.end_current();
+        }
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
         } else {
             self.ensure_compute()
         };
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            if isolate_rt_stage {
+                enc.setLabel(Some(&debug_label));
+            }
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setComputePipelineState(&pipeline.state);
         }
 
@@ -543,6 +569,9 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
+        if isolate_rt_stage {
+            self.end_current();
+        }
     }
 
     /// Dispatch a compute shader that also binds a Metal acceleration
@@ -556,22 +585,43 @@ impl GpuEncoder {
     /// per-slot resource cache (`ComputeBindCache`) that `dispatch_compute`
     /// uses — this dispatches once or twice per frame (the shadow-ray
     /// pass), not the many-dispatches-per-frame case the cache exists for.
-    pub fn dispatch_compute_with_accel(
+    pub fn dispatch_compute_with_accel<'a>(
         &mut self,
         pipeline: &GpuComputePipeline,
         accel_binding: u32,
         accel: &super::raytrace::RtAccel,
         bindings: &[GpuBinding],
+        indirect_reads: impl IntoIterator<Item = &'a GpuBuffer>,
+        inline_bytes: Option<(u32, &[u8])>,
         workgroups: [u32; 3],
         label: &str,
     ) {
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
+                pipeline.workgroup_size, accel.blas.len(), accel.geometry_buffers.len(), bindings.len());
+            log::info!("[GPU-DIAG] accel={:p} instances_bytes={}", &*accel.structure, accel.instance_buffer.size);
+            for binding in bindings {
+                if let GpuBinding::Buffer { binding: slot, buffer, offset } = binding {
+                    log::info!("[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
+                        &*buffer.raw, buffer.size, *offset <= buffer.size);
+                }
+            }
+            for geo in &accel.geometry_buffers {
+                log::info!("[GPU-DIAG] geometry handle={:p} bytes={}", &**geo, geo.length());
+            }
+
+        }
+        self.end_current();
         let enc = if self.profile.is_some() {
             self.begin_profiled_compute(label)
         } else {
             self.ensure_compute()
         };
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.setLabel(Some(&debug_label));
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setComputePipelineState(&pipeline.state);
             if let Some(slot) = pipeline.slot_map.get(accel_binding) {
                 enc.setAccelerationStructure_atBufferIndex(
@@ -637,6 +687,21 @@ impl GpuEncoder {
                 }
             }
         }
+        for buffer in indirect_reads {
+            unsafe {
+                let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+            }
+        }
+        if let Some((binding, bytes)) = inline_bytes {
+            let Some(slot) = pipeline.slot_map.get(binding) else {
+                panic!("dispatch_compute_with_accel: inline binding {binding} absent from pipeline slot map");
+            };
+            let ptr = NonNull::new(bytes.as_ptr() as *mut c_void)
+                .expect("dispatch_compute_with_accel: inline bytes must not be empty");
+            unsafe {
+                enc.setBytes_length_atIndex(ptr, bytes.len(), slot.metal_index as usize);
+            }
+        }
         // BUG-jddy root fix: declare usage for every resource the trace
         // kernel reaches only INDIRECTLY — the TLAS's referenced BLASes
         // and the instance buffer the TLAS was built from. Resources no
@@ -692,14 +757,10 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
-        // Cross-dispatch cache invalidation: this path doesn't populate
-        // `compute_cache`, but a subsequent `dispatch_compute` call in the
-        // same encoder must not skip a `setBuffer`/`setTexture` because
-        // the cache still thinks a slot holds what it held before this
-        // accel-structure dispatch touched it. Clear the cache wholesale
-        // — cheap (one dispatch/frame) and correct, vs. tracking exactly
-        // which slots this call touched.
-        self.compute_cache.clear();
+        // Keep the RT dispatch in its own labelled encoder. Besides making
+        // the failure boundary visible, end_current clears the ordinary
+        // compute binding cache before the next dispatch reuses this slot.
+        self.end_current();
     }
 
     /// Insert a buffer-scope memory barrier on the active compute encoder.
@@ -754,7 +815,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -796,7 +859,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -851,7 +916,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -906,7 +973,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
         }
 
@@ -985,7 +1054,7 @@ impl GpuEncoder {
     /// shared depth buffer resolving inter-object occlusion; additionally:
     /// `desc.depth_resolve` — `Some(tex)` stores the depth attachment via
     /// `MultisampleResolve` with filter `Sample0` into `tex` (single-sample
-    /// `R32Float`, raw non-linear clip depth); `None` keeps today's
+    /// `Depth32Float`, raw non-linear clip depth); `None` keeps today's
     /// `DontCare` (memoryless, never leaves the GPU). `desc.aux_color` —
     /// extra MRT color attachments (index 1..), reserved for P2's velocity
     /// output; empty today.
@@ -1046,6 +1115,16 @@ impl GpuEncoder {
             depth.setClearDepth(1.0);
             match desc.depth_resolve {
                 Some(resolve) => {
+                    assert_eq!(
+                        resolve.format,
+                        desc.msaa_depth.format,
+                        "depth resolve texture must match the MSAA depth format"
+                    );
+                    assert_eq!(
+                        resolve.format,
+                        crate::GpuTextureFormat::Depth32Float,
+                        "depth resolve texture must be Depth32Float"
+                    );
                     depth.setResolveTexture(Some(&resolve.raw));
                     depth.setStoreAction(MTLStoreAction::MultisampleResolve);
                     // D2: deterministic, matches a single-sample render —
@@ -1062,7 +1141,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&pass_desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setDepthStencilState(Some(&desc.depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1177,7 +1258,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1254,7 +1337,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
@@ -1334,7 +1419,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(fill_mode));
@@ -1410,7 +1497,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1479,7 +1568,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
 
             if let Some((x, y, w, h)) = viewport {
@@ -1551,7 +1642,9 @@ impl GpuEncoder {
 
         let enc = self.make_render_encoder(&desc, label);
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setViewport(MTLViewport {
                 originX: 0.0,
                 originY: 0.0,
@@ -1585,7 +1678,9 @@ impl GpuEncoder {
         };
 
         unsafe {
-            enc.pushDebugGroup(&NSString::from_str(label));
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
             enc.setRenderPipelineState(&pipeline.state);
 
             if let Some((x, y, w, h)) = viewport {
@@ -1846,6 +1941,26 @@ impl GpuEncoder {
             let enc = self.make_render_encoder(&desc, "clear_texture");
             enc.endEncoding();
         }
+    }
+
+    /// Copy a single-sample depth texture into an R32Float storage texture.
+    pub fn copy_depth_to_float(&mut self, source: &GpuTexture, target: &GpuTexture) {
+        assert_eq!(source.format, crate::GpuTextureFormat::Depth32Float);
+        assert_eq!(target.format, crate::GpuTextureFormat::R32Float);
+        assert_eq!(source.width, target.width);
+        assert_eq!(source.height, target.height);
+        assert!(unsafe { target.raw.usage() }.contains(MTLTextureUsage::ShaderWrite),
+            "copy_depth_to_float destination must allow shader writes");
+        let pipelines = unsafe { &*self.clear_pipelines };
+        self.dispatch_compute(
+            &pipelines.depth_to_float,
+            &[
+                GpuBinding::Texture { binding: 0, texture: source },
+                GpuBinding::Texture { binding: 1, texture: target },
+            ],
+            [target.width.div_ceil(16), target.height.div_ceil(16), 1],
+            "Copy Depth To Float",
+        );
     }
 
     /// Fill a buffer with zeros via blit encoder.
@@ -2117,7 +2232,7 @@ impl GpuEncoder {
         // Metal: no-op. Intra-queue ordering is automatic.
     }
 
-    /// Upload CPU data to a 2D texture region via replaceRegion.
+    /// Upload CPU data to a CPU_UPLOAD 2D texture region via replaceRegion.
     pub fn upload_texture(
         &mut self,
         texture: &GpuTexture,
@@ -2126,6 +2241,7 @@ impl GpuEncoder {
         _depth: u32,
         data: &[u8],
     ) {
+        texture.assert_cpu_uploadable();
         self.end_current();
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = width as u64 * bpp as u64;
@@ -2226,20 +2342,25 @@ impl GpuEncoder {
                 let (code, desc) = match err {
                     None => (-1i64, String::from("(nil)")),
                     Some(err) => {
+                        super::gpu_fault::log_error_diagnostics(&err, &label);
                         let code = err.code() as i64;
                         let desc = err.localizedDescription().to_string();
                         (code, desc)
                     }
                 };
-                super::gpu_fault::record_fault(&desc);
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
                     label,
                     code,
                     desc,
                 );
+                super::gpu_fault::record_fault(&desc);
             }
+            // Publish completion after diagnostics and fault state so a
+            // fatal-path drain cannot race the evidence it is meant to save.
+            super::gpu_fault::complete_submission();
         });
+        super::gpu_fault::begin_submission();
         unsafe {
             self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
         }
@@ -2251,6 +2372,9 @@ impl GpuEncoder {
     /// instead of just the buffer (BUG-84fv). A handful of calls per
     /// frame — per card, not per dispatch.
     pub fn note_scope(&mut self, scope: &str) {
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe { self.cmd_buf.label() });
+        }
         self.scopes.push(scope.to_string());
     }
 
@@ -2269,6 +2393,9 @@ impl GpuEncoder {
             .map(|s| s.to_string())
             .unwrap_or_else(|| String::from("(unlabeled)"));
         let scopes = std::mem::take(&mut self.scopes);
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] submitting buffer={label} scopes={scopes:?}");
+        }
         let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             let cb = unsafe { buf.as_ref() };
             let status = unsafe { cb.status() };
@@ -2277,12 +2404,12 @@ impl GpuEncoder {
                 let (code, desc) = match err {
                     None => (-1i64, String::from("(nil)")),
                     Some(err) => {
+                        super::gpu_fault::log_error_diagnostics(&err, &label);
                         let code = err.code() as i64;
                         let desc = err.localizedDescription().to_string();
                         (code, desc)
                     }
                 };
-                super::gpu_fault::record_fault(&desc);
                 if scopes.is_empty() {
                     log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
                 } else {
@@ -2292,8 +2419,11 @@ impl GpuEncoder {
                         scopes.join(" | ")
                     );
                 }
+                super::gpu_fault::record_fault(&desc);
             }
+            super::gpu_fault::complete_submission();
         });
+        super::gpu_fault::begin_submission();
         unsafe {
             self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
         }
@@ -2311,13 +2441,16 @@ impl GpuEncoder {
     /// order is preserved; Metal's automatic hazard tracking covers cross-chunk
     /// resource dependencies. Never blocks (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
     ///
-    /// Dispatch profiling is incompatible with mid-encode splits (D5), so the
-    /// call panics in dev builds if profiling is enabled.
+    /// Profiled frames retain completed command buffers so their timings and
+    /// completion status are included in the final profile.
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
-        debug_assert!(self.profile.is_none(), "commit_and_continue: dispatch profiling is incompatible with mid-encode chunking (UI_RESPONSIVENESS_UNDER_LOAD D5)");
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
+
+        if let Some(profile) = &mut self.profile {
+            profile.committed_buffers.push(self.cmd_buf.clone());
+        }
 
         let label = unsafe { self.cmd_buf.label() }
             .map(|s| s.to_string())
@@ -2352,6 +2485,27 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilCompleted() };
         self.verify_completed("commit_and_wait_completed");
+    }
+
+    /// Commit, wait for completion, and return a failure instead of panicking.
+    /// Completion handlers have run by the time Metal returns from the wait.
+    pub fn try_commit_and_wait_completed(mut self) -> Result<(), String> {
+        self.end_current();
+        self.register_fault_handler();
+        self.cmd_buf.commit();
+        unsafe { self.cmd_buf.waitUntilCompleted() };
+        use objc2_metal::MTLCommandBufferStatus;
+        if unsafe { self.cmd_buf.status() } == MTLCommandBufferStatus::Completed {
+            return Ok(());
+        }
+        let (code, desc) = match unsafe { self.cmd_buf.error() } {
+            None => (-1i64, String::from("(no error object)")),
+            Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
+        };
+        Err(format!(
+            "[GPU] try_commit_and_wait_completed: command buffer did not reach Completed (status={}, code={}): {}",
+            unsafe { self.cmd_buf.status() }.0, code, desc
+        ))
     }
 
     /// Assert the command buffer reached `Completed` after a blocking wait.

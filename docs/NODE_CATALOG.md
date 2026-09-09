@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 264 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 265 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (62)
+### 3D Geometry (63)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -202,6 +202,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
+| Reflect Array | `node.reflect_array` | Filter | Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset. |
 | Render Copies | `node.render_copies` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
 | Render Mesh | `node.render_mesh` | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
 | Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by any number of shar… |
@@ -211,7 +212,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
-| Scene Array | `node.scene_array` | Source | Lays out copies in a line along one axis, spacing them evenly for a looping flythrough. |
+| Scene Array | `node.scene_array` | Source | Generates the corridor of instances around the camera — cells repeat by pattern, forever. |
 | Scene Object | `node.scene_object` | Source | Binds one object's mesh, transform, material, maps, and instances into a single wire. Wire it into a render_scene object slot. |
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
@@ -389,7 +390,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (67)
+### Effect & generator presets (75)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -422,16 +423,24 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `Infrared` | Infrared | effect | Filmic | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
+| `LED Barber Pole` | LED Barber Pole | generator | LED | 6 |
+| `LED Beat Rain` | LED Beat Rain | generator | LED | 6 |
 | `LED Burst` | LED Burst | generator | LED | 5 |
+| `LED Chase` | LED Chase | generator | LED | 7 |
 | `LED Chase Sweep` | LED Chase Sweep | generator | LED | 5 |
+| `LED Chevron` | LED Chevron | generator | LED | 6 |
 | `LED Cycle` | LED Cycle | generator | LED | 1 |
 | `LED Fill` | LED Fill | generator | LED | 2 |
 | `LED Pixel Walk` | LED Pixel Walk | generator | LED | 2 |
 | `LED Pulse` | LED Pulse | generator | LED | 3 |
+| `LED Shaped Pulse` | LED Shaped Pulse | generator | LED | 6 |
 | `LED Step Chase` | LED Step Chase | generator | LED | 6 |
 | `LED Step Scan` | LED Step Scan | generator | LED | 4 |
+| `LED Strip Fire` | LED Strip Fire | generator | LED | 5 |
 | `LED Strip ID` | LED Strip ID | generator | LED | 0 |
+| `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
+| `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
 | `Lantern` | Lantern | generator | Geometry | 157 |
 | `LightOrbit` | Light Orbit | generator | Geometry | 77 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
@@ -451,7 +460,7 @@ _Generated from the node registry. Do not hand-edit. 264 nodes registered, group
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
-| `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
+| `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `TimeScrub` | Time Scrub | generator | Geometry | 77 |

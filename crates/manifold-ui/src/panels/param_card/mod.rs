@@ -156,14 +156,16 @@ const CHANGE_BTN_H: f32 = 16.0;
 
 // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D22-D24) ──
 // The send path's own 8×120 readback (row = LED position, col = strip index)
-// displayed as a 120-wide × 8-tall transposed band at the top of the DMX
-// lane's generator card. The bitmap rides the viewport bitmap GPU path
-// (dirty CPU buffer → upload → layer-bitmap quad), never a second readback.
+// displayed at the top of the DMX lane's generator card in the rig's physical
+// orientation: 8 vertical strips, native 8×120 bitmap (no transpose), LED 0 at
+// the bottom. The bitmap rides the viewport bitmap GPU path (dirty CPU buffer →
+// upload → layer-bitmap quad), never a second readback.
 pub const LED_BAND_STRIPS: usize = 8;
 pub const LED_BAND_LEDS: usize = 120;
-/// Band interior height — one 2px row per strip. The frame adds `BORDER_W`
-/// on each side, so the chrome's total height is `LED_BAND_H + 2 * BORDER_W`.
-pub(crate) const LED_BAND_H: f32 = 16.0;
+/// Band interior height target. Width derives at the native 8:120 ratio
+/// (1:15), so the band is a centred vertical strip, integer-scaled by the
+/// nearest sampler. The frame adds `BORDER_W` on each side.
+pub(crate) const LED_BAND_MAX_H: f32 = 240.0;
 /// The band quad's layer-bitmap texture index (panels use 1000+; 1002 is the
 /// overview strip, 2000+ collapsed groups).
 pub const LED_BAND_BITMAP_INDEX: usize = 1003;
@@ -867,7 +869,7 @@ impl ParamCardPanel {
     /// Zero when absent (non-DMX card, no controller) or collapsed.
     fn led_band_height(&self) -> f32 {
         if self.led_preview.is_some() && !self.is_collapsed {
-            BORDER_W * 2.0 + LED_BAND_H + HEADER_BODY_GAP
+            BORDER_W * 2.0 + LED_BAND_MAX_H + HEADER_BODY_GAP
         } else {
             0.0
         }
@@ -1340,6 +1342,8 @@ mod tests {
         assert_eq!(tree.name_of(slider.value_text), Some("param_row.radius.value"));
         let drv = panel.row_host.driver_btn_ids[0].expect("radius row has a driver button");
         assert_eq!(tree.name_of(drv), Some("param_row.radius.driver_btn"));
+        let trigger = panel.row_host.envelope_btn_ids[0].expect("radius row has a trigger button");
+        assert_eq!(tree.name_of(trigger), Some("param_row.radius.trigger_btn"));
 
         // Toggle row ("invert"): no separate row-catcher — its button IS the
         // row's identity, so the row name lands there.
@@ -1817,7 +1821,7 @@ mod tests {
         let chevron = panel.row_host.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
-            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping(pid))] if pid == "strength"),
+            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Effect(0), param_id: pid, anchor_node_id })] if pid == "strength" && *anchor_node_id == chevron),
             "got {actions:?}"
         );
         // The chevron also has a resolvable anchor rect by binding id.
@@ -1902,7 +1906,7 @@ mod tests {
         let chevron = panel.row_host.mapping_chevron_ids[1].expect("generator mappable row → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
-            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping(pid))] if pid == "strength"),
+            matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Generator, param_id: pid, anchor_node_id })] if pid == "strength" && *anchor_node_id == chevron),
             "got {actions:?}"
         );
         assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
@@ -2168,6 +2172,59 @@ mod tests {
             "end emits exactly one commit: {ended:?}"
         );
         assert!(!panel.is_dragging(), "drag slot cleared after end");
+    }
+
+    /// BUG-3jpj (scene-modifier-card-drag-clunky): a modifier card's kind is
+    /// Effect with effect_index 0, but its rows address `GeneratorOf(owning
+    /// layer)` (param_target(), INV-M4). Every wire of a slider drag — begin,
+    /// mid-gesture moves, commit — must carry that target; a site that
+    /// re-derives the target from `self.kind` mid-gesture flips the address to
+    /// effect 0 of the active layer, the write lands nowhere, and the slider
+    /// snaps back on the next value sync.
+    #[test]
+    fn modifier_card_drag_addresses_owning_layer_for_whole_gesture() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut config = effect_config();
+        config.modifier = Some(crate::param_surface::ModifierCardInfo {
+            kind_id: "scene_loop".into(),
+            layer_id: LayerId::new("layer-1"),
+            show_enable_toggle: true,
+            wrap_debug: None,
+        });
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let want = GraphParamTarget::GeneratorOf(LayerId::new("layer-1"));
+
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let track_rect = tree.get_bounds(track);
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
+        assert!(
+            matches!(down.as_slice(),
+                [PanelAction::Scrub(ValueRef::Param(t1, _), ScrubPhase::Begin),
+                 PanelAction::Scrub(ValueRef::Param(t2, _), ScrubPhase::Move(..))]
+                if *t1 == want && *t2 == want),
+            "begin + first value address the owning layer: {down:?}"
+        );
+
+        let quarter_x = track_rect.x + track_rect.width * 0.25;
+        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree, false);
+        assert!(
+            matches!(moved.as_slice(),
+                [PanelAction::Scrub(ValueRef::Param(t, pid), ScrubPhase::Move(ScrubValue::Scalar(val)))]
+                if *t == want && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
+            "mid-gesture moves address the owning layer: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(),
+                [PanelAction::Scrub(ValueRef::Param(t, pid), ScrubPhase::Commit)] if *t == want && pid.as_ref() == "radius"),
+            "commit addresses the owning layer: {ended:?}"
+        );
     }
 
     /// D8: Shift during a param drag scales the applied pointer delta by 0.1,
@@ -2992,6 +3049,69 @@ mod tests {
         assert!(close(chevron, Rect::new(chevron_x, elem_y, CHEVRON_W, 16.0)), "chevron {chevron:?}");
         let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
         assert!(close(cog, Rect::new(cog_x, elem_y, COG_W, 16.0)), "cog {cog:?}");
+    }
+
+    // ── Modifier-card chrome (SCENE_MODIFIER_FRAMEWORK section 3.7) ──
+
+    fn modifier_config() -> ParamSurface {
+        let mut c = effect_config();
+        c.title = "Scene Loop".into();
+        c.modifier = Some(crate::param_surface::ModifierCardInfo {
+            kind_id: "scene_loop".into(),
+            layer_id: manifold_foundation::LayerId::new("layer-a"),
+            show_enable_toggle: true,
+            wrap_debug: None,
+        });
+        c
+    }
+
+    #[test]
+    fn modifier_header_carries_cog_navigating_to_generator_graph() {
+        // BUG-oe99: the modifier shell omitted the cog entirely. It must carry
+        // the same cog as every other card species, navigating to the layer's
+        // generator graph — the modifier's nodes live there.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // Perform context
+        panel.configure(&modifier_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let cog = panel.cog_btn_id.expect("modifier card builds the cog");
+        let actions = panel.handle_click(cog, &tree);
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [PanelAction::Root(RootAction::OpenGeneratorGraphEditor)]
+            ),
+            "modifier cog navigates to the generator graph, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn modifier_header_layout_places_remove_left_of_cog() {
+        // Trailing order: chevron (rightmost), cog, remove ×, [DBG], [toggle].
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&modifier_config());
+        let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
+        panel.build(&mut tree, rect);
+
+        let inner_x = rect.x + BORDER_W;
+        let inner_w = rect.width - BORDER_W * 2.0;
+        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
+        let cog_x = chevron_x - GAP - COG_W;
+        let remove_x = cog_x - GAP - CHEVRON_W;
+        let elem_y = rect.y + BORDER_W + (HEADER_HEIGHT - 16.0) * 0.5;
+
+        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
+        assert!((chevron.x - chevron_x).abs() < 0.01, "chevron stays rightmost: {chevron:?}");
+        assert!((chevron.y - elem_y).abs() < 0.01, "chevron y: {chevron:?}");
+        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
+        assert!((cog.x - cog_x).abs() < 0.01, "cog left of chevron: {cog:?}");
+        assert!((cog.y - elem_y).abs() < 0.01, "cog y: {cog:?}");
+        let remove = tree
+            .get_bounds(panel.modifier_remove_btn_id.expect("remove × built"));
+        assert!((remove.x - remove_x).abs() < 0.01, "remove × left of cog: {remove:?}");
+        assert!((remove.y - elem_y).abs() < 0.01, "remove × y: {remove:?}");
     }
 
     #[test]

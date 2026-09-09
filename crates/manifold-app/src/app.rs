@@ -54,6 +54,8 @@ pub type SelectionState = UIState;
 // `ResolvedScrub` variant. The restore path is `ScrubState::restore_dragged`.
 
 pub struct Application {
+    #[cfg(all(feature = "ui-automation", unix))]
+    pub(crate) live_ui: Option<crate::live_ui::LiveUi>,
     // GPU
     pub(crate) gpu: Option<GpuContext>,
 
@@ -549,6 +551,8 @@ impl Application {
         let (import_progress_tx, import_progress_rx) = crossbeam_channel::unbounded();
 
         Self {
+            #[cfg(all(feature = "ui-automation", unix))]
+            live_ui: None,
             gpu: None,
             import_validation_device: None,
             import_progress_tx,
@@ -1960,6 +1964,12 @@ impl Application {
 }
 
 impl ApplicationHandler for Application {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Native macOS Quit terminates through this callback without returning
+        // from run_app, so clean-session bookkeeping must happen here too.
+        crate::clear_session_sentinel();
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.initialized {
             return;
@@ -2637,6 +2647,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ) {
         let is_primary = Some(window_id) == self.primary_window_id;
 
+        #[cfg(all(feature = "ui-automation", unix))]
+        if is_primary && matches!(&event, WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::ModifiersChanged(_) | WindowEvent::CursorMoved { .. }
+            | WindowEvent::Focused(false) | WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }) {
+            self.interrupt_live_ui();
+        }
+
         let is_graph_editor = Some(window_id) == self.graph_editor_window_id;
 
         match event {
@@ -2749,13 +2768,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // ── Modifier tracking ──────────────────────────────────
             WindowEvent::ModifiersChanged(mods) => {
                 let state = mods.state();
-                self.modifiers = Modifiers {
+                self.input_modifiers(Modifiers {
                     shift: state.shift_key(),
                     ctrl: state.control_key(),
                     alt: state.alt_key(),
                     command: state.super_key(),
-                };
-                self.ws.ui_root.input.set_modifiers(self.modifiers);
+                });
             }
 
             // ── Keyboard input ─────────────────────────────────────
@@ -3076,6 +3094,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         if should_render && !in_display_transition {
             self.tick_and_render();
+            #[cfg(all(feature = "ui-automation", unix))]
+            self.tick_live_ui();
         }
 
         // Present output frame on the main thread (windowed mode only).

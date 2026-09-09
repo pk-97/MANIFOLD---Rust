@@ -1,0 +1,527 @@
+{
+  "version": 2,
+  "name": "LED Beat Rain",
+  "presetMetadata": {
+    "id": "LED Beat Rain",
+    "displayName": "LED Beat Rain",
+    "category": "LED",
+    "layerTypes": ["Dmx"],
+    "oscPrefix": "ledBeatRain",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "division",
+        "name": "Division",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Whole",
+          "Half",
+          "Quarter",
+          "Eighth",
+          "Sixteenth"
+        ],
+        "formatString": "F0",
+        "oscSuffix": "division"
+      },
+      {
+        "id": "drops",
+        "name": "Drops",
+        "min": 1.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "drops"
+      },
+      {
+        "id": "tail",
+        "name": "Tail",
+        "min": 0.1,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "tail"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.25,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "speed"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 190.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.8,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "division",
+        "label": "Division",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "division_power",
+          "param": "a"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "drops",
+        "label": "Drops",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "v_drops",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tail",
+        "label": "Tail",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "tail_end",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "fall_speed",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 190.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 3,
+      "typeId": "node.posterize",
+      "handle": "strip_index",
+      "nodeId": "strip_index",
+      "params": {
+        "levels": { "type": "Float", "value": 9.0 }
+      },
+      "title": "Strip Index"
+    },
+    {
+      "id": 4,
+      "typeId": "node.scale_offset_image",
+      "handle": "index_0_8",
+      "nodeId": "index_0_8",
+      "params": {
+        "scale": { "type": "Float", "value": 8.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Index 0-8"
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_image",
+      "handle": "hash_in",
+      "nodeId": "hash_in",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Hash Seed"
+    },
+    {
+      "id": 6,
+      "typeId": "node.sine_cosine",
+      "handle": "hash_sin",
+      "nodeId": "hash_sin",
+      "params": {
+        "freq": { "type": "Float", "value": 12.9898 },
+        "phase": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      },
+      "title": "Hash Sin"
+    },
+    {
+      "id": 7,
+      "typeId": "node.scale_offset_image",
+      "handle": "hash_scale",
+      "nodeId": "hash_scale",
+      "params": {
+        "scale": { "type": "Float", "value": 43758.5453 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Hash Scale"
+    },
+    {
+      "id": 8,
+      "typeId": "node.wrap",
+      "handle": "strip_hash",
+      "nodeId": "strip_hash",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Strip Hash"
+    },
+    {
+      "id": 9,
+      "typeId": "node.math",
+      "handle": "division_power",
+      "nodeId": "division_power",
+      "params": {
+        "a": { "type": "Float", "value": 2.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 13 }
+      },
+      "title": "Division Power"
+    },
+    {
+      "id": 10,
+      "typeId": "node.math",
+      "handle": "beat_div",
+      "nodeId": "beat_div",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Beat x Division"
+    },
+    {
+      "id": 11,
+      "typeId": "node.math",
+      "handle": "spawn_floor",
+      "nodeId": "spawn_floor",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 10 }
+      },
+      "title": "Spawn Step"
+    },
+    {
+      "id": 12,
+      "typeId": "node.math",
+      "handle": "fall_fract",
+      "nodeId": "fall_fract",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 1 }
+      },
+      "title": "Fall Fraction"
+    },
+    {
+      "id": 13,
+      "typeId": "node.math",
+      "handle": "fall_speed",
+      "nodeId": "fall_speed",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum", "value": 2 }
+      },
+      "title": "Fall Speed"
+    },
+    {
+      "id": 14,
+      "typeId": "node.math",
+      "handle": "rain_phase",
+      "nodeId": "rain_phase",
+      "params": {
+        "a": { "type": "Float", "value": 0.0 },
+        "b": { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum", "value": 0 }
+      },
+      "title": "Rain Phase"
+    },
+    {
+      "id": 15,
+      "typeId": "node.scale_offset_image",
+      "handle": "strip_phase",
+      "nodeId": "strip_phase",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Strip Phase"
+    },
+    {
+      "id": 16,
+      "typeId": "node.wrap",
+      "handle": "strip_phase_wrap",
+      "nodeId": "strip_phase_wrap",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Strip Phase Wrap"
+    },
+    {
+      "id": 17,
+      "typeId": "node.wrap",
+      "handle": "u8",
+      "nodeId": "u8",
+      "params": {
+        "scale": { "type": "Float", "value": 8.0 }
+      },
+      "title": "Strip Cells"
+    },
+    {
+      "id": 18,
+      "typeId": "node.scale_offset_image",
+      "handle": "col_centre",
+      "nodeId": "col_centre",
+      "params": {
+        "scale": { "type": "Float", "value": -1.0 },
+        "offset": { "type": "Float", "value": 0.5 }
+      },
+      "title": "Column Centre"
+    },
+    {
+      "id": 19,
+      "typeId": "node.absolute_value",
+      "handle": "col_dist",
+      "nodeId": "col_dist",
+      "params": {},
+      "title": "Column Distance"
+    },
+    {
+      "id": 20,
+      "typeId": "node.smoothstep",
+      "handle": "col_edge",
+      "nodeId": "col_edge",
+      "params": {
+        "low": { "type": "Float", "value": 0.1 },
+        "high": { "type": "Float", "value": 0.14 }
+      },
+      "title": "Column Edge"
+    },
+    {
+      "id": 21,
+      "typeId": "node.invert",
+      "handle": "col_band",
+      "nodeId": "col_band",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Column Band"
+    },
+    {
+      "id": 22,
+      "typeId": "node.wrap",
+      "handle": "v_drops",
+      "nodeId": "v_drops",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Drops Repeat"
+    },
+    {
+      "id": 23,
+      "typeId": "node.mix",
+      "handle": "phase_add",
+      "nodeId": "phase_add",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 2 }
+      },
+      "title": "Phase Add"
+    },
+    {
+      "id": 24,
+      "typeId": "node.wrap",
+      "handle": "head_wrap",
+      "nodeId": "head_wrap",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Head Wrap"
+    },
+    {
+      "id": 25,
+      "typeId": "node.scale_offset_value",
+      "handle": "tail_end",
+      "nodeId": "tail_end",
+      "params": {
+        "a": { "type": "Float", "value": 0.5 },
+        "scale": { "type": "Float", "value": 0.45 },
+        "offset": { "type": "Float", "value": 0.03 }
+      },
+      "title": "Tail End"
+    },
+    {
+      "id": 26,
+      "typeId": "node.smoothstep",
+      "handle": "head_tail",
+      "nodeId": "head_tail",
+      "params": {
+        "low": { "type": "Float", "value": 0.03 },
+        "high": { "type": "Float", "value": 0.255 }
+      },
+      "title": "Head Tail"
+    },
+    {
+      "id": 27,
+      "typeId": "node.invert",
+      "handle": "head",
+      "nodeId": "head",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Head"
+    },
+    {
+      "id": 28,
+      "typeId": "node.mix",
+      "handle": "column_mask",
+      "nodeId": "column_mask",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 4 }
+      },
+      "title": "Column Mask"
+    },
+    {
+      "id": 29,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 190.0 },
+        "saturation": { "type": "Float", "value": 0.8 },
+        "focus": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Tint"
+    }
+  ],
+  "wires": [
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "beat", "toNode": 10, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "b" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "b" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 14, "toPort": "a" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "b" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "offset" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 17, "toPort": "in" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 18, "toPort": "in" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 19, "toPort": "in" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "in" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 22, "toPort": "in" },
+    { "fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "a" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 23, "toPort": "b" },
+    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "in" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 26, "toPort": "in" },
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "high" },
+    { "fromNode": 26, "fromPort": "out", "toNode": 27, "toPort": "in" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 28, "toPort": "a" },
+    { "fromNode": 27, "fromPort": "out", "toNode": 28, "toPort": "b" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 29, "toPort": "in" },
+    { "fromNode": 29, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

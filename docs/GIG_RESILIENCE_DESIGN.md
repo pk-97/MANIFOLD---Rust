@@ -272,6 +272,16 @@ arrives, the fallback loop is the floor and it is show-safe.
   autosave), then assess whether (a)'s true-undo UX justifies the serde pass
   as a follow-on. Don't half-build (a): partial command coverage means an
   undo stack that lies.
+- **Failure audit (2026-09-07):** normal Rust logs are mirrored to timestamped
+  `session-*.log` files in `~/Library/Logs/com.latentspace.manifold` (keep 20).
+  GPU blacklist exits write a synced crash report with exit code, beat, PID,
+  and session-log path, then sync the session log before exit 70. The session
+  includes project-load paths and GPU error scopes. Native stderr outside
+  Rust logging is not captured. This records failures; it does not recover
+  a failed GPU. GPU-failed generator/effect warmup now exits through the
+  same audited path immediately. Export rejects failed or unfinished GPU
+  frames before encoding, cancels the partial export, and exits through the
+  audited path; completion waits enforce a five-second deadline.
 - **crash.log rotation (G10):** timestamped files, keep last 20. On next
   *editor-mode* launch after an unclean exit: one quiet banner — "MANIFOLD
   crashed last session — crash log + last autosave available." Never shown on

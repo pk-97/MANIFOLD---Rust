@@ -224,6 +224,7 @@ pub(super) fn scene_param_meta(name: &str, label: &str) -> manifold_core::scene_
         max: 1.0,
         default_value: SerializedParamValue::Float { value: 0.5 },
         is_angle: false,
+        wraps: false,
         whole_numbers: false,
         is_toggle: false,
         is_trigger: false,

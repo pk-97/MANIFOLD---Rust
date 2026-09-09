@@ -1,12 +1,17 @@
 //! SCENE_LOOP_P2 copies proof (hand-built graphs): the fullest 4-way fan-out
 //! splice — ONE `node.scene_array` feeding FOUR object groups, each a group
 //! whose `node.scene_object` receives mesh/material through its own group body
-//! and `instances` through the group-interface input — renders count=1 vs
-//! count=3 DIFFERENTLY (diff > 40). This is the pixel-level proof that the
+//! and `instances` through the group-interface input — renders jitter OFF vs
+//! jitter 0.9 DIFFERENTLY (diff > 40). This is the pixel-level proof that the
 //! apply splice reaches the renderer on a REALISTIC topology (the import-shape
 //! group + interface fan-out). The real-import gate (`scene_loop_e2e_import.rs`)
 //! asserts the pipeline facts because that GLB renders near-black in the
 //! throwaway headless runtime.
+//!
+//! Corridor P1 note: the old differentiator was scene_array `count` (1 vs 3)
+//! — that param is gone (the window replaced it), and the loader rejects it.
+//! jitter_amount is a live param carrying the same proof burden: the graph
+//! builder's param writes reach the renderer.
 
 use std::collections::BTreeMap;
 
@@ -89,8 +94,9 @@ fn max_pixel_diff(a: &[u8], b: &[u8]) -> u8 {
 
 /// ONE scene_array feeding FOUR import-style groups (mesh/material wired in
 /// the group body, instances through the interface input) — the apply splice's
-/// real fan-out shape.
-fn fanout_loop_def(count: f32) -> EffectGraphDef {
+/// real fan-out shape. `jitter_amount` is the live differentiator (the old
+/// `count` param is gone with the corridor window).
+fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
     use manifold_core::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef};
     let groups: Vec<EffectGraphNode> = vec![50, 60, 70, 80]
         .into_iter()
@@ -160,9 +166,10 @@ fn fanout_loop_def(count: f32) -> EffectGraphDef {
         }),
         node(2, "scene_array", "node.scene_array", {
             let mut p = BTreeMap::new();
-            p.insert("count".to_string(), SerializedParamValue::Float { value: count });
             p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
             p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+            p.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
+            p.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: jitter_amount });
             p
         }),
         node(3, "loop_camera", "node.loop_camera", {
@@ -223,12 +230,12 @@ fn fanout_loop_def(count: f32) -> EffectGraphDef {
 
 #[test]
 fn fanout_scene_array_renders_copies() {
-    let a = render(&fanout_loop_def(1.0));
-    let b = render(&fanout_loop_def(3.0));
+    let a = render(&fanout_loop_def(0.0));
+    let b = render(&fanout_loop_def(0.9));
     let diff = max_pixel_diff(&a, &b);
     assert!(
         diff > 40,
-        "fan-out loop: count=1 vs count=3 differ by only {diff} — the instance splice \
+        "fan-out loop: jitter 0 vs 0.9 differ by only {diff} — the instance splice \
          does not reach the renderer on this topology"
     );
 }

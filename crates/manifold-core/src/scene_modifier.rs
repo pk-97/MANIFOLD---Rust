@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::NodeId;
-use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire};
+use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphNode, EffectGraphWire};
 use crate::scene_exposure::SceneParamMetadata;
 
 /// One entry of a kind's declarative trace signature (D3). The plan carries
@@ -40,6 +40,13 @@ pub struct GroupSplice {
     pub source_doc_id: u32,
     /// The producer's output port (e.g. `out`).
     pub source_port: String,
+    /// Take-over consent (SCENE_MIRROR_DESIGN section 3.5): when true the
+    /// apply drops every other top-level wire feeding (group, inner_port)
+    /// and wires this source in — the loop's scene_array owns `instances`
+    /// this way (D6). When false and the interface input already exists,
+    /// the apply refuses the whole command (INV-MR8, one splice owner) —
+    /// never a silent skip.
+    pub replace_existing: bool,
 }
 
 /// Port take-over with declarative restore (generalizes the loop's
@@ -117,7 +124,49 @@ pub struct SceneModifierPlan {
     pub repoints: Vec<PortRepoint>,
     /// Per-node exposure curation (INV-6: each node its own manifest only).
     pub exposures: Vec<NodeExposure>,
+    /// Internal consumers that share one exposed control, including modulation.
+    pub shared_params: Vec<SharedParamBinding>,
     pub enable: EnablePlan,
+}
+
+/// A binding fan-out: both targets read the same manifest slot and mapping.
+/// Targets are internal parameters without independent card controls.
+#[derive(Debug, Clone)]
+pub struct SharedParamBinding {
+    pub source: BindingTarget,
+    pub target: BindingTarget,
+}
+
+/// Extend exposed controls to internal consumers using ordinary preset
+/// bindings. Called after exposure stamping, both on apply and on load.
+pub fn install_shared_param_bindings(bindings: &mut Vec<BindingDef>, links: &[SharedParamBinding]) -> bool {
+    let mut changed = false;
+    for link in links {
+        let Some(source) = bindings.iter().find(|binding| binding.target == link.source).cloned() else {
+            continue;
+        };
+        if let Some(existing) = bindings.iter_mut().find(|binding| binding.target == link.target) {
+            // An independently exposed target is a custom graph, not an
+            // internal consumer. Preserve its authored control and mapping.
+            if existing.id != source.id {
+                continue;
+            }
+            // Exposure migrations may give a node its primitive label while
+            // the card keeps a curated name. Labels do not affect evaluation;
+            // sharing a value must not rewrite existing consumer presentation.
+            let replacement = BindingDef {
+                target: link.target.clone(), label: existing.label.clone(), ..source
+            };
+            if *existing != replacement {
+                *existing = replacement;
+                changed = true;
+            }
+        } else {
+            bindings.push(BindingDef { target: link.target.clone(), ..source });
+            changed = true;
+        }
+    }
+    changed
 }
 
 impl SceneModifierPlan {

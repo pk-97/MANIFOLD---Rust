@@ -1,0 +1,575 @@
+# Live Water — MLS-MPM in the scene graph
+
+<!-- index: Dedicated MLS-MPM water: bounded graph substeps, persistent layer state, moving colliders, scene depth/refraction, and the pool-and-cube prototype. -->
+
+**Status:** PROPOSED implementation specification · 2026-09-09 · Astra. Peter approved the direction and MVP; the numerical defaults below are hypotheses to prove, not measured capability. No water implementation is claimed. Execution review 2026-09-09 (Astra, via Peter): the k3 lead seat owns S2/S7 and all landing; Q=2^20 is the sole momentum encoding, conditional on S1 proof; c0=10 stays baseline, with softness classified as expected only after the half-timestep stability gate (sections 5 and 8).
+**Prerequisites:** existing scene renderer, material system and native Metal backend. No cloth, ropes, baked-cache import or generic physics engine prerequisite.
+**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; executable assignments are in [WATER_IMPLEMENTATION_PLAN.md](WATER_IMPLEMENTATION_PLAN.md).
+
+The performer hits a pool with a cube on beats. Each hit acts on the water already
+there. Water pours, splashes, settles and stays in the same scene as ordinary objects.
+Peter: “I agree we should split between water and cloth and ropes”; “The ‘paddle’ can
+just be a basic cube for testing”. This supersedes the PBF-first water lane in
+[SIMULATIONS_DESIGN.md](SIMULATIONS_DESIGN.md); XPBD remains that document's cloth/rope
+solver. Astra authors the architecture; Sol High owns implementation, diagnosis,
+review and landing with bounded Luna Low assignments. Seat mapping for execution
+(Astra review 2026-09-09): Sol is the k3 lead seat in this repo's fleet, Luna
+lanes are K2.7 with two concurrent maximum, and Astra reviews escalations only.
+
+## 1. Audit — what exists (verified 2026-09-09)
+
+Snapshot base: `fd0dd5a96`. Anchors use symbols where line numbers would decay.
+Re-derive before editing. These are source findings, not runtime observations.
+
+| Piece | Anchor | Classification |
+|---|---|---|
+| Per-layer generator ownership | `crates/manifold-renderer/src/generator_renderer.rs`: `LayerGeneratorState`, `render_all`, `stop_clip`, `release_all` | Reuse. `layer_generators` is keyed by `LayerId`; clip stop removes the clip target, not the layer's generator. Structural removal evicts absent layers. |
+| Graph lifecycle | `crates/manifold-renderer/src/preset_runtime/core.rs`: `render`, `reset_state`, `clear_state`, `clear_trigger_state` | Reuse. Full reset clears nodes and `StateStore`; trigger-only clearing must not erase water. |
+| Persistent buffers | `crates/manifold-renderer/src/node_graph/state_store.rs`: `StateStore`, `NodeState`; `primitives/array_feedback.rs`: `ArrayFeedback` | Extend by analogy. Keys remain `(NodeInstanceId, OwnerKey)` inside the owning runtime. Existing feedback is frame-based and specifically `Particle`, not a generic substep solver. |
+| Graph execution | `node_graph/execution_plan.rs`: `ExecutionPlan`, `ExecutionStep`; `node_graph/execution.rs`: `execute_frame_with_state`, `compute_live_steps` | New bounded substep-region support required. Today there is one frame traversal, frame-level late capture, hoisting and resource recycling. |
+| Grouping | `manifold-core/src/effect_graph_def.rs`: `GroupDef`; `manifold-core/src/flatten.rs`: `flatten_groups` | Reuse for visual organisation only. Groups flatten; they are not runtime loops. No new group serialization required by this design. |
+| Typed GPU channels | `node_graph/ports.rs`: `KnownItem`, `ArrayType`; `generators/compute_common.rs`: `Particle`, `PARTICLE_SPECS` | Reuse mechanism; add water records. Existing Particle is 64 bytes and has no affine matrix. Do not repurpose its colour/padding. |
+| Atomic scatter | `node_graph/primitive.rs`: `atomic_outputs`; `freeze/codegen/standalone.rs`: atomic bindings; `primitives/scatter_particles.rs` | Reuse signed integer atomic support and generated dispatch infrastructure. Existing energy scale 4096 is a precedent, not a universally safe water scale. |
+| GPU submission | `manifold-gpu/src/metal/encoder.rs`: `dispatch_compute`; `manifold-renderer/src/gpu_encoder.rs` | Reuse `manifold-gpu`, one encoder and preallocated uniforms. No WebGPU runtime, raw Metal bypass, new queue, thread or mutex. |
+| Scene surface | `primitives/render_scene.rs`: `RenderScene`, `evaluate`, `force_consumed_outputs`; `shaders/render_scene.wgsl`: `sample_transmission` | Extend. Shared depth, opaque colour snapshot and a transmissive pass already exist. Water must explicitly request snapshots even with no glass objects. |
+| Camera and depth | `node_graph/camera.rs`: `Camera::proj`, `view_proj`; `generators/shaders/depth_common.wgsl` | Reuse right-handed camera, Metal clip depth [0,1], UV Y flip and reconstruction conventions. |
+| Surface filter | `primitives/bilateral_blur.rs`: `BilateralBlur` | Reuse algorithm/codegen helpers; extend coverage handling. Existing filter does not know an empty liquid pixel from far-plane depth. |
+| Scene authoring | `node_graph/scene_vm.rs`: `SceneVm::from_def_with_layers`; `scene_modifier.rs`: plan builders | Ordinary graph topology, not a separate SceneObject document database. MVP is a bundled scene preset with exposed controls. |
+| Controls | `assets/generator-presets/SceneStarter.json`, `OilyFluid.json`; `system.generator_input`; `primitives/transform_3d.rs` | Reuse scene assembly, feedback/control composition, stable NodeId bindings and parameter surface. Both presets' nodes and wires were audited. |
+| Transport | `manifold-playback/src/engine.rs`: `seek_to`, `stop`, `set_time`, `advance_time`; `manifold-app/src/content_pipeline.rs`: `render_all` call | Add explicit simulation-frame context. Generic wall-clock dt and trigger counts do not reliably describe pause, seek and export. |
+
+Paths abbreviated after their first occurrence above are relative to
+`crates/manifold-renderer/src/`. The effect-chain grace eviction policy is NOT the
+generator lifetime policy: do not invent a water cache to work around that unrelated
+cache. The per-layer generator already provides the intended home.
+
+Research basis: [MLS-MPM paper](https://yzhu.io/publication/mpmmls2018siggraph/paper.pdf),
+[APIC paper](https://www.math.ucla.edu/~jteran/papers/JSSTS15.pdf),
+[WebGPU-Ocean implementation](https://github.com/matsuoka-601/WebGPU-Ocean), and
+[screen-space fluid rendering](https://developer.download.nvidia.com/presentations/2010/gdc/Direct3D_Effects.pdf).
+Use the papers for transfer/stress equations. WebGPU-Ocean is implementation evidence,
+not a dependency or a benchmark for this app: its author explicitly reports occasional
+instability at the demonstrated large timestep. Its SPH comparison is not a comparison
+with every modern SPH solver. Record the commit and licence of any code actually
+adapted; do not port demo constants without the unit conversion below.
+
+## 2. Decisions
+
+**D1 — Dedicated MLS-MPM liquid system.** Use quadratic B-spline APIC transfers,
+an explicit weakly compressible liquid stress model and a bounded uniform grid.
+Recompute density from grid mass each substep. No solid deformation tensor, snow
+plasticity or PBF density constraints. The first numerical proof decides whether this
+chosen formulation is viable at the stated quality/cost; it does not silently select
+another solver. XPBD cloth/ropes remain independent.
+
+**D2 — Visible operations, one bounded repeat region.** Water is a graph of seeding,
+emission/impulse, particle-to-grid transfer, stress, grid motion, grid-to-particle
+transfer, collision and surface operations. The executor repeats only the simulation
+region; cameras, scene draws and post effects run once per output frame. Rejected:
+`water_sim` hiding every dispatch; repeating the whole scene N times; unrolling a
+fixed number of copied water graphs. Bounded region support is a real prerequisite,
+not “free” reuse of the existing feedback node.
+
+**D3 — Layer lifetime, explicit reset.** The runtime instance owns water. Adjacent
+clips on the same generator layer can change controls without replacing water.
+Gaps/mute/occlusion freeze it; they do not integrate unseen elapsed time on return.
+Deleting the layer, replacing its generator, changing topology/capacity or loading a
+project starts fresh. Ordinary parameter changes do not rebuild simulation buffers.
+
+**D4 — World-space physics, shared transforms.** One world unit is one metre in the
+prototype. Y is up. Cube mesh and cube collider consume the SAME `Transform` wire.
+V1 moving collider is a translating, fixed-size, axis-aligned box. Rotation, changing
+scale, arbitrary meshes and two-way rigid-body response are deferred explicitly.
+Do not expose controls that the collision implementation ignores.
+
+**D5 — Screen-space water, integrated scene depth.** Surface reconstruction is
+separate graph work. The existing scene renderer shades the resulting surface after
+opaque objects and before scene post processing. Reflection uses the scene environment;
+refraction uses its opaque colour snapshot. V1 supports an above-water perspective
+camera, opaque/masked objects and ONE water surface set. No claim of recursive glass
+refraction, underwater rendering, water ray tracing, caustics or liquid shadow casting.
+
+**D6 — A numerical failure is observable.** No wrapping fixed-point momentum, NaNs,
+silent particle deletion, arbitrary velocity clamp or automatic solver replacement.
+Bounded GPU diagnostics retain the last valid state and report a water fault through
+the existing node error path. Reset restarts; it does not hide a recurring fault.
+
+**D7 — Bounded proof before product polish.** Numerical transfer/stability checks come
+first, then the pool/cube scene. Peter judges realism from motion, not a particle-count
+headline. No calendar promise, FPS claim or “SOTA” label before that checkpoint.
+
+## 3. Data and ownership contracts
+
+New module: `manifold-renderer/src/node_graph/water.rs`. Runtime records are not
+serialized. Use `KnownItem` channel specs with the following exact field order and
+std430 layout (all six fields Vec4F, 96-byte stride):
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WaterParticle {
+    pub position_mass: [f32; 4], // world xyz; mass kg, zero means inactive
+    pub velocity_density: [f32; 4], // m/s xyz; density kg/m^3
+    pub affine_x: [f32; 4], // row 0 of C (1/s); w = 0
+    pub affine_y: [f32; 4], // row 1; w = 0
+    pub affine_z: [f32; 4], // row 2; w = 0
+    pub previous_position: [f32; 4], // previous accepted substep xyz; w = 0
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WaterGridCell {
+    pub velocity_mass: [f32; 4], // resolved velocity xyz; mass
+}
+```
+
+Channel names are the field names, interned through the existing channel-name
+mechanism. Shader structs use the same field order. Compile-time size and channel
+stride checks are mandatory. Water display nodes consume `Channels<WaterParticle>`
+directly; do not pretend these are ordinary 64-byte particles.
+
+Grid accumulation uses a flat `Channels< i32 >` wire of `4 * nx * ny * nz` items:
+`4*g+0..2` momentum xyz, `4*g+3` mass. Grid indexing is
+`g = x + nx*(y + ny*z)`. The resolved grid is `Channels<WaterGridCell>`.
+Status is one separate `Channels<u32>` word, sticky until reset. Domain dimensions,
+capacity and grid spacing are build-time configuration; allocation is independent
+of canvas resolution. No f16 in the physics loop.
+
+The boundary owns three preallocated particle buffers: accepted, candidate and seed.
+Temporary graph wires may alias only after the lifetime analysis proves safety.
+`candidate` never aliases `accepted`: fault rejection needs the latter unchanged.
+Grid, accumulation and bounded diagnostic/readback slots are allocated at install.
+Use StateStore and existing cleanup/warmup contracts; no new global water manager.
+
+Graph documents store node params/wires and stable NodeIds through the existing
+camelCase JSON format. They do not store live particles, grid contents, clocks or
+GPU handles. Save/reload restores the authored seed/configuration, then starts fresh.
+
+## 4. Fixed substeps and graph compiler seam
+
+Add `node.water_state` as the water-typed state boundary, analogous to
+`ArrayFeedback`, with required `seed` and state-capture `in`, both
+`Channels<WaterParticle>`. Outputs: `out` (same channels), `step_count`, `step_dt`,
+`step_time`, `step_index` (ScalarF32). Inputs `time_scale` (default 1) and
+`reset_trigger` (default 0) are scalar-shadowed params. First reset observation arms;
+a subsequent integer change resets even while paused. Params `step_hz=960`,
+`max_substeps=32` are install-time positive integers, not performance knobs.
+
+New `node_graph/substeps.rs` owns the scheduling types:
+
+```rust
+#[derive(Clone, Copy)]
+pub struct SubstepBoundaryPorts {
+    pub seed: &'static str,
+    pub capture: &'static str,
+    pub state: &'static str,
+    pub count: &'static str,
+    pub delta: &'static str,
+    pub time: &'static str,
+    pub index: &'static str,
+    pub results: &'static [SubstepResultPorts],
+}
+
+#[derive(Clone, Copy)]
+pub struct SubstepResultPorts {
+    pub capture: &'static str,
+    pub output: &'static str,
+}
+
+pub struct SubstepRegion {
+    pub boundary: NodeInstanceId,
+    pub steps: Vec<usize>, // indices into ExecutionPlan.steps, install-time only
+    pub held_resources: Vec<ResourceId>,
+}
+
+#[derive(Clone, Copy)]
+pub struct SimulationFrame {
+    pub frame_id: u64,
+    pub delta: manifold_core::Seconds,
+    pub epoch: u64,
+    pub advancing: bool,
+    pub exporting: bool,
+}
+```
+
+Add `fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> { None }` to
+`EffectNode` and `Primitive`, forwarding through the blanket impl. WaterState returns
+the names above. Other nodes remain unchanged. Add
+`ExecutionPlan::substep_regions(&self) -> &[SubstepRegion]` and store its regions at
+compile time. Keep `ExecutionStep` and the public execute entry signatures intact.
+Add `Executor::set_simulation_frame(&mut self, frame: SimulationFrame)` and forward
+from `PresetRuntime::set_simulation_frame` and `GeneratorRenderer::set_simulation_frame`.
+The context receives that optional frame without changing `FrameTime` semantics for
+existing effects. Missing context on a graph with water is a reported error; tests
+and warmup must provide it explicitly.
+
+**Region derivation and validation:** cut the declared capture back-edge, as for
+feedback. The region is the boundary plus nodes that are both descendants of its
+state/step outputs AND ancestors of any primary/result capture producer. Each step-dependent atom,
+including grid clear, must receive `step_dt` or another region output as an ordering
+dependency. External inputs (seed, camera, controls, collider target transforms) are
+evaluated once before the region. Contract each region to one vertex for outer
+topological sorting. Disallow nested/overlapping regions, another feedback boundary
+inside it, outside readers of intermediate wires, and render/IO atoms inside it.
+Only the boundary's final primary/result outputs may escape. A malformed region is a
+compile error with NodeIds, not a fallback to ordinary traversal.
+
+The executor runs the boundary once to seed/resolve the CPU clock, then the body
+`step_count` times. Before each iteration it sets scalar step outputs. After each
+iteration, the boundary capture accepts the candidate into the persistent accepted
+buffer; outside consumers read the FINAL accepted state, not the frame-start state.
+At zero steps, `out` still exposes the accepted/seed state. Region capture must not
+also run in frame-end late capture. Region resources remain held for the entire
+repeat; no per-iteration pool churn. Do not call `execute_frame_with_state` recursively.
+Reuse the existing single-step evaluation/binding routine after extracting it from
+the outer traversal, so liveness, diagnostics and GPU tracking have one implementation.
+
+Freeze must preserve region membership and never fuse across a region boundary.
+Within a region, eligible pure per-element stages use generated code and normal
+fusion. Atomic/global-dependency stages remain boundaries. Hoisting may cache external
+constants but must not skip a step-dependent stage because its frame params appear
+unchanged. Dirty epochs, uniforms and slot contents advance per substep. Uniform
+allocations use distinct arena slices so all submitted steps do not read the last dt.
+
+**Clock:** accumulate `SimulationFrame.delta * time_scale` in f64 Seconds. Consume
+integer ticks of `h_t=1/step_hz`; keep only the fractional remainder. `time_scale` is
+bounded [0,1] for V1: slow/freeze/normal, not unproven fast-forward. At the cap, live
+mode drops excess WHOLE ticks, records dropped simulation time and visibly reports
+overload; never enlarge dt or build an unbounded backlog. Export treats overload as
+an error rather than producing a silently slower simulation. Duplicate frame_id must
+not advance twice. A skipped-frame gap discards elapsed inactive time. An epoch change
+resets seed, clock, collider history, emitter cursor, event latches and diagnostics.
+
+**Cost:** this runtime seam is the largest non-water prerequisite. It gets its own
+small synthetic test before shader work depends on it. It must not turn into a generic
+nested-programming-language project or alter ordinary frame feedback semantics.
+
+## 5. Numerical recipe and bounded fault handling
+
+Coordinates, mass, velocity and pressure use metres, kilograms, seconds and pascals.
+Initial proof defaults: domain origin `(-2,0,-2)`, 64^3 nodes, spacing `h=0.0625 m`,
+rest density `rho0=1000`, sound-speed parameter `c0=10 m/s`, EOS exponent 7,
+dynamic viscosity `mu=0.001 Pa.s`. Seed lattice spacing h/2, particle mass
+`rho0*(h/2)^3`. 65,536 active particles, capacity 131,072. These are initial test
+settings, not a promised performance tier. Inactive slots have mass zero.
+
+For particle x, `q=(x-origin)/h`, `base=floor(q-0.5)`, `f=q-base`.
+In each axis use quadratic weights
+`w0=0.5*(1.5-f)^2`, `w1=0.75-(f-1)^2`, `w2=0.5*(f-0.5)^2`.
+Visit all 27 tensor-product neighbours; `d=(base+offset-q)*h`.
+Never silently discard stencil mass at a grid edge: contain particles within a
+two-cell guard shell, enforced by collision and tested.
+
+One substep, in this order:
+
+1. **Emit/impulse.** Deterministic lattice emission into unused prefix slots;
+   apply a latched event once, not once per substep. No recycling, drains or particle
+   death in V1. Emit rate is particles/s; residual fractional births carry forward.
+   Capacity exhaustion stops emission and reports Full while existing water continues.
+2. **Clear grid.** Zero the accumulation wire each substep. Sticky fault status is
+   cleared only by reset. Dispatch ordering, not workgroup barriers, separates stages.
+3. **P2G mass/momentum.** Accumulate `w*m` and `w*m*(v+C*d)` on the grid.
+4. **Density/stress.** Read the completed grid mass:
+   `rho_p=sum(w*m_i)/h^3`, `V_p=m_p/rho_p`.
+   `p=max(0, rho0*c0^2/7*((rho_p/rho0)^7-1))`.
+   Zero negative pressure is the explicit free-surface approximation; no tension or
+   artificial cohesion in V1. Stress is `sigma=-p*I + mu*(C+transpose(C))`.
+   Add stress momentum `-4*dt*V_p/h^2 * w * sigma*d` to grid momentum.
+   Recomputed density is written to a separate candidate record; no in-place
+   cross-thread particle mutation. Density and stress share one particle operation
+   because stress depends directly on that particle's reconstructed volume.
+5. **Grid velocity.** Resolve mass/momentum, `v_i=momentum_i/m_i + gravity*dt`
+   for nonempty cells; empty cells are zero. Apply no-penetration boundary velocities
+   relative to the translating collider. Tangential velocity is free-slip in V1.
+6. **G2P/advection.** `v_p=sum(w*v_i)`,
+   `C_p=4/h^2 * sum(w*outer(v_i,d))`, `x_next=x+dt*v_p`.
+   Store previous accepted position. Apply particle boundary projection as a separate
+   collision stage to close grid-resolution leakage; use the same collider geometry.
+7. **Validate/commit.** Validate candidate finiteness, positive live mass, full stencil
+   containment and supported kinematics. After the global status write completes,
+   copy candidate to accepted only when no sticky fault is present. Otherwise retain
+   the last valid state. Subsequent steps with a fault are no-ops.
+
+Named shader operations: `water_emit`, `water_impulse`, `clear_grid`,
+`mpm_scatter_mass_momentum`, `mpm_scatter_stress`, `mpm_grid_velocity`,
+`mpm_gather_advect`, `water_collide_box`, `water_validate`, `water_commit`.
+Use `node.*` type IDs with those names; seed is `node.seed_water` and the state
+boundary is `node.water_state`. Audit whether clear and collision can use existing
+operations before registration; the current particle suite has no MLS affine state.
+Density output must flow from stress to gather to preserve it; do not lose it through
+a parallel copy of pre-stress particle records.
+
+**Fixed point:** signed i32, initial scale Q=1,048,576 (2^20) for mass and momentum. Round each
+contribution to nearest integer consistently; divide by Q on resolve. Negative
+momentum remains signed. Use checked atomic compare/exchange accumulation, with
+overflow setting a sticky status bit and retaining a representable value. No wrapped
+atomicAdd accepted as data. A direct 27-weight mass check rejected Q=4096
+(2.4–4.8% error on simple lattice positions); Q=2^20 gave 0–0.0125% on those
+fixtures. This is not the S1 transfer proof. Q is a documented proof parameter: compare against an
+f64 reference before approving it. The kernel must also detect float-to-int overflow
+before conversion. If quantisation fails the transfer tests, Sol reports the numerical
+evidence to Astra; it does not guess another encoding in a Luna lane.
+
+Fault bits: 1 nonfinite, 2 integer overflow, 4 outside supported domain/stencil,
+8 unsupported velocity/affine bound, 16 invalid density. Bounds for proof:
+`|v|<=4 m/s`, Frobenius `|C|<=64/s`, `0<rho<=4*rho0`. Exceeding bounds faults;
+these are not clamping controls. The rest-density CFL check at installation is
+`dt*(c0+v_max)/h<=0.25`; at the defaults it is about 0.233. This is a guard,
+not a mathematical guarantee of stability of the whole discretisation. The EOS
+wave speed grows as c0*(rho/rho0)^3; the rest-density check does not bound that
+growth. At 1.15*rho0 the sound speed is about 15.2 m/s, which puts the default
+step at CFL ~0.32 — above the 0.25 rest-density guard. Zero fault bits plus a
+rest-density CFL pass is therefore not stability evidence. S1 implements and
+reports the density-dependent acoustic CFL `dt*(c(rho)+|v|)/h`. S4 adds a
+bounded half-timestep comparison: the default pool and impact fixtures rerun at
+dt/2 must agree with dt in density field, particle motion and settling outcome
+within recorded tolerances. Softness is classified as expected compressibility
+only after that comparison passes; a mismatch is a numerical failure escalated
+to Astra/Peter before S7, not a lane tuning task. The density fault bound alone
+is not a stability guarantee.
+
+GPU fault propagation and accepted-state retention are same-substep. CPU reporting
+uses a bounded ring and completed prior submissions only; never wait for same-frame
+readback in the live path. Include the first fault bit and node in `ctx.error` once
+per transition. Full and live-overload are nonfatal statuses, not shader faults.
+
+## 6. Colliders, events and lifecycle
+
+Cube collision takes a `Transform` wire and the cube mesh's fixed half extents. The
+same source is fanned to the scene object; no copied position sliders. Previous and
+target translation are retained by the water state. Interpolate over this frame's
+accepted substeps, use `(target-previous)/simulated_seconds` for collider velocity,
+and use relative normal velocity at contact. At a reset/reappearance, initialise both
+translations to the current target (no artificial launch). While time_scale=0, hold
+the collider target for the next advancing frame; do not move visible collision
+geometry through frozen water. The displayed cube consumes the accepted collider
+transform, emitted by `node.water_collider_motion`, and the target transform remains
+the authored input. This is intentional physical state, not a second authoring model.
+Translation speed above 4 m/s faults visibly; no teleport sweep claimed in V1.
+
+`node.water_collider_motion` runs inside the substep region and emits its final
+`Transform` through a declared region result (implementation plan section 2.1
+specifies typed result resources). It has no independent clock. Boundary planes for the
+basin are authored from the SAME dimensions as its visible opaque walls.
+
+Impulse is a velocity change, in m/s, not force multiplied again by dt. Within radius
+R of centre use `max(0,1-distance/R)^2 * impulse_vector`. An integer trigger-count
+change supplies the event multiplicity; rollback rearms, it never creates negative
+events. Queue an event across fractional frames with zero due substeps; consume on
+the first actual substep. Explicit pause/zero time-scale discards incoming events and
+rearms, preventing a burst on resume. Cap pending multiplicity at 32 with a reported
+overflow status. Reset dominates emission and impulses on the same frame.
+
+| Event | V1 behaviour |
+|---|---|
+| Adjacent clip starts on same water layer | Preserve state; existing trigger wiring may strike cube/inject impulse. |
+| Clip ends / gap / muted or skipped layer | Freeze persistent state. Stop emission while not evaluated; no catch-up on return. |
+| Transport pause / water speed zero | Render current water; no simulation or queued beat backlog. Camera may still move. |
+| Transport stop | Preserve accepted water; clear event latches and elapsed accumulator. Play resumes that water unless reset/seek occurred. |
+| Explicit seek, including forward seek | Reset to authored initial state at destination. No historical reconstruction promise. |
+| Global timeline loop implemented through seek | Same reset as seek. Not a seamless physical loop. |
+| Source-media clip loop | Does not reset water. Existing clip-edge events remain the only musical input. |
+| Small continuous sync correction | No reset; physical stepping follows supplied forward dt, not subtraction of corrected timeline positions. |
+| Load / generator replacement / topology or capacity change | Fresh seed. Parameter-only edits preserve state. |
+| Export | Fresh seed at export range start, fixed steps, sequential export. Repeatable for same build/hardware/settings/input event schedule; not cross-device bit identity. |
+| Finish/cancel export | Reset live water at restored timeline position; pre-export live particles are not restored in V1. |
+
+Transport seam: add engine-owned `simulation_epoch: u64` plus getter; increment on
+`seek_to` and project replacement. Stop does NOT increment it (table above is
+authoritative). Continuous `set_time`/sync nudges do not increment. The direct
+Play-from-position call in `content_commands.rs` must explicitly mark a seek epoch
+when it relocates the playhead. Source-player loops are excluded. Use the existing
+content thread to forward `SimulationFrame` before `GeneratorRenderer::render_all`;
+delta is zero when not advancing, fixed export dt when exporting, otherwise the
+accepted forward playback interval. Track stop through advancing transition plus
+trigger clearing; no new ContentCommand or thread/channel.
+
+The existing outer parameter surface exposes emission rate, impulse strength, cube
+stroke, simulation speed and reset trigger through stable NodeId bindings. Beat
+effects use existing modulation and easing nodes. Editing goes through the existing
+graph edit/EditingService commands. A convenience “Add Water” scene action and a
+dedicated reset button are deferred; V1 loads the Water prototype preset and uses
+the existing exposed scalar/reset-trigger surface.
+
+## 7. Surface and scene integration
+
+Surface graph, evaluated once after all substeps:
+
+```text
+water_state final state ──► particle_surface_depth ──► bilateral H/V ──► surface normals
+                       └─► particle_thickness ─────────────────────────────┐
+shared Camera ─────────────► both raster nodes and render_scene            │
+opaque scene objects + lights + environment + water material ──► render_scene ─► post
+```
+
+`node.particle_surface_depth`: `particles: Channels<WaterParticle>`, `camera: Camera`,
+`radius: ScalarF32`; outputs `depth: Texture2D` R32Float clip depth, empty=1,
+and `coverage: Texture2D` R8Unorm (0 empty, 1 occupied). Sphere-impostor rasterisation
+with depth testing, not additive point energy. Radius default 0.75*h. Perspective
+camera only; reject near-plane intersection/underwater view in V1 with an explicit
+diagnostic rather than constructing invalid depths.
+
+`node.particle_thickness`: same inputs; `thickness: Texture2D` R16Float, additive
+sphere chord lengths in metres, empty=0. This is an approximate optical thickness,
+not an exact volume integral. Render colour is still HDR Rgba16Float. Full canvas
+resolution is the initial correctness setting; a measured quality change can add
+half-resolution depth-aware upsampling later, not silently at first implementation.
+
+Extend `BilateralBlur` with optional `coverage: Texture2D`: unwired is byte-identical
+existing behaviour; wired excludes uncovered neighbour taps and preserves empty centre
+pixels. H/V smoothing uses raw depth as guide and linear-eye-depth as the averaged
+quantity (add explicit `value_space` enum RawColour/default vs ClipDepth); convert
+back through the shared projection convention inside BilateralBlur. Add optional
+`camera: Camera`, required in ClipDepth mode; use its projection/inverse projection
+at the current aspect for both conversions. RawColour does not consume it.
+Use fp32 depth outputs. No f16 depth
+feedback. `node.normals_from_depth` reconstructs view-space positions with Camera,
+chooses covered neighbours with smallest depth discontinuity, outputs view normals
+Rgba16Float with coverage in alpha. Audit the existing normal reconstruction helpers
+and share them; do not use heightmap normals as perspective water normals.
+
+Add OPTIONAL `render_scene` inputs:
+
+```text
+water_depth: Texture2D        water_thickness: Texture2D
+water_normals: Texture2D      water_material: Material
+water_camera: Camera
+```
+
+All five are required as a set when any is wired. `water_camera` is the actual
+surface camera wire, used to validate equality of view/projection with the scene
+camera at the current aspect: all view and projection matrix elements must be finite
+and satisfy abs(a-b) <= 1e-6*max(1,abs(a),abs(b)). Compare values, not NodeIds or
+pointers. No new opaque Liquid handle or scene identity map.
+V1 water material is PBR dielectric, IOR 1.333, transmission 1, metallic 0; use
+existing material fields for roughness and volume attenuation. Unsupported material
+features produce an error, not an ignored control. Default attenuation distance 2 m,
+attenuation colour (0.70,0.90,0.95), roughness 0.04. Water's appearance is tuned only
+after the grey-lit motion passes the numerical checkpoint.
+
+**Pass order:** existing shadows → opaque/masked scene → resolve opaque colour/depth
+snapshots → water fullscreen depth-tested shading pass → refresh public depth with
+water surface depth → existing supported post processing. Reuse the current E2a
+snapshot allocation/load path, broadening its condition to `has_transmission ||
+has_water || rt_enabled`, preserving the existing RT branch for ordinary scenes.
+After Pass A resolve, retain the existing single-sample `opaque_depth_snapshot` and
+opaque colour snapshot unchanged for refraction. Load a distinct single-sample
+Depth32Float water-pass attachment initialized from opaque depth; water fragments
+write depth there. After that pass, call the existing `copy_depth_to_float` into
+the public R32Float depth output. Never bind that output for simultaneous sampling
+and writing. Keep both depth resources alive until the final copy completes.
+Water fragments behind opaque depth are discarded. Visible fragments write the
+reconstructed clip depth and shaded colour, so later depth-aware effects see water.
+No water inputs means no additional resources, dispatches or colour/depth changes.
+
+Lighting shares the existing scene-light packing, environment sampling, BRDF and
+shadow lookup helpers; extract helpers if needed rather than copying a second lighting
+engine. Water receives opaque-object shadows on direct light but does not cast shadows
+or caustics. Refract the opaque scene with IOR and thickness; shorten thickness by
+distance to the first opaque hit. Out-of-screen rays use the environment intentionally,
+as a documented screen-space limitation. Clamp/reject displaced samples that would
+pull a foreground opaque object through the water. Beer-Lambert attenuation is
+`exp(-sigma_a * thickness)`, with coefficients derived from existing material fields.
+Fresnel blends reflected and transmitted light; do not add two full-energy images.
+
+**Explicit V1 compatibility limits:** reject a water scene with any Blend object,
+RT enabled, temporal upscaling/denoising, volumetric shafts, or multiple water sets.
+Reject partial water input sets during graph validation/rebuild before allocation.
+Validate camera, material and dynamic compatibility at evaluation, before capability
+fallbacks or pass encoding. Use `EffectNodeContext::error`, clear colour to magenta
+(the existing scene error convention), clear depth to 1 and auxiliary outputs to
+zero, then return. Never retain stale water output or silently disable a user setting.
+Depth-aware spatial post effects can consume
+the updated depth; temporal motion feeds are not claimed. These limits are visible
+in the preset description. Supporting intersecting transparent objects and reliable
+liquid motion vectors is later work, not a fake MVP implementation.
+
+## 8. Prototype and acceptance
+
+Preset `WaterPrototype.json`, display name **Water — Prototype**, category Sim.
+Use SceneStarter's camera/light/environment/object wiring. One basin with opaque
+walls and contrasting floor, one 0.5 m cube, one water volume. Initial pool is a
+centred 2×0.5×2 m lattice raised above the grid's guard shell; walls enclose it with
+room for splashes. Cube stroke is vertical, smooth and speed-bounded; a visible floor
+pattern and a partly submerged cube make refraction/occlusion judgeable.
+
+At 120 BPM: show still water, a short pour, four cube strikes one beat apart, then
+stop driving it and show settling. Orbit the above-water camera. Also show two
+adjacent clips, pause/resume and explicit reset. No unrelated show-wide render sweep.
+
+Acceptance has two owners: Sol runs computed tests and frame-cost measurements;
+Peter judges the motion and image. Required artifacts are a short real-scene sequence,
+the project/preset, numerical results and timing/memory report. A pretty still is not
+evidence of stable physical interaction. A green build is not a visual result.
+
+Initial performance target: 1920×1080, 60 FPS, 65,536 active / 131,072 capacity,
+water incremental GPU cost p95 <=6 ms and total scene GPU p95 <=12 ms, memory
+increment <=128 MiB. These are budget targets to measure on Peter's available Mac,
+whose exact chip/OS/build must be recorded. No 4K or larger-particle promise. A miss
+stops expansion; report the slow stage rather than silently reducing quality.
+
+Numerical acceptance: partition-of-unity <=1e-6; GPU/f64 one-step velocity error
+<=1e-3 m/s and position error <=1e-5 m for the transfer fixture; mass error <=0.5%
+for accumulated grid vs particles. Closed-basin tests lose ZERO live particles and
+keep total particle mass unchanged. Interior hydrostatic density median within 5%
+of rest, p95 within 15% (exclude the two-cell free-surface/boundary band). Collider
+penetration <=0.1*h after projection. No fault bits in the default 10-second sequence.
+Half-timestep comparison passes on the pool and impact fixtures: density field,
+particle motion and settling outcome at dt/2 agree with dt within recorded
+tolerances (thresholds recorded from the first passing run, then held).
+Record actual values. Thresholds are acceptance targets, not observed results; a
+failing target is evidence for Astra, not permission for Luna to loosen it.
+
+## 9. Invariants & enforcement
+
+| Invariant | Named check delivered by the plan |
+|---|---|
+| Same solver state survives clip edges/gaps | `water_lifecycle_preserves_clip_edges_and_gaps` |
+| One physical advance per output frame, fixed dt | `substeps_count_order_and_duplicate_frame`, `substeps_pause_gap_overload` |
+| Rendering outside repeat | `substeps_execute_post_once` |
+| Correct final-state visibility and resource lifetime | `substeps_final_state_and_zero_steps`, `substeps_no_recycle_between_iterations` |
+| Freeze preserves step semantics | `substeps_frozen_unfrozen_match`, existing GPU proof gate |
+| No signed overflow or invalid state committed | `water_signed_scatter_and_overflow`, `water_fault_retains_last_valid_state` |
+| Fixed dt resolves supported motion | `water_timestep_halving_stability` |
+| New typed layouts match WGSL | `water_channel_layouts_match` |
+| Shared cube geometry and collision | `water_cube_transform_and_collision_match` |
+| Opaque occlusion and scene depth include water | `water_scene_occlusion_and_depth`, no-water parity test |
+| Reset/load/export semantics | `water_lifecycle_seek_stop_export`, `water_preset_roundtrip_modulates` |
+| No hidden unsupported feature | `water_scene_rejects_unsupported_combinations` |
+| Zero new hot-loop allocation/readback stalls | preallocation source audit plus bounded trace in prototype; existing unrelated allocations are not claimed fixed |
+
+## 10. Phasing
+
+The complete entry checks, lane ownership, exact test commands and seam inventories
+live in [WATER_IMPLEMENTATION_PLAN.md](WATER_IMPLEMENTATION_PLAN.md). S1 proves the
+numerics; S2/S3 establish scheduling and clock; S4/S5 implement solver and colliders;
+S6/S7 surface and scene; S8 packages and validates the instrument. No phase is declared
+complete by this document. Later phases re-derive upstream anchors before dispatch.
+
+## 11. Decided — do not reopen
+
+1. MLS-MPM water; no PBF prerequisite and no cloth dependency.
+2. Composable stages and bounded executor substeps; one scene render per frame.
+3. Persistent per-layer generator state; no second water manager.
+4. Shared physical/display cube transform; one-way translation collision in MVP.
+5. Screen-space surface, existing scene lighting/depth, explicit compatibility limits.
+6. Sol High leads Luna Low implementation; Astra reviews architecture conflicts and
+   the first prototype evidence, not routine patches.
+7. Numerical defaults must pass the named proof; changing formulation or thresholds
+   is an Astra/Peter decision, not a worker's tuning task.
+
+## 12. Deferred, with triggers
+
+- Rotating/scaling/mesh/SDF colliders and two-way coupling: after translating-cube
+  interaction passes, when a named performance scene requires them.
+- Foam, spray, bubbles, surface tension and viscous artistic materials: after water
+  motion and surface pass Peter's eye; each requires an explicit physical/visual model.
+- Underwater camera, overlapping glass, multiple bodies, liquid shadows/caustics,
+  RT participation and temporal motion: after the opaque-scene MVP passes; amend
+  the render contract before enabling each.
+- Arbitrary-time reconstruction, checkpoints, seamless physical loops and restoring
+  live state after export: when timeline authoring requires historical replay.
+- Scene-panel Add Water action: once the graph ABI is proven; reuse scene plan edits
+  and exposure machinery, not a bespoke water panel.
+- Half-resolution surface, sparse grids, sorting/scatter optimisation and more capacity:
+  only after a measured stage misses the prototype budget.

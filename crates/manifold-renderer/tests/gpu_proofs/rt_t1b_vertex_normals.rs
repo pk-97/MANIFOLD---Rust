@@ -110,6 +110,9 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
                     emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                     emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
 
     let mut normal_sources_slot = None;
@@ -123,13 +126,17 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     // (vtx1), w2=0.25 (vtx2). CPU oracle (Python):
     // normalize(0.25*(0,0,1) + 0.5*(0,0,1) + 0.25*(0,1,0))
     //   = (0.0, 0.31622776601683794, 0.9486832980505138).
-    let got0 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 0, [0.5, 0.25]);
+    // RT_INSTANCING_DESIGN.md D11: the debug surface takes the same
+    // slot-row base as production params (the object count) — it reads the
+    // slot region [N, N+Σ), not the canonical rows.
+    let slot_row_base = objects.len() as u32;
+    let got0 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 0, [0.5, 0.25], slot_row_base);
     assert_close(got0, [0.0, 0.3162_2777, 0.9486_833], "triangle 0");
 
     // Triangle 1, barycentric (u=0.25, v=0.5) => w0=0.25 (vtx0=dup of
     // vert0), w1=0.25 (vtx1=dup of vert2), w2=0.5 (vtx2). CPU oracle:
     // normalize(0.25*(0,0,1) + 0.25*(0,1,0) + 0.5*(1,0,0))
     //   = (0.8164965809277261, 0.4082482904638631, 0.4082482904638631).
-    let got1 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 1, [0.25, 0.5]);
+    let got1 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 1, [0.25, 0.5], slot_row_base);
     assert_close(got1, [0.8164_966, 0.4082_483, 0.4082_483], "triangle 1");
 }

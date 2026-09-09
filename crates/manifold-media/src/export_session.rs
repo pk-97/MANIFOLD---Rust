@@ -28,7 +28,7 @@ pub enum ExportError {
     /// No clips in the export range.
     NoContent,
     /// Export range is invalid (start >= end).
-    InvalidRange { start: f32, end: f32 },
+    InvalidRange { start: f64, end: f64 },
     /// Metal encoder error.
     #[cfg(target_os = "macos")]
     Encoder(EncoderError),
@@ -119,13 +119,13 @@ impl ExportSession {
         let fallback = Bpm(bpm);
         let start_seconds = TempoMapConverter::beat_to_seconds(
             tempo_map,
-            Beats::from_f32(config.start_beat),
+            Beats(config.start_beat),
             fallback,
         )
         .as_f32();
         let end_seconds = TempoMapConverter::beat_to_seconds(
             tempo_map,
-            Beats::from_f32(config.end_beat),
+            Beats(config.end_beat),
             fallback,
         )
         .as_f32();
@@ -149,7 +149,7 @@ impl ExportSession {
         let audio_offset_seconds = if config.has_audio() {
             let audio_start_seconds = TempoMapConverter::beat_to_seconds(
                 tempo_map,
-                Beats::from_f32(config.audio_start_beat),
+                Beats(config.audio_start_beat),
                 fallback,
             )
             .as_f32();
@@ -218,13 +218,13 @@ impl ExportSession {
         let fallback = Bpm(bpm);
         let start_seconds = TempoMapConverter::beat_to_seconds(
             tempo_map,
-            Beats::from_f32(config.start_beat),
+            Beats(config.start_beat),
             fallback,
         )
         .as_f32();
         let end_seconds = TempoMapConverter::beat_to_seconds(
             tempo_map,
-            Beats::from_f32(config.end_beat),
+            Beats(config.end_beat),
             fallback,
         )
         .as_f32();
@@ -246,7 +246,7 @@ impl ExportSession {
         let audio_offset_seconds = if config.has_audio() {
             let audio_start_seconds = TempoMapConverter::beat_to_seconds(
                 tempo_map,
-                Beats::from_f32(config.audio_start_beat),
+                Beats(config.audio_start_beat),
                 fallback,
             )
             .as_f32();
@@ -424,7 +424,7 @@ impl ExportSession {
         self.encoder.frames_encoded()
     }
 
-    pub fn start_beat(&self) -> f32 {
+    pub fn start_beat(&self) -> f64 {
         self.config.start_beat
     }
 }

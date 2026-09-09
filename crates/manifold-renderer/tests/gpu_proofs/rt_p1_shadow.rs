@@ -137,6 +137,9 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
     }];
     let accel = tracer.build_accel(device, &objects, &[]);
 
@@ -251,7 +254,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
@@ -268,11 +271,13 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
@@ -385,6 +390,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
         RtObjectGeometry {
             vertex_buffer: &occ_vertex_buffer,
@@ -405,6 +413,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
     ];
     let accel = tracer.build_accel(device, &objects, &[]);
@@ -518,18 +529,20 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,

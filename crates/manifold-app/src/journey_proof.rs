@@ -293,6 +293,35 @@ pub(crate) fn star_field_generator_layer(index: i32) -> Layer {
     layer
 }
 
+/// Cut-placement fixture (CLIP_BOUNDARY_FRAME_DESIGN D5/D6): two StarField
+/// generator layers whose clips meet at beat 4. The top layer (index 0
+/// renders last, on top) is dim and covers [4, 8); the bottom layer is bright
+/// and covers [0, 4). Before the boundary the bright clip shows through the
+/// top layer's gap; from the boundary on, the dim clip owns the frame.
+fn cut_boundary_project() -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(120.0);
+
+    let mut top = Layer::new("Incoming".to_string(), LayerType::Generator, 0);
+    top.change_generator_type(PresetTypeId::from_string("StarField".to_string()));
+    top.gen_params_mut()
+        .expect("generator layer must carry gen_params")
+        .set_param("brightness", 0.0);
+    top.clips.push(TimelineClip::new_generator(Beats(4.0), Beats(4.0)));
+
+    let mut bottom = Layer::new("Outgoing".to_string(), LayerType::Generator, 1);
+    bottom.change_generator_type(PresetTypeId::from_string("StarField".to_string()));
+    bottom
+        .gen_params_mut()
+        .expect("generator layer must carry gen_params")
+        .set_param("brightness", 4.0);
+    bottom.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(4.0)));
+
+    project.timeline.layers.push(top);
+    project.timeline.layers.push(bottom);
+    project
+}
+
 /// Write a deterministic 120 BPM, 8-beat (4s), 48kHz mono click-track WAV: a
 /// sharp 10ms decaying-tone burst on every beat, silence between. Fixed
 /// content (no RNG, no wall clock) — `export_is_deterministic_in_features`
@@ -519,6 +548,51 @@ mod tests {
             max > min * 2.0,
             "luma series must not be constant: min={min} max={max} (ratio={:.2})",
             max / min
+        );
+    }
+
+    /// CLIP_BOUNDARY_FRAME_DESIGN D5/D6 render-path proof: export the
+    /// cut-boundary fixture and assert the visible cut lands on EXACTLY the
+    /// boundary frame — frame 0 renders the clip owning the export start,
+    /// the frame before the boundary still shows the outgoing clip, and the
+    /// boundary frame itself belongs to the incoming clip. One frame of drift
+    /// in either direction fails.
+    #[test]
+    fn export_cut_lands_exactly_on_clip_boundary() {
+        const FPS: f32 = 12.0;
+        // 8 beats at 120bpm = 4s; the cut at beat 4 (2s) is frame 24.
+        const TOTAL_FRAMES: usize = 48;
+        const CUT_FRAME: usize = 24;
+
+        let dir = out_dir("export_cut_lands_exactly_on_clip_boundary");
+        let video_path = dir.join("export.mp4");
+        let cfg = tiny_export_config(&video_path, FPS);
+        run_headless_export(cut_boundary_project(), cfg).expect("export should succeed");
+
+        let frames = extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
+        let luma = luma_series(&frames).expect("luma series");
+        println!(
+            "[journey-proof] export_cut_lands_exactly_on_clip_boundary: {} frames, luma={:?}",
+            luma.len(),
+            luma
+        );
+
+        assert_eq!(luma.len(), TOTAL_FRAMES, "4s at 12fps is 48 frames");
+        let bright_ref = luma[..4].iter().copied().fold(f32::MIN, f32::max);
+        assert!(
+            bright_ref > 1e-6,
+            "frame 0 must render the clip owning the export start (luma={luma:?})"
+        );
+        let dark_cutoff = bright_ref * 0.25;
+        let first_dark = luma.iter().position(|&l| l < dark_cutoff);
+        assert_eq!(
+            first_dark,
+            Some(CUT_FRAME),
+            "the cut must land exactly on the boundary frame, not one early or late"
+        );
+        assert!(
+            luma[CUT_FRAME..].iter().all(|&l| l < dark_cutoff),
+            "the incoming clip owns every frame from the boundary on"
         );
     }
 

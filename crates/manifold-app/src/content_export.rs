@@ -13,6 +13,49 @@ use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, ExportFinishedEvent};
 use crate::content_thread::ContentThread;
 
+/// Distinguish encoder failures from GPU failures that invalidate the session.
+struct ExportFrameFailure {
+    message: String,
+    gpu: bool,
+}
+
+/// A signalled fence is not success if any GPU work failed during the frame.
+pub(crate) fn export_gpu_completion(
+    completed: bool,
+    initial_faults: u64,
+    current_faults: u64,
+    submissions_ignored: bool,
+    timed_out: bool,
+) -> Option<Result<(), String>> {
+    if current_faults != initial_faults || submissions_ignored {
+        Some(Err("GPU execution failed during export; see session encoder diagnostics".into()))
+    } else if completed {
+        Some(Ok(()))
+    } else if timed_out {
+        Some(Err("GPU completion timed out during export".into()))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod gpu_completion_tests {
+    use super::export_gpu_completion;
+
+    #[test]
+    fn gpu_failure_overrides_signalled_fence() {
+        assert!(export_gpu_completion(true, 4, 5, false, false).unwrap().is_err());
+        assert!(export_gpu_completion(true, 4, 4, true, false).unwrap().is_err());
+    }
+
+    #[test]
+    fn unfinished_frame_waits_then_fails_at_deadline() {
+        assert!(export_gpu_completion(false, 0, 0, false, false).is_none());
+        assert!(export_gpu_completion(false, 0, 0, false, true).unwrap().is_err());
+        assert_eq!(export_gpu_completion(true, 0, 0, false, true), Some(Ok(())));
+    }
+}
+
 /// Derive export sections from timeline markers. Every marker inside the
 /// export range is a cut — sections are `[range_start, m₁)`, `[m₁, m₂)`, …,
 /// `[mₙ, range_end)` over the sorted, deduplicated markers strictly inside
@@ -171,8 +214,8 @@ impl ContentThread {
         };
         let bpm = project.settings.bpm;
         let (content_start, content_end) = project.timeline.content_range_beats();
-        let content_start = content_start.as_f32();
-        let content_end = content_end.as_f32();
+        let content_start = content_start.0;
+        let content_end = content_end.0;
 
         // Use config beats if set, otherwise use content range
         let start_beat = if config.start_beat > 0.0 {
@@ -205,11 +248,7 @@ impl ContentThread {
         // Derive sections from timeline markers. Empty when the setting is off or
         // no markers fall inside the range → single-export path below.
         let sections: Vec<(Beats, Beats, String)> = if base_config.split_at_markers {
-            derive_sections(
-                &project.timeline,
-                Beats::from_f32(start_beat),
-                Beats::from_f32(end_beat),
-            )
+            derive_sections(&project.timeline, Beats(start_beat), Beats(end_beat))
         } else {
             Vec::new()
         };
@@ -236,12 +275,12 @@ impl ContentThread {
             for (i, ((start, end, _name), path)) in sections.iter().zip(paths.iter()).enumerate() {
                 let mut sc = base_config.clone();
                 sc.output_path = path.clone();
-                sc.start_beat = start.as_f32();
-                sc.end_beat = end.as_f32();
+                sc.start_beat = start.0;
+                sc.end_beat = end.0;
                 // D8: audio per section uses the existing mux path — each
                 // section's audio_start_beat is its start, which the muxer
                 // turns into a zero-offset slice of the master audio.
-                sc.audio_start_beat = start.as_f32();
+                sc.audio_start_beat = start.0;
                 let prefix = format!("section {} of {}", i + 1, section_count);
                 let aborted = self.run_export_section(sc, bpm, Some(&prefix), cmd_rx, state_tx);
                 if aborted {
@@ -307,9 +346,9 @@ impl ContentThread {
         // Calculate timing
         let mut tempo_map = project.tempo_map.clone();
         let start_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats::from_f32(start_beat), bpm);
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(start_beat), bpm);
         let end_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats::from_f32(end_beat), bpm);
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(end_beat), bpm);
         let duration = end_seconds - start_seconds;
         let total_frames = (duration * export_config.fps).0.round() as u32;
         let frame_dt = 1.0 / export_config.fps as f64;
@@ -353,8 +392,8 @@ impl ContentThread {
         // borrows its buffers (Rust drops locals in reverse declaration order).
         let export_audio = match manifold_playback::audio_mixdown::render_export_audio(
             project,
-            Beats::from_f32(start_beat),
-            Beats::from_f32(end_beat),
+            Beats(start_beat),
+            Beats(end_beat),
             bpm,
             &mut tempo_map,
             &tapped_layers,
@@ -452,7 +491,7 @@ impl ContentThread {
         // by the caller, before the section loop).
         let start_time = self
             .engine
-            .beat_to_timeline_time(Beats::from_f32(start_beat));
+            .beat_to_timeline_time(Beats(start_beat));
         self.engine.seek_to(start_time);
         self.engine.play();
 
@@ -502,7 +541,10 @@ impl ContentThread {
                     realtime_now: Seconds::ZERO,
                     pre_render_dt: Seconds(frame_dt),
                     frame_count: u64::MAX,
-                    export_fixed_dt: Seconds(frame_dt),
+                    // Zero: warm-up uses the accumulating clock. The absolute
+                    // export clock (origin + frame_count * dt) starts at the
+                    // frame loop, after the re-seek below.
+                    export_fixed_dt: Seconds::ZERO,
                 };
                 let warmup_result = self.engine.tick(warmup_ctx);
                 self.engine.reclaim_tick_result(warmup_result);
@@ -521,15 +563,20 @@ impl ContentThread {
             // Re-seek to start — warmup ticks advanced the engine
             let start_time = self
                 .engine
-                .beat_to_timeline_time(Beats::from_f32(start_beat));
+                .beat_to_timeline_time(Beats(start_beat));
             self.engine.seek_to(start_time);
         }
 
         // 5. Export frame loop.
+        //    The engine is parked at the export start; pin that as the clock
+        //    origin so each frame's tick sets time absolutely
+        //    (origin + frame_idx * frame_dt) instead of accumulating dt.
+        self.engine.set_export_origin(start_time);
         //    Each iteration is wrapped in an autoreleasepool to drain Metal's
         //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;
         let mut encode_error: Option<String> = None;
+        let mut gpu_failed = false;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -544,7 +591,7 @@ impl ContentThread {
             }
 
             #[cfg(target_os = "macos")]
-            let frame_err: Option<String> = objc2::rc::autoreleasepool(|_| {
+            let frame_err: Option<ExportFrameFailure> = objc2::rc::autoreleasepool(|_| {
                 self.export_one_frame(
                     &mut session,
                     &export_config,
@@ -558,7 +605,7 @@ impl ContentThread {
                 )
             });
             #[cfg(not(target_os = "macos"))]
-            let frame_err: Option<String> = self.export_one_frame(
+            let frame_err: Option<ExportFrameFailure> = self.export_one_frame(
                 &mut session,
                 &export_config,
                 frame_idx,
@@ -571,7 +618,8 @@ impl ContentThread {
             );
 
             if let Some(err) = frame_err {
-                encode_error = Some(err);
+                gpu_failed = err.gpu;
+                encode_error = Some(err.message);
                 break;
             }
         }
@@ -586,6 +634,7 @@ impl ContentThread {
                     session.frames_encoded()
                 );
             }
+            session.cancel();
             // Clean up partial file
             let _ = std::fs::remove_file(&export_config.output_path);
             let temp_video = format!("{}.video_only.mp4", export_config.output_path);
@@ -634,6 +683,9 @@ impl ContentThread {
             self.send_export_finished(state_tx, false, msg, &export_config.output_path);
         }
 
+        if gpu_failed {
+            crate::abort_gpu_work("Export GPU failure; partial export cancelled");
+        }
         failed || finalize_failed
     }
 
@@ -649,11 +701,19 @@ impl ContentThread {
         progress_prefix: Option<&str>,
         generator_only: bool,
         offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
-    ) -> Option<String> {
+    ) -> Option<ExportFrameFailure> {
+        let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
+        // Frame k samples the timeline at export_start + k * frame_dt via the
+        // engine's absolute export clock (origin pinned before the loop), so
+        // frame 0 renders the exact export start and the export spans
+        // [start, end) like the live compositor. dt-driven effect state does
+        // not integrate on the first frame — it renders the state at the
+        // export start, then advances one frame per output frame.
+        let this_dt = if frame_idx == 0 { 0.0 } else { frame_dt };
         let ctx = TickContext {
-            dt_seconds: Seconds(frame_dt),
+            dt_seconds: Seconds(this_dt),
             realtime_now: Seconds(frame_idx as f64 * frame_dt),
-            pre_render_dt: Seconds(frame_dt),
+            pre_render_dt: Seconds(this_dt),
             frame_count: frame_idx as u64,
             export_fixed_dt: Seconds(frame_dt),
         };
@@ -683,7 +743,7 @@ impl ContentThread {
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            frame_dt,
+            this_dt,
             frame_idx as u64,
             true,
             self.editing_service.data_version(),
@@ -707,18 +767,21 @@ impl ContentThread {
             Self::get_metal_texture_ptr(texture)
         };
 
-        self.content_pipeline.wait_for_render_complete();
+        if let Err(message) = self.content_pipeline.wait_for_export_complete(initial_gpu_faults) {
+            log::error!("[Export] Frame {frame_idx} failed: {message}");
+            return Some(ExportFrameFailure { message, gpu: true });
+        }
 
         match tex_ptr {
             Some(ptr) => {
                 if let Err(e) = unsafe { session.encode_frame(ptr) } {
                     log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
-                    return Some(format!("Encode failed at frame {frame_idx}: {e}"));
+                    return Some(ExportFrameFailure { message: format!("Encode failed at frame {frame_idx}: {e}"), gpu: false });
                 }
             }
             None => {
                 log::error!("[ContentThread] No Metal texture at frame {frame_idx}");
-                return Some(format!("No texture at frame {frame_idx}"));
+                return Some(ExportFrameFailure { message: format!("No texture at frame {frame_idx}"), gpu: false });
             }
         }
 

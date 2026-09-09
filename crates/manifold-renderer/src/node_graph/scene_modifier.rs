@@ -378,7 +378,7 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 
 /// Re-export the loop kind's builder so `gltf_import`'s historical public
 /// path keeps working for tests and tooling during the D6 migration.
-pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_loop_exposure_rows, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
+pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_fixed_row_scene_loops, migrate_loop_exposure_rows, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
 
 pub use scene_modifier_fog::{FOG_KIND_ID, SCENE_FOG_DESCRIPTOR};
 
@@ -386,7 +386,7 @@ pub mod scene_modifier_loop {
     //! Kind `scene_loop` — the Scene Loop as modifier kind #1 (D6/D8).
     //!
     //! Same three atoms, same params, same `"Scene Loop"` section string,
-    //! same whitelist (Bars/Copies/Height/Lateral), same cell_size D4 gap
+    //! same row whitelist, same cell_size D4 gap
     //! rule — byte-identical behavior through the generic plan/command pair.
     //! What changes is the camera path: the apply additionally mints a
     //! `node.camera_switch` (`loop_cam_switch`: previous camera producer →
@@ -400,28 +400,52 @@ pub mod scene_modifier_loop {
 
     pub const LOOP_KIND_ID: &str = "scene_loop";
 
+    fn shared_loop_params() -> Vec<manifold_core::scene_modifier::SharedParamBinding> {
+        use manifold_core::effect_graph_def::BindingTarget;
+        [("scene_array", "pattern_length", "loop_camera", "pattern_length"),
+         ("loop_camera", "cell_size", "scene_array", "cell_size")]
+            .into_iter().map(|(source, source_param, target, target_param)| {
+                manifold_core::scene_modifier::SharedParamBinding {
+                    source: BindingTarget::Node { node_id: NodeId::new(source), param: source_param.into() },
+                    target: BindingTarget::Node { node_id: NodeId::new(target), param: target_param.into() },
+                }
+            }).collect()
+    }
+
+
     const CAMERA_RESTORE_TYPES: &[&str] = &[
         "node.orbit_camera",
         "node.free_camera",
         "node.look_at_camera",
     ];
 
-    /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment: the ONLY
-    /// params stamped as "Scene Loop" rows, as
-    /// `(stable node_id, param) → row label`. Everything else on the loop
-    /// nodes — axis, home, near, far, fov_y, attack, jitter_seed,
-    /// look_sweep_cycles — is internal: the plan builder computes it once
-    /// and a panel row for it would desync the loop. Spacing rides
-    /// loop_camera.cell_size (its stamped range is curated to
-    /// auto×0.25..4.0 at apply time); look_sweep_cycles stays internal at
-    /// 1 (integer cycles are a wrap-safety requirement, INV-3).
+    /// D6 P4 whitelist + SCENE_MODIFIER_FRAMEWORK P4 enrichment + BUG-gsql
+    /// framing rows, corridor-renamed (ENDLESS_CORRIDOR D3): the ONLY params
+    /// stamped as "Scene Loop" rows, as `(stable node_id, param) → row
+    /// label`. Everything else on the loop nodes — axis, attack,
+    /// jitter_seed, look_sweep_cycles, patterns_per_loop's twin
+    /// loop_camera.pattern_length — is internal: the plan builder computes
+    /// it once and a panel row for it would desync the loop. Spacing rides
+    /// loop_camera.cell_size (its stamped range is curated to auto×0.25..4.0
+    /// at apply time); Near/Far/Home ranges are curated to the cell too (the
+    /// manifest bands are room-scale generics, unusable on a minted
+    /// flythrough camera — same defect Spacing curation fixed);
+    /// look_sweep_cycles stays internal at 1 (integer cycles are a
+    /// wrap-safety requirement, INV-3).
     const LOOP_ROW_WHITELIST: &[(&str, &str, &str)] = &[
         ("loop_phase", "bars", "Bars"),
-        ("scene_array", "count", "Copies"),
+        ("scene_array", "pattern_length", "Pattern"),
         ("loop_camera", "height", "Height"),
         ("loop_camera", "lateral", "Lateral"),
+        ("loop_camera", "near", "Near"),
+        ("loop_camera", "far", "Far"),
+        ("loop_camera", "fov_y", "FOV"),
+        ("loop_camera", "home", "Home"),
+        ("loop_camera", "roll", "Roll"),
+        ("loop_camera", "pitch", "Pitch"),
+        ("loop_camera", "yaw", "Yaw"),
         ("loop_camera", "flow", "Flow"),
-        ("loop_camera", "stride", "Stride"),
+        ("loop_camera", "patterns_per_loop", "Stride"),
         ("loop_camera", "sway_amp", "Sway"),
         ("loop_camera", "sway_cycles", "Sway Rate"),
         ("loop_camera", "look_sweep_amp", "Look Sway"),
@@ -430,21 +454,28 @@ pub mod scene_modifier_loop {
         ("scene_array", "jitter_amount", "Jitter"),
     ];
 
-    /// Coupled row writes (P4). Stride travels K cells per loop, so the
-    /// instance array must scale with it: count = K+2 (behind + current +
-    /// ahead), clamped at count's own ceiling of 8 — K ≥ 7 outruns the
-    /// array by one cell (reported, not hidden). Spacing writes BOTH
-    /// cell_size params in one undo unit (INV-4: camera travel ==
-    /// instance spacing by construction) and home = −cell/2 must track the
-    /// cell or the mid-gap phase-0 framing desyncs.
+    /// Coupled row writes (P4, corridor-revised per ENDLESS_CORRIDOR D3):
+    /// Pattern writes scene_array.pattern_length AND loop_camera's internal
+    /// pattern_length (identity) — travel stays an integer multiple of the
+    /// pattern for any dial, so wrap purity cannot desync (the old
+    /// count/jitter_period secondaries patched a desync the corridor
+    /// dissolves; the Stride coupling is deleted — patterns_per_loop couples
+    /// to nothing). Spacing writes BOTH cell_size params in one undo unit
+    /// (INV-4: camera travel == instance spacing by construction) and
+    /// home = −cell/2 must track the cell or the mid-gap phase-0 framing
+    /// desyncs.
     const LOOP_COULED_WRITES: &[CoupledWrite] = &[
         CoupledWrite {
-            primary: ("loop_camera", "stride"),
-            secondaries: &[CoupledSecondary {
-                node_id: "scene_array",
-                param: "count",
-                value: stride_to_count,
-            }],
+            primary: ("scene_array", "pattern_length"),
+            secondaries: &[
+                // D3: the camera's travel is K·P cells, so its internal
+                // pattern_length must mirror the row or the wrap desyncs.
+                CoupledSecondary {
+                    node_id: "loop_camera",
+                    param: "pattern_length",
+                    value: identity_value,
+                },
+            ],
         },
         CoupledWrite {
             primary: ("loop_camera", "cell_size"),
@@ -463,12 +494,6 @@ pub mod scene_modifier_loop {
         },
     ];
 
-    fn stride_to_count(k: f32) -> f32 {
-        // K cells of travel need K+2 copies (behind + current + ahead);
-        // count's own range caps at 8, so K ≥ 7 runs one copy short.
-        (k + 2.0).min(8.0)
-    }
-
     fn identity_value(v: f32) -> f32 {
         v
     }
@@ -478,18 +503,90 @@ pub mod scene_modifier_loop {
         -cell * 0.5
     }
 
-    /// Curate the Spacing row (the loop_camera.cell_size exposure): narrow
-    /// the stamped spec range from the manifest's generic 0.01..1000 to
-    /// auto×0.25..4.0 (the P4-pinned band) so the slider is usable. Applied
-    /// by BOTH the plan builder and the load migration — one fn, two
-    /// call sites, no drift.
-    fn curate_spacing_row(exposure: &mut NodeExposure, cell_size: f32) {
+    /// Curate the loop_camera rows whose manifest ranges are room-scale
+    /// generics, unusable on a minted flythrough camera:
+    /// - Spacing (cell_size): 0.01..1000 → auto×0.25..4.0 (the P4-pinned
+    ///   band).
+    /// - Near/Far/Home: scale with the cell, mirroring the orbit_camera
+    ///   radius rules in `scene_scaled_range` (the card never flows through
+    ///   that table — it serves the import stamping path — so the modifier
+    ///   curates here, at the same two call sites as Spacing).
+    ///   Every edit keeps the stamped default inside the band (the stamper's
+    ///   own widen rule). Applied by BOTH the plan builder and the load
+    ///   migration — one fn, two call sites, no drift.
+    fn curate_loop_camera_rows(exposure: &mut NodeExposure, cell: f32) {
         for m in &mut exposure.metadata {
-            if m.name == "cell_size" {
-                m.min = cell_size * 0.25;
-                m.max = cell_size * 4.0;
+            let default = match &m.default_value {
+                SerializedParamValue::Float { value } => *value,
+                _ => continue,
+            };
+            match m.name.as_str() {
+                "cell_size" => {
+                    m.min = cell * 0.25;
+                    m.max = cell * 4.0;
+                }
+                "home" => {
+                    m.min = (-2.0 * cell).min(default);
+                    m.max = (2.0 * cell).max(default);
+                }
+                "near" => {
+                    m.min = 0.001_f32.min(default);
+                    m.max = (2.0 * cell).max(default);
+                }
+                "far" => {
+                    m.min = 1.0_f32.min(default);
+                    m.max = (20.0 * cell).min(10_000.0).max(default);
+                }
+                "roll" | "pitch" | "yaw" => {
+                    // These are signed periodic framing offsets. Keep the
+                    // authored radians range, but let the outer card's
+                    // modulation wrap continuously across ±180°.
+                    m.wraps = true;
+                }
+                _ => {}
             }
         }
+    }
+
+    /// Repair the P4 framing rows in already-saved loops. The original
+    /// framing release used a rounded ±3.2-radian band and omitted the
+    /// periodic flag. Preserve any performer-customized mapping bounds, but
+    /// replace that exact shipped band with ±π and always repair the semantic
+    /// angle/wrap flags.
+    fn repair_loop_rotation_specs(meta: &mut manifold_core::effect_graph_def::PresetMetadata) -> bool {
+        let rotation_ids: std::collections::BTreeSet<String> = meta
+            .bindings
+            .iter()
+            .filter_map(|binding| match &binding.target {
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                    if node_id.as_str() == "loop_camera"
+                        && matches!(param.as_str(), "roll" | "pitch" | "yaw") =>
+                {
+                    Some(binding.id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let mut changed = false;
+        for spec in &mut meta.params {
+            if !rotation_ids.contains(&spec.id) {
+                continue;
+            }
+            if (spec.min + 3.2).abs() < 1e-4 && (spec.max - 3.2).abs() < 1e-4 {
+                spec.min = -std::f32::consts::PI;
+                spec.max = std::f32::consts::PI;
+                changed = true;
+            }
+            if !spec.is_angle {
+                spec.is_angle = true;
+                changed = true;
+            }
+            if !spec.wraps {
+                spec.wraps = true;
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub static SCENE_LOOP_DESCRIPTOR: SceneModifierDescriptor = SceneModifierDescriptor {
@@ -574,6 +671,9 @@ pub mod scene_modifier_loop {
                 inner_port: "instances",
                 source_doc_id: 0, // filled once scene_array's id is known
                 source_port: "out".to_string(),
+                // D6: the loop's scene_array takes over (group, instances)
+                // from whatever fed it before (the camera-switch precedent).
+                replace_existing: true,
             });
         }
 
@@ -602,11 +702,15 @@ pub mod scene_modifier_loop {
         f32_param(&mut params, "attack", 1.0);
         new_nodes.push(mint_node(beat_ramp_id, "loop_phase", "node.beat_ramp", params));
 
-        // scene_array: the shared copy array — count 3, axis +Z default.
-        // jitter_seed/jitter_amount pinned off: the loop's copies repeat
-        // exactly until the performer dials the Jitter row.
+        // scene_array: the corridor's windowed instance array (ENDLESS_
+        // CORRIDOR D1) — pattern_length 1 (uniform cells), axis +Z default.
+        // jitter_seed/jitter_amount pinned off: the loop's cells repeat
+        // exactly until the performer dials the Jitter row; the jitter keys
+        // on the Euclidean (cell mod pattern_length) (D4), so wrap purity
+        // holds at any Pattern value with no period coupling. The camera
+        // input is wired below (D2) — the window follows the loop camera.
         let mut params = std::collections::BTreeMap::new();
-        f32_param(&mut params, "count", 3.0);
+        f32_param(&mut params, "pattern_length", 1.0);
         params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z
         f32_param(&mut params, "cell_size", cell_size);
         f32_param(&mut params, "jitter_seed", 0.0);
@@ -614,11 +718,13 @@ pub mod scene_modifier_loop {
         new_nodes.push(mint_node(scene_array_id, "scene_array", "node.scene_array", params));
 
         // loop_camera: flies one cell per loop. home = -cell/2 = mid-gap
-        // before copy 0. Scale-aware framing (BUG-j65u): height/near/far
+        // before cell 0. Scale-aware framing (BUG-j65u): height/near/far
         // derive from the cell, never room-scale constants. P4 movement
         // controls pinned at "off" defaults (flow 0 = linear travel, sway /
-        // look / zoom 0 = no effect, stride 1 = one cell) — the performer
-        // dials them from the card rows.
+        // look / zoom 0 = no effect, patterns_per_loop 1 × pattern_length 1
+        // = one cell) — the performer dials them from the card rows. The
+        // internal pattern_length (D3) rides the Pattern row's coupled
+        // write; minting it at 1 matches the scene_array mint.
         let mut params = std::collections::BTreeMap::new();
         f32_param(&mut params, "cell_size", cell_size);
         params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 }); // +Z — must match scene_array
@@ -629,7 +735,8 @@ pub mod scene_modifier_loop {
         f32_param(&mut params, "far", cell_size * 4.0);
         f32_param(&mut params, "fov_y", 0.9);
         f32_param(&mut params, "flow", 0.0);
-        f32_param(&mut params, "stride", 1.0);
+        f32_param(&mut params, "patterns_per_loop", 1.0);
+        f32_param(&mut params, "pattern_length", 1.0);
         f32_param(&mut params, "sway_amp", 0.0);
         f32_param(&mut params, "sway_cycles", 1.0);
         f32_param(&mut params, "look_sweep_amp", 0.0);
@@ -641,8 +748,12 @@ pub mod scene_modifier_loop {
             s.source_doc_id = scene_array_id;
         }
 
-        // Wires: beat_ramp.out → loop_camera.phase (D5).
+        // Wires: beat_ramp.out → loop_camera.phase (D5), and the corridor
+        // camera feed loop_camera.out → scene_array.camera (ENDLESS_
+        // CORRIDOR D2 — the window derives from the same camera that flies
+        // the loop, so the corridor can never outrun the array).
         new_wires.push(wire(beat_ramp_id, "out", loop_camera_id, "phase"));
+        new_wires.push(wire(loop_camera_id, "out", scene_array_id, "camera"));
 
         // D5 Switch enable: the camera path runs through loop_cam_switch —
         // previous camera producer → a, loop_camera → b, out → lens.camera.
@@ -669,12 +780,12 @@ pub mod scene_modifier_loop {
         }];
 
         let mut skeleton = plan_skeleton(&SCENE_LOOP_DESCRIPTOR, &new_nodes, repoints);
-        // Spacing row range curation: the stamped cell_size spec spans the
-        // manifest's generic 0.01..1000 — unusable. Narrow it to the
-        // P4-pinned auto×0.25..4.0 band (the plan's cell IS the auto cell).
+        // Framing row range curation: the stamped specs span the manifests'
+        // generic room-scale bands — unusable. Narrow them to the cell-scaled
+        // bands (the plan's cell IS the auto cell).
         for exposure in &mut skeleton.exposures {
             if exposure.node_id.as_str() == "loop_camera" {
-                curate_spacing_row(exposure, cell_size);
+                curate_loop_camera_rows(exposure, cell_size);
             }
         }
 
@@ -687,6 +798,7 @@ pub mod scene_modifier_loop {
             group_splices,
             repoints: skeleton.repoints,
             exposures: skeleton.exposures,
+            shared_params: shared_loop_params(),
             enable: EnablePlan {
                 toggle: ToggleDecl::NodeParam {
                     node_doc_hint: NodeId::new("loop_cam_switch"),
@@ -761,13 +873,176 @@ pub mod scene_modifier_loop {
         true
     }
 
+    /// ENDLESS_CORRIDOR D7: a saved FIXED-ROW loop (scene_array carrying
+    /// `count`/`jitter_period`, loop_camera carrying `stride`) upgrades to
+    /// the corridor shape at load, by exact arithmetic:
+    /// - scene_array.jitter_period J (absent → 1) → scene_array.pattern_length = J
+    /// - scene_array.count → deleted (the camera-windowed corridor replaces
+    ///   the fixed row; capacity is the constant 32)
+    /// - loop_camera.stride S (absent → 1) → loop_camera.patterns_per_loop
+    ///   = round(S / J) (half away from zero), loop_camera.pattern_length = J
+    ///
+    /// K·P ≡ 0 (mod P) for any integers, so the migrated loop is wrap-pure
+    /// by construction; when J ∤ S the travel shifts (S=7, J=3 → 7→6
+    /// cells) — purity wins, travel-preservation is unrepresentable (D7
+    /// ruling). The one wire the corridor needs (loop_camera.out →
+    /// scene_array.camera, D2) is added when absent — old graphs predate it.
+    ///
+    /// Exposure rows and bindings are rewritten IN PLACE (Peter's ruling
+    /// 2026-09-06): rows bound to ("scene_array","count") /
+    /// ("loop_camera","stride") retarget to pattern_length /
+    /// patterns_per_loop with the spec id PRESERVED, so performer base
+    /// values, drivers, envelopes, and Ableton mappings keyed by that id
+    /// stay alive at the gig. Rows bound to the deleted jitter_period have
+    /// no successor param and are dropped (binding + spec). Instance-level
+    /// values ride untouched (they key by spec id, which is preserved).
+    ///
+    /// Idempotent: the OLD-shape test is scene_array still carrying
+    /// `count` — a migrated graph is new-shape and a second run is a no-op.
+    /// Runs BEFORE migrate_loop_exposure_rows in the per-layer load loop
+    /// (D7 order); that migration's jitter_period re-stamp is gated on the
+    /// same old-shape test so it can't re-insert the deleted param.
+    pub fn migrate_fixed_row_scene_loops(def: &mut EffectGraphDef) -> bool {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let result = trace_modifier(&SCENE_LOOP_DESCRIPTOR, &def.nodes);
+        if !result.applied(&SCENE_LOOP_DESCRIPTOR) {
+            return false;
+        }
+        let (Some(&array_doc), Some(&camera_doc)) = (
+            result.doc_ids.get("scene_array"),
+            result.doc_ids.get("loop_camera"),
+        ) else {
+            return false;
+        };
+        // The old-shape gate (also the D7 gate for the exposure migration's
+        // jitter_period re-stamp below).
+        if !def
+            .nodes
+            .iter()
+            .any(|n| n.id == array_doc && n.params.contains_key("count"))
+        {
+            return false;
+        }
+
+        let param_f32 = |doc: u32, name: &str| {
+            def.nodes
+                .iter()
+                .find(|n| n.id == doc)
+                .and_then(|n| n.params.get(name))
+                .and_then(|v| match v {
+                    SerializedParamValue::Float { value } => Some(*value),
+                    _ => None,
+                })
+        };
+        // D7: J absent → 1, S absent → 1. round() is half away from zero;
+        // the shipped coupled writes guaranteed J | S for card-written
+        // loops, hand-desynced graphs take the travel shift.
+        let j = param_f32(array_doc, "jitter_period").unwrap_or(1.0).round().clamp(1.0, 8.0);
+        let s = param_f32(camera_doc, "stride").unwrap_or(1.0).round().clamp(1.0, 8.0);
+        let patterns = (s / j).round().clamp(1.0, 8.0);
+
+        // Node params (and the node's own exposed-param name set, kept in
+        // sync so nothing addresses the dead names).
+        let array = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == array_doc)
+            .expect("traced doc id resolves");
+        array.params.remove("count");
+        array.params.remove("jitter_period");
+        array.params.insert(
+            "pattern_length".to_string(),
+            SerializedParamValue::Float { value: j },
+        );
+        array.exposed_params.remove("count");
+        array.exposed_params.remove("jitter_period");
+        array.exposed_params.insert("pattern_length".to_string());
+
+        let camera = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == camera_doc)
+            .expect("traced doc id resolves");
+        camera.params.remove("stride");
+        camera.params.insert(
+            "patterns_per_loop".to_string(),
+            SerializedParamValue::Float { value: patterns },
+        );
+        camera.params.insert(
+            "pattern_length".to_string(),
+            SerializedParamValue::Float { value: j },
+        );
+        camera.exposed_params.remove("stride");
+        camera.exposed_params.insert("patterns_per_loop".to_string());
+
+        // D2 wire: the window derives from the loop camera. Old graphs
+        // wired loop_camera.out only into the camera path — add the feed
+        // when absent (idempotent).
+        if !def.wires.iter().any(|w| {
+            w.from_node == camera_doc && w.to_node == array_doc && w.to_port == "camera"
+        }) {
+            def.wires.push(wire(camera_doc, "out", array_doc, "camera"));
+        }
+
+        // Exposure rows: retarget in place, ids preserved (ruling above).
+        // Rows bound to the deleted jitter_period drop entirely — no
+        // successor param exists.
+        if let Some(meta) = def.preset_metadata.as_mut() {
+            let mut count_ids: Vec<String> = Vec::new();
+            let mut stride_ids: Vec<String> = Vec::new();
+            let mut dropped_ids: Vec<String> = Vec::new();
+            meta.bindings.retain_mut(|b| {
+                let BindingTarget::Node { node_id, param } = &mut b.target else {
+                    return true;
+                };
+                if node_id.as_str() == "scene_array" && param == "count" {
+                    *param = "pattern_length".to_string();
+                    count_ids.push(b.id.clone());
+                    true
+                } else if node_id.as_str() == "loop_camera" && param == "stride" {
+                    *param = "patterns_per_loop".to_string();
+                    stride_ids.push(b.id.clone());
+                    true
+                } else if node_id.as_str() == "scene_array" && param == "jitter_period" {
+                    // No successor param — the row drops with its binding.
+                    dropped_ids.push(b.id.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            // The dropped rows' specs drop with them; every surviving spec
+            // keeps its id so instance-level references stay valid.
+            meta.params
+                .retain(|p| !dropped_ids.iter().any(|id| id == &p.id));
+            for p in &mut meta.params {
+                if count_ids.iter().any(|id| id == &p.id) {
+                    p.name = "Pattern".to_string();
+                    p.default_value = j;
+                    p.min = p.min.min(1.0);
+                    p.max = p.max.max(8.0);
+                    p.whole_numbers = true;
+                } else if stride_ids.iter().any(|id| id == &p.id) {
+                    p.name = "Stride".to_string();
+                    p.default_value = patterns;
+                    p.min = p.min.min(1.0);
+                    p.max = p.max.max(8.0);
+                    p.whole_numbers = true;
+                }
+            }
+        }
+        true
+    }
+
     /// P4 load migration: an applied loop stamped before the enrichment
     /// carries only the four D6 rows. Re-stamp the loop nodes' curated
     /// exposures through the CURRENT whitelist — the stamper is idempotent
     /// by (node_id, param), so existing rows are untouched and only the new
-    /// P4 rows (Flow/Stride/Sway/…/Spacing/Jitter) land. The Spacing row's
-    /// range is curated against the node's CURRENT cell_size (the auto cell
-    /// for every pre-P4 project — none have Spacing-written cells yet).
+    /// rows (P4 controls, Spacing/Jitter, and the BUG-gsql framing rows)
+    /// land. The framing rows' ranges are curated against the node's
+    /// CURRENT cell_size (the auto cell for every pre-P4 project — none
+    /// have Spacing-written cells yet).
     /// Runs in the same per-layer load loop as `migrate_scene_exposures`.
     /// Returns true when any new row was stamped.
     pub fn migrate_loop_exposure_rows(def: &mut EffectGraphDef) -> bool {
@@ -776,6 +1051,51 @@ pub mod scene_modifier_loop {
             return false;
         }
         let mut changed = false;
+
+        // BUG-jvlq: pre-fix loops carry no jitter_period. Stamp it from the
+        // camera's current stride so the pattern period matches the travel
+        // (variety survives where stride > 1; stride 1 gets uniform jitter —
+        // the wrap-snap fix). Also unblocks the Stride coupling, which skips
+        // a secondary whose def param is absent.
+        //
+        // D7 (ENDLESS_CORRIDOR): gated on the OLD node shape — only a
+        // fixed-row scene_array (still carrying `count`) can be missing
+        // jitter_period. After migrate_fixed_row_scene_loops runs the node
+        // is corridor-shaped and jitter_period is deleted; an ungated block
+        // would re-insert the param and corrupt the migrated graph.
+        let array_is_old_shape = result
+            .doc_ids
+            .get("scene_array")
+            .is_some_and(|&doc| def.nodes.iter().any(|n| n.id == doc && n.params.contains_key("count")));
+        if array_is_old_shape
+            && let (Some(&array_doc), Some(&camera_doc)) =
+            (result.doc_ids.get("scene_array"), result.doc_ids.get("loop_camera"))
+        {
+            let stride = def
+                .nodes
+                .iter()
+                .find(|n| n.id == camera_doc)
+                .and_then(|n| n.params.get("stride"))
+                .and_then(|v| match v {
+                    SerializedParamValue::Float { value } => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or(1.0)
+                .round()
+                .clamp(1.0, 8.0);
+            if let Some(array) = def
+                .nodes
+                .iter_mut()
+                .find(|n| n.id == array_doc && !n.params.contains_key("jitter_period"))
+            {
+                array.params.insert(
+                    "jitter_period".to_string(),
+                    SerializedParamValue::Float { value: stride },
+                );
+                changed = true;
+            }
+        }
+
         for t in SCENE_LOOP_DESCRIPTOR.trace {
             let Some(&doc_id) = result.doc_ids.get(t.node_id) else { continue };
             let Some(node) = def.nodes.iter().find(|n| n.id == doc_id) else { continue };
@@ -791,7 +1111,7 @@ pub mod scene_modifier_loop {
                         _ => None,
                     })
                     .unwrap_or(10.0);
-                curate_spacing_row(&mut exposure, cell);
+                curate_loop_camera_rows(&mut exposure, cell);
             }
             if manifold_core::scene_exposure::stamp_scene_node_exposures(
                 def,
@@ -801,6 +1121,27 @@ pub mod scene_modifier_loop {
             ) {
                 changed = true;
             }
+        }
+        if let Some(meta) = def.preset_metadata.as_mut() {
+            // Repair partially upgraded saves whose retargeted Pattern binding
+            // still carries the retired Copies label. Keep the binding id.
+            for binding in &mut meta.bindings {
+                if matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                    if node_id.as_str() == "scene_array" && param == "pattern_length") {
+                    if binding.label == "Copies" {
+                        binding.label = "Pattern".into();
+                        changed = true;
+                    }
+                    if let Some(spec) = meta.params.iter_mut().find(|spec| spec.id == binding.id && spec.name == "Copies") {
+                        spec.name = "Pattern".into();
+                        changed = true;
+                    }
+                }
+            }
+            changed |= manifold_core::scene_modifier::install_shared_param_bindings(
+                &mut meta.bindings, &shared_loop_params(),
+            );
+            changed |= repair_loop_rotation_specs(meta);
         }
         changed
     }
@@ -977,6 +1318,7 @@ pub mod scene_modifier_fog {
             group_splices: Vec::new(),
             repoints: skeleton.repoints,
             exposures: skeleton.exposures,
+            shared_params: Vec::new(),
             // Gate kinds (D5): the toggle row writes the enabled value
             // atom's `value` param; the multiply IS the bypass wiring, so
             // there are no enable extras beyond the atoms themselves.

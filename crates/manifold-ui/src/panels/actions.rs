@@ -745,12 +745,15 @@ pub enum RootAction {
     /// Currently shows a hardcoded test graph regardless of which effect
     /// triggered it; live data sync lands in a future phase.
     OpenGraphEditor(usize),
-    /// Open the sideways mapping drawer for an effect user-tail binding
-    /// (Author-context card, right-edge chevron). Carries the binding's stable
-    /// `param_id`; the host resolves its current range/scale/offset/invert/curve
-    /// from the edited effect and anchors the drawer beside the row. Editor-only:
+    /// Open the mapping drawer from an Author-context card. Carries its target,
+    /// parameter id, and clicked node so selection and duplicate names cannot
+    /// redirect the drawer or its anchor. Editor-only:
     /// the perform inspector never emits it (the chevron is Author-context).
-    OpenCardMapping(ParamId),
+    OpenCardMapping {
+        target: GraphParamTarget,
+        param_id: ParamId,
+        anchor_node_id: crate::node::NodeId,
+    },
     /// click on an enum (`value_labels`) row's value cell with 3+
     /// labels opens the shared `panels::dropdown` overlay — items = the
     /// row's label set anchored under the cell (`cell_node_id`, same
@@ -851,20 +854,19 @@ pub enum RootAction {
     // ── Graph-editor mapping-sidebar drags (`EffectMappingRange*` /
     // `EffectMappingAffine*`) are FRAME-RESIDENT (UI_FUNNEL_DECOMPOSITION P-I,
     // Fork-2): they stay `RootAction` variants dispatched from `app_render`'s
-    // pending-actions loop, NOT `PanelAction::Scrub`. Reason: the commit reads
-    // the reshaped range/affine back via `watched_reshape`, which needs the
-    // app's graph-editor watch context — folding them onto the wire would force
-    // that context into `DispatchCtx` (a rejected cascade-redesign). Only their
-    // snapshot-stomp guard folded into `ScrubState.active` (a
-    // `ResolvedScrub::Mapping{Range,Affine}`); the wire variants below are
-    // unchanged.
+    // pending-actions loop, NOT `PanelAction::Scrub`. Each event carries the
+    // stable UiGraphTarget captured when the modal opens. The existing
+    // ResolvedScrub::Mapping{Range,Affine} guard owns the baseline and latest
+    // preview used for commit/cancel and snapshot-stomp protection.
     /// Snapshot the binding's `(min, max)` before a range drag begins.
     EffectMappingRangeSnapshot {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
     },
     /// Live `(min, max)` update during a range drag — writes the local
     /// project + content thread but records no undo command.
     EffectMappingRangeChanged {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
         min: f32,
         max: f32,
@@ -872,10 +874,12 @@ pub enum RootAction {
     /// Commit a range drag — records the single `EditUserParamBinding`
     /// undo command spanning the whole drag.
     EffectMappingRangeCommit {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
     },
     /// Set the binding's display label. One-shot edit (one undo entry).
     EffectMappingLabel {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
         label: String,
     },
@@ -883,16 +887,19 @@ pub enum RootAction {
     /// section 2 D5). One-shot edit; `None` clears the row back to unsectioned.
     /// Manifest-only per BOUNDARIES D4 — see `BindingMappingEdit::section`.
     EffectMappingSection {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
         section: Option<String>,
     },
     /// Set the binding's card-slider invert flag. One-shot edit.
     EffectMappingInvert {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
         invert: bool,
     },
     /// Set the binding's response curve. One-shot edit.
     EffectMappingCurve {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
         curve: MacroCurve,
     },
@@ -900,11 +907,13 @@ pub enum RootAction {
     /// scale/offset scrub, so the matching commit records one undo entry
     /// for the whole drag. Mirrors `EffectMappingRangeSnapshot`.
     EffectMappingAffineSnapshot {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
     },
     /// Live scale/offset drag: update the binding's card→consumer affine
     /// remap (`out = value * scale + offset`) without recording undo.
     EffectMappingAffineChanged {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
         scale: f32,
         offset: f32,
@@ -912,6 +921,12 @@ pub enum RootAction {
     /// Scale/offset drag release: record one `EditUserParamBindingCommand`
     /// spanning the whole drag.
     EffectMappingAffineCommit {
+        target: crate::view::UiGraphTarget,
+        binding_id: String,
+    },
+    /// Cancel an unfinished mapping gesture without adding an undo entry.
+    EffectMappingCancel {
+        target: UiGraphTarget,
         binding_id: String,
     },
     /// Jump the graph-editor canvas to the node this card binding is exposed
@@ -919,6 +934,7 @@ pub enum RootAction {
     /// (no undo, no model write); the app resolves the binding's stable
     /// `NodeId` from the snapshot and centres the canvas on it.
     EffectMappingGotoNode {
+        target: crate::view::UiGraphTarget,
         binding_id: String,
     },
     /// User clicked the "open graph editor" affordance on the

@@ -167,12 +167,12 @@
             section: None,
         });
         // Drag the user-tail slider to `translate_value`. With static
-        // count = 3 (amount, zoom, rotate) the user binding is the 4th
-        // manifest entry, keyed by its binding id.
+        // count = 4 (amount, zoom, rotate, mode) the user binding is the
+        // 5th manifest entry, keyed by its binding id.
         assert_eq!(
             fx.params.len(),
-            4,
-            "StylizedFeedback with 3 static + 1 user-tail = 4 param slots",
+            5,
+            "StylizedFeedback with 4 static + 1 user-tail = 5 param slots",
         );
         set_slot(&mut fx, "user.affine.translate_x.1", translate_value);
         fx
@@ -298,8 +298,10 @@
         });
         // Leave the outer slot at its declared default so the test
         // depends on the seed pass, not on the apply-with-divergent-
-        // value path.
-        assert_eq!(fx.params.len(), 4);
+        // value path. StylizedFeedback exposes 5 card params since the
+        // stencil work added `mode` — the invariant is that appending a
+        // user binding does NOT grow the manifest.
+        assert_eq!(fx.params.len(), 5);
         set_slot(&mut fx, "user.affine.translate_x.1", 0.42);
 
         let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)

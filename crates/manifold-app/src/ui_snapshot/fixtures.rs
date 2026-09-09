@@ -1171,25 +1171,41 @@ fn dmxcard_scene() -> SceneData {
     project.timeline.layers = layers;
 
     // MVP-P4 demo payload: the fixture has no LED controller/content thread,
-    // so the preview state is injected as a synthetic completed readback — a
-    // soft per-strip gradient — and reaches the card through the SAME
-    // ContentState → projection path as the live one (no card special-casing).
-    // Readback layout: 8×120 RGBA, row = LED position, col = strip index.
+    // so the preview state is injected as a synthetic completed readback and
+    // reaches the card through the SAME ContentState → projection path as the
+    // live one (no card special-casing). Readback layout: 8×120 RGBA, row =
+    // LED position, col = strip index. The pattern mimics LED Strip ID (one
+    // hue per strip column) so the band reads as the rig, plus asymmetric
+    // sentinels — white (LED 100, strip 6), red (LED 6, strip 2), blue (LED
+    // 113, strip 5) — placed away from the rounded corners (the corner carve
+    // would eat them) so the PNG pins the orientation: LED 0 at the bottom,
+    // strip 0 at the left.
     let mut pixels = vec![0u8; 8 * 120 * 4];
+    let mut set = |pixels: &mut [u8], led: usize, strip: usize, rgb: [u8; 3]| {
+        let o = (led * 8 + strip) * 4;
+        pixels[o] = rgb[0];
+        pixels[o + 1] = rgb[1];
+        pixels[o + 2] = rgb[2];
+        pixels[o + 3] = 255;
+    };
+    // Strip-ID column hues (hue k*45, full saturation) at 40% brightness —
+    // the same plateau math as the LED Strip ID preset's CPU model.
+    fn hsv2rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+        let k = [1.0f32, 2.0 / 3.0, 1.0 / 3.0];
+        k.map(|ki| {
+            let p = ((h + ki).fract() * 6.0 - 3.0).abs();
+            (v * (1.0 + s * ((p - 1.0).clamp(0.0, 1.0) - 1.0)) * 255.0) as u8
+        })
+    }
     for strip in 0..8usize {
-        // Alternate bright/dim rows so the eight strips read as distinct
-        // bands, warm-shifted per row — unmistakable proof of the transpose
-        // in the PNG.
-        let row_gain = if strip % 2 == 0 { 1.0f32 } else { 0.35 };
+        let tint = hsv2rgb(strip as f32 * 45.0 / 360.0, 1.0, 0.4);
         for led in 0..120usize {
-            let o = (led * 8 + strip) * 4;
-            let sweep = led as f32 / 119.0; // 0..1 left→right
-            pixels[o] = ((40.0 + strip as f32 * 24.0) * row_gain) as u8; // r: rises per strip row
-            pixels[o + 1] = (sweep * 200.0 * row_gain) as u8; // g: sweeps left→right
-            pixels[o + 2] = ((1.0 - sweep) * 235.0 * row_gain + 20.0) as u8; // b: falls along the strip
-            pixels[o + 3] = 255;
+            set(&mut pixels, led, strip, tint);
         }
     }
+    set(&mut pixels, 100, 6, [255, 255, 255]);
+    set(&mut pixels, 6, 2, [255, 0, 0]);
+    set(&mut pixels, 113, 5, [0, 0, 255]);
     let content = ContentState {
         current_beat: Beats(4.0),
         is_playing: false,

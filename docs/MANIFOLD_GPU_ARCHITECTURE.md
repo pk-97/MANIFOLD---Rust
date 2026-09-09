@@ -45,6 +45,42 @@ manifold-gpu/
 
 **Dependency policy:** manifold-gpu pulls only `objc2`, `block2`, `objc2-foundation`, `objc2-metal`, `objc2-metal-fx`, `objc2-metal-performance-shaders`. No `metal` crate, no `objc 0.2`, no `block 0.1`, no `core-graphics-types`. Raw-window-handle is the only non-objc2 macOS dep (winit interop).
 
+## Failure diagnostics
+
+RT à-trous passes bind parameters through inline bytes. Each encoded dispatch
+owns its step/settings snapshot; a later pass must not overwrite parameters
+that an earlier GPU dispatch has yet to read. The existing buffer argument is
+retained for caller compatibility, but these two passes no longer upload it.
+
+Command buffers request Metal encoder execution status. On failure the session
+log records encoder labels, error states, and dispatch signposts when Metal
+supplies them. RT trace and the `node.render_scene RT*` postprocess stages
+(upsample, à-trous, and accumulate) each use a separate labelled compute
+encoder, so an RT-A3a trace can be distinguished from a later stage. This
+changes encoder boundaries, not submission order, and the labels identify
+completed, affected, or pending encoders rather than guaranteeing the exact shader fault or its earlier
+resource/synchronization cause. Blocking production warmup uses
+`try_commit_and_wait_completed` and propagates GPU failure instead of treating
+a logged error as successful work.
+
+### Incident capture
+
+`MANIFOLD_GPU_DIAGNOSTICS=1` enables command-buffer correlation IDs,
+creation/scheduling/completion events, available GPU durations, allocation
+footprints, RT dispatch sizes, and bound-buffer identities/sizes. This is an
+opt-in diagnostic mode: logging and validation overhead may change timing.
+Ray validation covers primary, shadow/sun, AO, GI, emissive-shadow and reflection
+queries. Invalid inputs are recorded and replaced with a finite short ray only
+in this mode. Eight preallocated slots retain their first invalid inputs;
+exclusive ownership lasts through completion readback. Failed commands and slot
+exhaustion log validation as unavailable. Positive infinite maximum distance is
+valid. Geometry logs check flat vertex-buffer extents; indexed hit bounds and
+full resource lifetime correctness remain unverified.
+Fatal GPU reports embed a bounded session-log tail; the adjacent full session
+is the authoritative timeline. Buffer states and missing GPU timestamps are
+reported as evidence, not inferred causes. Resource metadata does not prove
+lifetime safety, and driver-internal traversal is not observable here.
+
 ## Phase Roadmap
 
 | Phase                  | What                                                                                             | Status          |

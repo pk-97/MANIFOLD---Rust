@@ -139,6 +139,9 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
                     emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                     emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
@@ -230,7 +233,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
 
     let mut encoder = device.create_encoder("rt-t2a-shadow-proof");
@@ -254,11 +257,13 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &alpha_textures,
         &depth_tex,
         &out_sv,

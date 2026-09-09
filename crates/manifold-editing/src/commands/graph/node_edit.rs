@@ -697,6 +697,13 @@ pub struct SetGraphNodeParamCommand {
     /// manifest id written and the value it held before. Undo restores it.
     /// `None` = ordinary def-node write.
     card_redirect: Option<(String, f32)>,
+    /// Deliberate def write to a card-owned param: the caller dual-writes
+    /// the owning card slot itself in the same undo unit (a coupled-row
+    /// secondary — the slot carries the live value, the def mirror keeps
+    /// the durable record the card-path contract reads). Skips the BUG-1l7f
+    /// redirect and its card-owned-write warning, which exist to catch
+    /// LONE def writes that the render would stomp — not this.
+    force_def_write: bool,
 }
 
 impl SetGraphNodeParamCommand {
@@ -716,7 +723,16 @@ impl SetGraphNodeParamCommand {
             scope_path: Vec::new(),
             previous_value: None,
             card_redirect: None,
+            force_def_write: false,
         }
+    }
+
+    /// Deliberate def write to a card-owned param — see the field. Caller
+    /// must write the owning card slot in the same undo unit, or the render
+    /// never sees the value (the card binding shadows the def param).
+    pub fn with_forced_def_write(mut self) -> Self {
+        self.force_def_write = true;
+        self
     }
 
     /// Target a nested group level instead of the document root.
@@ -798,6 +814,7 @@ impl Command for SetGraphNodeParamCommand {
         // to the card value; never dual-write. Root-level edits only —
         // binding metadata addresses root node ids.
         if self.scope_path.is_empty()
+            && !self.force_def_write
             && let Some((outer_id, previous)) = self.write_through_card_slot(project)
         {
             self.card_redirect = Some((outer_id, previous));
@@ -817,6 +834,7 @@ impl Command for SetGraphNodeParamCommand {
         let captured: Option<Option<SerializedParamValue>> =
             with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
                 if scope.is_empty()
+                    && !self.force_def_write
                     && let Some(warning) = card_owned_write_warning(def, node_id, &param_name)
                 {
                     eprintln!("{warning}");

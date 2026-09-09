@@ -188,6 +188,12 @@ runtime cost of an applied modifier is the atoms it already mints).
   enabled value atom, Density a slider on the amount atom. Both families:
   toggle = one undoable param write, no graph rebuild, survives save/load as
   ordinary params.
+  Scene Setup retains the downstream lens, DoF, and motion-blur controls
+  with either switch selection. A custom camera producer does not make its
+  shared lens custom: trace and expose that lens independently. While a
+  modifier owns movement, its movement controls remain on its inspector
+  card; selecting the shared Camera section must not expose the inactive
+  original camera's movement rows merely because they share a section name.
   **Consequences, stated honestly:** this deliberately DIVERGES from 2D
   effect enable, which is structural elision (`ToggleEffectCommand` → topology
   hash → rebuild; a disabled effect never enters the plan). A scene-graph

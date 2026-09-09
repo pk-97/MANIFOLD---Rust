@@ -950,16 +950,16 @@ pub(crate) mod cpu_reference {
         ]
     }
 
-    /// Composite near over far: `out = mix(far, near.rgb, near.a)`.
+    /// Near RGB already includes coverage; composite using premultiplied over.
     pub fn composite(far: &Plane4<'_>, near: &Plane4<'_>, cx: i32, cy: i32) -> [f32; 4] {
         let uv = [(cx as f32 + 0.5) / far.w as f32, (cy as f32 + 0.5) / far.h as f32];
         let far_sample = far.sample(uv[0], uv[1]);
         let near_sample = near.sample(uv[0], uv[1]);
         let a = near_sample[3].clamp(0.0, 1.0);
         [
-            far_sample[0] * (1.0 - a) + near_sample[0] * a,
-            far_sample[1] * (1.0 - a) + near_sample[1] * a,
-            far_sample[2] * (1.0 - a) + near_sample[2] * a,
+            far_sample[0] * (1.0 - a) + near_sample[0],
+            far_sample[1] * (1.0 - a) + near_sample[1],
+            far_sample[2] * (1.0 - a) + near_sample[2],
             far_sample[3],
         ]
     }
@@ -1562,6 +1562,34 @@ mod gpu_tests {
     }
 
 
+    /// A flat grey surface must not acquire a dark edge as its near-field
+    /// blur radius crosses the gather cutoff (the F-stop seam in BUG-lpfd).
+    #[test]
+    fn near_blur_cutoff_preserves_constant_colour() {
+        let device = crate::test_device();
+        let (w, h) = (64u32, 16u32);
+        let color: Vec<f16> = (0..w * h).flat_map(|_| [0.5, 0.5, 0.5, 1.0].map(f16::from_f32)).collect();
+        let coc: Vec<f16> = (0..w * h).flat_map(|i| {
+            let radius = (i % w) as f32 / (w - 1) as f32 * 0.03;
+            [radius, 1.0, radius, 1.0].map(f16::from_f32)
+        }).collect();
+        let color_tex = upload_rgba16f(&device, w, h, "cutoff-flat-grey", &color);
+        let coc_tex = upload_rgba16f(&device, w, h, "cutoff-near-ramp", &coc);
+        let sampler = mip_linear_sampler(&device);
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<BokehGather>().unwrap();
+        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "cutoff-proof");
+        let got = dispatch(
+            &device, &pipeline, &downsample_pipeline(&device), &dilation_pipeline(&device),
+            &extract_pipeline(&device), &composite_pipeline(&device), &sampler,
+            &color_tex, &coc_tex, w, h, 32.0,
+        );
+        let min = got.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        let max = got.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+        assert!((min - 0.5).abs() < 0.001 && (max - 0.5).abs() < 0.001,
+            "constant grey changed across near blur cutoff: {min}..{max}");
+        assert!(got.iter().all(|p| p[3] == 1.0));
+    }
+
     /// **I2**: a uniform-zero CoC field is an exact pass-through of `in` —
     /// mirrors `node.variable_blur`'s own in-focus (`center_coc < 0.005`)
     /// early-out and `coc_from_depth.rs`'s pinhole-chain invariant. Runs
@@ -2039,4 +2067,3 @@ mod gpu_tests {
         );
     }
 }
-

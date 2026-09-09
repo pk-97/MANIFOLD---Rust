@@ -373,6 +373,7 @@ impl GraphCanvas {
     #[allow(clippy::too_many_arguments)]
     pub fn open_mapping_popover(
         &mut self,
+        target: crate::view::UiGraphTarget,
         viewport: Rect,
         node_id: u32,
         pi: usize,
@@ -385,6 +386,7 @@ impl GraphCanvas {
         scale: f32,
         offset: f32,
         range: Option<(f32, f32)>,
+        is_angle: bool,
         section: Option<String>,
     ) {
         let Some(anchor) = self.param_row_rect(viewport, node_id, pi) else {
@@ -398,7 +400,7 @@ impl GraphCanvas {
             (viewport.h - HEADER_HEIGHT).max(0.0),
         );
         self.mapping_popover.open(
-            binding_id, label, min, max, invert, curve, scale, offset, range, section, anchor,
+            target, binding_id, label, min, max, invert, curve, scale, offset, range, is_angle, section, anchor,
             clip,
         );
     }
@@ -436,6 +438,10 @@ impl GraphCanvas {
     /// left-click is routed to the popover first.
     pub fn popover_open(&self) -> bool {
         self.mapping_popover.is_open()
+    }
+
+    pub fn close_mapping_popover(&mut self) {
+        self.mapping_popover.close();
     }
 
     /// `true` while a popover value field is being typed into — the host routes

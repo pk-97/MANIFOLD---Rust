@@ -12,6 +12,7 @@ use objc2::{Encoding, RefEncode};
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
+    MTLCommandBufferDescriptor, MTLCommandBufferErrorOption,
     MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLHeap, MTLHeapDescriptor,
     MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource,
     MTLResourceOptions, MTLSamplerDescriptor, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
@@ -82,7 +83,19 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
     )
 }
 
-/// Pre-compiled compute clear pipelines for all storage-capable texture formats.
+fn depth_to_float_wgsl() -> &'static str {
+    r#"@group(0) @binding(0) var source_tex: texture_depth_2d;
+@group(0) @binding(1) var output_tex: texture_storage_2d<r32float, write>;
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(output_tex);
+    if id.x >= dims.x || id.y >= dims.y { return; }
+    let depth = textureLoad(source_tex, vec2<i32>(id.xy), 0);
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(depth, 0.0, 0.0, 1.0));
+}"#
+}
+
+/// Pre-compiled compute clear and depth-copy pipelines for texture utilities.
 pub(super) struct ClearPipelines {
     rgba16float: GpuComputePipeline,
     rgba8unorm: GpuComputePipeline,
@@ -91,6 +104,7 @@ pub(super) struct ClearPipelines {
     r32float: GpuComputePipeline,
     rg32float: GpuComputePipeline,
     r32uint: GpuComputePipeline,
+    pub(super) depth_to_float: GpuComputePipeline,
 }
 
 impl ClearPipelines {
@@ -407,6 +421,7 @@ impl GpuDevice {
 
     /// Upload pixel data to a texture synchronously (CPU → GPU).
     pub fn upload_texture(&self, texture: &GpuTexture, data: &[u8]) {
+        texture.assert_cpu_uploadable();
         use objc2_metal::{MTLOrigin, MTLRegion, MTLSize};
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = texture.width as u64 * bpp as u64;
@@ -1140,6 +1155,11 @@ impl GpuDevice {
                     let wgsl = clear_texture_uint_wgsl("r32uint");
                     self.create_compute_pipeline(&wgsl, "cs_main", "Clear r32uint")
                 },
+                depth_to_float: self.create_compute_pipeline(
+                    depth_to_float_wgsl(),
+                    "cs_main",
+                    "Depth to Float",
+                ),
             }
         })
     }
@@ -1148,11 +1168,19 @@ impl GpuDevice {
     /// [`GpuEncoder::commit_and_continue`] to keep encoding across submits
     /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
     pub(crate) fn new_command_buffer(&self, label: &str) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
-        let cmd_buf = self
-            .queue
-            .commandBuffer()
+        let descriptor = unsafe { MTLCommandBufferDescriptor::new() };
+        unsafe {
+            descriptor.setRetainedReferences(true);
+            descriptor.setErrorOptions(MTLCommandBufferErrorOption::EncoderExecutionStatus);
+        }
+        let cmd_buf = unsafe { self.queue.commandBufferWithDescriptor(&descriptor) }
             .expect("Failed to acquire command buffer");
         unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
+        if super::gpu_fault::diagnostics_enabled() {
+            log::info!("[GPU-DIAG] device={:?} queue={:p} allocated_bytes={} buffer={label}",
+                self.raw_device().name(), &*self.queue, self.raw_device().currentAllocatedSize());
+            super::gpu_fault::trace_buffer(&cmd_buf);
+        }
         cmd_buf
     }
 

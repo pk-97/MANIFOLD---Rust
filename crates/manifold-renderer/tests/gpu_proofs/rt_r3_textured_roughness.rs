@@ -161,6 +161,9 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
         RtObjectGeometry {
             vertex_buffer: &emitter_vertex_buffer,
@@ -181,6 +184,9 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
     ];
 
@@ -288,7 +294,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, floor_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
         GiMaterial::new([0.5, 0.5, 0.5], EMITTER_EMISSIVE, [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
     ];
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
 
     let mut encoder = device.create_encoder("rt-r3-textured-roughness-proof");
@@ -304,11 +310,13 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &material_textures,
         &depth_tex,
         &out_sv,

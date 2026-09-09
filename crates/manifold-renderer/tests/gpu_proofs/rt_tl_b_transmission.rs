@@ -236,7 +236,7 @@ fn run_tl_fixture(
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
 
     let mut encoder = device.create_encoder("rt-tlb-transmission-proof");
     let out_sv2_dummy = device.create_texture(&GpuTextureDesc {
@@ -261,11 +261,13 @@ fn run_tl_fixture(
     });
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &final_alpha_textures,
         &depth_tex,
         &out_sv,
@@ -324,6 +326,9 @@ fn single_translucent_occluder_attenuates_half() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
@@ -370,6 +375,9 @@ fn factor_zero_control_stays_fully_shadowed() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
@@ -419,6 +427,9 @@ fn stacked_petals_compound_to_quarter() {
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
         RtObjectGeometry {
             vertex_buffer: &vertex_buffer2,
@@ -439,6 +450,9 @@ fn stacked_petals_compound_to_quarter() {
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         },
     ];
     let gi_materials = [
@@ -491,6 +505,9 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     // Albedo ignored when texture supplies albedo at hit — still passed through
     // so the flat-albedo fallback (no-texture branch in walk_with_transmission) is
@@ -541,6 +558,9 @@ fn albedo_tint_folds_to_luma() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     // factor 0.6, albedo (1.0, 0.1, 0.1) → tint = (0.6, 0.06, 0.06)
     // luma = 0.2126*0.6 + 0.7152*0.06 + 0.0722*0.06 = 0.174804

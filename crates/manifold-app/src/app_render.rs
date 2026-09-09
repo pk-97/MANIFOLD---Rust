@@ -15,7 +15,6 @@ use crate::app::Application;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use manifold_editing::command::Command;
-use manifold_editing::commands::effects::BindingMappingEdit;
 
 pub(crate) use crate::frame::present::format_scope_readout;
 pub(crate) use crate::frame::present::fmt_table_cell_seed;
@@ -905,8 +904,7 @@ impl Application {
 
         // The editor mapping popover (canvas on-node rows) emits the same
         // `EffectMapping*` actions the canvas popover does (range / scale / offset
-        // / invert / curve), keyed by binding id and dispatched against the
-        // editor's `watched_graph_target` in the inline arms below.
+        // / invert / curve), carrying their captured target and binding id.
         actions.extend(self.editor_mapping_popover.drain_actions());
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
@@ -1036,6 +1034,11 @@ impl Application {
             .unwrap_or_default();
 
         for (action_idx, action) in actions.iter().enumerate().take(editor_card_seg_start) {
+            if let PanelAction::Root(action) = action
+                && self.dispatch_mapping_action(action)
+            {
+                continue;
+            }
             // Intercept actions that need Application-level access
             match action {
                 PanelAction::Root(RootAction::CopyOscAddress(addr)) => {
@@ -1200,229 +1203,6 @@ impl Application {
                 // ── Graph-editor mutations moved to the `graph_edits` loop
                 // below (Phase 4.3) — they're `GraphEditCommand` now, not
                 // `PanelAction`. ──
-                PanelAction::Root(RootAction::EffectMappingRangeSnapshot { binding_id }) => {
-                    // Pre-drag (min, max) as the undo baseline AND the
-                    // snapshot-stomp guard, folded into the one
-                    // `ScrubState.active` slot (P-I). Frame-resident: dispatched
-                    // here, not on the `PanelAction::Scrub` wire, because the
-                    // commit reads the range back via `watched_reshape` (needs the
-                    // editor context). Store-aware / kind-aware.
-                    let snap = self.watched_reshape(binding_id).map(|(mn, mx, _, _)| (mn, mx));
-                    if let (Some(t), Some((mn, mx))) = (self.mapping_target(), snap) {
-                        self.scrub.check_single_active_on_begin("mapping-range");
-                        self.scrub.active =
-                            Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
-                                target: t,
-                                param_id: binding_id.to_string(),
-                                baseline: (mn, mx),
-                                live: (mn, mx),
-                            });
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingRangeChanged {
-                    binding_id,
-                    min,
-                    max,
-                }) => {
-                    // Track the in-flight range on the guard so a snapshot
-                    // stomp restores the latest dragged value, not the pre-drag
-                    // one (BUG-262).
-                    if let Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
-                        live, ..
-                    }) = &mut self.scrub.active
-                    {
-                        *live = (*min, *max);
-                    }
-                    if let Some(t) = self.mapping_target() {
-                        self.preview_mapping(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                min: Some(*min),
-                                max: Some(*max),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingRangeCommit { binding_id }) => {
-                    // Take the baseline out of `active` only if it holds THIS
-                    // gesture's range guard (leave any other live gesture alone).
-                    let baseline = if let Some(
-                        crate::ui_bridge::scrub::ResolvedScrub::MappingRange { baseline, .. },
-                    ) = &self.scrub.active
-                    {
-                        let b = *baseline;
-                        self.scrub.active = None;
-                        Some(b)
-                    } else {
-                        None
-                    };
-                    if let (Some((old_min, old_max)), Some(t)) = (baseline, self.mapping_target())
-                        && let Some((new_min, new_max, _, _)) = self.watched_reshape(binding_id)
-                        && ((old_min - new_min).abs() > f32::EPSILON
-                            || (old_max - new_max).abs() > f32::EPSILON)
-                    {
-                        self.commit_mapping_with_reverse(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                min: Some(new_min),
-                                max: Some(new_max),
-                                ..Default::default()
-                            },
-                            BindingMappingEdit {
-                                min: Some(old_min),
-                                max: Some(old_max),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingLabel { binding_id, label }) => {
-                    if let Some(t) = self.mapping_target() {
-                        self.commit_mapping(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                label: Some(label.clone()),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingSection { binding_id, section }) => {
-                    if let Some(t) = self.mapping_target() {
-                        self.commit_mapping(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                section: Some(section.clone()),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingInvert { binding_id, invert }) => {
-                    if let Some(t) = self.mapping_target() {
-                        self.commit_mapping(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                invert: Some(*invert),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingCurve { binding_id, curve }) => {
-                    if let Some(t) = self.mapping_target() {
-                        self.commit_mapping(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                curve: Some(crate::ui_translate::macro_curve_to_core(*curve)),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingAffineSnapshot { binding_id }) => {
-                    // Pre-drag (scale, offset) as the undo baseline + stomp guard,
-                    // folded into `ScrubState.active` (P-I; frame-resident, same
-                    // as the range gesture above).
-                    let snap = self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
-                    if let (Some(t), Some((sc, of))) = (self.mapping_target(), snap) {
-                        self.scrub.check_single_active_on_begin("mapping-affine");
-                        self.scrub.active =
-                            Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
-                                target: t,
-                                param_id: binding_id.to_string(),
-                                baseline: (sc, of),
-                                live: (sc, of),
-                            });
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingAffineChanged {
-                    binding_id,
-                    scale,
-                    offset,
-                }) => {
-                    if let Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
-                        live, ..
-                    }) = &mut self.scrub.active
-                    {
-                        *live = (*scale, *offset);
-                    }
-                    if let Some(t) = self.mapping_target() {
-                        self.preview_mapping(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                scale: Some(*scale),
-                                offset: Some(*offset),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingAffineCommit { binding_id }) => {
-                    let baseline = if let Some(
-                        crate::ui_bridge::scrub::ResolvedScrub::MappingAffine { baseline, .. },
-                    ) = &self.scrub.active
-                    {
-                        let b = *baseline;
-                        self.scrub.active = None;
-                        Some(b)
-                    } else {
-                        None
-                    };
-                    if let (Some((old_scale, old_offset)), Some(t)) = (baseline, self.mapping_target())
-                        && let Some((_, _, new_scale, new_offset)) =
-                            self.watched_reshape(binding_id)
-                        && ((old_scale - new_scale).abs() > f32::EPSILON
-                            || (old_offset - new_offset).abs() > f32::EPSILON)
-                    {
-                        self.commit_mapping_with_reverse(
-                            &t,
-                            binding_id,
-                            BindingMappingEdit {
-                                scale: Some(new_scale),
-                                offset: Some(new_offset),
-                                ..Default::default()
-                            },
-                            BindingMappingEdit {
-                                scale: Some(old_scale),
-                                offset: Some(old_offset),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::EffectMappingGotoNode { binding_id }) => {
-                    // Read-only navigation: resolve the binding's stable NodeId
-                    // from the live snapshot (outer routing → node handle → id)
-                    // and centre the editor canvas on it. Same path as the
-                    // card-label jump-to-node, triggered from the mapping drawer.
-                    if let Some(ui_snap) = self.editor_ui_snapshot()
-                        && let Some(node_id) =
-                            crate::graph_canvas::resolve_card_param_node_id(&ui_snap, binding_id)
-                        && let Some(canvas) = self.graph_canvas.as_mut()
-                    {
-                        canvas.focus_node(&ui_snap, &node_id);
-                    }
-                    continue;
-                }
                 PanelAction::Project(ProjectAction::EnterPerformMode) => {
                     self.perform.pending_enter = true;
                     continue;
@@ -1955,23 +1735,6 @@ impl Application {
                 manifold_core::effect_graph_def::EffectGraphDef,
                 crate::text_input::SavePresetDestination,
             )> = None;
-            // BUG-121 root fix: the mapping-drawer chevron (Author-context
-            // cards only, now that the editor's inspector carries
-            // `CardContext::Author`) resolves to `OpenCardMapping`, but
-            // nothing ever opened the popover it names — `ui_bridge::
-            // dispatch` just marks it handled as a no-op. Resolve the
-            // watched target's current reshape here, before `ed` borrows
-            // `self.graph_editor` mutably (`watched_full_reshape` needs
-            // `&self`); the loop below anchors it off the clicked card's
-            // own chevron rect and actually opens the popover.
-            let pending_mapping_open = actions[editor_card_seg_start..]
-                .iter()
-                .find_map(|a| match a {
-                    PanelAction::Root(RootAction::OpenCardMapping(pid)) => {
-                        Some((pid.to_string(), self.watched_full_reshape(pid.as_ref())))
-                    }
-                    _ => None,
-                });
             let (screen_w, screen_h) = self
                 .graph_editor_window_id
                 .and_then(|wid| self.window_registry.get(&wid))
@@ -1981,45 +1744,18 @@ impl Application {
                     (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
                 })
                 .unwrap_or((1280.0, 720.0));
+            for action in &actions[editor_card_seg_start..] {
+                if let PanelAction::Root(RootAction::OpenCardMapping { target, param_id, anchor_node_id }) = action {
+                    self.open_card_mapping(target, param_id.as_ref(), *anchor_node_id,
+                        manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));
+                }
+            }
             if let Some(ed) = self.graph_editor.as_mut() {
                 let content_tx = self.content_tx.as_ref().unwrap();
                 for action in &actions[editor_card_seg_start..] {
                     match action {
                         PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => retarget_effect = Some(*ei),
                         PanelAction::Params(ParamsAction::GenCardClicked) => retarget_generator = true,
-                        PanelAction::Root(RootAction::OpenCardMapping(param_id)) => {
-                            if let Some((_, Some((label, min, max, invert, curve, scale, offset)))) =
-                                pending_mapping_open
-                                    .as_ref()
-                                    .filter(|(pid, _)| pid == param_id.as_ref())
-                                && let Some(anchor) = ed
-                                    .ui_root
-                                    .inspector
-                                    .mapping_chevron_rect(&ed.ui_root.tree, param_id.as_ref())
-                            {
-                                self.editor_mapping_popover.open(
-                                    param_id.to_string(),
-                                    label.clone(),
-                                    *min,
-                                    *max,
-                                    *invert,
-                                    crate::ui_translate::macro_curve_to_ui(*curve),
-                                    *scale,
-                                    *offset,
-                                    None,
-                                    None,
-                                    manifold_ui::graph_canvas::Rect::new(
-                                        anchor.x,
-                                        anchor.y,
-                                        anchor.width,
-                                        anchor.height,
-                                    ),
-                                    manifold_ui::graph_canvas::Rect::new(
-                                        0.0, 0.0, screen_w, screen_h,
-                                    ),
-                                );
-                            }
-                        }
                         _ => {}
                     }
                     let mut dctx = crate::ui_bridge::DispatchCtx {

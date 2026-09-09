@@ -29,6 +29,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+use manifold_gpu::raytrace::{EmissiveAliasEntry, EmissiveTriangleGpu};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::{
     Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
@@ -41,6 +42,16 @@ use manifold_renderer::render_target::RenderTarget;
 /// (multiple of the 16×16 workgroup size).
 pub const PARITY_WIDTH: u32 = 128;
 pub const PARITY_HEIGHT: u32 = 128;
+
+/// Allocate a valid empty emissive-table argument for RT fixtures. Metal
+/// validates the declared argument length even when the table has no entries.
+pub fn dummy_emissive_buffer(device: &GpuDevice) -> manifold_gpu::GpuBuffer {
+    let size = std::mem::size_of::<EmissiveTriangleGpu>()
+        .max(std::mem::size_of::<EmissiveAliasEntry>()) as u64;
+    let buffer = device.create_buffer_shared(size);
+    buffer.zero_fill();
+    buffer
+}
 
 /// Bytes per pixel for the canonical format (`Rgba16Float`).
 const BYTES_PER_PIXEL: u32 = 8;

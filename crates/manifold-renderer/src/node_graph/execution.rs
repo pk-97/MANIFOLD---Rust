@@ -247,6 +247,14 @@ pub struct Executor {
     /// numbers is always sound. See `rebuild_epoch` for the cross-executor-
     /// lifetime hazard this alone does not cover.
     slot_generations: Vec<u64>,
+    /// Per-physical-slot content-availability flag, indexed by `Slot.0`:
+    /// `true` = the producing step declared its outputs pending this frame
+    /// (`ctx.mark_outputs_pending()` — async content in flight, bytes are
+    /// allocation not content). Rewritten from the step's latest evaluate
+    /// each time it runs (a skipped step keeps its last declaration), so
+    /// stopping the declaration returns the slot to ready. Read side:
+    /// [`crate::node_graph::bindings::NodeInputs::slot_content_ready`].
+    slot_pending: Vec<bool>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — per-step
     /// "last frame's param-driven alias" state: `(aliased-from resource,
     /// destination slot, in-resource's write generation at alias time)`,
@@ -423,6 +431,7 @@ impl Executor {
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
             node_declared_unchanged: Vec::new(),
+            slot_pending: Vec::new(),
             slot_generations: Vec::new(),
             alias_propagation_state: Vec::new(),
             rebuild_epoch: NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -1205,6 +1214,7 @@ impl Executor {
                     inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
                 };
                 let mut performed_alias = false;
+                let mut copied_passthrough = false;
                 if let Some((in_port, out_port)) = skip_alias {
                     let in_slot = self
                         .input_scratch
@@ -1224,23 +1234,41 @@ impl Executor {
                     // performs the real resample. The data-skip path keeps its
                     // established declaration-only contract (draw atoms
                     // composite onto their source at identical shape).
-                    let compatible = || {
+                    let compatible = |i: Slot, o: Slot| {
                         if data_skip {
                             return true;
                         }
                         let res_of = |list: &[(&'static str, ResourceId)], port: &str| {
                             list.iter().find(|&&(n, _)| n == port).map(|&(_, r)| r)
                         };
-                        let (Some(r_in), Some(r_out)) =
-                            (res_of(&step.inputs, in_port), res_of(&step.outputs, out_port))
-                        else {
+                        let (Some(r_in), Some(r_out)) = (
+                            res_of(&step.inputs, in_port),
+                            res_of(&step.outputs, out_port),
+                        ) else {
                             return false;
                         };
-                        resolve_dims(plan, r_in, canvas_dims) == resolve_dims(plan, r_out, canvas_dims)
-                            && plan.resource_format(r_in) == plan.resource_format(r_out)
+                        let plan_compatible = resolve_dims(plan, r_in, canvas_dims)
+                            == resolve_dims(plan, r_out, canvas_dims)
+                            && plan.resource_format(r_in) == plan.resource_format(r_out);
+                        // The plan's format declaration can be absent on an
+                        // inherited/default edge while the allocated textures
+                        // still have the same concrete format. Prefer the
+                        // bound textures when both are exposed by the backend.
+                        match (self.backend.texture_2d(i), self.backend.texture_2d(o)) {
+                            (Some(src), Some(dst)) => {
+                                src.width == dst.width
+                                    && src.height == dst.height
+                                    && src.format == dst.format
+                            }
+                            _ => plan_compatible,
+                        }
+                    };
+                    let compatible = match (in_slot, out_slot) {
+                        (Some(i), Some(o)) => compatible(i, o),
+                        _ => false,
                     };
                     if let (Some(i), Some(o)) = (in_slot, out_slot)
-                        && compatible()
+                        && compatible
                         && self.backend.alias_2d(i, o)
                     {
                         performed_alias = true;
@@ -1280,17 +1308,33 @@ impl Executor {
                                 .iter()
                                 .find(|&&(n, _)| n == in_port)
                                 .map(|&(_, r)| r);
-                            let in_generation =
-                                self.slot_generations.get(i.0 as usize).copied().unwrap_or(0);
+                            let in_generation = self
+                                .slot_generations
+                                .get(i.0 as usize)
+                                .copied()
+                                .unwrap_or(0);
                             let prev = self.alias_propagation_state[idx];
-                            self.alias_propagation_state[idx] =
-                                r_in.map(|r| (r, o, in_generation));
+                            self.alias_propagation_state[idx] = r_in.map(|r| (r, o, in_generation));
                             if let Some(r) = r_in
                                 && prev == Some((r, o, in_generation))
                             {
                                 self.node_declared_unchanged[idx] = true;
                             }
                         }
+                    }
+                    if !performed_alias
+                        && !data_skip
+                        && let (Some(i), Some(o), Some(g)) = (in_slot, out_slot, gpu.as_deref_mut())
+                        && compatible
+                        && let (Some(src), Some(dst)) =
+                            (self.backend.texture_2d(i), self.backend.texture_2d(o))
+                    {
+                        // A real backend can refuse aliasing when the
+                        // destination is borrowed by the host. Preserve the
+                        // no-op contract with a same-format blit, while
+                        // retaining evaluation for genuine resampling cases.
+                        g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                        copied_passthrough = true;
                     }
                 }
                 if !performed_alias || data_skip {
@@ -1300,7 +1344,7 @@ impl Executor {
                     self.alias_propagation_state[idx] = None;
                 }
 
-                if !performed_alias {
+                if !performed_alias && !copied_passthrough {
                     self.scalar_write_scratch.clear();
                     self.camera_write_scratch.clear();
                     self.light_write_scratch.clear();
@@ -1311,7 +1355,8 @@ impl Executor {
                     self.error_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
-                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
+                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                            .with_pending(&self.slot_pending);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -1384,6 +1429,21 @@ impl Executor {
                         // frame. `idx` indexes `plan.steps()`, which
                         // `node_declared_unchanged` is sized to match.
                         self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
+                        // Content availability: rewrite this step's output
+                        // slots from its latest declaration (default ready).
+                        // A slot's producer is the single writer of its
+                        // flag, so a stale `true` can only survive while
+                        // the producer itself is skipped.
+                        let declared_pending = ctx.outputs_pending;
+                        for &(_, res) in &step.outputs {
+                            if let Some(slot) = self.backend.slot_for(res) {
+                                let slot_idx = slot.0 as usize;
+                                if self.slot_pending.len() <= slot_idx {
+                                    self.slot_pending.resize(slot_idx + 1, false);
+                                }
+                                self.slot_pending[slot_idx] = declared_pending;
+                            }
+                        }
                     }
                     // Drain scalar writes back into the backend so
                     // downstream readers in the same frame see them via
@@ -1692,7 +1752,8 @@ impl Executor {
                 self.object_write_scratch.clear();
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
-                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
+                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                    .with_pending(&self.slot_pending);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,
@@ -3341,6 +3402,112 @@ mod tests {
         );
     }
 
+    /// A Texture2D producer whose pending declaration is driven by a
+    /// shared flag — stands in for `gltf_mesh_source` mid-parse.
+    struct PendingSourceNode {
+        type_id: EffectNodeType,
+        declare_pending: Arc<Mutex<bool>>,
+    }
+
+    impl EffectNode for PendingSourceNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if *self.declare_pending.lock().unwrap() {
+                ctx.mark_outputs_pending();
+            }
+        }
+    }
+
+    /// Records `slot_content_ready` of its "in" port on every evaluate.
+    struct ReadinessObservingNode {
+        type_id: EffectNodeType,
+        log: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl EffectNode for ReadinessObservingNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            let ready = ctx
+                .inputs
+                .slot("in")
+                .map(|s| ctx.inputs.slot_content_ready(s))
+                .expect("wired input must resolve to a slot");
+            self.log.lock().unwrap().push(ready);
+        }
+    }
+
+    /// A producer's pending declaration must reach the consumer in the
+    /// SAME frame (topological order), persist across frames while the
+    /// producer keeps declaring, and reset to ready on the first evaluate
+    /// that stops declaring — the contract render_scene's not-ready
+    /// object gate relies on.
+    #[test]
+    fn pending_declaration_reaches_consumers_and_resets() {
+        let declare_pending = Arc::new(Mutex::new(true));
+        let log = Arc::new(Mutex::new(Vec::new()));
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(PendingSourceNode {
+            type_id: EffectNodeType::new("test.pending_source"),
+            declare_pending: declare_pending.clone(),
+        }));
+        let observer = g.add_node(Box::new(ReadinessObservingNode {
+            type_id: EffectNodeType::new("test.readiness_observer"),
+            log: log.clone(),
+        }));
+        g.connect((src, "out"), (observer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::new(Box::new(crate::node_graph::MockBackend::new()));
+
+        exec.execute_frame(&mut g, &plan, frame_time());
+        exec.execute_frame(&mut g, &plan, frame_time());
+        *declare_pending.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.as_slice(), &[false, false, true]);
+    }
+
 }
 
 /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — the alias-path
@@ -3372,6 +3539,114 @@ mod alias_gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
     use std::sync::{Arc, Mutex};
+
+    // A disabled effect whose evaluate would visibly replace its input.
+    struct BypassProbe {
+        source: bool,
+        evals: Arc<std::sync::atomic::AtomicUsize>,
+        type_id: EffectNodeType,
+    }
+
+    impl EffectNode for BypassProbe {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("in"), ty: PortType::Texture2D,
+                kind: PortKind::Input, required: true,
+            }];
+            if self.source { &[] } else { &INPUTS }
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"), ty: PortType::Texture2D,
+                kind: PortKind::Output, required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn output_format(&self, _: &str) -> Option<GpuTextureFormat> {
+            self.source.then_some(GpuTextureFormat::Rgba16Float)
+        }
+        fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+            (!self.source).then_some(("in", "out"))
+        }
+        fn skip_passthrough(
+            &self, _: &crate::node_graph::ParamValues, _: &[&str],
+        ) -> Option<(&'static str, &'static str)> { self.skip_passthrough_ports() }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let out = ctx.outputs.texture_2d("out").unwrap().clone();
+            ctx.gpu_encoder().clear_texture(&out, if self.source { 0.25 } else { 0.75 }, 0.0, 0.0, 1.0);
+        }
+    }
+
+    fn check_skip_passthrough(borrowed: bool, size: u32, format: GpuTextureFormat) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let device = crate::test_device();
+        let evals = Arc::new(AtomicUsize::new(0));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(BypassProbe {
+            source: true, evals: Arc::new(AtomicUsize::new(0)),
+            type_id: EffectNodeType::new("test.bypass_source"),
+        }));
+        let effect = graph.add_node(Box::new(BypassProbe {
+            source: false, evals: evals.clone(),
+            type_id: EffectNodeType::new("test.bypass_effect"),
+        }));
+        let out = graph.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        graph.connect((src, "out"), (effect, "in")).unwrap();
+        graph.connect((effect, "out"), (out, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let resource = |node| plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1;
+        let (src_res, dst_res) = (resource(src), resource(effect));
+        assert_eq!(plan.resource_format(src_res), Some(GpuTextureFormat::Rgba16Float));
+        assert_eq!(plan.resource_format(dst_res), None);
+        let mut backend = MetalBackend::new(device.arc(), 4, 4, GpuTextureFormat::Rgba16Float);
+        backend.pre_bind_texture_2d(src_res, RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "bypass-src"));
+        backend.pre_bind_texture_2d(dst_res, RenderTarget::new(&device, size, size, format, "bypass-dst"));
+        let dst_slot = backend.slot_for(dst_res).unwrap();
+        let host = RenderTarget::new(&device, size, size, format, "bypass-host");
+        if borrowed { assert!(backend.replace_texture_2d(dst_slot, host.texture.clone())); }
+        let mut exec = Executor::new(Box::new(backend));
+        // Two frames also exercise alias generation bookkeeping and copy freshness.
+        for _ in 0..2 {
+            let mut enc = device.create_encoder("bypass-proof");
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time(), &mut gpu);
+            enc.commit_and_wait_completed();
+        }
+        let compatible = size == 4 && format == GpuTextureFormat::Rgba16Float;
+        assert_eq!(evals.load(Ordering::Relaxed), if compatible { 0 } else { 2 });
+        if borrowed && compatible {
+            assert_eq!(exec.backend().texture_2d(dst_slot).unwrap().raw_ptr(), host.texture.raw_ptr());
+            let buffer = device.create_buffer_shared(4 * 4 * 8);
+            let mut enc = device.create_encoder("bypass-readback");
+            enc.copy_texture_to_buffer(&host.texture, &buffer, 4, 4, 32);
+            enc.commit_and_wait_completed();
+            let bits = unsafe { *buffer.mapped_ptr().unwrap().cast::<u16>() };
+            assert_eq!(half::f16::from_bits(bits).to_f32(), 0.25);
+            assert!(exec.alias_propagation_state.iter().all(Option::is_none));
+        }
+    }
+
+    #[test]
+    fn skip_passthrough_matches_concrete_default_format() {
+        check_skip_passthrough(false, 4, GpuTextureFormat::Rgba16Float);
+    }
+
+    #[test]
+    fn skip_passthrough_copies_to_borrowed_destination() {
+        check_skip_passthrough(true, 4, GpuTextureFormat::Rgba16Float);
+    }
+
+    #[test]
+    fn skip_passthrough_evaluates_real_mismatches() {
+        check_skip_passthrough(false, 2, GpuTextureFormat::Rgba16Float);
+        check_skip_passthrough(false, 4, GpuTextureFormat::Rgba8Unorm);
+    }
 
     fn frame_time() -> FrameTime {
         FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }

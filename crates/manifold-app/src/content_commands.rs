@@ -85,6 +85,9 @@ impl ContentThread {
         cmd_tx: &Sender<ContentCommand>,
         state_tx: &Sender<ContentState>,
     ) {
+        // Warmup precedes render_content: install the new project's live
+        // quality now rather than inheriting defaults or a previous export.
+        self.content_pipeline.apply_rt_quality(&mut self.engine, false);
         let Some(project) = self.engine.project() else {
             return;
         };
@@ -105,9 +108,11 @@ impl ContentThread {
             })
             .map(|(i, l)| (i, l.layer_id.clone(), l.name.clone()))
             .collect();
+        log::info!("[ContentThread] Warmup RT quality: {:?}", project.settings.rt_quality.realtime);
         let total = warmup_layers.len() as u32;
         let budget = manifold_core::WarmupBudget::default();
         let start = std::time::Instant::now();
+        let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         let mut any_budget_exhausted = false;
         let mut any_install_failed = false;
 
@@ -140,6 +145,9 @@ impl ContentThread {
             log::info!("[ContentThread] Starting warmup for {total} layers");
         }
         for (done, (layer_index, _layer_id, layer_name)) in warmup_layers.iter().enumerate() {
+            if manifold_gpu::gpu_fault::fault_count() != initial_gpu_faults {
+                crate::abort_gpu_work("GPU failure observed during warmup; stopping remaining layers");
+            }
             // Abort early on shutdown so a quit during a long warm doesn't hang.
             match cmd_rx.try_recv() {
                 Ok(ContentCommand::Shutdown) => {
@@ -218,7 +226,8 @@ impl ContentThread {
                             );
                             any_install_failed = true;
                         }
-                        manifold_core::WarmupOutcome::Quiescent => {}
+                        manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
+                    manifold_core::WarmupOutcome::Quiescent => {}
                     }
                 }
             }
@@ -236,6 +245,9 @@ impl ContentThread {
                     .and_then(|p| p.timeline.layers.get(*layer_index))
                 {
                     let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
+                    if chain_outcome == manifold_core::WarmupOutcome::GpuFailed {
+                        crate::abort_gpu_work("GPU failure during layer-chain warmup");
+                    }
                     if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } = chain_outcome {
                         log::warn!(
                             "[ContentThread] Warmup chain budget exhausted ({cap:?}) for layer '{}' ({}) after {elapsed:.1?}; \
@@ -347,6 +359,7 @@ impl ContentThread {
                         any_install_failed = true;
                         break;
                     }
+                    manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
@@ -402,6 +415,7 @@ impl ContentThread {
                         any_install_failed = true;
                         break;
                     }
+                    manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
@@ -454,6 +468,7 @@ impl ContentThread {
                         any_install_failed = true;
                         break;
                     }
+                    manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
@@ -485,7 +500,13 @@ impl ContentThread {
             }
         }
 
-        let status = if any_install_failed {
+        let gpu_faults = manifold_gpu::gpu_fault::fault_count().saturating_sub(initial_gpu_faults);
+        let status = if gpu_faults > 0 {
+            log::error!(
+                "[ContentThread] {gpu_faults} GPU errors observed during warmup; warmup success is unverified"
+            );
+            "ended with GPU errors"
+        } else if any_install_failed {
             "completed with install failure(s)"
         } else if any_budget_exhausted {
             "completed with budget exhaustion"

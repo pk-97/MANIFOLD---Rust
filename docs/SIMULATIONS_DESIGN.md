@@ -1,6 +1,6 @@
-# Realtime Simulations — XPBD Solver, Cloth, Liquids, Baked Playback
+# Realtime Simulations — XPBD Cloth/Ropes, Dedicated Water, Baked Playback
 
-**Status: APPROVED design, not built · 2026-07-03 · Fable**
+**Status:** APPROVED design, not built · 2026-07-03 · Fable; water split supersedes liquid decisions below, 2026-09-09 · Astra.
 **Prerequisites: MATERIAL_SYSTEM M1–M5 (sims render through materials); REALTIME_3D P1
 (`node.render_scene`) for scene composition — cloth can smoke-test through
 `node.render_mesh` before it. Vocab-audit apply first (post-rename ids used
@@ -10,7 +10,11 @@ any phase.**
 
 Peter's directives (2026-07-03): realtime simulations "like Nuke and Houdini";
 realistic water explicitly wanted; approved the full shape: three lanes ordered
-bridge → live solver → volumes, **cloth first, liquids second** in the live lane.
+bridge → live solver → volumes. **Amended by Peter, 2026-09-09:** dedicated
+MLS-MPM water proceeds independently of XPBD cloth/ropes and baked import. The old
+cloth-first/PBF-first water prerequisite is retired. Water's detailed specification
+and proof checkpoints live in [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md)
+and [WATER_IMPLEMENTATION_PLAN.md](WATER_IMPLEMENTATION_PLAN.md).
 Competitive frame: **Notch** (realtime stage sims), not offline Houdini — Houdini is
 the authoring world lane 1 borrows from.
 
@@ -35,34 +39,26 @@ this doc and execution.
 
 ## 2. Decisions
 
-- **D1 — Three lanes, ordered 1→2→3 (Peter approved).**
+- **D1 — Three capability lanes; live water now independent (2026-09-09).**
   **Lane 1 — baked playback:** Houdini/Blender-quality sims (incl. photoreal FLIP
   water) baked to per-frame vertex caches, streamed as mesh sequences, **beat-retimed**
   (`beat_ramp` scrubs the playhead; loop a bar; freeze on a trigger). Designed:
-  `docs/IMPORT_DESIGN.md` P3 (MDD/PC2 streaming + `node.mesh_sequence`). **Lane 2 — live XPBD (this doc's body).** **Lane 3 — volume rendering**
+  `docs/IMPORT_DESIGN.md` P3 (MDD/PC2 streaming + `node.mesh_sequence`). **Lane 2 — live XPBD cloth/ropes (this doc) and dedicated MLS-MPM water (WATER_SIMULATION_DESIGN).** **Lane 3 — volume rendering**
   (raymarched smoke/pyro + baked VDB) — deferred section 8; baked VDB may cover most stage
   needs first.
-- **D2 — One solver, families as constraint recipes. No monoliths.** XPBD
+- **D2 — XPBD families as constraint recipes; water is separate. No monoliths.** XPBD
   (position-based dynamics — the same family Houdini Vellum, Unreal and Unity cloth
-  are built on). Cloth, liquids, grains, ropes, soft bodies = different constraint
+  are built on). Cloth, grains, ropes, soft bodies = different constraint
   sets over the same particle arrays and the same solver atom. A fused `cloth_sim`
   node is the named forbidden move — this extends the particle-suite decomposition,
   same doctrine as everything else.
-- **D3 — Family order: cloth → liquids → grains/ropes.** Cloth proves the whole
-  stack (constraints, solver, collision, mesh output). Liquids = **Position-Based
-  Fluids** (a density constraint in the same solver) + the screen-space surface
-  renderer (D6). Peter: realistic water matters — live water is "very good
-  game-engine water"; render-farm water is lane 1. Both stated honestly.
-  **Liquid-fidelity fallback settled (Peter, 2026-07-16):** PBF ships as designed —
-  it is nearly free alongside the solver cloth/grains already need, so try it first;
-  it may look good enough. If PBF water underwhelms *Peter's eye* (his verdict, not a
-  numeric gate), the named upgrade path is **MLS-MPM as a second solver for the liquid
-  family only** — 2026 real-time evidence: ~100k particles on integrated GPUs, ~300k on
-  mid-range (WebGPU/Godot implementations). That is a separate design doc (grid state,
-  scatter-with-atomics P2G kernels, bounded domain — a genuinely different GPU pattern);
-  do NOT fold it into this solver, and do NOT propose FLIP or other alternatives — the
-  PBF-first-then-MLS-MPM ladder is the settled shape. XPBD stays the only solver for
-  cloth/ropes/grains regardless.
+- **D3 — Cloth → grains/ropes within XPBD; MLS-MPM water independently.**
+  Supersedes the 2026-07-16 PBF-first fallback ladder. Do not build PBF liquid
+  constraints under this document. Water uses a dedicated grid/particle pipeline,
+  bounded graph substeps and screen-space surface; its numerical and visual proofs
+  are in WATER_SIMULATION_DESIGN. Shared scheduling is reusable infrastructure, not
+  a reason to force different physical models into one solver. Published demo particle
+  counts are not MANIFOLD performance measurements.
 - **D4 — Fixed-substep time.** XPBD needs stable dt: the solver runs fixed substeps
   (default 1/240 s) accumulated from the content clock; iteration count and substep
   are params. Consequences: deterministic re-runs at fixed export FPS (same
@@ -72,15 +68,13 @@ this doc and execution.
   (planes, spheres, boxes — port-shadowed transforms, so a collider can dance).
   Baking `render_scene` objects to SDF volumes is real infra — deferred with its
   trigger (section 8).
-- **D6 — Liquid surface is screen-space, decomposed.** Particles → depth splat →
-  bilateral smooth → normals → shaded (refraction/fresnel via the existing envmap/
-  material machinery + `render_scene`'s depth output). Each step is one dispatch —
-  the section 2.5 audit at implementation reconciles against existing atoms
-  (`node.surface_bumps`, blur family) before any new primitive is proposed.
+- **D6 — Liquid surface moved to WATER_SIMULATION_DESIGN section 7.** That
+  contract owns camera/depth conventions, surface reconstruction, material reuse,
+  scene pass order and the explicit MVP transparency limits.
 - **D7 — Sim outputs are ordinary wires.** Cloth emits `Array(MeshVertex)` →
   feeds a `render_scene` object input (or `node.render_mesh`) and gets materials,
-  lights, shadows for free. Liquids emit particle arrays → `node.liquid_surface` or
-  the existing `draw_particles` family. Grains/ropes → instanced copies. No sim has
+  lights and shadows through the renderer. Water's typed particle/surface wires are
+  specified in WATER_SIMULATION_DESIGN. Grains/ropes → instanced copies. No sim has
   a private renderer.
 - **D8 — Beat-native is the differentiator (the layer Notch doesn't have).** Wind,
   gravity, stiffness, viscosity, time-scale: all port-shadowed → audio-reactive
@@ -93,11 +87,9 @@ this doc and execution.
 |---|---|
 | `node.cloth_from_grid` | Grid mesh → particle array + distance/bend constraint arrays (pin map param) |
 | `node.rope_from_points` | Point chain → rope constraints |
-| `node.liquid_constraints` | PBF density constraint set over a particle array |
 | `node.solve_constraints` | The XPBD step: substeps × iterations over (particles, constraints, colliders) |
 | `node.collide_shapes` | Analytic collider list (plane/sphere/box) consumed by the solver |
 | `node.cloth_to_mesh` | Solved particles + topology → `Array(MeshVertex)` (normals recomputed) |
-| `node.liquid_surface` | Screen-space surface (decomposed per D6; may be several atoms after audit) |
 
 Solver state (positions, prev-positions, velocities) rides `array_feedback`-style
 persistent buffers, keyed per the two-cache rules.
@@ -123,9 +115,8 @@ in solver loops (pre-allocated constraint/particle buffers only).
   under gravity settles to known sag (value-level vertex positions, fixed seed);
   collision keeps particles outside a sphere; determinism — two identical runs,
   identical buffers. Full workspace sweep (new stateful runtime pattern = infra).
-- **P2 — Liquids.** `liquid_constraints` (PBF) + `liquid_surface` (post-section 2.5-audit
-  decomposition). Gate: gpu_tests — density constraint keeps rest spacing (value
-  level); surface pass PNG on a known splash frame; pour-into-box demo preset.
+- **P2 — Liquids: SUPERSEDED, not implemented.** Execution moved to
+  WATER_IMPLEMENTATION_PLAN S1–S8. PBF work under this phase is retired.
 - **P3 — Grains + ropes.** Constraint recipes only — solver untouched. Gate: recipe
   unit tests + demo presets.
 - **P4 — Beat wiring + polish.** Bar-quantized reseed examples, time-scale ramp
@@ -133,18 +124,17 @@ in solver loops (pre-allocated constraint/particle buffers only).
 
 ## 6. Performance (stated honestly)
 
-XPBD cost = particles × constraints × iterations × substeps. Realtime stage budgets
-on Apple Silicon: cloth ~64k–256k particles, liquids ~100k–500k with surface pass —
-tune against the 4.5–5.5 ms baseline; the perf HUD makes cost visible, caps are
-constants. The surface pass is resolution-bound (half-res + upsample is the standard
-escape hatch, HDR half-res rule applies).
+XPBD cost = particles × constraints × iterations × substeps. The earlier cloth
+~64k–256k and liquid ~100k–500k counts were planning estimates, not measured support.
+Water's explicit first-scene timing/memory targets and pass/fail checkpoint are now
+in WATER_SIMULATION_DESIGN section 8. Measure cloth separately when its lane starts.
 
 ## 7. Decided — do not reopen
 
-1. Three lanes, 1→2→3; lane 1 lives in the import design; frame is Notch, not
-   offline Houdini.
-2. One XPBD solver; families are constraint recipes; no fused sim monoliths.
-3. Cloth first, liquids second (PBF + screen-space surface), grains/ropes after.
+1. Three capability lanes; live water has no baked-import or cloth prerequisite.
+   Baked playback lives in the import design; performance is the live frame.
+2. XPBD for cloth/ropes/grains; dedicated MLS-MPM water; no fused sim monoliths.
+3. Cloth first within XPBD; water follows WATER_IMPLEMENTATION_PLAN independently.
 4. Fixed-substep integration; deterministic export; beat-rampable time-scale.
 5. Colliders v1 analytic; scene-SDF v2.
 6. Sim outputs are ordinary wires into the existing render stack; no private

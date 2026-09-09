@@ -267,12 +267,21 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
         })
         .collect();
     let expected: std::collections::BTreeSet<(String, String)> = [
+        ("loop_camera", "pattern_length"),
+        ("scene_array", "cell_size"),
         ("loop_phase", "bars"),
-        ("scene_array", "count"),
+        ("scene_array", "pattern_length"),
         ("loop_camera", "height"),
         ("loop_camera", "lateral"),
+        ("loop_camera", "near"),
+        ("loop_camera", "far"),
+        ("loop_camera", "fov_y"),
+        ("loop_camera", "home"),
+        ("loop_camera", "roll"),
+        ("loop_camera", "pitch"),
+        ("loop_camera", "yaw"),
         ("loop_camera", "flow"),
-        ("loop_camera", "stride"),
+        ("loop_camera", "patterns_per_loop"),
         ("loop_camera", "sway_amp"),
         ("loop_camera", "sway_cycles"),
         ("loop_camera", "look_sweep_amp"),
@@ -285,8 +294,49 @@ fn inv_m3_stamped_rows_match_whitelist_exactly() {
     .collect();
     assert_eq!(
         targets, expected,
-        "INV-M3: Scene Loop section rows must be exactly the whitelist"
+        "INV-M3: bindings must be the whitelist plus shared internal consumers"
     );
+    assert_eq!(section_ids.len(), 19, "shared consumers do not mint card rows");
+}
+
+/// ENDLESS_CORRIDOR D3 coupled writes: the Pattern row (scene_array.
+/// pattern_length) couples ONE secondary — loop_camera.pattern_length,
+/// identity — so travel stays an integer multiple of the pattern for any
+/// dial. The Stride row (patterns_per_loop) couples NOTHING: the old
+/// count/jitter_period secondaries patched a desync (outrun, wrap-snap)
+/// the corridor dissolves, and any integer K is pure by construction.
+#[test]
+fn inv_coupled_writes_corridor_shape() {
+    use manifold_renderer::node_graph::scene_modifier::coupled_writes_for;
+
+    let (project, idx) = applied_project(grouped_scene_def());
+    let graph = project.timeline.layers[idx].generator_graph().expect("graph");
+
+    let pattern = coupled_writes_for(graph, "scene_array", "pattern_length");
+    assert_eq!(pattern.len(), 1, "Pattern couples exactly one secondary");
+    assert_eq!(
+        (pattern[0].1, pattern[0].2),
+        ("loop_camera", "pattern_length"),
+        "Pattern's secondary is the camera's internal pattern_length (identity)"
+    );
+    assert_eq!(
+        (pattern[0].3)(3.0),
+        3.0,
+        "the Pattern secondary is the identity coupling"
+    );
+
+    assert!(
+        coupled_writes_for(graph, "loop_camera", "patterns_per_loop").is_empty(),
+        "Stride couples nothing under the corridor (D3)"
+    );
+    assert!(
+        coupled_writes_for(graph, "loop_camera", "stride").is_empty(),
+        "the deleted stride primary no longer couples"
+    );
+
+    // Spacing is untouched: still both cell_size params + home.
+    let spacing = coupled_writes_for(graph, "loop_camera", "cell_size");
+    assert_eq!(spacing.len(), 2, "Spacing still couples both cells + home");
 }
 
 /// P4 load migration (INV-M3 extension): a loop applied BEFORE the control
@@ -308,7 +358,7 @@ fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
     // four D6 rows, exactly what an old save carries.
     let old_targets: std::collections::BTreeSet<(&str, &str)> = [
         ("loop_phase", "bars"),
-        ("scene_array", "count"),
+        ("scene_array", "pattern_length"),
         ("loop_camera", "height"),
         ("loop_camera", "lateral"),
     ]
@@ -332,7 +382,8 @@ fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
     let old_param_count = meta.params.len();
     assert_eq!(old_param_count, 4, "fixture starts from the four D6 rows");
 
-    // One migration: the eight new rows land.
+    // One migration: the fifteen new rows land (eight P4 controls +
+    // Spacing/Jitter + the five BUG-gsql framing rows).
     assert!(
         migrate_loop_exposure_rows(&mut def),
         "the first migration must stamp the new rows"
@@ -343,7 +394,7 @@ fn p4_migration_stamps_new_rows_on_pre_enrichment_loops() {
         .iter()
         .filter(|p| p.section.as_deref() == Some("Scene Loop"))
         .count();
-    assert_eq!(section_rows, 12, "4 old + 8 new rows after migration");
+    assert_eq!(section_rows, 19, "4 old + 15 new rows after migration");
 
     // The old four ids are untouched (no re-stamp churn).
     for id in &keep_ids {
@@ -388,19 +439,13 @@ fn inv_m2_apply_remove_exact_inverse_three_layers() {
     let stamped_ids: Vec<String> = {
         let graph = project.timeline.layers[idx].generator_graph().expect("graph");
         let meta = graph.preset_metadata.as_ref().unwrap();
-        meta.bindings
+        meta.params
             .iter()
-            .filter(|b| {
-                matches!(
-                    &b.target,
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. }
-                        if matches!(node_id.as_str(), "loop_phase" | "scene_array" | "loop_camera")
-                )
-            })
+            .filter(|p| p.section.as_deref() == Some("Scene Loop"))
             .map(|b| b.id.clone())
             .collect()
     };
-    assert_eq!(stamped_ids.len(), 12, "twelve whitelist rows stamped");
+    assert_eq!(stamped_ids.len(), 19, "nineteen whitelist rows stamped");
     project
         .with_preset_graph_mut(&target, |inst| {
             inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {
@@ -633,7 +678,7 @@ fn inv_m8_pre_switch_graph_migrates_once_at_load() {
     phase_params.insert("rate".to_string(), SerializedParamValue::Float { value: 0.0 });
     phase_params.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
     let mut array_params = BTreeMap::new();
-    array_params.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
+    array_params.insert("pattern_length".to_string(), SerializedParamValue::Float { value: 1.0 });
     array_params.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
     array_params.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
     let mut camera_params = BTreeMap::new();

@@ -1,0 +1,430 @@
+{
+  "version": 2,
+  "name": "LED Strobe",
+  "presetMetadata": {
+    "id": "LED Strobe",
+    "displayName": "LED Strobe",
+    "category": "LED",
+    "layerTypes": ["Dmx"],
+    "oscPrefix": "ledStrobe",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.5,
+        "max": 16.0,
+        "defaultValue": 4.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "rate"
+      },
+      {
+        "id": "duty",
+        "name": "Duty",
+        "min": 0.05,
+        "max": 0.5,
+        "defaultValue": 0.25,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "duty"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "All Strips",
+          "Alternating Strips"
+        ],
+        "formatString": "F0",
+        "oscSuffix": "mode"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "saturation"
+      },
+      {
+        "id": "brightness",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "brightness"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 4.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "strobe_phase",
+          "param": "rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "duty",
+        "label": "Duty",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "duty_edge",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "duty",
+        "label": "Duty",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "duty_edge_soft",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_select",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "tint",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "brightness",
+        "label": "Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "brightness",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    },
+    {
+      "id": 2,
+      "typeId": "node.circle_mask",
+      "handle": "white_field",
+      "nodeId": "white_field",
+      "params": {
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "radius_x": { "type": "Float", "value": 4.0 },
+        "radius_y": { "type": "Float", "value": 4.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "softness": { "type": "Float", "value": 0.0 }
+      },
+      "title": "White Field"
+    },
+    {
+      "id": 3,
+      "typeId": "node.beat_ramp",
+      "handle": "strobe_phase",
+      "nodeId": "strobe_phase",
+      "params": {
+        "rate": { "type": "Float", "value": 4.0 },
+        "bars": { "type": "Int", "value": 0 },
+        "attack": { "type": "Float", "value": 0.001 }
+      },
+      "title": "Strobe Phase"
+    },
+    {
+      "id": 4,
+      "typeId": "node.scale_offset_image",
+      "handle": "phase_field",
+      "nodeId": "phase_field",
+      "params": {
+        "scale": { "type": "Float", "value": 0.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Phase Field"
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_value",
+      "handle": "duty_edge",
+      "nodeId": "duty_edge",
+      "params": {
+        "a": { "type": "Float", "value": 0.25 },
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Duty Edge"
+    },
+    {
+      "id": 6,
+      "typeId": "node.scale_offset_value",
+      "handle": "duty_edge_soft",
+      "nodeId": "duty_edge_soft",
+      "params": {
+        "a": { "type": "Float", "value": 0.25 },
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.02 }
+      },
+      "title": "Duty Edge Soft"
+    },
+    {
+      "id": 7,
+      "typeId": "node.smoothstep",
+      "handle": "duty_cut",
+      "nodeId": "duty_cut",
+      "params": {
+        "low": { "type": "Float", "value": 0.25 },
+        "high": { "type": "Float", "value": 0.27 }
+      },
+      "title": "Duty Cut"
+    },
+    {
+      "id": 8,
+      "typeId": "node.invert",
+      "handle": "strobe_gate",
+      "nodeId": "strobe_gate",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Strobe Gate"
+    },
+    {
+      "id": 9,
+      "typeId": "node.invert",
+      "handle": "inverse_gate",
+      "nodeId": "inverse_gate",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Inverse Gate"
+    },
+    {
+      "id": 10,
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "nodeId": "uv",
+      "params": {},
+      "title": "UV"
+    },
+    {
+      "id": 11,
+      "typeId": "node.posterize",
+      "handle": "strip_index",
+      "nodeId": "strip_index",
+      "params": {
+        "levels": { "type": "Float", "value": 9.0 }
+      },
+      "title": "Strip Index"
+    },
+    {
+      "id": 12,
+      "typeId": "node.scale_offset_image",
+      "handle": "index_0_8",
+      "nodeId": "index_0_8",
+      "params": {
+        "scale": { "type": "Float", "value": 8.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Index 0-8"
+    },
+    {
+      "id": 13,
+      "typeId": "node.scale_offset_image",
+      "handle": "half_index",
+      "nodeId": "half_index",
+      "params": {
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Half Index"
+    },
+    {
+      "id": 14,
+      "typeId": "node.wrap",
+      "handle": "parity",
+      "nodeId": "parity",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Parity"
+    },
+    {
+      "id": 15,
+      "typeId": "node.scale_offset_image",
+      "handle": "parity_0_1",
+      "nodeId": "parity_0_1",
+      "params": {
+        "scale": { "type": "Float", "value": 2.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Parity 0-1"
+    },
+    {
+      "id": 16,
+      "typeId": "node.smoothstep",
+      "handle": "odd_strips",
+      "nodeId": "odd_strips",
+      "params": {
+        "low": { "type": "Float", "value": 0.25 },
+        "high": { "type": "Float", "value": 0.75 }
+      },
+      "title": "Odd Strips"
+    },
+    {
+      "id": 17,
+      "typeId": "node.masked_mix",
+      "handle": "alternate",
+      "nodeId": "alternate",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Alternate"
+    },
+    {
+      "id": 18,
+      "typeId": "node.switch_texture",
+      "handle": "mode_select",
+      "nodeId": "mode_select",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "num_inputs": { "type": "Int", "value": 2 }
+      },
+      "title": "Mode"
+    },
+    {
+      "id": 19,
+      "typeId": "node.colorize",
+      "handle": "tint",
+      "nodeId": "tint",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "hue": { "type": "Float", "value": 0.0 },
+        "saturation": { "type": "Float", "value": 0.0 },
+        "focus": { "type": "Float", "value": 0.0 }
+      },
+      "title": "Tint"
+    },
+    {
+      "id": 20,
+      "typeId": "node.exposure",
+      "handle": "brightness",
+      "nodeId": "brightness",
+      "params": {
+        "gain": { "type": "Float", "value": 1.0 }
+      },
+      "title": "Brightness"
+    }
+  ],
+  "wires": [
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "offset" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "low" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "high" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 17, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 17, "toPort": "b" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "mask" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 18, "toPort": "in_0" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 18, "toPort": "in_1" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 19, "toPort": "in" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "in" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 1, "toPort": "in" }
+  ]
+}

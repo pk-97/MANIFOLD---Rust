@@ -150,6 +150,58 @@ actually joined, over the real `partition_regions` pass — faster than wiring t
 primitive into a preset and eyeballing the freeze debug output. See
 `docs/GRAPH_TOOLING_DESIGN.md`.
 
+## Install-time pipeline creation (COMPILE_CONTRACT)
+
+**All pipelines must be created at install time, not on first use.** This is a
+hard requirement from `COMPILE_CONTRACT_DESIGN.md` D2: the live rig cannot pay
+for shader compilation during a show.
+
+For primitives using the `primitive!` macro:
+
+- **Add an `install` hook** in the macro that creates pipelines unconditionally:
+  ```rust
+  crate::primitive! {
+      name: MyPrimitive,
+      // ... other fields ...
+      extra_fields: {
+          pipeline: Option<GpuComputePipeline> = None,
+      },
+      install: |gpu| {
+          Self::pipeline = Some(gpu.device.create_compute_pipeline(
+              MY_SHADER,
+              "cs_main",
+              "node.my_primitive",
+          ));
+      },
+  }
+  ```
+- **The runtime `run()` method uses the pre-created pipeline**:
+  ```rust
+  fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+      let pipeline = self.pipeline.as_ref().expect("pipeline created at install");
+      // ... dispatch with pipeline
+  }
+  ```
+
+For data-gated primitives (nodes with `empty_skip_input_ports` — e.g., blob
+detection, particle systems that skip when input arrays are empty), the **skip
+logic stays** (it saves dispatch cost), but the pipeline must be created when the
+node is installed, not on the first non-empty frame. The install hook runs
+unconditionally; the early return in `run()` is purely for dispatch avoidance.
+
+For bounded lazy variant sets (e.g., `variable_blur`'s 3 quality × 2 weighting
+mode variants), prewarm every variant at startup via a `prewarm_pipelines`
+function registered in `generators/registry.rs` alongside `RenderScene`,
+`GltfTextureSource`, etc.
+
+For `EffectNode` hand-written nodes (not using `primitive!`), add a
+`prewarm_pipelines(&device)` static method and register it in the generator
+registry's startup prewarm list.
+
+The gpu-proofs suite enforces this: `compile_contract_p2.rs` constructs each
+data-skip primitive with empty data and asserts no new `PipelineCompile` cold
+touch on first run.
+
 ## Skeleton
 
 The skeleton below is a per-element texture atom, so it is on the codegen path per

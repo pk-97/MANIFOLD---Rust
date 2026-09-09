@@ -59,6 +59,11 @@ pub(crate) fn normalize_scroll_delta(delta: MouseScrollDelta) -> (f32, f32) {
 }
 
 impl Application {
+    /// Shared modifier state for native window events and live UI gestures.
+    pub(crate) fn input_modifiers(&mut self, modifiers: manifold_ui::input::Modifiers) {
+        self.modifiers = modifiers;
+        self.ws.ui_root.input.set_modifiers(modifiers);
+    }
     /// Physical→logical cursor position using `window_id`'s scale factor. The
     /// one place that conversion lives; both the primary cursor track and the
     /// editor's zoom anchor read it.
@@ -1515,6 +1520,7 @@ impl Application {
                             scale,
                             offset,
                             range,
+                            is_angle,
                             section,
                         )) = crate::app_render::resolve_canvas_binding(
                             self.content_state.active_graph_snapshot.as_deref(),
@@ -1525,9 +1531,10 @@ impl Application {
                         )
                     {
                         canvas.open_mapping_popover(
+                            crate::editing_host::to_ui_graph_target(self.watched_graph_target.as_ref().expect("resolved binding has a graph target")),
                             viewport, node_id, pi, binding_id, label, min, max, invert,
                             crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
-                            section,
+                            is_angle, section,
                         );
                     }
                 }
@@ -1718,6 +1725,24 @@ impl Application {
                     }
                     _ => {}
                 }
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.offscreen_dirty = true;
+                }
+                return true;
+            }
+        }
+        if is_graph_editor && matches!(logical_key, Key::Named(NamedKey::Escape)) {
+            if self.editor_mapping_popover.is_open() {
+                self.editor_mapping_popover.close();
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.offscreen_dirty = true;
+                }
+                return true;
+            }
+            if let Some(canvas) = self.graph_canvas.as_mut()
+                && canvas.popover_open()
+            {
+                canvas.close_mapping_popover();
                 if let Some(ed) = self.graph_editor.as_mut() {
                     ed.offscreen_dirty = true;
                 }

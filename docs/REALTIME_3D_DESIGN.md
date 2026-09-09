@@ -4,6 +4,10 @@
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (its contract unchanged; this design consumes its extension points).**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.**
 
+Water integration is specified in [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md)
+section 7: optional water surface inputs, opaque snapshot reuse and scene-depth writes.
+This is planned work, not a claim that liquids already render here.
+
 Peter's directives (2026-07-03): proper realtime 3D scenes with proper lighting — "I
 think we have all of the basics but don't have it fleshed out yet so it's easy to use."
 **Blender import = strategic yes**: "would be amazing and seriously open up Manifold as

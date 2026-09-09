@@ -41,7 +41,7 @@ fn edge_extend_half_widths_is_identity_mapping() {
         depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::RENDER_TARGET_FULL,
+        usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
         label: "edge-identity-src",
         mip_levels: 1,
     });

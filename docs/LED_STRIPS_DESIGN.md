@@ -375,11 +375,12 @@ Accepted — same hazard class as when `Audio = 3` was added.
   **Payload shape: `try_read` returns `Arc<[u8]>`** (`readback.rs:97` already allocates
   this buffer per completed frame; the same allocation serves `pack_and_send` and the
   snapshot — no clone, no new per-frame alloc).
-- **D24 — Presentation: transposed band (120 wide × 8 tall) at the top of the DMX lane's
+- **D24 — Presentation: faithful-orientation band (native 8×120, 8 vertical strips) at the top of the DMX lane's
   generator card, drawn through the viewport bitmap path; black when the strips are black.**
-  The texture is 8×120 (strips × LEDs); displayed faithfully it is a 3px sliver at card
+  The texture is 8×120 (strips × LEDs). ~~Displayed faithfully it is a 3px sliver at card
   width — useless as a debug view. Transposed, each row is one strip, read left-to-right
-  like the rig. No label, no placeholder text; idle states are drawn truthfully (below).
+  like the rig.~~ (Superseded 2026-09-05 — see the addendum below: faithful orientation
+  shipped, centred vertical strip.) No label, no placeholder text; idle states are drawn truthfully (below).
   **Machinery: the viewport bitmap path (`panels/viewport/render.rs`:34,197,316 —
   dirty-flagged per-frame CPU bitmap → GPU upload → blit via the layer-bitmap path,
   `viewport.rs:1474`) — browser thumbnails are static atlas registrations, NOT the
@@ -394,6 +395,11 @@ Accepted — same hazard class as when `Audio = 3` was added.
   left/right, strip-0 top/bottom) written into the test; guessing ships a preview that
   mirrors the rig. Rejected: faithful-orientation sliver (illegible); placeholder copy in
   idle (a debug tool must show state, not reassure).
+  **Addendum (owner feedback 2026-09-05): the transpose is rejected — the band ships
+  faithful physical orientation: 8 vertical strips as a native 8×120 bitmap (direct copy,
+  v-flip only so LED 0 sits at the bottom), integer-scaled, height ≤240px, width at the
+  1:15 strip ratio, centred at the card top. The "illegible sliver" rejection above is
+  superseded; a vertical strip at 2× scale reads fine and matches the rig.**
 
 **MVP-P3 plausible-wrong architectures, forbidden by name:** (1) You will want a bespoke
 DMX card or DMX browser — no: D17. (2) You will want to rename the `LED *.json` preset ids

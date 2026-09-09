@@ -1430,6 +1430,16 @@ impl ClipRenderer for GeneratorRenderer {
 
             self.uniform_arena.reset();
             let mut native_enc = device.create_encoder("warmup");
+            native_enc.note_scope(&format!(
+                "warmup layer '{}' ({}) generator {} clip {} frame {} size {}x{}",
+                layer.name,
+                layer_id,
+                layer.generator_type(),
+                first_clip.map_or("none", |clip| clip.id.as_str()),
+                frame,
+                self.width,
+                self.height,
+            ));
             {
                 let mut gpu = GpuEncoder::new(&mut native_enc, &device);
                 gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
@@ -1460,7 +1470,10 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
                 }
             }
-            native_enc.commit_and_wait_completed();
+            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+                log::error!("Generator warmup failed for layer {layer_id}: {err}");
+                return manifold_core::WarmupOutcome::GpuFailed;
+            }
             self.uniform_arena.flush(&device);
 
             if let Some(ls) = self.layer_generators.get(&layer_id)

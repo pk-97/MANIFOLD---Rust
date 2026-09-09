@@ -168,11 +168,11 @@ pub struct PlaybackEngine {
     last_sync_time: Seconds,
     drift_correction_count: i32,
     is_export_mode: bool,
-    /// Half-frame tolerance for the visual active-clip query. Clips within this
-    /// epsilon of a start or end edge are considered active, so the playhead on
-    /// a clip boundary still renders the clip. Logical time (transport/triggers/
-    /// audio) uses exact `current_beat`.
-    visual_boundary_epsilon: Beats,
+    /// Export clock origin (seconds): the engine time at the export start.
+    /// In export mode the tick sets time absolutely as
+    /// `origin + frame_count * export_fixed_dt` — accumulated dt addition
+    /// drifts off exact clip boundaries within seconds.
+    export_origin_seconds: f64,
 
     last_realtime_now: f64,
     last_frame_count: u64,
@@ -325,7 +325,7 @@ impl PlaybackEngine {
             last_sync_time: Seconds::ZERO,
             drift_correction_count: 0,
             is_export_mode: false,
-            visual_boundary_epsilon: Beats::ZERO,
+            export_origin_seconds: 0.0,
             last_realtime_now: 0.0,
             last_frame_count: 0,
             stop_buffer: Vec::with_capacity(16),
@@ -676,6 +676,13 @@ impl PlaybackEngine {
         self.is_export_mode = value;
     }
 
+    /// Set the export clock origin — call with the engine parked at the export
+    /// start, before the frame loop. Each export tick then sets time to
+    /// `origin + frame_count * export_fixed_dt` exactly.
+    pub fn set_export_origin(&mut self, origin: Seconds) {
+        self.export_origin_seconds = origin.0;
+    }
+
     pub fn set_video_sync_interval(&mut self, interval: Seconds) {
         self.video_sync_interval = interval;
     }
@@ -694,19 +701,6 @@ impl PlaybackEngine {
         self.current_time = time;
         self.update_beat_from_time();
         self.sync_project_bpm_from_current_beat();
-    }
-
-    /// Update the half-frame boundary epsilon used by the visual active-clip
-    /// query. Called at the top of every tick before sync, using the same dt
-    /// that drives time advancement.
-    fn update_visual_boundary_epsilon(&mut self, dt_seconds: Seconds) {
-        let bpm = self
-            .project
-            .as_ref()
-            .map(|p| p.settings.bpm.0 as f64)
-            .unwrap_or(120.0);
-        let frame_beat_delta = (bpm / 60.0) * dt_seconds.0;
-        self.visual_boundary_epsilon = Beats(0.5 * frame_beat_delta.max(0.0));
     }
 
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
@@ -844,19 +838,20 @@ impl PlaybackEngine {
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
-        // Epsilon for the visual active-clip query: half a frame in beats.
-        // Updated before any sync so boundary frames render the owning clip.
-        self.update_visual_boundary_epsilon(ctx.dt_seconds);
-
         // 1. Advance time (unless external sync source is the clock authority).
         //    Port of C# lines 1141-1150.
         if !self.external_time_sync {
-            let frame_delta = if self.is_export_mode && ctx.export_fixed_dt.0 > 0.0 {
-                ctx.export_fixed_dt
+            if self.is_export_mode && ctx.export_fixed_dt.0 > 0.0 {
+                // Frame-exact export clock: absolute per-frame time, never an
+                // accumulated dt. Repeated addition of 1/fps drifts off exact
+                // clip boundaries within seconds (a cut due at t=2.0s lands a
+                // hair before it and the incoming clip appears one frame late).
+                self.set_time(Seconds(
+                    self.export_origin_seconds + ctx.frame_count as f64 * ctx.export_fixed_dt.0,
+                ));
             } else {
-                ctx.dt_seconds
-            };
-            self.advance_time(Seconds(frame_delta.0 * self.playback_speed as f64));
+                self.advance_time(Seconds(ctx.dt_seconds.0 * self.playback_speed as f64));
+            }
             self.sync_project_bpm_from_current_beat();
 
             // Fire on_time_changed callback. Port of C# line 1149.
@@ -990,9 +985,6 @@ impl PlaybackEngine {
 
     /// Non-playing (paused/stopped) tick. Matches C# PlaybackController.Update lines 1114-1133.
     fn tick_non_playing(&mut self, ctx: TickContext) -> TickResult {
-        // Epsilon for the visual active-clip query: half a frame in beats.
-        self.update_visual_boundary_epsilon(ctx.dt_seconds);
-
         // 1. Reconcile desired membership every tick (P1: unconditional reconcile).
         //    Seek active clips only when membership actually changed — re-seeking
         //    every paused frame would churn every active video player.
@@ -1116,9 +1108,8 @@ impl PlaybackEngine {
         self.timeline_active_scratch.clear();
         if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            project.timeline.get_active_clips_at_beat_ref_epsilon(
+            project.timeline.get_active_clips_at_beat_ref(
                 beat,
-                self.visual_boundary_epsilon,
                 &mut self.active_indices_scratch,
                 &mut self.active_layer_indices_scratch,
             );
@@ -1138,9 +1129,6 @@ impl PlaybackEngine {
                     continue;
                 }
                 if let Some(clip) = layer.clips.get(*ci) {
-                    let end_beat = clip.end_beat().0;
-                    let is_boundary_owned = self.current_beat < clip.start_beat.0
-                        || self.current_beat >= end_beat;
                     self.timeline_active_scratch.push(ActiveClipRef {
                         clip_id: clip.id.clone(),
                         layer_index: *li as i32,
@@ -1150,7 +1138,6 @@ impl PlaybackEngine {
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
                         is_muted: clip.is_muted,
-                        is_boundary_owned,
                         layer_id: layer.layer_id.clone(),
                     });
                 }
@@ -1421,10 +1408,17 @@ impl PlaybackEngine {
             .map(|p| p.settings.bpm.0)
             .unwrap_or(120.0);
         let spb = 60.0_f32 / bpm.max(20.0);
-        let min_remaining_beats = if spb > 0.0 {
+        // Warm-up guard scope: live playback only. When parked/scrubbing or
+        // exporting, a clip's final frame must render exactly, so the guard
+        // is zeroed and the scheduler starts any clip the timeline says is
+        // active — even one with sub-frame remaining lifetime.
+        let guard_active = self.is_playing() && !self.is_export_mode;
+        let min_remaining_beats = if guard_active && spb > 0.0 {
             MIN_START_REMAINING_TIME / spb
-        } else {
+        } else if guard_active {
             MIN_START_REMAINING_TIME
+        } else {
+            0.0
         };
 
         self.live_slot_refs_scratch.clear();

@@ -44,6 +44,22 @@
         "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Rotate"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "valueLabels": [
+          "Ghost",
+          "Stencil",
+          "Depth"
+        ]
       }
     ],
     "bindings": [
@@ -81,6 +97,19 @@
           "kind": "node",
           "nodeId": "affine",
           "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode",
+          "param": "selector"
         },
         "convert": {
           "type": "Float"
@@ -173,7 +202,7 @@
           "value": 3
         }
       },
-      "title": "Max Blend"
+      "title": "Ghost Blend"
     },
     {
       "id": 6,
@@ -181,6 +210,87 @@
       "typeId": "system.final_output",
       "handle": "final_output",
       "title": "Output"
+    },
+    {
+      "id": 7,
+      "nodeId": "matte_inverse",
+      "typeId": "node.invert",
+      "handle": "matte_inverse",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Inverse Matte"
+    },
+    {
+      "id": 8,
+      "nodeId": "mix_stencil",
+      "typeId": "node.masked_mix",
+      "handle": "mix_stencil",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Stencil"
+    },
+    {
+      "id": 10,
+      "nodeId": "matte",
+      "typeId": "node.channel_mixer",
+      "handle": "matte",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [0.0, 0.0, 0.0, 1.0]
+        }
+      },
+      "title": "Alpha Matte"
+    },
+    {
+      "id": 11,
+      "nodeId": "mix_depth",
+      "typeId": "node.masked_mix",
+      "handle": "mix_depth",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Depth"
+    },
+    {
+      "id": 9,
+      "nodeId": "mode",
+      "typeId": "node.switch_texture",
+      "handle": "mode",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "num_inputs": {
+          "type": "Int",
+          "value": 3
+        }
+      },
+      "title": "Mode"
     }
   ],
   "wires": [
@@ -189,6 +299,12 @@
       "fromPort": "out",
       "toNode": 5,
       "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "source"
     },
     {
       "fromNode": 1,
@@ -215,13 +331,73 @@
       "toPort": "b"
     },
     {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in_2"
+    },
+    {
       "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 9,
       "fromPort": "out",
       "toNode": 1,
       "toPort": "in"
     },
     {
-      "fromNode": 5,
+      "fromNode": 9,
       "fromPort": "out",
       "toNode": 6,
       "toPort": "in"

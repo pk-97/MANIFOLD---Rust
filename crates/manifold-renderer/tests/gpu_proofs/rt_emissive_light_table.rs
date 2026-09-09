@@ -94,6 +94,9 @@ fn rt_object_geom<'a>(
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }
 }
 
@@ -349,6 +352,9 @@ fn emissive_table_truncates_at_cap() {
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 1,
         });
     }
 

@@ -75,4 +75,6 @@ pub enum WarmupOutcome {
     /// will pay the same construction cost on stage and likely render black
     /// until the root cause is fixed.
     InstallFailed,
+    /// GPU execution failed; callers must stop submitting and preserve the fault report.
+    GpuFailed,
 }

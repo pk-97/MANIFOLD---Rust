@@ -241,16 +241,18 @@ fn run_tlc_fixture(
         svt_slot,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
-    let dummy_emissive = device.create_buffer_shared(1);
+    let dummy_emissive = harness::dummy_emissive_buffer(device);
 
     let mut encoder = device.create_encoder("tlc-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
+        device,
         &accel,
         &params,
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &objects,
         &final_alpha_textures,
         &depth_tex,
         &out_sv,
@@ -332,6 +334,9 @@ fn red_petal_tints_transmitted_pool() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 0.1, 0.1], // red albedo
@@ -404,6 +409,9 @@ fn point_caster_control_svt_stays_white() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 0.1, 0.1],
@@ -465,6 +473,9 @@ fn factor_zero_occluder_svt_reads_zero() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
@@ -521,6 +532,9 @@ fn unoccluded_texels_read_white_in_svt() {
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],

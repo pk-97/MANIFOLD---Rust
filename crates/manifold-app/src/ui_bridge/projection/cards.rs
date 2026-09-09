@@ -553,6 +553,13 @@ pub(crate) fn modifier_surfaces(
         if rows.is_empty() {
             continue;
         }
+        // The section string IS the card title (the filter above matches the
+        // display name), so a section header inside the body would repeat the
+        // title — effect card bodies don't re-title themselves. Strip it; the
+        // rows render as one unsectioned run.
+        for r in &mut rows {
+            r.spec.section = None;
+        }
         // ParamAddr sidecar per row: the row id IS its binding id; the
         // binding names the inner (node_id, param); the trace resolves the
         // node_id to the live doc id. Rows whose binding doesn't resolve
