@@ -78,6 +78,7 @@ use manifold_gpu::{
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::dispatch_standalone_2d;
 
 /// Generated-codegen uniform layout: the `max_radius` param (f32) then the
 /// `enabled` param (Bool → u32), padded to a 16-byte (4-word) multiple.
@@ -489,19 +490,13 @@ impl Primitive for BokehGather {
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&far_uniforms),
-                },
-                GpuBinding::Texture { binding: 1, texture: mip_chain },
-                GpuBinding::Texture { binding: 2, texture: far_coc },
-                GpuBinding::Sampler { binding: 3, sampler },
-                GpuBinding::Texture { binding: 4, texture: far_result },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&far_uniforms),
+            &[mip_chain, far_coc],
+            Some(sampler),
+            far_result,
             "node.bokeh_gather far",
         );
 
@@ -513,19 +508,13 @@ impl Primitive for BokehGather {
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&near_uniforms),
-                },
-                GpuBinding::Texture { binding: 1, texture: mip_chain },
-                GpuBinding::Texture { binding: 2, texture: near_coc },
-                GpuBinding::Sampler { binding: 3, sampler },
-                GpuBinding::Texture { binding: 4, texture: near_result },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&near_uniforms),
+            &[mip_chain, near_coc],
+            Some(sampler),
+            near_result,
             "node.bokeh_gather near",
         );
 

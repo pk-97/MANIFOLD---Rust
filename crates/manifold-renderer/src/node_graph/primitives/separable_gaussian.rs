@@ -12,12 +12,12 @@
 //! when section 6.4 lands).
 
 use std::borrow::Cow;
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Display labels for the `kernel_size` enum, indexed by enum value.
 pub const GAUSSIAN_BLUR_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
@@ -236,7 +236,6 @@ impl Primitive for GaussianBlur {
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
         };
-        let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -270,27 +269,13 @@ impl Primitive for GaussianBlur {
             _pad1: 0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: in_tex,
-                },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: out_tex,
-                },
-            ],
-            [width.div_ceil(16), height.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[in_tex],
+            Some(sampler),
+            out_tex,
             "node.gaussian_blur",
         );
     }

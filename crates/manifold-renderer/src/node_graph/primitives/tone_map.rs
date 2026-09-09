@@ -20,12 +20,12 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const TONE_MAP_CURVES: &[&str] = &[
     "Narkowicz ACES",
@@ -161,27 +161,13 @@ impl Primitive for ToneMap {
             _pad2: 0.0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: src,
-                },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: target,
-                },
-            ],
-            [width.div_ceil(16), height.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[src],
+            Some(sampler),
+            target,
             "node.tone_map",
         );
     }

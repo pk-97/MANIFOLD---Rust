@@ -16,12 +16,11 @@
 //! independence of the oily-fluid family rely on this.
 
 use std::borrow::Cow;
-use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const SIMPLEX_FIELD_OUTPUT_CHANNELS: &[&str] = &["R", "G", "B", "A"];
 
@@ -179,19 +178,13 @@ impl Primitive for SimplexField2D {
             _pad1: 0.0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: target,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[],
+            None,
+            target,
             "node.simplex_field_2d",
         );
     }

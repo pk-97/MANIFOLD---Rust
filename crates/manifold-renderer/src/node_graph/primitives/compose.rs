@@ -8,12 +8,12 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 // =====================================================================
 // Mix — combine A and B with a blend mode, crossfaded by amount.
@@ -117,7 +117,6 @@ impl Primitive for Mix {
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
         };
-        let (width, height) = (out.width, out.height);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -132,31 +131,13 @@ impl Primitive for Mix {
             _pad1: 0.0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: a,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: b,
-                },
-                GpuBinding::Sampler {
-                    binding: 3,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: out,
-                },
-            ],
-            [width.div_ceil(16), height.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[a, b],
+            Some(sampler),
+            out,
             "node.mix",
         );
     }

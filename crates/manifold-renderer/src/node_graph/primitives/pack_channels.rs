@@ -11,12 +11,12 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 crate::primitive! {
     name: PackChannels,
@@ -141,39 +141,13 @@ impl Primitive for PackChannels {
         let b_bind = b_tex.unwrap_or(out_tex);
         let a_bind = a_tex.unwrap_or(out_tex);
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: r_bind,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: g_bind,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: b_bind,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: a_bind,
-                },
-                GpuBinding::Sampler {
-                    binding: 5,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 6,
-                    texture: out_tex,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[r_bind, g_bind, b_bind, a_bind],
+            Some(sampler),
+            out_tex,
             "node.pack_rgba",
         );
     }

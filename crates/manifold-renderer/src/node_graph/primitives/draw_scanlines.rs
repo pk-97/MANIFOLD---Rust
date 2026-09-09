@@ -5,12 +5,12 @@
 //! verbatim from the Blob Track HUD's `scanline` wgsl_compute kernel.
 
 use std::borrow::Cow;
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param → 4
 /// consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -122,15 +122,13 @@ impl Primitive for DrawScanlines {
 
         // Bindings match the generated standalone layout: uniform(0),
         // texture input `in`(1), sampler(2), output(3) — no array input.
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Texture { binding: 1, texture: in_tex },
-                GpuBinding::Sampler { binding: 2, sampler },
-                GpuBinding::Texture { binding: 3, texture: out_tex },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[in_tex],
+            Some(sampler),
+            out_tex,
             "node.draw_scanlines",
         );
     }

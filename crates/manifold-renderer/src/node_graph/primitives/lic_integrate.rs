@@ -8,12 +8,12 @@
 //!     → flow-aligned intensity.
 
 use std::borrow::Cow;
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,31 +113,13 @@ impl Primitive for LicIntegrate {
             _pad1: 0.0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: src,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: vel,
-                },
-                GpuBinding::Sampler {
-                    binding: 3,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: target,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[src, vel],
+            Some(sampler),
+            target,
             "node.flow_lines",
         );
     }
