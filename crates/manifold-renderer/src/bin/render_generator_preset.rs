@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
+use manifold_core::Seconds;
 use manifold_gpu::GpuDevice;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
@@ -188,6 +189,19 @@ fn main() {
         let mut enc = device.create_encoder("look-dev-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            // WATER_SIMULATION_DESIGN section 6 warmup parity: this headless
+            // context has no host transport, so it installs an explicit
+            // advancing frame (fixed 60 Hz, epoch 0) — a graph with substep
+            // regions never runs without a SimulationFrame.
+            runtime.set_simulation_frame(
+                manifold_renderer::node_graph::substeps::SimulationFrame {
+                    frame_id: frame as u64 + 1,
+                    delta: Seconds(1.0 / 60.0),
+                    epoch: 0,
+                    advancing: true,
+                    exporting: false,
+                },
+            );
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
         enc.commit_and_wait_completed();

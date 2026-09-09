@@ -133,6 +133,9 @@ struct ThumbGen {
     runtime: Box<PresetRuntime>,
     rt: RenderTarget,
     gen_type: PresetTypeId,
+    /// Monotonic simulation frame id for this isolated instance — refresh
+    /// renders keep advancing the clock instead of repeating a frame id.
+    next_sim_frame_id: u64,
 }
 
 pub struct GeneratorRenderer {
@@ -183,11 +186,33 @@ pub struct GeneratorRenderer {
     /// for this frame. Set by the host before `render_all`; a raw pointer is
     /// used because the renderer's lifetime is independent of the registry.
     layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
+    /// Host simulation clock for the current output frame
+    /// (WATER_SIMULATION_DESIGN section 6). Installed by the content
+    /// thread before `render_all` and forwarded to each layer's
+    /// `PresetRuntime` only on frames that layer is actually evaluated
+    /// — a render-skipped or clip-less layer receives nothing, so its
+    /// simulation clock freezes across gaps instead of accumulating
+    /// hidden elapsed time.
+    simulation_frame: Option<crate::node_graph::substeps::SimulationFrame>,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
 fn gen_scope(layer_id: &LayerId) -> String {
     format!("gen:{layer_id}")
+}
+
+/// WATER_SIMULATION_DESIGN section 6 warmup parity: warmup / thumbnail /
+/// headless contexts have no host transport, so they install an explicit
+/// advancing frame (fixed 60 Hz, epoch 0) — a graph with substep regions
+/// never runs without a `SimulationFrame`.
+fn warmup_simulation_frame(frame_id: u64) -> crate::node_graph::substeps::SimulationFrame {
+    crate::node_graph::substeps::SimulationFrame {
+        frame_id,
+        delta: Seconds(1.0 / 60.0),
+        epoch: 0,
+        advancing: true,
+        exporting: false,
+    }
 }
 
 impl GeneratorRenderer {
@@ -228,6 +253,7 @@ impl GeneratorRenderer {
             profiling_enabled: false,
             rt_quality: crate::node_graph::RtQuality::default(),
             layer_skin_registry: None,
+            simulation_frame: None,
         }
     }
 
@@ -698,6 +724,12 @@ impl GeneratorRenderer {
         self.render_scratch
             .extend(self.active_clips.keys().cloned());
 
+        // The frame evaluated layers receive this output frame. Copied out
+        // before the loop so the per-layer borrow below can read it; a layer
+        // is handed the frame only when it actually renders (simulation
+        // freeze across render-skip / clip gaps — see the field doc).
+        let simulation_frame = self.simulation_frame;
+
         // Pre-collect (layer_index, trigger_count, anim_progress, internal_scale)
         // per clip during immutable borrow, avoiding per-clip LayerId/PresetTypeId clones.
         self.render_info_scratch.clear();
@@ -835,6 +867,9 @@ impl GeneratorRenderer {
                 layer_state
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
+                if let Some(frame) = simulation_frame {
+                    layer_state.generator.set_simulation_frame(frame);
+                }
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -849,6 +884,17 @@ impl GeneratorRenderer {
         self.uniform_arena.flush(gpu.device);
         // Clear the arena pointer from GpuEncoder.
         gpu.uniform_arena = None;
+    }
+
+    /// Install the host simulation clock for this output frame. The content
+    /// thread calls this before `render_all`; `render_all` forwards it to
+    /// each evaluated layer's `PresetRuntime`. Substep boundary nodes
+    /// (`node.water_state`) consume it; existing generators are untouched.
+    pub fn set_simulation_frame(
+        &mut self,
+        frame: crate::node_graph::substeps::SimulationFrame,
+    ) {
+        self.simulation_frame = Some(frame);
     }
 
     /// Get the animation progress for a rendered clip (for profiling).
@@ -1144,6 +1190,7 @@ impl GeneratorRenderer {
                     runtime,
                     rt,
                     gen_type: gen_type.clone(),
+                    next_sim_frame_id: 1,
                 },
             );
         }
@@ -1182,6 +1229,9 @@ impl GeneratorRenderer {
                 anim_progress: 0.0,
                 trigger_count: 0,
             };
+            t.runtime
+                .set_simulation_frame(warmup_simulation_frame(t.next_sim_frame_id));
+            t.next_sim_frame_id += 1;
             t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params);
         }
         Some(&t.rt.texture)
@@ -1467,6 +1517,8 @@ impl ClipRenderer for GeneratorRenderer {
                         trigger_count: 0,
                     };
                     gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
+                    ls.generator
+                        .set_simulation_frame(warmup_simulation_frame(frame as u64 + 1));
                     ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
                 }
             }

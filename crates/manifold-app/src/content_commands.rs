@@ -616,6 +616,12 @@ impl ContentThread {
                     self.engine.set_beat(midi_beat);
                     let time = self.engine.beat_to_timeline_time(midi_beat);
                     self.engine.set_time(Seconds(time.0.max(0.0)));
+                    // WATER_SIMULATION_DESIGN section 6: this block relocates
+                    // the playhead and plays WITHOUT going through `seek_to`,
+                    // so the engine's seek_to-side epoch bump never fires.
+                    // Mark the simulation epoch explicitly — for water this
+                    // relocation is a fresh-seed boundary like any seek.
+                    self.engine.mark_simulation_seek();
                 }
                 self.engine.play();
                 self.cache_link_beat_offset();

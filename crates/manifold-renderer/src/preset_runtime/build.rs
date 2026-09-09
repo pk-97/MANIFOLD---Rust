@@ -664,6 +664,7 @@ impl PresetRuntime {
             target_format: None,
             string_bindings,
             layer_skin_registry: None,
+            last_simulation_frame: None,
         };
         g.apply_string_defaults();
         Ok(g)

@@ -12,6 +12,7 @@ use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, Compos
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
+use manifold_renderer::node_graph::substeps::SimulationFrame;
 use manifold_renderer::tonemap::TonemapSettings;
 
 /// Thread-safe shared output dimensions. The content thread writes new
@@ -782,6 +783,14 @@ pub struct ContentPipeline {
     /// target dir)`. Consumed on the next render: the compositor captures the
     /// effect's node outputs, then they're read back and written as PNGs.
     pending_graph_dump: Option<(EffectId, std::path::PathBuf)>,
+    /// Monotonic per-pipeline simulation frame sequence
+    /// (WATER_SIMULATION_DESIGN section 6). The content thread's
+    /// `frame_count` is NOT usable as a `SimulationFrame::frame_id`: export
+    /// restarts it at 0 per range and engine resets can repeat values, and a
+    /// repeated frame_id would let a substep boundary skip a clock advance.
+    /// Pipeline-local: unique for the life of the process, across live and
+    /// export renders.
+    sim_frame_seq: u64,
     /// Triple-buffered IOSurface textures for the node-output preview (the
     /// captured node texture, downscaled). Separate bridge from the workspace
     /// preview so the editor reads the node output independently.
@@ -1133,6 +1142,7 @@ impl ContentPipeline {
                 .unwrap_or(true),
             master_trigger_count: 0,
             pending_graph_dump: None,
+            sim_frame_seq: 0,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
@@ -2029,6 +2039,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// When `export_mode` is true, skips IOSurface wait/blit/swap — the export
     /// pipeline reads directly from `export_output_texture()` and doesn't need
     /// the cross-device surface bridge.
+    /// Build the one `SimulationFrame` the generator stack consumes this
+    /// output frame (WATER_SIMULATION_DESIGN section 6, "Transport seam").
+    /// Pure value mapping from the host transport state — extracted so the
+    /// delta/advancing/exporting rules are unit-testable without a GPU.
+    fn build_simulation_frame(
+        frame_id: u64,
+        dt: f64,
+        epoch: u64,
+        advancing: bool,
+        exporting: bool,
+    ) -> SimulationFrame {
+        SimulationFrame {
+            frame_id,
+            // Zero when not advancing (paused/stopped): rendering the
+            // current state must not advance a simulation clock. Export
+            // and live both carry the accepted forward interval — the
+            // caller passes the export frame_dt in export mode (0.0 on
+            // the first export frame, matching the existing "no
+            // integration on frame 0" contract) and the live tick
+            // interval otherwise. Backward intervals are never supplied
+            // to a simulation: clamp at zero.
+            delta: manifold_core::Seconds(if advancing { dt.max(0.0) } else { 0.0 }),
+            epoch,
+            advancing,
+            exporting,
+        }
+    }
+
     pub fn render_content(
         &mut self,
         gpu: &manifold_renderer::gpu::GpuContext,
@@ -2072,6 +2110,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let time_f64 = engine.current_time_double();
         let beat_f64 = engine.current_beat_f64();
 
+        // WATER_SIMULATION_DESIGN section 6: one SimulationFrame per output
+        // frame, built from the transport BEFORE the renderer/project split
+        // borrow and installed on the GeneratorRenderer ahead of render_all.
+        // `advancing` is the engine's playing state; a paused or stopped
+        // frame carries zero delta so persistent simulations hold.
+        self.sim_frame_seq += 1;
+        let simulation_frame = Self::build_simulation_frame(
+            self.sim_frame_seq,
+            dt,
+            engine.simulation_epoch(),
+            engine.is_playing(),
+            export_mode,
+        );
+
         // === NATIVE METAL PATH ===
         // When manifold-gpu is initialized, use raw Metal encoding.
         // Native Metal encoding path.
@@ -2089,6 +2141,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 _poll_ms,
                 export_mode,
                 data_version,
+                simulation_frame,
             );
         }
 
@@ -2103,6 +2156,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 frame_count,
                 time_f64,
                 beat_f64,
+                simulation_frame,
             );
             log::warn!("[ContentPipeline] Non-macOS render path not available");
         }
@@ -2127,6 +2181,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         _poll_ms: f64,
         export_mode: bool,
         data_version: u64,
+        simulation_frame: SimulationFrame,
     ) {
         // One-shot graph dump: consume the request as a local so the borrow of
         // `self.pending_graph_dump` ends here. The compositor captures during
@@ -2309,6 +2364,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             }
                             None => gen_renderer.clear_preview(),
                         }
+
+                        // WATER_SIMULATION_DESIGN section 6: the host
+                        // simulation clock for this output frame, installed
+                        // before render_all forwards it to each evaluated
+                        // layer's runtime.
+                        gen_renderer.set_simulation_frame(simulation_frame);
 
                         gen_renderer.render_all(
                             &mut gpu_gen,
@@ -4412,5 +4473,59 @@ mod render_skip_tests {
         assert!(occ.is_empty(), "muted layer is not occluded, just hidden");
         let skip = skip_for(&layers, &clips);
         assert_eq!(skip, vec![1], "hidden plain leaf render-skips");
+    }
+}
+
+#[cfg(test)]
+mod water_simulation_frame_tests {
+    //! WATER_SIMULATION_DESIGN section 6, "Transport seam": the content
+    //! thread builds one `SimulationFrame` per output frame and installs
+    //! it on the GeneratorRenderer before `render_all`. These tests pin
+    //! the value mapping from transport state (delta / advancing /
+    //! exporting / epoch) without needing a GPU.
+
+    use super::*;
+
+    const DT: f64 = 1.0 / 60.0;
+
+    #[test]
+    fn water_simulation_frame_delta_advancing_exporting_rules() {
+        // Paused / stopped: zero delta and advancing false — a persistent
+        // simulation clock holds while the transport isn't running.
+        let paused = ContentPipeline::build_simulation_frame(1, DT, 3, false, false);
+        assert_eq!(paused.frame_id, 1);
+        assert_eq!(paused.delta, manifold_core::Seconds(0.0));
+        assert!(!paused.advancing);
+        assert!(!paused.exporting);
+        assert_eq!(paused.epoch, 3);
+
+        // Live advancing: the accepted forward interval.
+        let live = ContentPipeline::build_simulation_frame(2, DT, 3, true, false);
+        assert_eq!(live.delta, manifold_core::Seconds(DT));
+        assert!(live.advancing);
+        assert!(!live.exporting);
+
+        // Export advancing: the caller passes the fixed export dt (0.0 on
+        // the first export frame, matching the existing
+        // no-integration-on-frame-0 contract).
+        let export = ContentPipeline::build_simulation_frame(3, 1.0 / 30.0, 9, true, true);
+        assert!(export.exporting);
+        assert_eq!(export.delta, manifold_core::Seconds(1.0 / 30.0));
+        assert_eq!(export.epoch, 9);
+
+        // Backward intervals never reach a simulation clock.
+        let rewind = ContentPipeline::build_simulation_frame(4, -DT, 3, true, false);
+        assert_eq!(rewind.delta, manifold_core::Seconds(0.0));
+    }
+
+    #[test]
+    fn water_simulation_frame_epoch_comes_from_the_engine() {
+        // Seek / project replacement bumps the engine epoch; the frame
+        // carries it through so a simulation resets exactly on relocation
+        // and survives stop/play/nudges (covered in manifold-playback).
+        for epoch in [0u64, 1, 7, 4096] {
+            let frame = ContentPipeline::build_simulation_frame(10, DT, epoch, true, false);
+            assert_eq!(frame.epoch, epoch);
+        }
     }
 }

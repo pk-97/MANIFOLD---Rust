@@ -168,6 +168,16 @@ pub struct PlaybackEngine {
     last_sync_time: Seconds,
     drift_correction_count: i32,
     is_export_mode: bool,
+    /// Host simulation clock epoch (WATER_SIMULATION_DESIGN section 6,
+    /// "Transport seam"). Bumped by `seek_to` (explicit seek, export
+    /// reseek, timeline-loop-through-seek) and by `initialize` (project
+    /// replacement). Stop, play, and continuous sync nudges
+    /// (`nudge_time` / `set_time` / `advance_time`) deliberately do NOT
+    /// bump it. The content thread reads it through
+    /// [`simulation_epoch`](Self::simulation_epoch) and installs it on
+    /// every `SimulationFrame` so persistent simulations (water) can tell
+    /// "relocate the playhead" from "drift along the timeline".
+    simulation_epoch: u64,
     /// Export clock origin (seconds): the engine time at the export start.
     /// In export mode the tick sets time absolutely as
     /// `origin + frame_count * export_fixed_dt` — accumulated dt addition
@@ -325,6 +335,7 @@ impl PlaybackEngine {
             last_sync_time: Seconds::ZERO,
             drift_correction_count: 0,
             is_export_mode: false,
+            simulation_epoch: 0,
             export_origin_seconds: 0.0,
             last_realtime_now: 0.0,
             last_frame_count: 0,
@@ -413,6 +424,20 @@ impl PlaybackEngine {
     }
     pub fn is_playing(&self) -> bool {
         self.current_state == PlaybackState::Playing
+    }
+
+    /// Host simulation clock epoch — see the field doc. Water-class
+    /// persistent simulations reset when this changes.
+    pub fn simulation_epoch(&self) -> u64 {
+        self.simulation_epoch
+    }
+
+    /// Explicitly bump the simulation epoch. `seek_to` does this itself;
+    /// hosts that relocate the playhead WITHOUT going through `seek_to`
+    /// (the direct Play-from-position path) must call this so simulations
+    /// observe the relocation as a fresh-seed boundary.
+    pub fn mark_simulation_seek(&mut self) {
+        self.simulation_epoch += 1;
     }
     pub fn is_recording(&self) -> bool {
         self.is_recording
@@ -515,6 +540,9 @@ impl PlaybackEngine {
     // ─── Lifecycle ───
 
     pub fn initialize(&mut self, mut project: Project) {
+        // WATER_SIMULATION_DESIGN section 6: a project swap is a fresh-seed
+        // boundary for persistent simulations, same class as a seek.
+        self.mark_simulation_seek();
         // BUG-256: a project swap is a hard boundary for ALL runtime state
         // keyed by project-local identity. Renderers cache by `LayerId` /
         // `ClipId` and gate rebuilds on serialized per-project version
@@ -704,6 +732,7 @@ impl PlaybackEngine {
     }
 
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
+        self.mark_simulation_seek();
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
         self.sync_project_bpm_from_current_beat();
@@ -2929,5 +2958,102 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
 
     fn seek(&mut self, time: Seconds) {
         self.seek_to(time);
+    }
+}
+
+#[cfg(test)]
+mod water_lifecycle_tests {
+    //! WATER_SIMULATION_DESIGN section 9, "Reset/load/export semantics":
+    //! the simulation epoch is the host clock persistent simulations
+    //! (water) use to distinguish relocation from drift. These tests pin
+    //! the transport-side contract from section 6's lifecycle table.
+
+    use super::*;
+    use crate::renderer::StubRenderer;
+
+    fn engine_with_project() -> PlaybackEngine {
+        let renderers: Vec<Box<dyn ClipRenderer>> = vec![Box::new(StubRenderer::new_generator())];
+        let mut engine = PlaybackEngine::new(renderers);
+        engine.initialize(manifold_core::project::Project::default());
+        engine
+    }
+
+    /// Design section 9 table row "Reset/load/export semantics"
+    /// (`water_lifecycle_seek_stop_export`). Default project tempo is
+    /// 120 bpm, so 1 beat = 0.5 s: 0.4 s is a sub-beat seek, 4.0 s is an
+    /// 8-beat seek — the engine's >1-beat live-clip clearing gate fires on
+    /// the second one, and BOTH must still bump the epoch.
+    #[test]
+    fn water_lifecycle_seek_stop_export() {
+        let mut engine = engine_with_project();
+        // Project replacement already bumped the epoch from the 0 start.
+        assert_eq!(engine.simulation_epoch(), 1);
+
+        // Seek under 1 beat — bumps.
+        engine.seek_to(Seconds(0.4));
+        assert_eq!(engine.simulation_epoch(), 2, "sub-beat seek must bump");
+
+        // Seek over 1 beat — bumps (this is the path that also clears
+        // live clips; water must reset on both sides of that gate).
+        engine.seek_to(Seconds(4.0));
+        assert_eq!(engine.simulation_epoch(), 3, "multi-beat seek must bump");
+
+        // Transport stop does NOT bump (design table: "Transport stop —
+        // Preserve accepted water ... Play resumes that water").
+        engine.play();
+        assert_eq!(engine.simulation_epoch(), 3, "play must not bump");
+        engine.stop();
+        assert_eq!(engine.simulation_epoch(), 3, "stop must not bump");
+        engine.play();
+        assert_eq!(
+            engine.simulation_epoch(),
+            3,
+            "resume after stop keeps the same epoch"
+        );
+
+        // Export parks the transport at the range start via the same
+        // `seek_to` the live UI uses, then re-seeks to restore — every
+        // one of those seeks bumps.
+        engine.set_export_mode(true);
+        engine.seek_to(Seconds(1.0));
+        assert_eq!(engine.simulation_epoch(), 4, "export start seek bumps");
+        engine.stop();
+        engine.seek_to(Seconds(0.0));
+        assert_eq!(engine.simulation_epoch(), 5, "export restore reseek bumps");
+        engine.set_export_mode(false);
+
+        // Project replacement is a fresh seed.
+        engine.initialize(manifold_core::project::Project::default());
+        assert_eq!(engine.simulation_epoch(), 6, "project load bumps");
+    }
+
+    /// Design section 9 table row "Reset/load/export semantics"
+    /// (`water_lifecycle_sync_nudge_no_reset`). Continuous sync
+    /// correction (MIDI Clock / OSC / Link drift pulls) relocates the
+    /// timeline in small steps; the physical clock must follow the
+    /// supplied forward dt without treating the correction as a seek.
+    #[test]
+    fn water_lifecycle_sync_nudge_no_reset() {
+        let mut engine = engine_with_project();
+        assert_eq!(engine.simulation_epoch(), 1);
+
+        engine.play();
+
+        // Small continuous corrections in both directions — none bump.
+        for i in 0..32 {
+            let nudge = 0.001 * (i as f64 + 1.0);
+            engine.nudge_time(Seconds(10.0 + nudge));
+        }
+        assert_eq!(engine.simulation_epoch(), 1, "sync nudges must not bump");
+
+        // `set_time` / `advance_time` (transport-follow and drift
+        // correction call shapes) are also nudges, not seeks.
+        engine.set_time(Seconds(10.5));
+        engine.advance_time(Seconds(1.0 / 60.0));
+        assert_eq!(engine.simulation_epoch(), 1);
+
+        // An explicit user seek still bumps — nudges never suppress it.
+        engine.seek_to(Seconds(12.0));
+        assert_eq!(engine.simulation_epoch(), 2);
     }
 }

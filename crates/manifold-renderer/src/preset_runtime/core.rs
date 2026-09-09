@@ -108,6 +108,15 @@ pub struct PresetRuntime {
     pub(super) io: PresetIo,
     pub(super) width: u32,
     pub(super) height: u32,
+    /// Host simulation clock last installed on this instance
+    /// (WATER_SIMULATION_DESIGN section 6). `None` until a host installs
+    /// one — a graph with substep regions run without it is a reported
+    /// host-integration error, so every render path (live, export,
+    /// warmup, headless, thumbnail) installs an explicit frame before
+    /// executing. This is per-INSTANCE identity: a layer whose clip
+    /// ended (gap) receives no frames while unevaluated, so the sim
+    /// clock freezes instead of accumulating hidden elapsed time.
+    pub(super) last_simulation_frame: Option<crate::node_graph::substeps::SimulationFrame>,
     /// Hash of the topology this graph was built for. Compared
     /// each frame to decide whether to rebuild.
     pub(super) topology_hash: u64,
@@ -1298,6 +1307,7 @@ impl PresetRuntime {
             target_format: None,
             string_bindings: chain_string_bindings,
             layer_skin_registry: None,
+            last_simulation_frame: None,
         };
         // Seed each String binding's declared default into its inner node, the
         // same one-shot the generator path does at construction (a no-op when
@@ -1997,6 +2007,26 @@ impl PresetRuntime {
         self.refresh_plan_if_forced_outputs_changed();
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
+    }
+
+    /// Install the host simulation clock for subsequent frames
+    /// (WATER_SIMULATION_DESIGN section 6). The value is forwarded to
+    /// the executor, which exposes it to substep boundary nodes;
+    /// `FrameTime` semantics for existing effects are untouched. Hosts
+    /// must call this every frame BEFORE `render`/`execute_frame` — a
+    /// plan with substep regions run without it is a reported error and
+    /// the region iterates zero times.
+    pub fn set_simulation_frame(&mut self, frame: crate::node_graph::substeps::SimulationFrame) {
+        self.last_simulation_frame = Some(frame);
+        self.executor.set_simulation_frame(frame);
+    }
+
+    /// The simulation frame this instance last consumed, if any. Per-instance
+    /// identity: frames arrive only for output frames the host actually
+    /// evaluated this layer on, so a clip gap leaves this frozen at the
+    /// pre-gap frame instead of accumulating hidden elapsed time.
+    pub fn last_simulation_frame(&self) -> Option<crate::node_graph::substeps::SimulationFrame> {
+        self.last_simulation_frame
     }
 
     /// Install the host-provided target texture as the source for
