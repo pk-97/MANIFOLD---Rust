@@ -66,6 +66,9 @@ pub fn standalone_2d_slots(n_textures: usize, has_sampler: bool) -> Vec<Standalo
     slots
 }
 
+/// Stack capacity checked against every canonical kernel by the binding census.
+pub(crate) const STANDALONE_2D_MAX_BINDINGS: usize = 32;
+
 /// Canonical texture-path dispatch tail: builds the bindings in
 /// [`standalone_2d_slots`] order and dispatches a 2D grid over `out`
 /// (16×16 workgroups, the texture path's constant). Qualifying atoms only —
@@ -82,37 +85,45 @@ pub fn dispatch_standalone_2d(
     out: &manifold_gpu::GpuTexture,
     label: &str,
 ) {
-    debug_assert_eq!(
-        standalone_2d_slots(textures.len(), sampler.is_some()).len(),
-        textures.len() + 2 + usize::from(sampler.is_some())
-    );
-    let mut bindings: Vec<manifold_gpu::GpuBinding> =
-        Vec::with_capacity(textures.len() + 2 + usize::from(sampler.is_some()));
-    bindings.push(manifold_gpu::GpuBinding::Bytes {
+    // The canonical standalone texture path has one uniform, one output,
+    // and the reflected input texture ports (currently well below this
+    // bound). Keep the storage fixed so dispatches never allocate.
+    let binding_count = textures.len() + 2 + usize::from(sampler.is_some());
+    assert!(binding_count <= STANDALONE_2D_MAX_BINDINGS, "standalone 2D binding count exceeds stack capacity");
+    let mut bindings: [_; STANDALONE_2D_MAX_BINDINGS] = std::array::from_fn(|_| manifold_gpu::GpuBinding::Bytes {
+        binding: 0,
+        data: &[],
+    });
+    let mut len = 0;
+    bindings[len] = manifold_gpu::GpuBinding::Bytes {
         binding: 0,
         data: uniform_bytes,
-    });
+    };
+    len += 1;
     for (i, tex) in textures.iter().enumerate() {
-        bindings.push(manifold_gpu::GpuBinding::Texture {
+        bindings[len] = manifold_gpu::GpuBinding::Texture {
             binding: (i + 1) as u32,
             texture: tex,
-        });
+        };
+        len += 1;
     }
     let mut next = textures.len() as u32 + 1;
     if let Some(s) = sampler {
-        bindings.push(manifold_gpu::GpuBinding::Sampler {
+        bindings[len] = manifold_gpu::GpuBinding::Sampler {
             binding: next,
             sampler: s,
-        });
+        };
+        len += 1;
         next += 1;
     }
-    bindings.push(manifold_gpu::GpuBinding::Texture {
+    bindings[len] = manifold_gpu::GpuBinding::Texture {
         binding: next,
         texture: out,
-    });
+    };
+    len += 1;
     gpu.native_enc.dispatch_compute(
         pipeline,
-        &bindings,
+        &bindings[..len],
         [out.width.div_ceil(16), out.height.div_ceil(16), 1],
         label,
     );

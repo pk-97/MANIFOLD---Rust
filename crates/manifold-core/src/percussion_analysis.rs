@@ -312,12 +312,26 @@ impl PercussionBeatGrid {
 
 // ─── PercussionAnalysisData ───
 
+/// Deserialize an analysis BPM while preserving the unknown zero sentinel.
+fn deserialize_analysis_bpm<'de, D>(deserializer: D) -> Result<Bpm, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let bpm = f32::deserialize(deserializer)?;
+    Ok(Bpm(if bpm.is_finite() && bpm > 0.0 {
+        bpm.clamp(20.0, 300.0)
+    } else {
+        0.0
+    }))
+}
+
 /// Port of Unity PercussionAnalysisData class.
 /// Parsed percussion analysis payload for one track/input segment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PercussionAnalysisData {
     pub track_id: String,
+    #[serde(deserialize_with = "deserialize_analysis_bpm")]
     pub bpm: Bpm,
     pub bpm_confidence: f32,
     pub beat_grid: Option<PercussionBeatGrid>,
@@ -839,6 +853,28 @@ mod tests {
     fn test_energy_at_beat_no_envelope() {
         let data = PercussionAnalysisData::new("test", Bpm(120.0), vec![], 0.9, None, None);
         assert_eq!(data.energy_at_beat(Beats(1.0)), 1.0);
+    }
+
+    #[test]
+    fn analysis_bpm_roundtrip_preserves_unknown_zero() {
+        let data = PercussionAnalysisData::new_simple("test", Bpm(0.0), vec![]);
+        let mut detection = crate::audio_clip_detection::AudioClipDetection::new();
+        detection.analysis = Some(data);
+        let json = serde_json::to_string(&detection).unwrap();
+        let restored: crate::audio_clip_detection::AudioClipDetection =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.analysis.unwrap().bpm, Bpm(0.0));
+    }
+
+    #[test]
+    fn analysis_bpm_roundtrip_clamps_valid_and_nonpositive_values() {
+        for (input, expected) in [(120.0, 120.0), (10.0, 20.0), (400.0, 300.0), (-5.0, 0.0)] {
+            let json = format!(
+                r#"{{"trackId":"test","bpm":{input},"bpmConfidence":0.0,"beatGrid":null,"events":[],"energyEnvelope":null}}"#
+            );
+            let restored: PercussionAnalysisData = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.bpm, Bpm(expected));
+        }
     }
 
     #[test]

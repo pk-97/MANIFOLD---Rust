@@ -174,7 +174,7 @@ impl RetireQueue {
         if self.pending.is_empty() {
             return;
         }
-        for item in std::mem::take(&mut self.pending) {
+        for item in self.pending.drain(..) {
             if item.event.signaled_value() >= item.stamp && item.age >= min_drains() {
                 // Actual release — funnels through the defer-drop probe so
                 // the env-gated harness stays composable with retirement on.
@@ -319,10 +319,20 @@ mod tests {
         let (sender, mut queue) = RetireQueue::new();
         let mark = RetireMark::new(event.second_handle(), sender);
 
+        queue.pending.reserve(4);
+        queue.keep.reserve(4);
+        let warm_capacity = queue.pending.capacity() + queue.keep.capacity();
+
         // Entry A: stamp 1, no commit yet.
         drop(marked_texture(&device, &mark));
         queue.drain();
         assert_eq!(queue.pending_count(), 1, "unsignaled entry stays pending");
+        // Repeated drains of an unsignaled resource must retain both scratch
+        // allocations rather than freeing a consumed vector every frame.
+        for _ in 0..3 {
+            queue.drain();
+            assert_eq!(queue.pending.capacity() + queue.keep.capacity(), warm_capacity);
+        }
 
         // Commit (signaled = 1), then entry B drops → stamp 2.
         commit_one_signal(&device, &event);
