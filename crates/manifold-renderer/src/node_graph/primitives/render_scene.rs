@@ -2563,6 +2563,326 @@ impl RenderScene {
                 );
         }
     }
+    /// BUG-trh7 stage 2, pass 7a: RT accel maintenance — gi_materials,
+    /// the three-tier dirty keys (topo / content-settle / accel), the
+    /// deferred-build decision, and the build/refit itself with the
+    /// reject path. Returns the gi_materials table for the dispatch-time
+    /// GPU upload, plus the topo and content keys the trace gate and the
+    /// RT-SOURCE admission log consume. Runs inside evaluate's
+    /// `if rt_enabled` gate, ahead of `rt_trace_accumulate`.
+    fn rt_accel_maintenance<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        rt_ready: &mut bool,
+        topology_valid: bool,
+        objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
+        opaque_draws: &[&ObjectDraw<'ctx>],
+    ) -> (
+        Vec<manifold_gpu::raytrace::GiMaterial>,
+        Vec<&'ctx manifold_gpu::GpuTexture>,
+        u64,
+        u64,
+    ) {
+            // RS-B: build gi_materials alongside objects (SAME order) for
+            // the emissive light table at accel-build time. Reused below
+            // for the GPU upload at dispatch time.
+            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
+                .iter()
+                .map(|d| {
+                    manifold_gpu::raytrace::GiMaterial::new(
+                        [
+                            d.uniforms.base_color[0],
+                            d.uniforms.base_color[1],
+                            d.uniforms.base_color[2],
+                        ],
+                        [
+                            d.uniforms.emission[0] * d.uniforms.emission[3],
+                            d.uniforms.emission[1] * d.uniforms.emission[3],
+                            d.uniforms.emission[2] * d.uniforms.emission[3],
+                        ],
+                        [
+                            d.uniforms.pbr_metallic_roughness[0],
+                            d.uniforms.pbr_metallic_roughness[1],
+                            0.0,
+                            0.0,
+                        ],
+                        // RT-TL-B (section 16 TL4): the walk's attenuation
+                        // factor — the same `diffuse_transmission_params.x`
+                        // the raster forward term reads.
+                        d.uniforms.diffuse_transmission_params,
+                    )
+                })
+                .collect();
+            // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4):
+            // scene-level flag — true if any object's diffuse_transmission_factor > 0.
+            self.rt_has_translucency = gi_materials_data.iter().any(|m| m.translucency[0] > 0.0);
+
+            // Dirty-check keys, three tiers (in priority order):
+            //
+            // TOPO key (identity + count + epoch, no generation) — drives
+            // first build and genuine topology changes (buffer swap, object
+            // count change). Deliberately excludes transforms: a moving
+            // object must NOT read as a new topology (BUG-320).
+            //
+            // CONTENT key (topo + per-draw vertices_generation) — separates
+            // async mesh content arrival (gltf_mesh_source decode + staging
+            // copy lands after initial build) from the topo path. The
+            // generation bumps when new content lands, triggering a deferred
+            // rebuild once the generation settles (stable one frame). A
+            // never-settling (deforming) producer changes generation every
+            // frame, so this key never settles — no rebuild, preserving
+            // pre-fix behavior (D17 documented caveat).
+            //
+            // ACCEL key (topo + transforms) — the refit path. Only checked
+            // when both topo and content are settled; a content rebuild
+            // subsumes any pending refit (both fire → rebuild wins).
+            use std::hash::{Hash, Hasher};
+            let mut hasher = ahash::AHasher::default();
+            hasher.write_usize(objects.len());
+            for o in objects {
+                o.vertex_buffer.identity_key().hash(&mut hasher);
+                hasher.write_u32(o.triangle_count);
+                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
+                // CAPACITY is topology — the TLAS slot count is baked at
+                // build time, so a capacity change rebuilds through
+                // BUG-308's one-frame defer. Same rule as manifold-gpu's
+                // `effective_instance_slots` (P1.5: any WIRED object takes
+                // the GPU path, 1-capacity included — its TRS is GPU-side).
+                // The wired buffer's IDENTITY deliberately does NOT ride
+                // here (D9: the descriptor kernel reads whatever buffer is
+                // wired each refit); content changes ride the accel key
+                // below.
+                hasher.write_u32(if o.instances_addr != 0 {
+                    o.instance_slots.max(1)
+                } else {
+                    1
+                });
+            }
+            hasher.write_u64(ctx.rebuild_epoch);
+            let topo_key = hasher.finish();
+            for (o, d) in objects.iter().zip(opaque_draws.iter()) {
+                hasher.write(bytemuck::bytes_of(&o.transform));
+                // Per-object cast_shadows toggle rewrites only the instance
+                // mask (see `refit_accel`), same cheap path as a transform
+                // change — folded into the SAME key so a toggle with no
+                // transform change still triggers a refit.
+                hasher.write_u8(o.cast_shadows as u8);
+                // RT_INSTANCING_DESIGN.md D9/INV-RTI4: a wired instances
+                // buffer's CONTENT changes refit (descriptor-build
+                // re-dispatch + TLAS refit in one command buffer). Static
+                // loop/mirror buffers never bump the generation, so the
+                // common case is zero per-frame cost. Deliberately NOT in
+                // the content-settle key: a re-scattering producer bumps
+                // every frame and would never settle, suppressing its
+                // rebuilds. `None` (unwired) hashes as a distinct state,
+                // mirroring the vertices_generation Option discipline.
+                d.instances_generation.hash(&mut hasher);
+            }
+            let accel_key = hasher.finish();
+            // Content key: topo key plus every draw's slot generation, on a
+            // fresh hasher so generation stays OUT of `accel_key` — a
+            // generation bump must not read as a refit trigger (refits only
+            // rewrite instance transforms; a content change needs a full
+            // rebuild via the settle path, and a deforming producer would
+            // otherwise force a refit every frame).
+            let mut content_hasher = ahash::AHasher::default();
+            topo_key.hash(&mut content_hasher);
+            for d in opaque_draws.iter() {
+                d.vertices_generation.hash(&mut content_hasher);
+            }
+            let content_key = content_hasher.finish();
+
+            let rt_source_trace_generation = ctx.rebuild_epoch;
+            let gpu = ctx.gpu_encoder();
+            // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
+            // count, same NLL-borrow reason the tracer/masks/params
+            // buffers above are ensured before `opaque_draws`'
+            // long-lived immutable borrow starts.
+            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
+            // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
+            // `ensure_normal_sources` — object-indexed readers (n4.w
+            // roughness, RS-C sampler) use the canonical rows,
+            // instance_id-indexed readers add N via params.slot_row_base.
+            // A wired draw contributes `instance_count` (buffer capacity —
+            // D2) slot rows; unwired draws contribute their one identity
+            // slot.
+            let rt_gi_slot_count: usize = objects
+                .iter()
+                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
+                .sum::<usize>()
+                + objects.len();
+            ensure_rt_gi_materials(
+                &mut self.rt_gi_materials,
+                &mut self.rt_gi_materials_capacity,
+                gpu.device,
+                rt_gi_slot_count,
+            );
+            // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
+            // placement as `ensure_rt_gi_materials` above.
+            ensure_rt_obj_motion(
+                &mut self.rt_obj_motion,
+                &mut self.rt_obj_motion_capacity,
+                gpu.device,
+                objects.len(),
+            );
+            // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
+            // the SAME `objects` slice every RT-ready frame (below), not
+            // gated on the accel-rebuild key (an object's `transform` alone
+            // changing, e.g. animation, must refresh its normal_matrix too).
+            // RT-T2-A: also returns the ordered alpha-masked-object base-
+            // color-texture list, threaded straight to `dispatch_shadow_
+            // rays` below (same per-frame cadence — this list can change
+            // even when topology/transform don't, e.g. a material swap).
+            // BUG-wytp: the same returned list now also carries normal-map
+            // textures (and MR maps, since R3), indexed by
+            // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
+            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
+                &mut self.rt_normal_sources,
+                &mut self.rt_normal_sources_capacity,
+                gpu.device,
+                objects,
+            );
+            // Rebuild-or-refit decision with BUG-308's one-frame defer.
+            //
+            // Two triggers share the same build call site:
+            // 1. Topo trigger (identity + count + epoch) — fires on first
+            //    RT frame or a genuine topology change. Key must recur
+            //    unchanged one frame before build enqueues (BUG-308).
+            // 2. Content-settle trigger (topo + per-draw generation) —
+            //    fires when async mesh content lands and settles. Only
+            //    evaluated when the topo key is stable, so both never
+            //    fight. A never-settling producer (deforming mesh, every-
+            //    frame generation bump) never satisfies the recur check
+            //    — no rebuild, preserving pre-fix D17 behavior.
+            //
+            // The topo key is recorded by ANY build. The content key is
+            // recorded ONLY when the content-settle trigger fired
+            // (BUG-oqta): a topo-triggered build that recorded it would
+            // swallow an in-flight generation bump — async mesh content
+            // landing during the BUG-308 one-frame defer changes the
+            // content key before the build enqueues, and the settle
+            // trigger (which compares against the recorded key) would
+            // then never fire the second build that picks the landed
+            // content up, leaving the empty/stale accel forever. Not
+            // recording it costs one settle-triggered rebuild at startup
+            // even when content was already resident — async and served
+            // by the raster path meanwhile. The refit path (full
+            // accel_key changes under an UNCHANGED topo key) fires only
+            // when neither trigger has work to do — a content rebuild
+            // subsumes any pending refit.
+            let (build_this_frame, content_trigger_fired) = match rt_deferred_build_decision(
+                self.rt_accel_topo_key, self.rt_accel_content_key,
+                &mut self.rt_accel_pending_key, &mut self.rt_accel_content_pending_key,
+                topo_key, content_key,
+            ) {
+                RtBuildDecision::Defer => (false, false),
+                RtBuildDecision::Build { content_trigger_fired } => (true, content_trigger_fired),
+            };
+
+            if build_this_frame {
+                let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                if rt_source_trace_enabled() {
+                    log::info!(
+                        "[RT-SOURCE] accel-build action=build rebuild_epoch={} topo_key={topo_key:#x} content_key={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                        rt_source_trace_generation, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                    );
+                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                        log::info!(
+                            "[RT-SOURCE] accel-object action=build index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                            object.instance_slots, object.instances_addr
+                        );
+                        log::info!("[RT-SOURCE] accel-generations action=build index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                    }
+                }
+                // Q1 probe: what did build_accel see?
+                if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
+                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
+                    for (i, o) in objects.iter().enumerate() {
+                        let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
+                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
+                    }
+                }
+                // The old accel is dropped here — safe: `RtAccel`'s
+                // `Drop` self-retires its Metal handles through
+                // `retire_on_queue` (raytrace.rs), so prior frames'
+                // Generators traces provably finish before anything
+                // frees. No caller-side handoff needed.
+                self.rt_accel = Some(tracer.build_accel(gpu.device, objects, &gi_materials_data));
+                self.rt_accel_topo_key = Some(topo_key);
+                // BUG-oqta: only a content-settle-triggered build records
+                // the content key (why: the trigger block above).
+                if content_trigger_fired {
+                    self.rt_accel_content_key = Some(content_key);
+                }
+                self.rt_accel_key = Some(accel_key);
+                self.rt_accel_pending_key = None;
+                self.rt_accel_content_pending_key = None;
+                // BUG-320: the fresh build must be observed ready
+                // before tracing resumes — the old accel is dropped
+                // (self-retiring Drop) and no longer traced against.
+                self.rt_accel_built = false;
+                *rt_ready = false;
+                self.rt_topology_rejected = false;
+                log::info!(
+                    "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"
+                );
+            } else if rt_refit_eligible(topology_valid, self.rt_accel_key, accel_key) {
+                // BUG-320: same topology, moved transforms — refit the
+                // TLAS in place. Safe same-frame (transforms are
+                // CPU-authored; no upstream GPU write to race — the
+                // BUG-308 defer is a build_accel concern only). Enqueue
+                // only when the accel is idle (`ready`): rewriting the
+                // CPU-mapped instance buffer under an in-flight
+                // refit/build would tear; when busy, skip and catch up
+                // next frame with the then-current transforms. Tracing
+                // continues against the old transforms throughout
+                // (`rt_accel_built` gate above) — one frame of accel
+                // latency on a moving mesh is invisible, the RT↔raster
+                // path swap it replaces was not.
+                if let Some(accel) = self.rt_accel.as_ref()
+                    && accel.ready.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                    if let Err(mismatch) = tracer.refit_accel(gpu.device, accel, objects) {
+                        *rt_ready = false;
+                        let first_rejection = reject_topology(
+                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                            &mut self.rt_topology_rejected,
+                        );
+                        if first_rejection && !self.rt_topology_mismatch_logged {
+                            log::warn!("node.render_scene: RT topology mismatch before refit: object={} category={:?}", mismatch.object, mismatch.category);
+                            self.rt_topology_mismatch_logged = true;
+                        }
+                    } else {
+                        if rt_source_trace_enabled() {
+                            log::info!(
+                                "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                                rt_source_trace_generation, accel as *const _ as usize, self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                            );
+                            for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                                log::info!(
+                                    "[RT-SOURCE] accel-object action=refit index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                                    index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                                    object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                                    object.instance_slots, object.instances_addr
+                                );
+                                log::info!("[RT-SOURCE] accel-generations action=refit index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                            }
+                        }
+                        self.rt_accel_key = Some(accel_key);
+                        self.rt_topology_mismatch_logged = false;
+                    }
+                }
+            }
+
+
+        (gi_materials_data, alpha_textures, topo_key, content_key)
+    }
+
 
 
 
@@ -6006,303 +6326,19 @@ impl EffectNode for RenderScene {
         // instance capacity, composed GPU-side (descriptor-build kernel),
         // so instanced objects trace one copy per live raster slot. ----
         if rt_enabled {
+            // BUG-trh7 stage 2, pass 7a: accel maintenance (keys, build,
+            // refit) — returns the dispatch-time gi_materials table and the
+            // keys the trace gate + admission log consume.
+            let (gi_materials_data, alpha_textures, topo_key, content_key) = self.rt_accel_maintenance(
+                ctx,
+                &mut rt_ready,
+                topology_valid,
+                &rt_objects,
+                &opaque_draws,
+            );
             let objects = rt_objects;
-
-            // RS-B: build gi_materials alongside objects (SAME order) for
-            // the emissive light table at accel-build time. Reused below
-            // for the GPU upload at dispatch time.
-            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
-                .iter()
-                .map(|d| {
-                    manifold_gpu::raytrace::GiMaterial::new(
-                        [
-                            d.uniforms.base_color[0],
-                            d.uniforms.base_color[1],
-                            d.uniforms.base_color[2],
-                        ],
-                        [
-                            d.uniforms.emission[0] * d.uniforms.emission[3],
-                            d.uniforms.emission[1] * d.uniforms.emission[3],
-                            d.uniforms.emission[2] * d.uniforms.emission[3],
-                        ],
-                        [
-                            d.uniforms.pbr_metallic_roughness[0],
-                            d.uniforms.pbr_metallic_roughness[1],
-                            0.0,
-                            0.0,
-                        ],
-                        // RT-TL-B (section 16 TL4): the walk's attenuation
-                        // factor — the same `diffuse_transmission_params.x`
-                        // the raster forward term reads.
-                        d.uniforms.diffuse_transmission_params,
-                    )
-                })
-                .collect();
-            // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4):
-            // scene-level flag — true if any object's diffuse_transmission_factor > 0.
-            self.rt_has_translucency = gi_materials_data.iter().any(|m| m.translucency[0] > 0.0);
-
-            // Dirty-check keys, three tiers (in priority order):
-            //
-            // TOPO key (identity + count + epoch, no generation) — drives
-            // first build and genuine topology changes (buffer swap, object
-            // count change). Deliberately excludes transforms: a moving
-            // object must NOT read as a new topology (BUG-320).
-            //
-            // CONTENT key (topo + per-draw vertices_generation) — separates
-            // async mesh content arrival (gltf_mesh_source decode + staging
-            // copy lands after initial build) from the topo path. The
-            // generation bumps when new content lands, triggering a deferred
-            // rebuild once the generation settles (stable one frame). A
-            // never-settling (deforming) producer changes generation every
-            // frame, so this key never settles — no rebuild, preserving
-            // pre-fix behavior (D17 documented caveat).
-            //
-            // ACCEL key (topo + transforms) — the refit path. Only checked
-            // when both topo and content are settled; a content rebuild
-            // subsumes any pending refit (both fire → rebuild wins).
-            use std::hash::{Hash, Hasher};
-            let mut hasher = ahash::AHasher::default();
-            hasher.write_usize(objects.len());
-            for o in &objects {
-                o.vertex_buffer.identity_key().hash(&mut hasher);
-                hasher.write_u32(o.triangle_count);
-                // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
-                // CAPACITY is topology — the TLAS slot count is baked at
-                // build time, so a capacity change rebuilds through
-                // BUG-308's one-frame defer. Same rule as manifold-gpu's
-                // `effective_instance_slots` (P1.5: any WIRED object takes
-                // the GPU path, 1-capacity included — its TRS is GPU-side).
-                // The wired buffer's IDENTITY deliberately does NOT ride
-                // here (D9: the descriptor kernel reads whatever buffer is
-                // wired each refit); content changes ride the accel key
-                // below.
-                hasher.write_u32(if o.instances_addr != 0 {
-                    o.instance_slots.max(1)
-                } else {
-                    1
-                });
-            }
-            hasher.write_u64(ctx.rebuild_epoch);
-            let topo_key = hasher.finish();
-            for (o, d) in objects.iter().zip(opaque_draws.iter()) {
-                hasher.write(bytemuck::bytes_of(&o.transform));
-                // Per-object cast_shadows toggle rewrites only the instance
-                // mask (see `refit_accel`), same cheap path as a transform
-                // change — folded into the SAME key so a toggle with no
-                // transform change still triggers a refit.
-                hasher.write_u8(o.cast_shadows as u8);
-                // RT_INSTANCING_DESIGN.md D9/INV-RTI4: a wired instances
-                // buffer's CONTENT changes refit (descriptor-build
-                // re-dispatch + TLAS refit in one command buffer). Static
-                // loop/mirror buffers never bump the generation, so the
-                // common case is zero per-frame cost. Deliberately NOT in
-                // the content-settle key: a re-scattering producer bumps
-                // every frame and would never settle, suppressing its
-                // rebuilds. `None` (unwired) hashes as a distinct state,
-                // mirroring the vertices_generation Option discipline.
-                d.instances_generation.hash(&mut hasher);
-            }
-            let accel_key = hasher.finish();
-            // Content key: topo key plus every draw's slot generation, on a
-            // fresh hasher so generation stays OUT of `accel_key` — a
-            // generation bump must not read as a refit trigger (refits only
-            // rewrite instance transforms; a content change needs a full
-            // rebuild via the settle path, and a deforming producer would
-            // otherwise force a refit every frame).
-            let mut content_hasher = ahash::AHasher::default();
-            topo_key.hash(&mut content_hasher);
-            for d in opaque_draws.iter() {
-                d.vertices_generation.hash(&mut content_hasher);
-            }
-            let content_key = content_hasher.finish();
-
             let rt_source_trace_generation = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
-            // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
-            // count, same NLL-borrow reason the tracer/masks/params
-            // buffers above are ensured before `opaque_draws`'
-            // long-lived immutable borrow starts.
-            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
-            // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
-            // `ensure_normal_sources` — object-indexed readers (n4.w
-            // roughness, RS-C sampler) use the canonical rows,
-            // instance_id-indexed readers add N via params.slot_row_base.
-            // A wired draw contributes `instance_count` (buffer capacity —
-            // D2) slot rows; unwired draws contribute their one identity
-            // slot.
-            let rt_gi_slot_count: usize = objects
-                .iter()
-                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
-                .sum::<usize>()
-                + objects.len();
-            ensure_rt_gi_materials(
-                &mut self.rt_gi_materials,
-                &mut self.rt_gi_materials_capacity,
-                gpu.device,
-                rt_gi_slot_count,
-            );
-            // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
-            // placement as `ensure_rt_gi_materials` above.
-            ensure_rt_obj_motion(
-                &mut self.rt_obj_motion,
-                &mut self.rt_obj_motion_capacity,
-                gpu.device,
-                objects.len(),
-            );
-            // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
-            // the SAME `objects` slice every RT-ready frame (below), not
-            // gated on the accel-rebuild key (an object's `transform` alone
-            // changing, e.g. animation, must refresh its normal_matrix too).
-            // RT-T2-A: also returns the ordered alpha-masked-object base-
-            // color-texture list, threaded straight to `dispatch_shadow_
-            // rays` below (same per-frame cadence — this list can change
-            // even when topology/transform don't, e.g. a material swap).
-            // BUG-wytp: the same returned list now also carries normal-map
-            // textures (and MR maps, since R3), indexed by
-            // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
-            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
-                &mut self.rt_normal_sources,
-                &mut self.rt_normal_sources_capacity,
-                gpu.device,
-                &objects,
-            );
-            // Rebuild-or-refit decision with BUG-308's one-frame defer.
-            //
-            // Two triggers share the same build call site:
-            // 1. Topo trigger (identity + count + epoch) — fires on first
-            //    RT frame or a genuine topology change. Key must recur
-            //    unchanged one frame before build enqueues (BUG-308).
-            // 2. Content-settle trigger (topo + per-draw generation) —
-            //    fires when async mesh content lands and settles. Only
-            //    evaluated when the topo key is stable, so both never
-            //    fight. A never-settling producer (deforming mesh, every-
-            //    frame generation bump) never satisfies the recur check
-            //    — no rebuild, preserving pre-fix D17 behavior.
-            //
-            // The topo key is recorded by ANY build. The content key is
-            // recorded ONLY when the content-settle trigger fired
-            // (BUG-oqta): a topo-triggered build that recorded it would
-            // swallow an in-flight generation bump — async mesh content
-            // landing during the BUG-308 one-frame defer changes the
-            // content key before the build enqueues, and the settle
-            // trigger (which compares against the recorded key) would
-            // then never fire the second build that picks the landed
-            // content up, leaving the empty/stale accel forever. Not
-            // recording it costs one settle-triggered rebuild at startup
-            // even when content was already resident — async and served
-            // by the raster path meanwhile. The refit path (full
-            // accel_key changes under an UNCHANGED topo key) fires only
-            // when neither trigger has work to do — a content rebuild
-            // subsumes any pending refit.
-            let (build_this_frame, content_trigger_fired) = match rt_deferred_build_decision(
-                self.rt_accel_topo_key, self.rt_accel_content_key,
-                &mut self.rt_accel_pending_key, &mut self.rt_accel_content_pending_key,
-                topo_key, content_key,
-            ) {
-                RtBuildDecision::Defer => (false, false),
-                RtBuildDecision::Build { content_trigger_fired } => (true, content_trigger_fired),
-            };
-
-            if build_this_frame {
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                if rt_source_trace_enabled() {
-                    log::info!(
-                        "[RT-SOURCE] accel-build action=build rebuild_epoch={} topo_key={topo_key:#x} content_key={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
-                        rt_source_trace_generation, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
-                    );
-                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
-                        log::info!(
-                            "[RT-SOURCE] accel-object action=build index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
-                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
-                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
-                            object.instance_slots, object.instances_addr
-                        );
-                        log::info!("[RT-SOURCE] accel-generations action=build index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
-                    }
-                }
-                // Q1 probe: what did build_accel see?
-                if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
-                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
-                    for (i, o) in objects.iter().enumerate() {
-                        let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
-                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
-                    }
-                }
-                // The old accel is dropped here — safe: `RtAccel`'s
-                // `Drop` self-retires its Metal handles through
-                // `retire_on_queue` (raytrace.rs), so prior frames'
-                // Generators traces provably finish before anything
-                // frees. No caller-side handoff needed.
-                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects, &gi_materials_data));
-                self.rt_accel_topo_key = Some(topo_key);
-                // BUG-oqta: only a content-settle-triggered build records
-                // the content key (why: the trigger block above).
-                if content_trigger_fired {
-                    self.rt_accel_content_key = Some(content_key);
-                }
-                self.rt_accel_key = Some(accel_key);
-                self.rt_accel_pending_key = None;
-                self.rt_accel_content_pending_key = None;
-                // BUG-320: the fresh build must be observed ready
-                // before tracing resumes — the old accel is dropped
-                // (self-retiring Drop) and no longer traced against.
-                self.rt_accel_built = false;
-                rt_ready = false;
-                self.rt_topology_rejected = false;
-                log::info!(
-                    "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"
-                );
-            } else if rt_refit_eligible(topology_valid, self.rt_accel_key, accel_key) {
-                // BUG-320: same topology, moved transforms — refit the
-                // TLAS in place. Safe same-frame (transforms are
-                // CPU-authored; no upstream GPU write to race — the
-                // BUG-308 defer is a build_accel concern only). Enqueue
-                // only when the accel is idle (`ready`): rewriting the
-                // CPU-mapped instance buffer under an in-flight
-                // refit/build would tear; when busy, skip and catch up
-                // next frame with the then-current transforms. Tracing
-                // continues against the old transforms throughout
-                // (`rt_accel_built` gate above) — one frame of accel
-                // latency on a moving mesh is invisible, the RT↔raster
-                // path swap it replaces was not.
-                if let Some(accel) = self.rt_accel.as_ref()
-                    && accel.ready.load(std::sync::atomic::Ordering::Acquire)
-                {
-                    let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    if let Err(mismatch) = tracer.refit_accel(gpu.device, accel, &objects) {
-                        rt_ready = false;
-                        let first_rejection = reject_topology(
-                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                            &mut self.rt_topology_rejected,
-                        );
-                        if first_rejection && !self.rt_topology_mismatch_logged {
-                            log::warn!("node.render_scene: RT topology mismatch before refit: object={} category={:?}", mismatch.object, mismatch.category);
-                            self.rt_topology_mismatch_logged = true;
-                        }
-                    } else {
-                        if rt_source_trace_enabled() {
-                            log::info!(
-                                "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
-                                rt_source_trace_generation, accel as *const _ as usize, self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
-                            );
-                            for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
-                                log::info!(
-                                    "[RT-SOURCE] accel-object action=refit index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
-                                    index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
-                                    object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
-                                    object.instance_slots, object.instances_addr
-                                );
-                                log::info!("[RT-SOURCE] accel-generations action=refit index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
-                            }
-                        }
-                        self.rt_accel_key = Some(accel_key);
-                        self.rt_topology_mismatch_logged = false;
-                    }
-                }
-            }
 
             // `rt_ready` was captured at the top of `evaluate()` from the
             // latched `rt_accel_built` flag BEFORE this block ran —

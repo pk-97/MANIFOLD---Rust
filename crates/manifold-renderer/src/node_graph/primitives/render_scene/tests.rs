@@ -51,8 +51,19 @@
         ] {
             assert!(evaluate.find(marker).unwrap() > validate_call, "dispatcher consumer precedes the validate call: {marker}");
         }
-        let build = evaluate.split_once("self.rt_accel = Some(tracer.build_accel").unwrap().1
-            .split_once("} else if rt_refit_eligible").unwrap().0;
+        // The build path (inside `rt_accel_maintenance` after the carve):
+        // a fresh build is observed not-ready before tracing resumes.
+        let maintenance = source
+            .split_once("    fn rt_accel_maintenance<'ctx, 'gpu>")
+            .unwrap()
+            .1;
+        let build = maintenance
+            .split_once("self.rt_accel = Some(tracer.build_accel")
+            .unwrap()
+            .1
+            .split_once("} else if rt_refit_eligible")
+            .unwrap()
+            .0;
         assert!(build.contains("self.rt_accel_built = false;"));
         assert!(build.contains("rt_ready = false;"));
     }
