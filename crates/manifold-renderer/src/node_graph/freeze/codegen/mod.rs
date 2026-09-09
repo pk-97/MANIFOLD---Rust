@@ -16,6 +16,7 @@
 //! pipeline-cache key, so determinism is load-bearing.
 
 mod types;
+mod params_struct;
 mod uniforms;
 mod entry_points;
 mod standalone;
