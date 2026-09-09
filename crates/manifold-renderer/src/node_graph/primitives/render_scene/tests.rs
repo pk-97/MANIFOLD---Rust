@@ -13,25 +13,57 @@
         // Production source-order contract: no duplicated topology model or
         // synthetic GPU buffers. A late check would leave uploaded flags and
         // skipped fallback passes inconsistent with trace suppression.
+        // BUG-trh7 stage 2 shape: the check, the reject path, and the flag
+        // authoring all live inside `validate_topology_and_author_flags`;
+        // every later consumer is ordered by the dispatcher's call order.
         let source = include_str!("../render_scene.rs");
-        let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1
-            .split_once("#[cfg(test)]").unwrap().0;
-        let check = evaluate.find("accel.check_topology(&rt_objects)").unwrap();
-        let reject = evaluate[check..].find("rt_ready = false;").unwrap() + check;
+        let method = source
+            .split_once("    fn validate_topology_and_author_flags<'ctx, 'gpu>")
+            .unwrap()
+            .1
+            .split_once("\n    /// ")
+            .unwrap()
+            .0;
+        let check = method.find("accel.check_topology(&rt_objects)").unwrap();
+        let reject = method[check..].find("rt_ready = false;").unwrap() + check;
         for marker in [
             "let will_rt_accumulate_this_frame =", "uniforms.scene_params[3] =",
             "uniforms.rt_flags[0] =", "uniforms.rt_flags[1] =",
             "uniforms.rt_flags[2] =", "uniforms.rt_flags[3] =",
             "uniforms.fog_params[2] =", "uniforms.fog_params[3] =",
-            "let denoise_wanted =", "self.ensure_shadow_map(gpu.device",
-            "if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled)",
         ] {
-            assert!(evaluate.find(marker).unwrap() > reject, "consumer precedes topology rejection: {marker}");
+            assert!(method.find(marker).unwrap() > reject, "consumer precedes topology rejection: {marker}");
         }
-        assert_eq!(evaluate.matches("let rt_objects:").count(), 1);
-        assert!(evaluate.contains("let objects = rt_objects;"));
-        let build = evaluate.split_once("self.rt_accel = Some(tracer.build_accel").unwrap().1
-            .split_once("} else if rt_refit_eligible").unwrap().0;
+        assert_eq!(method.matches("let rt_objects:").count(), 1);
+        // The dispatcher: the validate call textually precedes every later
+        // consumer of the topology decision — the ensure call (which owns
+        // denoise_wanted and the shadow-map ensures) and the remaining
+        // inline consumers.
+        let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1;
+        let validate_call = evaluate
+            .find(".validate_topology_and_author_flags(ctx")
+            .unwrap();
+        for marker in [
+            ".ensure_gpu_resources(",
+            ".raster_shadow_prepasses(",
+            ".opaque_depth_snapshot_pass(",
+            "let objects = rt_objects;",
+        ] {
+            assert!(evaluate.find(marker).unwrap() > validate_call, "dispatcher consumer precedes the validate call: {marker}");
+        }
+        // The build path (inside `rt_accel_maintenance` after the carve):
+        // a fresh build is observed not-ready before tracing resumes.
+        let maintenance = source
+            .split_once("    fn rt_accel_maintenance<'ctx, 'gpu>")
+            .unwrap()
+            .1;
+        let build = maintenance
+            .split_once("self.rt_accel = Some(tracer.build_accel")
+            .unwrap()
+            .1
+            .split_once("} else if rt_refit_eligible")
+            .unwrap()
+            .0;
         assert!(build.contains("self.rt_accel_built = false;"));
         assert!(build.contains("rt_ready = false;"));
     }
