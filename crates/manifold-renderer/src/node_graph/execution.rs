@@ -247,6 +247,14 @@ pub struct Executor {
     /// numbers is always sound. See `rebuild_epoch` for the cross-executor-
     /// lifetime hazard this alone does not cover.
     slot_generations: Vec<u64>,
+    /// Per-physical-slot content-availability flag, indexed by `Slot.0`:
+    /// `true` = the producing step declared its outputs pending this frame
+    /// (`ctx.mark_outputs_pending()` — async content in flight, bytes are
+    /// allocation not content). Rewritten from the step's latest evaluate
+    /// each time it runs (a skipped step keeps its last declaration), so
+    /// stopping the declaration returns the slot to ready. Read side:
+    /// [`crate::node_graph::bindings::NodeInputs::slot_content_ready`].
+    slot_pending: Vec<bool>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — per-step
     /// "last frame's param-driven alias" state: `(aliased-from resource,
     /// destination slot, in-resource's write generation at alias time)`,
@@ -423,6 +431,7 @@ impl Executor {
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
             node_declared_unchanged: Vec::new(),
+            slot_pending: Vec::new(),
             slot_generations: Vec::new(),
             alias_propagation_state: Vec::new(),
             rebuild_epoch: NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -1346,7 +1355,8 @@ impl Executor {
                     self.error_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
-                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
+                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                            .with_pending(&self.slot_pending);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -1419,6 +1429,21 @@ impl Executor {
                         // frame. `idx` indexes `plan.steps()`, which
                         // `node_declared_unchanged` is sized to match.
                         self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
+                        // Content availability: rewrite this step's output
+                        // slots from its latest declaration (default ready).
+                        // A slot's producer is the single writer of its
+                        // flag, so a stale `true` can only survive while
+                        // the producer itself is skipped.
+                        let declared_pending = ctx.outputs_pending;
+                        for &(_, res) in &step.outputs {
+                            if let Some(slot) = self.backend.slot_for(res) {
+                                let slot_idx = slot.0 as usize;
+                                if self.slot_pending.len() <= slot_idx {
+                                    self.slot_pending.resize(slot_idx + 1, false);
+                                }
+                                self.slot_pending[slot_idx] = declared_pending;
+                            }
+                        }
                     }
                     // Drain scalar writes back into the backend so
                     // downstream readers in the same frame see them via
@@ -1727,7 +1752,8 @@ impl Executor {
                 self.object_write_scratch.clear();
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
-                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
+                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                    .with_pending(&self.slot_pending);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,
@@ -3374,6 +3400,112 @@ mod tests {
             2,
             "draw node evaluates again the frame detections return"
         );
+    }
+
+    /// A Texture2D producer whose pending declaration is driven by a
+    /// shared flag — stands in for `gltf_mesh_source` mid-parse.
+    struct PendingSourceNode {
+        type_id: EffectNodeType,
+        declare_pending: Arc<Mutex<bool>>,
+    }
+
+    impl EffectNode for PendingSourceNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if *self.declare_pending.lock().unwrap() {
+                ctx.mark_outputs_pending();
+            }
+        }
+    }
+
+    /// Records `slot_content_ready` of its "in" port on every evaluate.
+    struct ReadinessObservingNode {
+        type_id: EffectNodeType,
+        log: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl EffectNode for ReadinessObservingNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            let ready = ctx
+                .inputs
+                .slot("in")
+                .map(|s| ctx.inputs.slot_content_ready(s))
+                .expect("wired input must resolve to a slot");
+            self.log.lock().unwrap().push(ready);
+        }
+    }
+
+    /// A producer's pending declaration must reach the consumer in the
+    /// SAME frame (topological order), persist across frames while the
+    /// producer keeps declaring, and reset to ready on the first evaluate
+    /// that stops declaring — the contract render_scene's not-ready
+    /// object gate relies on.
+    #[test]
+    fn pending_declaration_reaches_consumers_and_resets() {
+        let declare_pending = Arc::new(Mutex::new(true));
+        let log = Arc::new(Mutex::new(Vec::new()));
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(PendingSourceNode {
+            type_id: EffectNodeType::new("test.pending_source"),
+            declare_pending: declare_pending.clone(),
+        }));
+        let observer = g.add_node(Box::new(ReadinessObservingNode {
+            type_id: EffectNodeType::new("test.readiness_observer"),
+            log: log.clone(),
+        }));
+        g.connect((src, "out"), (observer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::new(Box::new(crate::node_graph::MockBackend::new()));
+
+        exec.execute_frame(&mut g, &plan, frame_time());
+        exec.execute_frame(&mut g, &plan, frame_time());
+        *declare_pending.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.as_slice(), &[false, false, true]);
     }
 
 }

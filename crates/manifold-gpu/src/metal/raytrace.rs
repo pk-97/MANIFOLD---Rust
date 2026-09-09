@@ -7444,7 +7444,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
-        params_buffer: &GpuBuffer,
+        _params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -7462,15 +7462,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         dst_svt: &GpuTexture,
         label: &str,
     ) {
-        params_buffer.upload(atrous_params_bytes(params));
+        // Each dispatch owns a parameter snapshot; later passes may use a different step.
         let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
         encoder.dispatch_compute(
             &self.atrous_pipeline,
             &[
-                GpuBinding::Buffer {
+                GpuBinding::Bytes {
                     binding: 1,
-                    buffer: params_buffer,
-                    offset: 0,
+                    data: atrous_params_bytes(params),
                 },
                 GpuBinding::Buffer {
                     binding: 2,
@@ -7584,7 +7583,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousPostParams,
-        params_buffer: &GpuBuffer,
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         normal_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -7592,15 +7591,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         dst_irr: &GpuTexture,
         label: &str,
     ) {
-        params_buffer.upload(atrous_post_params_bytes(params));
+        // Each dispatch owns a parameter snapshot; later passes may use a different step.
         let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
         encoder.dispatch_compute(
             &self.atrous_post_pipeline,
             &[
-                GpuBinding::Buffer {
+                GpuBinding::Bytes {
                     binding: 1,
-                    buffer: params_buffer,
-                    offset: 0,
+                    data: atrous_post_params_bytes(params),
                 },
                 GpuBinding::Texture {
                     binding: 0,
@@ -7915,6 +7913,93 @@ impl UploadBytes for GpuBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpu-proofs")]
+    fn test_rgba_texture(device: &GpuDevice, label: &str, values: &[[f32; 4]; 81]) -> GpuTexture {
+        let tex = device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
+            format: GpuTextureFormat::Rgba32Float, dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+            label, mip_levels: 1 });
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.iter().flat_map(|x| x.to_le_bytes())).collect();
+        device.upload_texture(&tex, &bytes);
+        tex
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    fn test_depth_texture(device: &GpuDevice) -> GpuTexture {
+        let tex = device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
+            format: GpuTextureFormat::R32Float, dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "f7f1-depth", mip_levels: 1 });
+        device.upload_texture(&tex, &vec![0.5f32.to_le_bytes(); 81].into_iter().flatten().collect::<Vec<_>>());
+        tex
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn bug_f7f1_atrous_passes_snapshot_parameters() {
+        let device = GpuDevice::new();
+        let tracer = MetalShadowRayTracer::new(&device);
+        let depth = test_depth_texture(&device);
+        let normal = test_rgba_texture(&device, "f7f1-normal", &[[0.0, 0.0, 1.0, -1.0]; 81]);
+        let moments = test_rgba_texture(&device, "f7f1-moments", &[[0.0, 1.0, 1.0, 1.0]; 81]);
+        // Bright immediate neighbors, black center and distant neighbors:
+        // step=1 filters the center; step=4 leaves it black. A linear ramp
+        // would be symmetric and could hide the overwritten step.
+        let src = std::array::from_fn(|i| {
+            let x = i % 9;
+            let y = i / 9;
+            let v = if (3..=5).contains(&x) && (3..=5).contains(&y) && i != 40 { 1.0 } else { 0.0 };
+            [v, v, v, 1.0]
+        });
+        let src_tex = test_rgba_texture(&device, "f7f1-src", &src);
+        let params_buffer = device.create_buffer_shared(24);
+        let materials = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+        materials.zero_fill();
+        let read = |tex: &GpuTexture| {
+            let buf = device.create_buffer_shared(9 * 9 * 16);
+            let mut rb = device.create_encoder("f7f1-readback");
+            rb.copy_texture_to_buffer(tex, &buf, 9, 9, 9 * 16);
+            rb.try_commit_and_wait_completed().expect("denoiser readback");
+            unsafe { buf.mapped_ptr().unwrap().cast::<[f32; 4]>().add(40).read_unaligned() }
+        };
+        for post in [false, true] {
+            // Two batched outputs, then the same two passes submitted one at
+            // a time as references. Each regular pass needs six output textures.
+            let outputs: [[GpuTexture; 6]; 4] = std::array::from_fn(|_| {
+                std::array::from_fn(|_| test_rgba_texture(&device, "f7f1-output", &[[0.0; 4]; 81]))
+            });
+            let dispatch = |enc: &mut GpuEncoder, step: u32, out: &[GpuTexture; 6]| {
+                if post {
+                    tracer.atrous_post_pass(enc, &AtrousPostParams::new([9, 9], step, 1.0),
+                        &params_buffer, &depth, &normal, &moments, &src_tex, &out[2], "f7f1-post");
+                } else {
+                    tracer.atrous_pass(enc, &AtrousParams::new([9, 9], step, true, 0),
+                        &params_buffer, &materials, &depth, &moments,
+                        &src_tex, &out[0], &src_tex, &out[1], &src_tex, &out[2],
+                        &normal, &out[3], &src_tex, &out[4], &src_tex, &out[5], "f7f1-atrous");
+                }
+            };
+            let mut enc = device.create_encoder("f7f1-batched");
+            dispatch(&mut enc, 1, &outputs[0]);
+            dispatch(&mut enc, 4, &outputs[1]);
+            enc.try_commit_and_wait_completed().expect("batched denoiser passes");
+            for (i, step) in [1, 4].into_iter().enumerate() {
+                let mut enc = device.create_encoder("f7f1-individual-reference");
+                dispatch(&mut enc, step, &outputs[i + 2]);
+                enc.try_commit_and_wait_completed().expect("reference denoiser pass");
+            }
+            let values: [[f32; 4]; 4] = std::array::from_fn(|i| read(&outputs[i][2]));
+            assert!((values[2][0] - values[3][0]).abs() > 0.05, "fixture does not distinguish steps: post={post} {values:?}");
+            for i in 0..2 {
+                for c in 0..4 {
+                    assert!(values[i][c].is_finite());
+                    assert!((values[i][c] - values[i + 2][c]).abs() < 1e-5,
+                        "batched parameters changed: post={post} pass={i} channel={c} {values:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn wired_instance_source_address_contract() {
