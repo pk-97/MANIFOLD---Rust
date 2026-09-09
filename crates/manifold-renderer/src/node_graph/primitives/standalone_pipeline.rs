@@ -38,3 +38,82 @@ pub fn standalone_pipeline<'a, P: Primitive>(
 pub fn active_elements<T>(bytes: u64, requested: u32) -> u32 {
     requested.min((bytes / std::mem::size_of::<T>() as u64) as u32)
 }
+
+/// The canonical texture-path binding order (BUG-uwgn cluster 4): uniform(0),
+/// sampled input textures in port order, the shared sampler, one 2D
+/// storage-write output. The freeze codegen emits exactly this layout for
+/// texture-path atoms (binding_contract_tests reflects every generated kernel
+/// and pins the census); call sites that match it build their tail through
+/// [`dispatch_standalone_2d`] instead of an inline binding array.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandaloneSlot {
+    Uniform,
+    TexIn,
+    Sampler,
+    TexOut,
+}
+
+/// Slot sequence for the canonical tail — pure so the binding-contract test
+/// can check it against the reflected kernel without a device.
+pub fn standalone_2d_slots(n_textures: usize, has_sampler: bool) -> Vec<StandaloneSlot> {
+    let mut slots = Vec::with_capacity(n_textures + 3);
+    slots.push(StandaloneSlot::Uniform);
+    slots.extend(std::iter::repeat_n(StandaloneSlot::TexIn, n_textures));
+    if has_sampler {
+        slots.push(StandaloneSlot::Sampler);
+    }
+    slots.push(StandaloneSlot::TexOut);
+    slots
+}
+
+/// Canonical texture-path dispatch tail: builds the bindings in
+/// [`standalone_2d_slots`] order and dispatches a 2D grid over `out`
+/// (16×16 workgroups, the texture path's constant). Qualifying atoms only —
+/// the reflected kernel must be uniform(0) + sampled textures + at most one
+/// sampler + exactly one 2D storage-write output (no storage buffers, no 3D,
+/// no multi-output); `binding_contract_tests` is the census that defines the
+/// set. Anything else keeps its hand-written tail.
+pub fn dispatch_standalone_2d(
+    gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+    pipeline: &manifold_gpu::GpuComputePipeline,
+    uniform_bytes: &[u8],
+    textures: &[&manifold_gpu::GpuTexture],
+    sampler: Option<&manifold_gpu::GpuSampler>,
+    out: &manifold_gpu::GpuTexture,
+    label: &str,
+) {
+    debug_assert_eq!(
+        standalone_2d_slots(textures.len(), sampler.is_some()).len(),
+        textures.len() + 2 + usize::from(sampler.is_some())
+    );
+    let mut bindings: Vec<manifold_gpu::GpuBinding> =
+        Vec::with_capacity(textures.len() + 2 + usize::from(sampler.is_some()));
+    bindings.push(manifold_gpu::GpuBinding::Bytes {
+        binding: 0,
+        data: uniform_bytes,
+    });
+    for (i, tex) in textures.iter().enumerate() {
+        bindings.push(manifold_gpu::GpuBinding::Texture {
+            binding: (i + 1) as u32,
+            texture: tex,
+        });
+    }
+    let mut next = textures.len() as u32 + 1;
+    if let Some(s) = sampler {
+        bindings.push(manifold_gpu::GpuBinding::Sampler {
+            binding: next,
+            sampler: s,
+        });
+        next += 1;
+    }
+    bindings.push(manifold_gpu::GpuBinding::Texture {
+        binding: next,
+        texture: out,
+    });
+    gpu.native_enc.dispatch_compute(
+        pipeline,
+        &bindings,
+        [out.width.div_ceil(16), out.height.div_ceil(16), 1],
+        label,
+    );
+}
