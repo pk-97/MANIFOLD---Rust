@@ -867,9 +867,11 @@ mod tests {
         let (b, node, reason) = malformed(compile(&graph).unwrap_err());
         // `Graph::nodes` iterates a hash map, so the boundary whose walk
         // trips the claim is order-dependent — either boundary is a
-        // legitimate reporter.
+        // legitimate reporter. The claimed node is deterministic: the
+        // second walk's body scan is in topological order, so body_a
+        // always trips first.
         assert!(b == b1 || b == b2, "boundary: {b:?}");
-        assert!(node == body_a || node == body_b, "node: {node:?}");
+        assert_eq!(node, body_a);
         assert!(
             reason.contains("two substep regions"),
             "reason: {reason}"
