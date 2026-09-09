@@ -1555,6 +1555,103 @@ fn reject_topology(
     *topo_key = None; *accel_key = None; *content_key = None;
     *pending_topo = None; *pending_content = None; *rejected = true; true
 }
+// ---- Pass-1 draw record (was local to evaluate(); hoisted for the BUG-trh7
+// stage-2 pass methods — Pass 1 produces, the RT block + Pass 2 consume).
+// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): one ObjectDraw per wired,
+// visible object.
+struct ObjectDraw<'ctx> {
+    vertices: &'ctx manifold_gpu::GpuBuffer,
+    uniforms: RenderSceneUniforms,
+    pipeline: manifold_gpu::GpuRenderPipeline,
+    base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    /// IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
+    /// per-object texture ports, same "None = unwired, dummy-bind at
+    /// draw time" shape as `base_color_map` above.
+    normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
+    /// same "None = unwired, dummy-bind at draw time" shape.
+    sheen_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    sheen_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    iridescence_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    iridescence_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    anisotropy_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+    /// completion sweep): same "None = unwired" shape.
+    clearcoat_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    clearcoat_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    clearcoat_normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    specular_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    specular_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    volume_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
+    /// sampler settings, order `[base_color, normal, mr, occlusion,
+    /// emissive]` — matches `binding_sets`' 22..26 slot order below.
+    /// Resolved to actual `&GpuSampler`s in Pass 2 via
+    /// `ensure_material_sampler` (ensured for every draw in the
+    /// "Ensure cached GPU resources" block, so the Pass-2 cache
+    /// lookup can never miss).
+    sampler_descs: [MapSamplerDesc; 5],
+    /// Wired `instances_n` buffer, or `None` (unwired — bind the
+    /// identity stub at draw time; see `identity_instance_stub`).
+    instances: Option<&'ctx manifold_gpu::GpuBuffer>,
+    /// `buffer_size / 32` when wired, else 1 (identity stub).
+    instance_count: u32,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+    /// `mesh_n` input slot's write generation this frame
+    /// (`ctx.inputs.slot_generation`) — a component of the shadow
+    /// cache key below. `None` only if the (required) mesh port
+    /// somehow resolved to an unbound slot — can't happen on the
+    /// live path (the `vertices` field above already required a
+    /// resolved array), kept `Option` to mirror `slot_generation`'s
+    /// signature exactly rather than unwrap a should-never-fail case.
+    vertices_generation: Option<u64>,
+    /// Same for `instances_n` — `None` both when the port is
+    /// genuinely unwired AND (indistinguishably, which is fine: an
+    /// unwired port never contributes model-specific staleness) if
+    /// somehow unresolved. D6 folds this `Option` into the key
+    /// as-is so "unwired" and "wired-then-unwired" both correctly
+    /// invalidate any cached key computed under the other state.
+    instances_generation: Option<u64>,
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
+    /// model — `Blend` routes into the sorted transparent group and
+    /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
+    /// existing group, unchanged.
+    alpha_mode: AlphaMode,
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
+    /// object's model-matrix translation (the interior's stand-in
+    /// for a full local-space bounding-box centroid — no per-object
+    /// AABB is tracked anywhere in the graph today, and building
+    /// that infra is out of this phase's scope; see the landing
+    /// report's confessed-shortcuts field). Larger = farther from
+    /// the camera along its forward axis. Used only to order the
+    /// Blend group back-to-front; unread for Opaque/Mask objects.
+    sort_depth: f32,
+    /// Per-object shadow-cast toggle (`node.scene_object`'s
+    /// `cast_shadows` param). `false` removes this object from the
+    /// raster shadow-map depth pass and the RT shadow-ray mask
+    /// ONLY — it stays in the opaque depth prepass, the RT accel
+    /// structure, AO, GI, reflections, and primary hits on both
+    /// paths.
+    cast_shadows: bool,
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: this object routes to
+    /// Pass B AND wants the opaque-scene-color snapshot bound at
+    /// @binding(27) (`Blend` + `transmission_factor > 0`). Every
+    /// other draw binds the 1×1 dummy there instead — same always-
+    /// bind ABI-stub discipline as `normal_map`/`mr_map`/etc above.
+    is_transmissive: bool,
+    /// RAYTRACING_DESIGN.md section 12 AM1: kept so the post-loop
+    /// remap below can rebuild a Blend draw's pipeline WITHOUT aux
+    /// outputs when `has_transmission` routes the Blend group to
+    /// Pass B — a single-color-attachment pass that must never be
+    /// paired with a velocity/ao_mask-emitting pipeline (attachment
+    /// layout mismatch).
+    kind: MaterialKind,
+}
+
 
 impl RenderScene {
     pub fn new() -> Self {
@@ -4597,98 +4694,6 @@ impl EffectNode for RenderScene {
         // its pipeline. Structured error + magenta clear + return on the
         // first unmet requirement (no-silent-fallbacks, matching
         // render_mesh / render_copies).
-        struct ObjectDraw<'ctx> {
-            vertices: &'ctx manifold_gpu::GpuBuffer,
-            uniforms: RenderSceneUniforms,
-            pipeline: manifold_gpu::GpuRenderPipeline,
-            base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            /// IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
-            /// per-object texture ports, same "None = unwired, dummy-bind at
-            /// draw time" shape as `base_color_map` above.
-            normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
-            /// same "None = unwired, dummy-bind at draw time" shape.
-            sheen_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            sheen_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            iridescence_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            iridescence_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            anisotropy_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-            /// completion sweep): same "None = unwired" shape.
-            clearcoat_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            clearcoat_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            clearcoat_normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            specular_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            specular_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            volume_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
-            /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
-            /// sampler settings, order `[base_color, normal, mr, occlusion,
-            /// emissive]` — matches `binding_sets`' 22..26 slot order below.
-            /// Resolved to actual `&GpuSampler`s in Pass 2 via
-            /// `ensure_material_sampler` (ensured for every draw in the
-            /// "Ensure cached GPU resources" block, so the Pass-2 cache
-            /// lookup can never miss).
-            sampler_descs: [MapSamplerDesc; 5],
-            /// Wired `instances_n` buffer, or `None` (unwired — bind the
-            /// identity stub at draw time; see `identity_instance_stub`).
-            instances: Option<&'ctx manifold_gpu::GpuBuffer>,
-            /// `buffer_size / 32` when wired, else 1 (identity stub).
-            instance_count: u32,
-            /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
-            /// `mesh_n` input slot's write generation this frame
-            /// (`ctx.inputs.slot_generation`) — a component of the shadow
-            /// cache key below. `None` only if the (required) mesh port
-            /// somehow resolved to an unbound slot — can't happen on the
-            /// live path (the `vertices` field above already required a
-            /// resolved array), kept `Option` to mirror `slot_generation`'s
-            /// signature exactly rather than unwrap a should-never-fail case.
-            vertices_generation: Option<u64>,
-            /// Same for `instances_n` — `None` both when the port is
-            /// genuinely unwired AND (indistinguishably, which is fine: an
-            /// unwired port never contributes model-specific staleness) if
-            /// somehow unresolved. D6 folds this `Option` into the key
-            /// as-is so "unwired" and "wired-then-unwired" both correctly
-            /// invalidate any cached key computed under the other state.
-            instances_generation: Option<u64>,
-            /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
-            /// model — `Blend` routes into the sorted transparent group and
-            /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
-            /// existing group, unchanged.
-            alpha_mode: AlphaMode,
-            /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
-            /// object's model-matrix translation (the interior's stand-in
-            /// for a full local-space bounding-box centroid — no per-object
-            /// AABB is tracked anywhere in the graph today, and building
-            /// that infra is out of this phase's scope; see the landing
-            /// report's confessed-shortcuts field). Larger = farther from
-            /// the camera along its forward axis. Used only to order the
-            /// Blend group back-to-front; unread for Opaque/Mask objects.
-            sort_depth: f32,
-            /// Per-object shadow-cast toggle (`node.scene_object`'s
-            /// `cast_shadows` param). `false` removes this object from the
-            /// raster shadow-map depth pass and the RT shadow-ray mask
-            /// ONLY — it stays in the opaque depth prepass, the RT accel
-            /// structure, AO, GI, reflections, and primary hits on both
-            /// paths.
-            cast_shadows: bool,
-            /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: this object routes to
-            /// Pass B AND wants the opaque-scene-color snapshot bound at
-            /// @binding(27) (`Blend` + `transmission_factor > 0`). Every
-            /// other draw binds the 1×1 dummy there instead — same always-
-            /// bind ABI-stub discipline as `normal_map`/`mr_map`/etc above.
-            is_transmissive: bool,
-            /// RAYTRACING_DESIGN.md section 12 AM1: kept so the post-loop
-            /// remap below can rebuild a Blend draw's pipeline WITHOUT aux
-            /// outputs when `has_transmission` routes the Blend group to
-            /// Pass B — a single-color-attachment pass that must never be
-            /// paired with a velocity/ao_mask-emitting pipeline (attachment
-            /// layout mismatch).
-            kind: MaterialKind,
-        }
 
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 

@@ -69,7 +69,50 @@ CELLS = [
                                                       "--capture-from", "40",
                                                       "--frame-clock"]),
     ("sun-intensity-snap", "lighting", LIGHT_COMMON + ["--set-at", "60", "intensity=8.0"]),
+    # ── BUG-zw2l gate gap (BUG-trh7): round-trip identity + combo-order ──
+    # Stale-state classes the single-flip cells can't see: does a toggle
+    # returned to its original value converge back to the never-flipped
+    # baseline, and does the FINAL state of a two-toggle combo depend on flip
+    # order. Every run shares the same timeline shape (--paused: 60 rotation
+    # frames, flip at 60, 120 flip-phase frames, 60 paused), so compared
+    # windows are matched: the mean of each channel's last ≤6 stats rows
+    # (the fully-settled paused tail — the camera is static there in every
+    # run). Baseline runs the identical timeline with no mutations.
+    ("baseline",          "baseline", FLIP_COMMON),
+    # Determinism control: an identical second baseline. Every cross-cell
+    # identity check is only meaningful above the run-to-run floor this pair
+    # measures (async accel-build timing varies run to run even with an
+    # untouched timeline — the accel-ready frame shifts, so the raster/RT
+    # path split during rotation shifts, so the accumulated history differs).
+    ("baseline2",         "baseline", FLIP_COMMON),
+    ("roundtrip-shadows", "roundtrip", FLIP_COMMON + ["--set-at", "30", "rt_shadows=0",
+                                                      "--live-flip", "rt_shadows"]),
+    ("roundtrip-ao",      "roundtrip", FLIP_COMMON + ["--set-at", "30", "rt_ao=0",
+                                                      "--live-flip", "rt_ao"]),
+    ("roundtrip-gi",      "roundtrip", FLIP_COMMON + ["--set-at", "30", "rt_gi=0",
+                                                      "--live-flip", "rt_gi"]),
+    ("roundtrip-refl",    "roundtrip", FLIP_COMMON + ["--set-at", "30", "rt_reflections=0",
+                                                      "--live-flip", "rt_reflections"]),
+    # Combo cells pair up by name suffix: combo-AB / combo-BA. Each run turns
+    # one toggle off at f30 (--set-at) and the other off at the f60 flip, so
+    # the pair ends in the SAME all-off state by different orders.
+    ("combo-shadows-ao",  "combo",    FLIP_COMMON + ["--set-at", "30", "rt_shadows=0",
+                                                      "--live-flip", "rt_ao"]),
+    ("combo-ao-shadows",  "combo",    FLIP_COMMON + ["--set-at", "30", "rt_ao=0",
+                                                      "--live-flip", "rt_shadows"]),
+    ("combo-ao-gi",       "combo",    FLIP_COMMON + ["--set-at", "30", "rt_ao=0",
+                                                      "--live-flip", "rt_gi"]),
+    ("combo-gi-ao",       "combo",    FLIP_COMMON + ["--set-at", "30", "rt_gi=0",
+                                                      "--live-flip", "rt_ao"]),
 ]
+
+# Pairing for the combo-order check: (run_a, run_b) — same final state by
+# different flip orders; their settled windows must match within tolerance.
+COMBO_PAIRS = [
+    ("combo-shadows-ao", "combo-ao-shadows"),
+    ("combo-ao-gi", "combo-gi-ao"),
+]
+
 
 # Direction each flip cell expects for the composite, and whether a miss is a
 # FAIL (load-bearing) or a WARN (scene-dependent). The universal INERT check is
@@ -109,6 +152,24 @@ SNAP_JUMP_REL = 0.5       # sun-intensity-snap: luma must jump >=50% relative af
 # fully visible (nothing shadowed). At or above this, a shadow direction check
 # has nothing to observe and is downgraded to a vacuous WARN.
 SHADOW_COVERAGE_LUMA = 0.99
+
+# Numerical identity tolerances for the cross-cell checks (round-trip vs
+# baseline, combo order pairs). Same scales as the direction checks above:
+# hit and luma on the 0.01 "changed" floor rt-capture itself uses, sd on the
+# looser relative scale (it is small and unit-dependent). These are NOT the
+# per-frame temporal ceilings rt_noise_gate enforces — they compare two
+# converged means, so the existing direction-check scales apply.
+ID_HIT = CHANGE_HIT
+ID_LUMA = CHANGE_LUMA
+ID_SD_REL = RISE_SD_REL
+ID_SD_ABS = RISE_SD_ABS
+# Per-channel sd overrides, calibrated against the determinism floor (two
+# identical baseline runs, 2026-09-10): sv_hold is a diagnostic counter
+# channel whose sd jitters ~0.0005 run-to-run even with an untouched
+# timeline — the generic 1e-4 abs floor flags it every time. 0.001 is 2x the
+# observed floor. Content channels (composite/irr/mask family) keep the
+# generic floor; identical runs agree on them within it.
+ID_SD_ABS_BY_CHANNEL = {"sv_hold": 0.001}
 
 # rt_capture.rs prints this stdout marker the instant the flip is sent.
 FLIP_SPLIT_RE = re.compile(r"=== LIVE FLIP")
@@ -232,6 +293,10 @@ CHANGED_RE = re.compile(r"\[rt-capture\] (?P<label>\S+) stats changed:")
 APPEARED_RE = re.compile(r"\[rt-capture\] (?P<label>\S+) APPEARED after flip:")
 VANISHED_RE = re.compile(r"\[rt-capture\] (?P<label>\S+) VANISHED after flip")
 PARAM_NOT_FOUND_RE = re.compile(r"\[rt-capture\] Param '([^']+)' not found")
+# `[rt-capture] --set-at f30: layer[0] param '8_rt_shadows' 1.00 → 0.00` — the
+# one-shot snap fired (an absent line means the mutation never happened and a
+# round-trip/combo comparison would be vacuous).
+SET_AT_FIRED_RE = re.compile(r"\[rt-capture\] --set-at f\d+:")
 # `[rt-capture] --live-flip: layer[0] param '8_rt_denoise_feed' 0.00 → 1.00` —
 # the flip's before/after values. A fixture that stores a toggle at 0 gets
 # turned ON (0→1) by the flip, which inverts the expected direction.
@@ -279,6 +344,51 @@ def parse_log(text):
                 verdicts.append((kind, m.group("label")))
                 break
     return stats, verdicts
+
+
+def final_window(text, n=6):
+    """label -> (mean hit, mean luma, mean sd, row count) over the label's last
+    ≤n stats rows in log order — the settled paused tail every --paused run
+    ends in (camera static). The comparison window for the round-trip and
+    combo-order checks: matched across runs by construction, since every run
+    shares the --paused timeline shape."""
+    stats, _ = parse_log(text)
+    out = {}
+    for label, rows in stats.items():
+        tail = rows[-n:]
+        k = len(tail)
+        out[label] = (
+            sum(r[1] for r in tail) / k,
+            sum(r[2] for r in tail) / k,
+            sum(r[3] for r in tail) / k,
+            k,
+        )
+    return out
+
+
+def compare_windows(a, b):
+    """Cross-run identity check over two final windows. A channel present in
+    only one run is a FAIL (a toggle that loses a channel by the end is the
+    BUG-zw2l stale-state shape); otherwise per-channel |Δhit| ≤ ID_HIT,
+    |Δluma| ≤ ID_LUMA, |Δsd| ≤ max(ID_SD_ABS, ID_SD_REL·max). Returns reasons."""
+    reasons = []
+    for label in sorted(set(a) | set(b)):
+        if label not in a:
+            reasons.append(f"FAIL:channel '{label}' missing from the left run")
+            continue
+        if label not in b:
+            reasons.append(f"FAIL:channel '{label}' missing from the right run")
+            continue
+        ah, al, asd, _ = a[label]
+        bh, bl, bsd, _ = b[label]
+        if abs(ah - bh) > ID_HIT:
+            reasons.append(f"FAIL:{label} hit {ah:.6f} vs {bh:.6f} (> {ID_HIT})")
+        if abs(al - bl) > ID_LUMA:
+            reasons.append(f"FAIL:{label} luma {al:.6f} vs {bl:.6f} (> {ID_LUMA})")
+        sd_tol = max(ID_SD_ABS_BY_CHANNEL.get(label, ID_SD_ABS), ID_SD_REL * max(asd, bsd))
+        if abs(asd - bsd) > sd_tol:
+            reasons.append(f"FAIL:{label} sd {asd:.6f} vs {bsd:.6f} (> {sd_tol:.6f})")
+    return reasons
 
 
 def resolve_fixture(repo, explicit):
@@ -422,6 +532,22 @@ def check_cell(name, kind, parsed, png_count, rc, log_text):
                 (fail if severity == "FAIL" else warn)(
                     "no before/after composite stats to run the direction check")
 
+    elif kind in ("baseline", "roundtrip", "combo"):
+        # BUG-zw2l cells: the universal checks above carry the run; the
+        # identity comparisons happen cross-cell in main(). Here, verify the
+        # mutations actually fired — an inert set-at/flip would make the
+        # comparison vacuous.
+        if kind in ("roundtrip", "combo"):
+            if not SET_AT_FIRED_RE.search(log_text):
+                fail("the --set-at never fired (no '[rt-capture] --set-at' line)")
+            fb, fa = parse_flip_values(log_text)
+            if fb is None:
+                fail("no --live-flip line parsed")
+            elif kind == "roundtrip" and not (fb == 0.0 and fa == 1.0):
+                fail(f"round-trip flip did not restore the toggle (was {fb} → {fa}, want 0.0 → 1.0)")
+            elif kind == "combo" and not (fb == 1.0 and fa == 0.0):
+                fail(f"combo flip did not turn the toggle off (was {fb} → {fa}, want 1.0 → 0.0)")
+
     elif kind == "lighting":
         # Lighting cells are continuous (no flip): frame numbers are monotonic,
         # so frame-based before/after is safe here.
@@ -475,7 +601,7 @@ def run_cell(name, kind, extra_args, binary, project, out_root, timeout):
         verdict = "PASS"
     detail = "; ".join(r[5:] for r in reasons) if reasons else "ok"
     log(f"CELL {name}: {verdict} — {detail}")
-    return verdict, reasons, cell_dir, pngs, dur
+    return verdict, reasons, cell_dir, pngs, dur, final_window(text)
 
 
 def main():
@@ -526,10 +652,56 @@ def main():
     for name, kind, extra in selected:
         results[name] = run_cell(name, kind, extra, binary, project, out_root, args.timeout)
 
-    p = sum(1 for v, *_ in results.values() if v == "PASS")
-    w = sum(1 for v, *_ in results.values() if v == "WARN")
-    f = sum(1 for v, *_ in results.values() if v == "FAIL")
-    log(f"TOTALS: {len(results)} cells, {p} PASS, {w} WARN, {f} FAIL")
+    # ── BUG-zw2l cross-cell identity checks ──
+    # Round-trip: each roundtrip-* cell's settled window must match the
+    # baseline's (same toggle values at the end, by different history).
+    # Combo-order: each pair's two runs end in the same all-off state by
+    # different flip orders; their settled windows must match each other.
+    xcell_verdicts = []
+    # Determinism control first: baseline vs baseline2 measures the run-to-run
+    # floor. Its result does not PASS/FAIL the gate — it calibrates how much
+    # of every other comparison is timeline noise. A FAIL here with FAILs
+    # everywhere else means the gate is measuring nondeterminism, not bugs.
+    if "baseline" in results and "baseline2" in results \
+            and results["baseline"][0] != "FAIL" and results["baseline2"][0] != "FAIL":
+        reasons = compare_windows(results["baseline"][5], results["baseline2"][5])
+        verdict = "FAIL" if reasons else "PASS"
+        detail = "; ".join(r[5:] for r in reasons) if reasons else "runs are identical within tolerance"
+        log(f"XCELL baseline vs baseline2 (determinism floor): {verdict} — {detail}")
+    if "baseline" in results and results["baseline"][0] != "FAIL":
+        base_window = results["baseline"][5]
+        for name, kind, _ in selected:
+            if kind != "roundtrip" or name not in results:
+                continue
+            if results[name][0] == "FAIL":
+                xcell_verdicts.append(("SKIP", f"{name} vs baseline: cell already FAIL"))
+                continue
+            reasons = compare_windows(base_window, results[name][5])
+            verdict = "FAIL" if reasons else "PASS"
+            detail = "; ".join(r[5:] for r in reasons) if reasons else "identity holds"
+            xcell_verdicts.append((verdict, f"{name} vs baseline: {verdict} — {detail}"))
+    elif any(k == "roundtrip" for _, k, _ in selected):
+        xcell_verdicts.append(("WARN", "no healthy baseline run — round-trip checks skipped"))
+    for a, b in COMBO_PAIRS:
+        if a not in results or b not in results:
+            continue
+        if results[a][0] == "FAIL" or results[b][0] == "FAIL":
+            xcell_verdicts.append(("SKIP", f"{a} vs {b}: a cell already FAIL"))
+            continue
+        reasons = compare_windows(results[a][5], results[b][5])
+        verdict = "FAIL" if reasons else "PASS"
+        detail = "; ".join(r[5:] for r in reasons) if reasons else "order-independent"
+        xcell_verdicts.append((verdict, f"{a} vs {b}: {verdict} — {detail}"))
+    for verdict, line in xcell_verdicts:
+        log(f"XCELL {line}")
+
+    p = sum(1 for v, *_ in results.values() if v == "PASS") \
+        + sum(1 for v, _ in xcell_verdicts if v == "PASS")
+    w = sum(1 for v, *_ in results.values() if v == "WARN") \
+        + sum(1 for v, _ in xcell_verdicts if v == "WARN")
+    f = sum(1 for v, *_ in results.values() if v == "FAIL") \
+        + sum(1 for v, _ in xcell_verdicts if v == "FAIL")
+    log(f"TOTALS: {len(results)} cells + {len(xcell_verdicts)} cross-checks, {p} PASS, {w} WARN, {f} FAIL")
     return 1 if f else 0
 
 
