@@ -269,6 +269,7 @@ mod value;
 mod vignette;
 mod voronoi_2d;
 mod voxelize_mesh;
+mod water_state;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 pub(crate) mod wgsl_compute;
@@ -514,6 +515,7 @@ pub use voronoi_2d::Voronoi2D;
 pub use voxelize_mesh::VoxelizeMesh;
 pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
+pub use water_state::WaterState;
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 
 #[cfg(test)]

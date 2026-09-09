@@ -1,0 +1,474 @@
+//! `node.water_state` — the bounded-substep boundary for MLS-MPM water.
+//!
+//! Contract: `docs/WATER_SIMULATION_DESIGN.md` sections 4 and 6 and
+//! `docs/WATER_IMPLEMENTATION_PLAN.md` section 2.1. This node owns the
+//! simulation clock and the persistent accepted state; the solver stages
+//! in its substep region are ordinary per-dispatch atoms. Per output
+//! frame `run` resolves the tick count from the context's
+//! [`SimulationFrame`](crate::node_graph::substeps::SimulationFrame)
+//! (accumulate `delta * time_scale` in f64, consume integer ticks of
+//! `1/step_hz`, drop whole ticks at the `max_substeps` cap — never
+//! enlarge dt, never backlog), then the executor repeats the region body
+//! and calls `late_capture` once per iteration to accept the candidate.
+//!
+//! `out` IS the accepted buffer (persistent output): reset/epoch re-seeds
+//! it from `seed`, each capture copies the candidate into it, and outside
+//! consumers read the final accepted state of the frame. A zero-tick
+//! frame (pause, duplicate frame_id, exhausted clock) still exposes it.
+//!
+//! Reset semantics (design section 6): first observation of
+//! `reset_trigger` arms; a later integer change re-seeds even while
+//! paused. An epoch change (seek / project replacement) re-seeds, zeroes
+//! the clock, the sticky status and diagnostics, and re-arms the collider
+//! from `collider_seed`. Reset dominates anything else on the same frame.
+
+use std::borrow::Cow;
+
+use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::primitive::Primitive;
+use crate::node_graph::state_store::NodeState;
+use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
+use crate::node_graph::transform::Transform;
+use crate::node_graph::water::WaterParticle;
+
+crate::primitive! {
+    name: WaterState,
+    type_id: "node.water_state",
+    purpose: "Substep boundary for MLS-MPM water: owns the fixed-rate simulation clock and the persistent accepted particle state. The executor repeats its substep region under this clock; capture accepts the candidate each iteration. time_scale [0,1] scales the clock (0 = frozen); reset_trigger re-seeds on integer change even while paused. Seek/project-load (epoch change) re-seeds from scratch. step_hz and max_substeps are install-time constants, not performance knobs.",
+    inputs: {
+        seed: Array(WaterParticle) required,
+        in: Array(WaterParticle) optional,
+        collider_seed: Transform required,
+        collider_in: Transform optional,
+        status_in: Array(u32) optional,
+        time_scale: ScalarF32 optional,
+        reset_trigger: ScalarF32 optional,
+    },
+    outputs: {
+        out: Array(WaterParticle),
+        collider_out: Transform,
+        status_out: Array(u32),
+        step_count: ScalarF32,
+        step_dt: ScalarF32,
+        step_time: ScalarF32,
+        step_index: ScalarF32,
+    },
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("step_hz"),
+            label: "Step rate (Hz)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(960.0),
+            range: Some((1.0, 1920.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("max_substeps"),
+            label: "Max substeps per frame",
+            ty: ParamType::Float,
+            default: ParamValue::Float(32.0),
+            range: Some((1.0, 64.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("time_scale"),
+            label: "Simulation speed",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+    ],
+    depth_rule: Terminal,
+    composition_notes: "Seed, collider target and controls feed this boundary once per frame; the solver stages (emit, scatter, stress, grid, gather, collide, validate, commit) sit inside the substep region and run step_count times per frame. out feeds the surface graph; status_out feeds diagnostics; collider_out feeds the displayed collider object.",
+    examples: [],
+    picker: { label: "Water State", category: Atom },
+    summary: "Owns the water simulation clock and persistent accepted state; the executor repeats the solver region under it.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["water state", "mpm boundary", "substep boundary"],
+    boundary_reason: CrossFrameState,
+    extra_fields: {
+        // Mirror of the StateStore tick schedule, written by `run` and
+        // read by `substep_iteration` (which gets no context). Per node
+        // instance — each layer's graph instantiates its own node.
+        pending_ticks: std::cell::Cell<u32> = std::cell::Cell::new(0),
+        tick_base: std::cell::Cell<f64> = std::cell::Cell::new(0.0),
+        last_step_hz: std::cell::Cell<f64> = std::cell::Cell::new(960.0),
+    },
+}
+
+/// Per-owner boundary state: the f64 tick clock, reset/epoch latches and
+/// diagnostics. The accepted particle buffer is the persistent `out`
+/// SLOT — zero-copy across frames — so keyed state here is scalar only.
+#[derive(Clone, Copy)]
+struct WaterBoundaryState {
+    accumulator: f64,
+    sim_time: f64,
+    last_frame_id: Option<u64>,
+    epoch: u64,
+    seeded: bool,
+    dropped_ticks: u32,
+    overload_reported: bool,
+    last_reset_trigger: Option<i32>,
+    last_collider: Transform,
+    capacity_bytes: u64,
+}
+
+impl NodeState for WaterBoundaryState {}
+
+const BOUNDARY_RESULTS: &[SubstepResultPorts] = &[
+    SubstepResultPorts {
+        capture: "collider_in",
+        output: "collider_out",
+    },
+    SubstepResultPorts {
+        capture: "status_in",
+        output: "status_out",
+    },
+];
+
+impl WaterState {
+    fn clock_config(&self, ctx: &EffectNodeContext<'_, '_>) -> (f64, u32) {
+        let step_hz = match ctx.params.get("step_hz") {
+            Some(ParamValue::Float(f)) => f64::from(f.max(1.0)),
+            _ => 960.0,
+        };
+        let max_substeps = match ctx.params.get("max_substeps") {
+            Some(ParamValue::Float(f)) => f.max(1.0).round() as u32,
+            _ => 32,
+        };
+        (step_hz, max_substeps)
+    }
+}
+
+impl Primitive for WaterState {
+    fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+        crate::node_graph::effect_node::NodeRequires {
+            state_store: true,
+            gpu_encoder: true,
+        }
+    }
+
+    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+        &["in", "collider_in", "status_in"]
+    }
+
+    fn persistent_output_ports(&self) -> &[&str] {
+        // `out` is the accepted buffer and `status_out` the sticky fault
+        // word: both must survive frames untouched by pool recycling.
+        &["out", "status_out"]
+    }
+
+    fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
+        Some(SubstepBoundaryPorts {
+            seed: "seed",
+            capture: "in",
+            state: "out",
+            count: "step_count",
+            delta: "step_dt",
+            time: "step_time",
+            index: "step_index",
+            results: BOUNDARY_RESULTS,
+        })
+    }
+
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        match port_name {
+            "out" => input_capacities
+                .iter()
+                .find(|(p, _)| *p == "seed")
+                .map(|(_, n)| *n),
+            "status_out" => Some(1),
+            _ => None,
+        }
+    }
+
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        ctx.mark_gpu_accessed();
+        let node_id = ctx.node_id;
+        let owner_key = ctx.owner_key;
+        let out_size = match ctx.outputs.array("out") {
+            Some(b) => b.size,
+            None => return,
+        };
+
+        // Load-or-init the per-owner clock state as a VALUE; the store
+        // borrow ends here so GPU calls and ctx.error below are free of
+        // conflicting borrows.
+        let mut s: WaterBoundaryState = {
+            let store = ctx
+                .state
+                .as_deref_mut()
+                .expect("WaterState requires a StateStore");
+            match store.get::<WaterBoundaryState>(node_id, owner_key) {
+                Some(existing) if existing.capacity_bytes == out_size => *existing,
+                _ => WaterBoundaryState {
+                    accumulator: 0.0,
+                    sim_time: 0.0,
+                    last_frame_id: None,
+                    epoch: ctx.simulation_frame.map(|f| f.epoch).unwrap_or(0),
+                    seeded: false,
+                    dropped_ticks: 0,
+                    overload_reported: false,
+                    last_reset_trigger: None,
+                    last_collider: Transform::default(),
+                    capacity_bytes: out_size,
+                },
+            }
+        };
+
+        let frame = ctx.simulation_frame;
+        let epoch_changed = frame.is_some_and(|f| f.epoch != s.epoch);
+        if epoch_changed {
+            s.epoch = frame.map(|f| f.epoch).unwrap_or(0);
+            s.seeded = false;
+        }
+
+        // Reset trigger: first observation arms; a later integer change
+        // re-seeds even while paused. Dominates everything else this frame.
+        let reset_edge = match ctx.inputs.scalar("reset_trigger") {
+            Some(ParamValue::Float(v)) => {
+                let current = v.round() as i32;
+                let edge = s.last_reset_trigger.is_some_and(|p| current != p);
+                s.last_reset_trigger = Some(current);
+                edge
+            }
+            _ => false,
+        };
+
+        let time_scale = ctx.scalar_or_param("time_scale", 1.0).clamp(0.0, 1.0);
+        let (step_hz, max_substeps) = self.clock_config(ctx);
+        self.last_step_hz.set(step_hz);
+
+        // Seed/re-seed path: first frame, epoch change, or reset edge.
+        // Re-seeds the accepted `out` buffer from the seed wire, zeroes
+        // the sticky status, the clock and diagnostics, and re-arms the
+        // collider from collider_seed.
+        let mut reset_fired = false;
+        if !s.seeded || epoch_changed || reset_edge {
+            if let (Some(seed_buf), Some(out_buf)) =
+                (ctx.inputs.array("seed"), ctx.outputs.array("out"))
+            {
+                let gpu = ctx
+                    .gpu
+                    .as_deref_mut()
+                    .expect("WaterState requires a GpuEncoder");
+                let copy_size = seed_buf.size.min(out_buf.size);
+                if copy_size > 0 {
+                    gpu.native_enc.copy_buffer_to_buffer(seed_buf, out_buf, copy_size);
+                }
+                if let Some(status_buf) = ctx.outputs.array("status_out") {
+                    gpu.native_enc.clear_buffer(status_buf);
+                }
+            }
+            s.seeded = true;
+            s.accumulator = 0.0;
+            s.sim_time = 0.0;
+            s.dropped_ticks = 0;
+            s.overload_reported = false;
+            s.last_frame_id = None;
+            s.last_collider = ctx.inputs.transform("collider_seed").unwrap_or_default();
+            reset_fired = epoch_changed || reset_edge;
+        }
+
+        // Clock resolution → the frame's tick schedule.
+        let mut ticks: u32 = 0;
+        let mut overload_error: Option<String> = None;
+        let mut host_error = false;
+        match frame {
+            None => {
+                // Host integration error: the executor reports it too and
+                // runs the region zero times. No panic; expose accepted.
+                host_error = true;
+            }
+            Some(f) if reset_fired || s.last_frame_id == Some(f.frame_id) => {
+                // Reset dominates: zero ticks this frame. A duplicate frame
+                // renders the accepted state again without advancing.
+            }
+            Some(f) if !f.advancing || time_scale <= 0.0 => {
+                s.last_frame_id = Some(f.frame_id);
+            }
+            Some(f) => {
+                s.last_frame_id = Some(f.frame_id);
+                let h = 1.0 / step_hz;
+                s.accumulator += f.delta.0 * f64::from(time_scale);
+                let mut whole = (s.accumulator / h).floor();
+                s.accumulator -= whole * h;
+                if whole > f64::from(max_substeps) {
+                    let dropped = (whole - f64::from(max_substeps)) as u32;
+                    s.dropped_ticks += dropped;
+                    whole = f64::from(max_substeps);
+                    if f.exporting {
+                        // Export never trades simulation time for frame rate.
+                        overload_error = Some(format!(
+                            "WaterState: simulation overload in export — dropped \
+                             {dropped} ticks; raise the step budget or slow the \
+                             input schedule"
+                        ));
+                    } else if !s.overload_reported {
+                        s.overload_reported = true;
+                        overload_error = Some(format!(
+                            "WaterState: simulation overload — dropping whole ticks \
+                             (total dropped: {})",
+                            s.dropped_ticks
+                        ));
+                    }
+                }
+                self.tick_base.set(s.sim_time);
+                s.sim_time += whole * h;
+                ticks = whole as u32;
+            }
+        }
+        self.pending_ticks.set(ticks);
+
+        // Write the clock state back, then the frame's scalar/transform
+        // outputs and any deferred error.
+        {
+            let store = ctx
+                .state
+                .as_deref_mut()
+                .expect("WaterState requires a StateStore");
+            store.insert(node_id, owner_key, s);
+        }
+        ctx.outputs
+            .set_scalar("step_count", ParamValue::Float(ticks as f32));
+        ctx.outputs.set_transform("collider_out", s.last_collider);
+        if host_error {
+            ctx.error("WaterState: no SimulationFrame installed".to_string());
+        }
+        if let Some(msg) = overload_error {
+            ctx.error(msg);
+        }
+    }
+
+    fn substep_iteration(&mut self, iteration: u32) -> Option<[f32; 3]> {
+        if iteration >= self.pending_ticks.get() {
+            return None;
+        }
+        // The schedule mirrors `run`'s: dt = 1/step_hz, time = base +
+        // (i+1)*dt — both pinned to cells when `run` resolved the clock.
+        let dt = 1.0 / self.last_step_hz.get();
+        Some([
+            dt as f32,
+            (self.tick_base.get() + (f64::from(iteration) + 1.0) * dt) as f32,
+            iteration as f32,
+        ])
+    }
+
+    fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Per-iteration accept: the body's final candidate sits in the
+        // persistent `in` slot; copy it into the accepted `out` buffer.
+        // Status and collider results land the same way — sticky status
+        // word, accepted collider transform for the displayed object.
+        ctx.mark_gpu_accessed();
+        let gpu = ctx
+            .gpu
+            .as_deref_mut()
+            .expect("WaterState::late_capture requires a GpuEncoder");
+        if let (Some(in_buf), Some(out_buf)) =
+            (ctx.inputs.array("in"), ctx.outputs.array("out"))
+        {
+            let copy_size = in_buf.size.min(out_buf.size);
+            if copy_size > 0 {
+                gpu.native_enc.copy_buffer_to_buffer(in_buf, out_buf, copy_size);
+            }
+        }
+        if let (Some(status_in), Some(status_out)) =
+            (ctx.inputs.array("status_in"), ctx.outputs.array("status_out"))
+        {
+            let copy_size = status_in.size.min(status_out.size).min(4);
+            if copy_size > 0 {
+                gpu.native_enc
+                    .copy_buffer_to_buffer(status_in, status_out, copy_size);
+            }
+        }
+        if let Some(collider) = ctx.inputs.transform("collider_in") {
+            let store = ctx
+                .state
+                .as_deref_mut()
+                .expect("WaterState::late_capture requires a StateStore");
+            if let Some(s) = store.get::<WaterBoundaryState>(ctx.node_id, ctx.owner_key) {
+                s.last_collider = collider;
+            }
+            ctx.outputs.set_transform("collider_out", collider);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::EffectNode;
+    use crate::node_graph::ports::{ArrayType, PortType};
+
+    #[test]
+    fn water_state_declares_boundary_contract() {
+        let prim = WaterState::new();
+        let node: &dyn EffectNode = &prim;
+        assert_eq!(node.type_id().as_str(), "node.water_state");
+
+        // Capture ports and persistence per design section 4: the primary
+        // particle back-edge plus collider/status results; out and
+        // status_out persist as the accepted state across frames.
+        assert_eq!(
+            node.state_capture_input_ports(),
+            &["in", "collider_in", "status_in"]
+        );
+        assert_eq!(node.persistent_output_ports(), &["out", "status_out"]);
+
+        let ports = node.substep_boundary().expect("WaterState is a boundary");
+        assert_eq!(ports.seed, "seed");
+        assert_eq!(ports.capture, "in");
+        assert_eq!(ports.state, "out");
+        assert_eq!(ports.count, "step_count");
+        assert_eq!(ports.delta, "step_dt");
+        assert_eq!(ports.time, "step_time");
+        assert_eq!(ports.index, "step_index");
+        assert_eq!(ports.results.len(), 2);
+        assert_eq!(ports.results[0].capture, "collider_in");
+        assert_eq!(ports.results[0].output, "collider_out");
+        assert_eq!(ports.results[1].capture, "status_in");
+        assert_eq!(ports.results[1].output, "status_out");
+
+        // The particle wire carries the 96-byte WaterParticle record, not
+        // the ordinary 64-byte Particle.
+        let particle_layout = ArrayType::of_known::<WaterParticle>();
+        let out = node
+            .outputs()
+            .iter()
+            .find(|p| p.name == "out")
+            .expect("out port");
+        assert_eq!(out.ty, PortType::Array(particle_layout));
+        let status = node
+            .outputs()
+            .iter()
+            .find(|p| p.name == "status_out")
+            .expect("status_out port");
+        assert_eq!(status.ty, PortType::Array(ArrayType::of_known::<u32>()));
+    }
+
+    #[test]
+    fn water_state_requires_state_store_and_gpu() {
+        let prim = WaterState::new();
+        let node: &dyn EffectNode = &prim;
+        let req = node.requires();
+        assert!(req.state_store);
+        assert!(req.gpu_encoder);
+    }
+
+    #[test]
+    fn water_state_is_registered() {
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        assert!(
+            registry.construct("node.water_state").is_some(),
+            "node.water_state must be constructible from the builtin registry"
+        );
+    }
+}
