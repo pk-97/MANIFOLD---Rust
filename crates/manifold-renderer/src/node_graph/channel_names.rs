@@ -137,6 +137,15 @@ pub mod well_known {
         AGE  = "age";
         SEED = "seed";
 
+        // ─── Water (MLS-MPM records, design section 3) ──────────────
+        POSITION_MASS = "position_mass";
+        VELOCITY_DENSITY = "velocity_density";
+        AFFINE_X = "affine_x";
+        AFFINE_Y = "affine_y";
+        AFFINE_Z = "affine_z";
+        PREVIOUS_POSITION = "previous_position";
+        VELOCITY_MASS = "velocity_mass";
+
         // ─── Instance transforms ────────────────────────────────────
         POS_SCALE = "pos_scale";
         ROT       = "rot";

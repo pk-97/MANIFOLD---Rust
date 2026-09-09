@@ -26,6 +26,51 @@ pub struct WaterGridCell {
 const _: () = assert!(core::mem::size_of::<WaterParticle>() == 96);
 const _: () = assert!(core::mem::size_of::<WaterGridCell>() == 16);
 
+/// Channels signatures (design section 3): names are the field names,
+/// interned through the well-known registry; every field is Vec4F, so
+/// the std430 stride is exactly the struct size. Shader structs mirror
+/// the same field order — the drift test below is the enforcement.
+pub const WATER_PARTICLE_SPECS: &[crate::node_graph::ports::ChannelSpec] = &[
+    crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::POSITION_MASS,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    },
+    crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::VELOCITY_DENSITY,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    },
+    crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::AFFINE_X,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    },
+    crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::AFFINE_Y,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    },
+    crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::AFFINE_Z,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    },
+    crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::PREVIOUS_POSITION,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    },
+];
+
+pub const WATER_GRID_CELL_SPECS: &[crate::node_graph::ports::ChannelSpec] =
+    &[crate::node_graph::ports::ChannelSpec {
+        name: crate::node_graph::channel_names::well_known::VELOCITY_MASS,
+        ty: crate::node_graph::ports::ChannelElementType::Vec4F,
+    }];
+
+impl crate::node_graph::ports::KnownItem for WaterParticle {
+    const SPECS: &'static [crate::node_graph::ports::ChannelSpec] = WATER_PARTICLE_SPECS;
+}
+
+impl crate::node_graph::ports::KnownItem for WaterGridCell {
+    const SPECS: &'static [crate::node_graph::ports::ChannelSpec] = WATER_GRID_CELL_SPECS;
+}
+
 /// Fixed-point scale for grid mass/momentum accumulation (design section 5).
 /// Sole encoding: no runtime fallback. S1 must prove quantisation error and
 /// overflow headroom against the f64 reference before any GPU work.
@@ -399,6 +444,20 @@ mod reference;
 mod tests {
     use super::reference as r;
     use super::*;
+
+    #[test]
+    fn water_channel_layouts_match() {
+        assert_eq!(
+            crate::node_graph::ports::std430_stride(WATER_PARTICLE_SPECS) as usize,
+            core::mem::size_of::<WaterParticle>(),
+            "WATER_PARTICLE_SPECS std430 stride drifted from struct WaterParticle"
+        );
+        assert_eq!(
+            crate::node_graph::ports::std430_stride(WATER_GRID_CELL_SPECS) as usize,
+            core::mem::size_of::<WaterGridCell>(),
+            "WATER_GRID_CELL_SPECS std430 stride drifted from struct WaterGridCell"
+        );
+    }
 
     /// Analytically affine velocity field v(x) = a + B*x with non-symmetric B,
     /// so the f64 reference cannot agree with the f32 path by construction.
