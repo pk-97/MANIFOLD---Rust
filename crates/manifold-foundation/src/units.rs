@@ -422,9 +422,21 @@ impl Neg for Seconds {
 /// Distinct from `Beats` (a count/position) and `Seconds` (a duration).
 /// Clamped to 20–300 at all entry points to match Unity behaviour.
 /// `f32` precision is sufficient — BPM accuracy needs at most 0.01 BPM.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct Bpm(pub f32);
+
+/// Deserialization is a trust boundary: a hand-edited or legacy project file
+/// must not load an unclamped BPM (BUG-fobo — the transparent derive bypassed
+/// `clamped`, and `60.0 / 0.0` downstream is inf). The 20–300 range is a
+/// semantic choice, not an oversight; clamping here enforces it for every
+/// serde path. Direct `Bpm(x)` construction and `From<f32>` remain unclamped
+/// by design (internal callers), same as `clamped` being opt-in.
+impl<'de> Deserialize<'de> for Bpm {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Bpm::clamped(f32::deserialize(d)?))
+    }
+}
 
 impl Bpm {
     pub const DEFAULT: Bpm = Bpm(120.0);
@@ -434,18 +446,6 @@ impl Bpm {
     #[inline]
     pub fn clamped(v: f32) -> Self {
         Bpm(v.clamp(20.0, 300.0))
-    }
-
-    /// Beats per second derived from this BPM.
-    #[inline]
-    pub fn beats_per_second(self) -> f64 {
-        self.0 as f64 / 60.0
-    }
-
-    /// Seconds per beat derived from this BPM.
-    #[inline]
-    pub fn seconds_per_beat(self) -> f64 {
-        60.0 / self.0 as f64
     }
 
     #[inline]
@@ -475,19 +475,6 @@ impl From<Bpm> for f32 {
 }
 
 // ─── Cross-unit helpers ───────────────────────────────────────────────────────
-
-/// `beats_per_second` = BPM / 60.
-/// Called at audio/sync boundaries where ratio is already known.
-#[inline]
-pub fn beats_to_seconds(beats: Beats, beats_per_second: f64) -> Seconds {
-    Seconds(beats.0 / beats_per_second)
-}
-
-/// `beats_per_second` = BPM / 60.
-#[inline]
-pub fn seconds_to_beats(seconds: Seconds, beats_per_second: f64) -> Beats {
-    Beats(seconds.0 * beats_per_second)
-}
 
 #[cfg(test)]
 mod tests {
@@ -521,9 +508,13 @@ mod tests {
     }
 
     #[test]
-    fn cross_unit_conversions() {
-        let b = Beats(120.0);
-        let s = beats_to_seconds(b, 2.0); // 2 beats/sec = 120 BPM
-        assert!((s.0 - 60.0).abs() < 1e-10);
+    fn bpm_deserialize_clamps_to_the_invariant_range() {
+        // BUG-fobo: the load path must not admit an unclamped BPM.
+        let low: Bpm = serde_json::from_str("0.0").unwrap();
+        let high: Bpm = serde_json::from_str("950.0").unwrap();
+        let plain: Bpm = serde_json::from_str("128.5").unwrap();
+        assert_eq!(low, Bpm(20.0));
+        assert_eq!(high, Bpm(300.0));
+        assert_eq!(plain, Bpm(128.5));
     }
 }

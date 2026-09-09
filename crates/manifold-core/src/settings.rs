@@ -383,7 +383,10 @@ impl ProjectSettings {
 
     #[must_use]
     pub fn seconds_per_beat(&self) -> f32 {
-        60.0 / self.bpm.0
+        // Route through the authority (BUG-fobo): TempoMapConverter clamps
+        // defensively; `self.bpm` is clamped at construction/deserialize, so
+        // this can never divide by zero.
+        crate::tempo::TempoMapConverter::seconds_per_beat_from_bpm(self.bpm.0)
     }
     pub fn seconds_per_bar(&self) -> f32 {
         self.seconds_per_beat() * self.time_signature_numerator as f32

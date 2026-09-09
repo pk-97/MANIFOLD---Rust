@@ -651,7 +651,12 @@ fn evaluate_instance_audio_mods(
     // BEFORE the follower advances, matching the old pass-1 filter so an
     // unresolved mod does not advance its smoothing.
     let dt_s = dt.0 as f32;
-    let mods = fx.audio_mods.as_mut().unwrap();
+    // Fused guard+use (BUG-35vd): the caller-side `has_audio_mods()` check and
+    // this unwrap were one future edit away from separating. Unreachable in
+    // practice; structured so it stays that way.
+    let Some(mods) = fx.audio_mods.as_mut().filter(|m| !m.is_empty()) else {
+        return false;
+    };
     let params = &mut fx.params;
     let mut wrote = false;
     for m in mods.iter_mut().filter(|m| m.enabled) {

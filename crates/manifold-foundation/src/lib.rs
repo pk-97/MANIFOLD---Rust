@@ -27,7 +27,7 @@ pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_c
 pub use feature_flags::RELIGHT_FEATURE_ENABLED;
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
-pub use units::{Beats, Bpm, Seconds, beats_to_seconds, seconds_to_beats};
+pub use units::{Beats, Bpm, Seconds};
 
 /// Stable identifier for a single parameter slot.
 ///
