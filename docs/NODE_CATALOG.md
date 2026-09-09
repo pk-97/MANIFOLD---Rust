@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 274 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 278 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -262,7 +262,7 @@ _Generated from the node registry. Do not hand-edit. 274 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (22)
+### Particles 3D (26)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -285,7 +285,11 @@ _Generated from the node registry. Do not hand-edit. 274 nodes registered, group
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
+| Water Collide Box | `node.water_collide_box` | Filter | Pushes water particles out of the moving cube and the basin walls, matching the grid's boundary rule at particle resolution. |
+| Water Collider Motion | `node.water_collider_motion` | Filter | Moves the water collider smoothly between its last accepted position and the authored target over the frame's substeps, and reports how fast it is going. |
 | Water Commit | `node.water_commit` | Filter | Accepts the new water state when validation is clean, or keeps the last good state when anything faulted. |
+| Water Emit | `node.water_emit` | Filter | Pours new water particles into the unused tail of the particle buffer at a set rate, on the same lattice as the seed. |
+| Water Impulse | `node.water_impulse` | Filter | Turns trigger hits into one radial splash of velocity per event — queued across frames, capped, and never doubled by substepping. |
 | Water State | `node.water_state` | Filter | Owns the water simulation clock and persistent accepted state; the executor repeats the solver region under it. |
 | Water Validate | `node.water_validate` | Filter | Checks every live water particle for NaNs, runaway speeds and bad densities, and latches any fault into the sticky status word. |
 

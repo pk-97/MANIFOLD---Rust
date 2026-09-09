@@ -2063,3 +2063,978 @@ mod graph_chain {
         assert!(max_x_err <= 1.0e-5, "graph chain position error {max_x_err}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// S5 proofs — collider motion + collision, emission, impulses
+// (docs/WATER_IMPLEMENTATION_PLAN.md section 4, S5 gate). The event/cursor
+// latches run with the exact call sequence node.run() uses; the kernels run
+// on the GPU and are compared against CPU-computed expectations.
+// ---------------------------------------------------------------------------
+
+mod s5 {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use bytemuck::Zeroable as _;
+
+    use manifold_renderer::node_graph::primitives::{
+        CollideBoxUniforms, EmitCursor, EmitUniforms, ImpulseEventLatch, ImpulseUniforms,
+        WaterCollideBox, WaterColliderMotion, WaterEmit, WaterImpulse, EMIT_MAX, EMIT_MIN,
+    };
+
+    const S5_DT: f32 = 1.0 / 960.0;
+
+    fn impulse_pipeline() -> manifold_gpu::GpuComputePipeline {
+        pipeline_standalone::<WaterImpulse>("node.water_impulse")
+    }
+
+    fn emit_pipeline() -> manifold_gpu::GpuComputePipeline {
+        pipeline_standalone::<WaterEmit>("node.water_emit")
+    }
+
+    fn collide_pipeline() -> manifold_gpu::GpuComputePipeline {
+        pipeline_standalone::<WaterCollideBox>("node.water_collide_box")
+    }
+
+    /// CPU expectation for one impulse application (design section 6):
+    /// within radius R, dv = max(0, 1 - d/R)^2 * impulse; else zero.
+    fn impulse_delta(pos: [f32; 3], centre: [f32; 3], radius: f32, impulse: [f32; 3]) -> [f32; 3] {
+        let d = ((pos[0] - centre[0]).powi(2)
+            + (pos[1] - centre[1]).powi(2)
+            + (pos[2] - centre[2]).powi(2))
+        .sqrt();
+        if d >= radius {
+            return [0.0; 3];
+        }
+        let f = 1.0 - d / radius;
+        let s = f * f;
+        [impulse[0] * s, impulse[1] * s, impulse[2] * s]
+    }
+
+    /// Live-particle fixture around the default impulse centre (0, 0.7, 0)
+    /// with inactive slots interleaved and one far-outside particle.
+    fn impulse_fixture(capacity: usize) -> Vec<WaterParticle> {
+        let centre = [0.0f32, 0.7, 0.0];
+        let mut out = Vec::with_capacity(capacity);
+        let mut i = 0usize;
+        while out.len() < capacity {
+            let ring = i % 7;
+            let (dx, dz) = match ring {
+                0 => (0.0f32, 0.0f32),
+                1 => (0.1, 0.0),
+                2 => (-0.05, 0.12),
+                3 => (0.3, -0.2), // outside radius 0.25 below? 0.36 > 0.25 -> outside
+                4 => (0.0, 0.0),
+                5 => (-0.15, -0.15),
+                _ => (0.05, -0.1),
+            };
+            let pos = [centre[0] + dx, centre[1] + 0.02 * (i % 3) as f32, centre[2] + dz];
+            // Every 5th slot is inactive; slot 3 is beyond any radius.
+            if i % 5 == 4 {
+                out.push(WaterParticle::zeroed());
+            } else if i == 3 {
+                let mut p = make_particle([1.5, 2.0, 1.5], [0.1, 0.2, 0.3], [[0.0; 3]; 3], PARTICLE_MASS);
+                p.velocity_density[3] = 900.0;
+                out.push(p);
+            } else {
+                let mut p = make_particle(pos, [0.05, -0.1, 0.02], [[0.0; 3]; 3], PARTICLE_MASS);
+                p.velocity_density[3] = 980.0 + (i % 5) as f32;
+                out.push(p);
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// Dispatch one impulse application on `buf` (in -> out).
+    fn dispatch_impulse(
+        buf_in: &manifold_gpu::GpuBuffer,
+        buf_out: &manifold_gpu::GpuBuffer,
+        capacity: u32,
+        uniforms: &ImpulseUniforms,
+    ) {
+        let mut enc = device().create_encoder("water-impulse");
+        enc.dispatch_compute(
+            &impulse_pipeline(),
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: buf_in, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: buf_out, offset: 0 },
+            ],
+            ceil256(capacity),
+            "node.water_impulse",
+        );
+        enc.commit_and_wait_completed();
+    }
+
+    /// Total velocity delta the latch+kernel pair produces for a frame with
+    /// `substeps` iterations and a trigger count of `trigger`. `expected_x`
+    /// scales the CPU expectation — a multiplicity-N run applies the kernel
+    /// N times, which is exactly N times the single-event delta.
+    /// Returns (total_dv_y, applied_substeps).
+    fn run_impulse_scenario(substeps: u32, trigger: f32, expected_x: f32) -> (f64, u32) {
+        let capacity = 256u32;
+        let centre = [0.0f32, 0.7, 0.0];
+        let impulse = [0.0f32, 1.5, 0.0];
+        let radius = 0.25f32;
+        let fixture = impulse_fixture(capacity as usize);
+        let expected: Vec<[f32; 3]> = fixture
+            .iter()
+            .map(|p| impulse_delta([p.position_mass[0], p.position_mass[1], p.position_mass[2]], centre, radius, impulse))
+            .collect();
+
+        let buf_in = particle_buffer(capacity as usize);
+        let buf_out = particle_buffer(capacity as usize);
+        write_particles(&buf_in, &fixture);
+        buf_out.zero_fill();
+
+        let uniforms = ImpulseUniforms {
+            centre_x: centre[0],
+            centre_y: centre[1],
+            centre_z: centre[2],
+            radius,
+            impulse_x: impulse[0],
+            impulse_y: impulse[1],
+            impulse_z: impulse[2],
+            dispatch_count: capacity,
+        };
+
+        // The exact run() call sequence: frame 1 arms the latch with no
+        // trigger (first observation arms, never fires), then frame 2 runs
+        // `substeps` iterations with the advanced trigger.
+        let mut latch = ImpulseEventLatch::default();
+        let mut step_time = 0.0f32;
+        let mut applied = 0u32;
+        let mut current_in = buf_in;
+        let mut current_out = buf_out;
+        let d = latch.sample(0, 1, true, step_time, 0.0);
+        assert!(!d.apply, "arming observation must not fire");
+        for i in 0..substeps {
+            step_time += S5_DT;
+            let d = latch.sample(0, 2, true, step_time, trigger);
+            if d.apply {
+                applied += 1;
+                dispatch_impulse(&current_in, &current_out, capacity, &uniforms);
+                std::mem::swap(&mut current_in, &mut current_out);
+            }
+        }
+        let gpu = read_particles(&current_in, capacity as usize);
+        let mut total = 0.0f64;
+        let mut max_err = 0.0f64;
+        for (i, (g, e)) in gpu.iter().zip(expected.iter()).enumerate() {
+            // Inactive slots: byte-identical pass-through.
+            if fixture[i].position_mass[3] == 0.0 {
+                assert_eq!(g.position_mass[3], 0.0, "inactive slot {i} gained mass");
+                assert_eq!(g.velocity_density, [0.0; 4], "inactive slot {i} gained velocity");
+                continue;
+            }
+            for a in 0..3 {
+                let dv = (g.velocity_density[a] - fixture[i].velocity_density[a]) as f64;
+                total += dv;
+                max_err = max_err.max((dv - expected_x as f64 * e[a] as f64).abs());
+            }
+            // Density and affine state untouched.
+            assert_eq!(g.velocity_density[3], fixture[i].velocity_density[3], "slot {i} density drifted");
+        }
+        println!(
+            "impulse scenario substeps={substeps} trigger={trigger}: applied={applied}, total dv_y {total:.6} m/s, max per-particle err {max_err:.3e}"
+        );
+        assert!(
+            max_err <= 1.0e-6,
+            "impulse kernel deviates from the CPU expectation by {max_err}"
+        );
+        (total, applied)
+    }
+
+    /// One trigger is one velocity change: the integrated delta over the
+    /// affected particles is identical whether the frame has 1 or 8
+    /// substeps — the event applies once, not once per substep (design
+    /// section 6), and never as force·dt.
+    #[test]
+    fn water_impulse_event_total_invariant_across_substep_counts() {
+        let (total_1, applied_1) = run_impulse_scenario(1, 1.0, 1.0);
+        let (total_8, applied_8) = run_impulse_scenario(8, 1.0, 1.0);
+        assert_eq!(applied_1, 1, "one trigger applies exactly once");
+        assert_eq!(applied_8, 1, "extra substeps must not re-apply the event");
+        assert!(
+            (total_1 - total_8).abs() <= 1.0e-9,
+            "total velocity effect must be substep-count invariant: {total_1} vs {total_8}"
+        );
+        assert!(total_1.abs() > 0.0, "the fixture must feel the impulse");
+
+        // Multiplicity: a trigger advancing by 3 is three events, consumed
+        // one per substep — three total applications, 3x the single effect.
+        // The tolerance is relative: each application rounds the velocity
+        // to f32, so three sequential adds differ from 3x one add at the
+        // per-rounding level, not bitwise.
+        let (total_3, applied_3) = run_impulse_scenario(8, 3.0, 3.0);
+        assert_eq!(applied_3, 3);
+        assert!(
+            (total_3 - 3.0 * total_1).abs() <= 1.0e-6 * total_1.abs(),
+            "three events are three times one: {total_3} vs {}",
+            3.0 * total_1
+        );
+    }
+
+    /// A queued event (trigger advanced on a zero-substep frame) is consumed
+    /// on the first actual substep and never again.
+    #[test]
+    fn water_impulse_pending_event_consumed_on_first_substep() {
+        let capacity = 256u32;
+        let fixture = impulse_fixture(capacity as usize);
+        let buf_in = particle_buffer(capacity as usize);
+        let buf_out = particle_buffer(capacity as usize);
+        write_particles(&buf_in, &fixture);
+        buf_out.zero_fill();
+        let uniforms = ImpulseUniforms {
+            centre_x: 0.0,
+            centre_y: 0.7,
+            centre_z: 0.0,
+            radius: 0.25,
+            impulse_x: 0.0,
+            impulse_y: 1.5,
+            impulse_z: 0.0,
+            dispatch_count: capacity,
+        };
+
+        let mut latch = ImpulseEventLatch::default();
+        // Frame 1: arm.
+        let d = latch.sample(0, 1, true, S5_DT, 0.0);
+        assert!(!d.apply);
+        // Frame 2: fractional time scale — zero due substeps, the body never
+        // runs, the trigger wire advances to 1.
+        // Frame 3: four actual substeps.
+        let mut step_time = 10.0f32;
+        let mut applies = 0u32;
+        let mut current_in = &buf_in;
+        let mut current_out = &buf_out;
+        for i in 0..4u32 {
+            step_time += S5_DT;
+            let d = latch.sample(0, 3, true, step_time, 1.0);
+            if d.apply {
+                applies += 1;
+                dispatch_impulse(current_in, current_out, capacity, &uniforms);
+                std::mem::swap(&mut current_in, &mut current_out);
+            }
+        }
+        assert_eq!(applies, 1, "the queued event fires exactly once, on the first actual substep");
+        let gpu = read_particles(current_in, capacity as usize);
+        let mut moved = 0usize;
+        for (i, g) in gpu.iter().enumerate() {
+            if fixture[i].position_mass[3] == 0.0 {
+                continue;
+            }
+            let dv = (g.velocity_density[1] - fixture[i].velocity_density[1]).abs();
+            if dv > 1.0e-7 {
+                moved += 1;
+            }
+        }
+        assert!(moved > 0, "the queued event must actually move water");
+    }
+
+    /// Dispatch one emit substep on `buf` (in -> out).
+    fn dispatch_emit(
+        buf_in: &manifold_gpu::GpuBuffer,
+        buf_out: &manifold_gpu::GpuBuffer,
+        capacity: u32,
+        birth_lo: u32,
+        birth_hi: u32,
+        first_free: u32,
+    ) {
+        let uniforms = EmitUniforms {
+            emit_min_x: EMIT_MIN[0],
+            emit_min_y: EMIT_MIN[1],
+            emit_min_z: EMIT_MIN[2],
+            emit_max_x: EMIT_MAX[0],
+            emit_max_y: EMIT_MAX[1],
+            emit_max_z: EMIT_MAX[2],
+            grid_spacing: GRID_SPACING,
+            rest_density: REST_DENSITY,
+            rate: 100.0,
+            first_free: first_free as i32,
+            birth_lo,
+            birth_hi,
+            dispatch_count: capacity,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let mut enc = device().create_encoder("water-emit");
+        enc.dispatch_compute(
+            &emit_pipeline(),
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: buf_in, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: buf_out, offset: 0 },
+            ],
+            ceil256(capacity),
+            "node.water_emit",
+        );
+        enc.commit_and_wait_completed();
+    }
+
+    /// CPU lattice expectation for one birth ordinal (same formula as
+    /// node.seed_water and the emit body).
+    fn emit_lattice_pos(ordinal: u32, spacing: f32) -> [f32; 3] {
+        let nx = ((EMIT_MAX[0] - EMIT_MIN[0]) / spacing + 0.5).floor() as u32;
+        let ny = ((EMIT_MAX[1] - EMIT_MIN[1]) / spacing + 0.5).floor() as u32;
+        let ix = ordinal % nx;
+        let iy = (ordinal / nx) % ny;
+        let iz = ordinal / (nx * ny);
+        [
+            EMIT_MIN[0] + (ix as f32 + 0.5) * spacing,
+            EMIT_MIN[1] + (iy as f32 + 0.5) * spacing,
+            EMIT_MIN[2] + (iz as f32 + 0.5) * spacing,
+        ]
+    }
+
+    /// Deterministic ordinal births into the unused tail: fractional carry
+    /// gates the first birth, lattice positions match the CPU formula, the
+    /// seeded prefix is byte-untouched, the unborn tail stays inactive, and
+    /// capacity exhaustion stops emission at exactly the tail size with one
+    /// Full report.
+    #[test]
+    fn water_emit_births_match_cpu_and_full_stops_at_capacity() {
+        let capacity = 384u32;
+        let first_free = 128u32;
+        let mut fixture = vec![WaterParticle::zeroed(); capacity as usize];
+        // Seeded prefix with distinctive records — emission must never
+        // overwrite existing water.
+        for (i, p) in fixture.iter_mut().enumerate().take(first_free as usize) {
+            *p = make_particle(
+                [0.01 * i as f32, 0.02, 0.03],
+                [0.1, 0.0, 0.0],
+                [[0.0; 3]; 3],
+                PARTICLE_MASS,
+            );
+        }
+        let prefix_bytes: Vec<u8> = bytemuck::cast_slice(&fixture[..first_free as usize]).to_vec();
+
+        let buf_in = particle_buffer(capacity as usize);
+        let buf_out = particle_buffer(capacity as usize);
+        write_particles(&buf_in, &fixture);
+        buf_out.zero_fill();
+
+        // Fractional carry: 100 particles/s at 960 substeps/s — the first
+        // birth lands on the 10th substep (carry crosses 1.0 at 10/96 s).
+        let mut cursor = EmitCursor::default();
+        let mut step_time = 0.0f32;
+        let mut current_in = &buf_in;
+        let mut current_out = &buf_out;
+        let mut reports = 0u32;
+        for substep in 0..24u32 {
+            step_time += S5_DT;
+            let plan = cursor.advance(0, step_time, 100.0, S5_DT as f64, first_free, capacity, 1024);
+            if plan.report_full {
+                reports += 1;
+            }
+            if plan.hi > plan.lo {
+                dispatch_emit(current_in, current_out, capacity, plan.lo, plan.hi, first_free);
+                std::mem::swap(&mut current_in, &mut current_out);
+            }
+        }
+
+        let gpu = read_particles(current_in, capacity as usize);
+        // Seeded prefix byte-identical.
+        let gpu_prefix: Vec<u8> = bytemuck::cast_slice(&gpu[..first_free as usize]).to_vec();
+        assert_eq!(gpu_prefix, prefix_bytes, "emission overwrote the seeded prefix");
+        // 24 substeps at 100/s = 2 or 3 births (2.5 expected; floor chain).
+        let born = cursor.born();
+        assert!(born >= 2 && born <= 3, "born {born} outside the fractional-carry window");
+        let spacing = GRID_SPACING * 0.5;
+        for slot in first_free as usize..(first_free + born) as usize {
+            let ordinal = slot - first_free as usize;
+            let expected_pos = emit_lattice_pos(ordinal as u32, spacing);
+            assert_eq!(
+                gpu[slot].position_mass,
+                [expected_pos[0], expected_pos[1], expected_pos[2], PARTICLE_MASS],
+                "birth ordinal {ordinal} off the lattice"
+            );
+            assert_eq!(gpu[slot].velocity_density, [0.0, 0.0, 0.0, REST_DENSITY]);
+            assert_eq!(gpu[slot].affine_x, [0.0; 4]);
+            assert_eq!(gpu[slot].affine_y, [0.0; 4]);
+            assert_eq!(gpu[slot].affine_z, [0.0; 4]);
+            assert_eq!(gpu[slot].previous_position, [expected_pos[0], expected_pos[1], expected_pos[2], 0.0]);
+        }
+        // Unborn tail stays inactive.
+        for (i, p) in gpu.iter().enumerate().skip((first_free + born) as usize) {
+            assert_eq!(p.position_mass, [0.0; 4], "unborn slot {i} became live");
+        }
+
+        // Full: pour hard into the remaining tail until exhaustion.
+        let mut full_reports = reports;
+        for substep in 0..64u32 {
+            step_time += S5_DT;
+            let plan = cursor.advance(0, step_time, 1.0e6, S5_DT as f64, first_free, capacity, 1024);
+            if plan.report_full {
+                full_reports += 1;
+            }
+            if plan.hi > plan.lo {
+                dispatch_emit(current_in, current_out, capacity, plan.lo, plan.hi, first_free);
+                std::mem::swap(&mut current_in, &mut current_out);
+            }
+        }
+        assert_eq!(cursor.born(), capacity - first_free, "emission stops exactly at the tail size");
+        assert_eq!(full_reports, reports + 1, "Full reported once at exhaustion");
+        let gpu = read_particles(current_in, capacity as usize);
+        let gpu_prefix: Vec<u8> = bytemuck::cast_slice(&gpu[..first_free as usize]).to_vec();
+        assert_eq!(gpu_prefix, prefix_bytes, "prefix touched after Full");
+        for slot in first_free as usize..capacity as usize {
+            assert_ne!(gpu[slot].position_mass[3], 0.0, "tail slot {slot} not born");
+        }
+        println!(
+            "water_emit: {} substeps -> {} born, Full once, prefix intact",
+            24 + 64,
+            cursor.born()
+        );
+    }
+
+    /// Shared-transform proof: node.water_collider_motion interpolates the
+    /// authored target across the frame's substeps (executor-driven, real
+    /// StateStore + Transform/Vec3 wires), the accepted collider lands
+    /// exactly on the target, and node.water_collide_box driven by that same
+    /// accepted transform projects particles out of the box with relative
+    /// normal velocity removed — post-projection penetration <= 0.1*h.
+    #[test]
+    fn water_cube_transform_and_collision_match() {
+        cube_transform_and_collision_match_inner();
+    }
+
+    fn cube_transform_and_collision_match_inner() {
+        use manifold_core::{Beats, Seconds};
+        use manifold_gpu::GpuTextureFormat;
+        use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use manifold_renderer::node_graph::depth_rule::DepthRule;
+        use manifold_renderer::node_graph::ports::{
+            ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+        };
+        use manifold_renderer::node_graph::StateStore;
+        use manifold_renderer::node_graph::substeps::SimulationFrame;
+        use manifold_renderer::node_graph::transform::Transform;
+        use manifold_renderer::node_graph::primitives::Value;
+        use manifold_renderer::node_graph::{
+            EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor, FrameTime,
+            Graph, MetalBackend, NodeInstanceId, ParamDef, ParamValue as NodeParamValue,
+            ParamValues, ResourceId, compile,
+        };
+
+        /// Records every Transform seen on its input wire — the display
+        /// proxy for the accepted collider.
+        struct CaptureTransform {
+            type_id: EffectNodeType,
+            seen: Arc<Mutex<Vec<Transform>>>,
+        }
+        impl EffectNode for CaptureTransform {
+            fn depth_rule(&self) -> DepthRule {
+                DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                static INPUTS: [NodeInput; 1] = [NodePort {
+                    name: std::borrow::Cow::Borrowed("in"),
+                    ty: PortType::Transform,
+                    kind: PortKind::Input,
+                    required: true,
+                }];
+                &INPUTS
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &[]
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+                if let Some(t) = ctx.inputs.transform("in") {
+                    self.seen.lock().unwrap().push(t);
+                }
+            }
+            fn is_liveness_root(&self) -> bool {
+                // Sink-only probe: no output wire propagates liveness to it,
+                // so it must be a root to survive the live-step pruning.
+                true
+            }
+        }
+
+        /// Records every Vec3 seen on its input wire.
+        struct CaptureVec3 {
+            type_id: EffectNodeType,
+            seen: Arc<Mutex<Vec<[f32; 3]>>>,
+        }
+        impl EffectNode for CaptureVec3 {
+            fn depth_rule(&self) -> DepthRule {
+                DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                static INPUTS: [NodeInput; 1] = [NodePort {
+                    name: std::borrow::Cow::Borrowed("in"),
+                    ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::Vec3),
+                    kind: PortKind::Input,
+                    required: true,
+                }];
+                &INPUTS
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &[]
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+                if let Some(manifold_renderer::node_graph::ParamValue::Vec3(v)) =
+                    ctx.inputs.scalar("in")
+                {
+                    self.seen.lock().unwrap().push(v);
+                }
+            }
+            fn is_liveness_root(&self) -> bool {
+                // Sink-only probe: no output wire propagates liveness to it,
+                // so it must be a root to survive the live-step pruning.
+                true
+            }
+        }
+
+        struct WaterSink {
+            type_id: EffectNodeType,
+            inputs: Vec<NodeInput>,
+        }
+        impl EffectNode for WaterSink {
+            fn depth_rule(&self) -> DepthRule {
+                DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &self.inputs
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &[]
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+            fn is_liveness_root(&self) -> bool {
+                true
+            }
+        }
+
+        /// Test-only particle producer — a small pre-bound buffer of
+        /// zeroed (inactive) records so the executor graph satisfies
+        /// collide_box's required `in` wire. The penetration measurement
+        /// itself drives the kernel directly below.
+        struct WaterSource {
+            type_id: EffectNodeType,
+        }
+        impl EffectNode for WaterSource {
+            fn depth_rule(&self) -> DepthRule {
+                DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &[]
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                    name: std::borrow::Cow::Borrowed("out"),
+                    ty: PortType::Array(ArrayType::of_known::<WaterParticle>()),
+                    kind: PortKind::Output,
+                    required: false,
+                }];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+            fn array_output_capacity(
+                &self,
+                _port_name: &str,
+                _params: &ParamValues,
+                _input_capacities: &[(&str, u32)],
+            ) -> Option<u32> {
+                Some(8)
+            }
+        }
+
+        fn resource_for(plan: &ExecutionPlan, node: NodeInstanceId, port: &str, is_input: bool) -> ResourceId {
+            for step in plan.steps() {
+                if step.node == node {
+                    let pool = if is_input { &step.inputs } else { &step.outputs };
+                    for &(name, id) in pool {
+                        if name == port {
+                            return id;
+                        }
+                    }
+                }
+            }
+            panic!("no resource for {port} on {node:?}");
+        }
+
+        fn frame_time() -> FrameTime {
+            FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(0.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: 0,
+            }
+        }
+
+        // The graph: authored target -> collider motion -> (capture +
+        // collide box) -> sink. The same motion.transform wire feeds both
+        // the display proxy and the collision stage — the shared-wire half
+        // of the proof.
+        let mut g = Graph::new();
+        let v_dt = g.add_node(Box::new(Value::new()));
+        let v_time = g.add_node(Box::new(Value::new()));
+        let v_index = g.add_node(Box::new(Value::new()));
+        let v_count = g.add_node(Box::new(Value::new()));
+        let target = g.add_node(Box::new(
+            manifold_renderer::node_graph::primitives::Transform3D::new(),
+        ));
+        let motion = g.add_node(Box::new(WaterColliderMotion::new()));
+        let seen_t_log: Arc<Mutex<Vec<Transform>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_v_log: Arc<Mutex<Vec<[f32; 3]>>> = Arc::new(Mutex::new(Vec::new()));
+        let capture_t = g.add_node(Box::new(CaptureTransform {
+            type_id: EffectNodeType::new("test.capture_transform"),
+            seen: Arc::clone(&seen_t_log),
+        }));
+        let capture_v = g.add_node(Box::new(CaptureVec3 {
+            type_id: EffectNodeType::new("test.capture_vec3"),
+            seen: Arc::clone(&seen_v_log),
+        }));
+        let collide = g.add_node(Box::new(WaterCollideBox::new()));
+        let source = g.add_node(Box::new(WaterSource {
+            type_id: EffectNodeType::new("test.water_source"),
+        }));
+        let sink = g.add_node(Box::new(WaterSink {
+            type_id: EffectNodeType::new("test.water_sink"),
+            inputs: vec![NodePort {
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Array(ArrayType::of_known::<WaterParticle>()),
+                kind: PortKind::Input,
+                required: true,
+            }],
+        }));
+
+        g.connect((v_dt, "out"), (motion, "step_dt")).unwrap();
+        g.connect((v_time, "out"), (motion, "step_time")).unwrap();
+        g.connect((v_index, "out"), (motion, "step_index")).unwrap();
+        g.connect((v_count, "out"), (motion, "step_count")).unwrap();
+        g.connect((target, "transform"), (motion, "target")).unwrap();
+        g.connect((motion, "transform"), (capture_t, "in")).unwrap();
+        g.connect((motion, "velocity"), (capture_v, "in")).unwrap();
+        g.connect((motion, "transform"), (collide, "collider")).unwrap();
+        g.connect((motion, "velocity"), (collide, "collider_velocity")).unwrap();
+        g.connect((source, "out"), (collide, "in")).unwrap();
+        g.connect((collide, "out"), (sink, "in")).unwrap();
+
+        let plan = compile(&g).expect("collider graph compiles");
+        let r_source_out = resource_for(&plan, source, "out", false);
+        let r_collide_out = resource_for(&plan, collide, "out", false);
+
+        let mut backend = MetalBackend::new(
+            Arc::clone(device()),
+            16,
+            16,
+            GpuTextureFormat::Rgba16Float,
+        );
+        let source_buf = particle_buffer(8);
+        source_buf.zero_fill();
+        let _source_slot = backend.pre_bind_array(r_source_out, source_buf);
+        let _collide_slot = backend.pre_bind_array(r_collide_out, particle_buffer(8));
+
+        let mut store = StateStore::new();
+        let mut exec = Executor::new(Box::new(backend));
+
+        const N_SUB: u32 = 4;
+        let stroke_target = [1.004f32, 0.0, 0.0]; // y = 1.004: 0.96 m/s over 4 substeps
+        // Frame 1: rest at y = 1.0. Frame 2: the stroke. Frame 3: hold.
+        for (frame, target_y) in [(1u64, 1.0f32), (2, stroke_target[0]), (3, stroke_target[0])] {
+            g.set_param(target, "pos_y", NodeParamValue::Float(target_y))
+                .unwrap();
+            g.set_param(v_count, "value", NodeParamValue::Float(N_SUB as f32))
+                .unwrap();
+            for i in 0..N_SUB {
+                g.set_param(v_dt, "value", NodeParamValue::Float(S5_DT))
+                    .unwrap();
+                g.set_param(
+                    v_time,
+                    "value",
+                    NodeParamValue::Float(frame as f32 * 10.0 + (i as f32 + 1.0) * S5_DT),
+                )
+                .unwrap();
+                g.set_param(v_index, "value", NodeParamValue::Float(i as f32))
+                    .unwrap();
+
+                let mut native_enc = device().create_encoder("water-collider-motion");
+                let mut gpu = RendererGpuEncoder::new(&mut native_enc, device());
+                exec.set_simulation_frame(SimulationFrame {
+                    frame_id: frame,
+                    delta: Seconds(1.0 / 60.0),
+                    epoch: 0,
+                    advancing: true,
+                    exporting: false,
+                });
+                exec.execute_frame_with_state(
+                    &mut g,
+                    &plan,
+                    frame_time(),
+                    &mut gpu,
+                    &mut store,
+                    0,
+                );
+                native_enc.commit_and_wait_completed();
+            }
+        }
+
+        let seen_t = seen_t_log.lock().unwrap().clone();
+        let seen_v = seen_v_log.lock().unwrap().clone();
+        assert_eq!(seen_t.len(), 12, "one capture per substep evaluation");
+        assert_eq!(seen_v.len(), 12);
+
+        // Frame 1 (indices 0..4): rest at y = 1.0, zero velocity.
+        for (i, t) in seen_t.iter().enumerate().take(4) {
+            assert!(
+                (t.pos[1] - 1.0).abs() < 1.0e-6,
+                "rest frame {i} moved: {}",
+                t.pos[1]
+            );
+            assert_eq!(seen_v[i], [0.0; 3]);
+        }
+        // Frame 2 (indices 4..8): linear interpolation previous=1.0 ->
+        // target=1.004, fractions (i+1)/4, frame-constant velocity 0.96 m/s.
+        let frac = [0.25f32, 0.5, 0.75, 1.0];
+        for (i, &f) in frac.iter().enumerate() {
+            let expected_y = 1.0 + 0.004 * f;
+            assert!(
+                (seen_t[4 + i].pos[1] - expected_y).abs() < 1.0e-6,
+                "stroke substep {i}: {} != {expected_y}",
+                seen_t[4 + i].pos[1]
+            );
+            assert!(
+                (seen_v[4 + i][1] - 0.96).abs() < 1.0e-3,
+                "stroke substep {i} velocity {} != 0.96",
+                seen_v[4 + i][1]
+            );
+            assert_eq!(seen_v[4 + i][0], 0.0);
+            assert_eq!(seen_v[4 + i][2], 0.0);
+        }
+        // Frame 3 (indices 8..12): hold at the accepted target, zero velocity.
+        for i in 8..12 {
+            assert!(
+                (seen_t[i].pos[1] - stroke_target[0]).abs() < 1.0e-6,
+                "hold frame moved: {}",
+                seen_t[i].pos[1]
+            );
+            assert_eq!(seen_v[i], [0.0; 3]);
+        }
+        // The accepted (displayed) collider IS the authored target at the
+        // end of the stroke — the shared-wire contract.
+        let accepted = seen_t[7];
+        assert!(
+            (accepted.pos[1] - stroke_target[0]).abs() < 1.0e-6,
+            "accepted collider {} != target {}",
+            accepted.pos[1],
+            stroke_target[0]
+        );
+
+        // Collision half: drive node.water_collide_box with the ACCEPTED
+        // transform + velocity from the shared wire and particles placed
+        // inside the box with into-wall velocities. Post-projection
+        // penetration must be <= 0.1*h and the relative normal velocity at
+        // contact must be removed (free-slip tangential preserved) — with a
+        // CPU mirror per particle.
+        let half = [0.25f32; 3];
+        let centre = accepted.pos;
+        let mut fixture: Vec<WaterParticle> = Vec::new();
+        // Inside particles on every axis combination, moving into the box.
+        let offs = [
+            ([0.05f32, 0.0, 0.0], [-0.4f32, 0.1, 0.0]),
+            ([-0.08, 0.06, 0.0], [0.5, -0.2, 0.1]),
+            ([0.0, -0.1, 0.05], [0.1, 0.6, -0.3]),
+            ([0.02, 0.02, -0.12], [-0.2, 0.0, 0.45]),
+            ([-0.2, -0.2, -0.2], [0.3, 0.3, 0.3]),
+        ];
+        for (o, v) in offs {
+            fixture.push(make_particle(
+                [centre[0] + o[0], centre[1] + o[1], centre[2] + o[2]],
+                v,
+                [[0.0; 3]; 3],
+                PARTICLE_MASS,
+            ));
+        }
+        // A below-floor particle exercises the basin half of the kernel
+        // (same rule as mpm_grid_velocity's boundary path).
+        let basin_floor_y = manifold_renderer::node_graph::primitives::BASIN_MIN[1];
+        fixture.push(make_particle(
+            [centre[0], basin_floor_y - 0.05, centre[2]],
+            [0.0, -1.0, 0.0],
+            [[0.0; 3]; 3],
+            PARTICLE_MASS,
+        ));
+        // Inactive slot passes through.
+        fixture.push(WaterParticle::zeroed());
+        let n = fixture.len();
+
+        let buf_in = particle_buffer(n);
+        let buf_out = particle_buffer(n);
+        write_particles(&buf_in, &fixture);
+        buf_out.zero_fill();
+
+        // The collider velocity comes off the shared wire too: zero here
+        // (the hold frame), so the relative velocity is the particle's own.
+        let uniforms = CollideBoxUniforms {
+            step_dt: S5_DT,
+            cube_half_x: half[0],
+            cube_half_y: half[1],
+            cube_half_z: half[2],
+            basin_min_x: manifold_renderer::node_graph::primitives::BASIN_MIN[0],
+            basin_min_y: basin_floor_y,
+            basin_min_z: manifold_renderer::node_graph::primitives::BASIN_MIN[2],
+            basin_max_x: manifold_renderer::node_graph::primitives::BASIN_MAX[0],
+            basin_max_y: manifold_renderer::node_graph::primitives::BASIN_MAX[1],
+            basin_max_z: manifold_renderer::node_graph::primitives::BASIN_MAX[2],
+            collider_x: centre[0],
+            collider_y: centre[1],
+            collider_z: centre[2],
+            collider_velocity_x: 0.0,
+            collider_velocity_y: 0.0,
+            collider_velocity_z: 0.0,
+            dispatch_count: n as u32,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let mut enc = device().create_encoder("water-collide-box");
+        enc.dispatch_compute(
+            &collide_pipeline(),
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &buf_in, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &buf_out, offset: 0 },
+            ],
+            ceil256(n as u32),
+            "node.water_collide_box",
+        );
+        enc.commit_and_wait_completed();
+        let gpu = read_particles(&buf_out, n);
+
+        let h = GRID_SPACING;
+        let mut max_penetration = 0.0f32;
+        for (i, g) in gpu.iter().enumerate().take(5) {
+            let p = &fixture[i];
+            let pos = [g.position_mass[0], g.position_mass[1], g.position_mass[2]];
+            let v = [g.velocity_density[0], g.velocity_density[1], g.velocity_density[2]];
+            let d = [
+                pos[0] - centre[0],
+                pos[1] - centre[1],
+                pos[2] - centre[2],
+            ];
+            let ad = [d[0].abs(), d[1].abs(), d[2].abs()];
+            // Post-projection penetration: how far inside the box the
+            // particle remains on its worst axis (0 when on a face).
+            let inside = ad[0] < half[0] && ad[1] < half[1] && ad[2] < half[2];
+            let penetration = if inside {
+                (half[0] - ad[0]).min(half[1] - ad[1]).min(half[2] - ad[2])
+            } else {
+                0.0
+            };
+            max_penetration = max_penetration.max(penetration);
+            assert!(
+                penetration <= 0.1 * h,
+                "slot {i} remains inside the box by {penetration} m"
+            );
+
+            // CPU mirror of the projection: min-penetration-axis push +
+            // relative normal velocity removal.
+            let mut exp_pos = [p.position_mass[0], p.position_mass[1], p.position_mass[2]];
+            let mut exp_v = [p.velocity_density[0], p.velocity_density[1], p.velocity_density[2]];
+            let pd = [
+                exp_pos[0] - centre[0],
+                exp_pos[1] - centre[1],
+                exp_pos[2] - centre[2],
+            ];
+            let pad = [pd[0].abs(), pd[1].abs(), pd[2].abs()];
+            if pad[0] < half[0] && pad[1] < half[1] && pad[2] < half[2] {
+                let dx_lo = pd[0] + half[0];
+                let dx_hi = half[0] - pd[0];
+                let dy_lo = pd[1] + half[1];
+                let dy_hi = half[1] - pd[1];
+                let dz_lo = pd[2] + half[2];
+                let dz_hi = half[2] - pd[2];
+                let mut best = dx_lo;
+                let mut axis = 0usize;
+                let mut sgn = -1.0f32;
+                if dx_hi < best { best = dx_hi; axis = 0; sgn = 1.0; }
+                if dy_lo < best { best = dy_lo; axis = 1; sgn = -1.0; }
+                if dy_hi < best { best = dy_hi; axis = 1; sgn = 1.0; }
+                if dz_lo < best { best = dz_lo; axis = 2; sgn = -1.0; }
+                if dz_hi < best { axis = 2; sgn = 1.0; }
+                exp_pos[axis] = centre[axis] + sgn * half[axis];
+                // Into-surface normal component removed; the collider
+                // velocity is zero in this fixture.
+                if exp_v[axis] * sgn < 0.0 {
+                    exp_v[axis] = 0.0;
+                }
+                // Free-slip tangential: the other two components unchanged.
+            }
+            for a in 0..3 {
+                assert!(
+                    (pos[a] - exp_pos[a]).abs() <= 1.0e-6,
+                    "slot {i} axis {a}: projected pos {} != CPU {}",
+                    pos[a],
+                    exp_pos[a]
+                );
+                assert!(
+                    (v[a] - exp_v[a]).abs() <= 1.0e-6,
+                    "slot {i} axis {a}: projected v {} != CPU {}",
+                    v[a],
+                    exp_v[a]
+                );
+            }
+            // Relative normal velocity at contact is never into the surface.
+            if inside {
+                let n_axis = {
+                    // Find the axis the particle was pushed along: the one
+                    // sitting exactly on the face.
+                    (0..3)
+                        .find(|&a| (ad[a] - half[a]).abs() <= 1.0e-6)
+                        .expect("a projected particle sits on a face")
+                };
+                let sgn = if d[n_axis] > 0.0 { 1.0 } else { -1.0 };
+                let vn = v[n_axis] * sgn;
+                assert!(
+                    vn >= -1.0e-6,
+                    "slot {i} still moving into the contact face: {vn}"
+                );
+            }
+        }
+        // Basin half: the below-floor particle may not hold a downward
+        // velocity (identical rule to mpm_grid_velocity's boundary path).
+        let floor = &gpu[5];
+        assert!(
+            floor.velocity_density[1] >= 0.0,
+            "basin floor velocity must be clamped upward: {}",
+            floor.velocity_density[1]
+        );
+        // Inactive pass-through.
+        assert_eq!(gpu[6].position_mass, [0.0; 4]);
+
+        println!(
+            "water_cube_transform_and_collision_match: accepted collider y = {}, max post-projection penetration {:.3e} m (0.1*h = {:.4}), velocity-rule and basin-rule projections match the CPU mirror",
+            accepted.pos[1],
+            max_penetration,
+            0.1 * h
+        );
+        assert!(max_penetration <= 0.1 * h);
+    }
+}

@@ -280,6 +280,13 @@ mod mpm_scatter_stress;
 mod seed_water;
 mod water_commit;
 mod water_validate;
+// Live Water S5 collider motion, collision, emission and impulse stages
+// (docs/WATER_IMPLEMENTATION_PLAN.md sections 2.2 and 4, S5 brief).
+// Registered by the S5 lane.
+mod water_collider_motion;
+mod water_collide_box;
+mod water_emit;
+mod water_impulse;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 pub(crate) mod wgsl_compute;
@@ -538,7 +545,13 @@ pub use mpm_scatter_stress::{
     MpmScatterStress, ScatterStressUniforms, WGSL as SCATTER_STRESS_WGSL,
 };
 pub use seed_water::{POOL_MAX, POOL_MIN, SeedWater, SeedWaterUniforms};
+pub use water_collider_motion::{ColliderMotion, ColliderSample, WaterColliderMotion};
+pub use water_collide_box::{CollideBoxUniforms, WaterCollideBox, CUBE_HALF};
 pub use water_commit::{CommitUniforms, WaterCommit};
+pub use water_emit::{EmitCursor, EmitPlan, EmitUniforms, WaterEmit, EMIT_MAX, EMIT_MIN};
+pub use water_impulse::{
+    ImpulseDecision, ImpulseEventLatch, ImpulseUniforms, WaterImpulse, MAX_PENDING_IMPULSES,
+};
 pub use water_validate::{ValidateUniforms, WGSL as VALIDATE_WGSL, WaterValidate};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 
