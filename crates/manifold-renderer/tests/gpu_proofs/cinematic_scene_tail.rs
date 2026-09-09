@@ -165,15 +165,28 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     let (mut with_tail, manifest_tail) = build_variant(h, false);
     let (mut stripped, manifest_stripped) = build_variant(h, true);
 
-    // Frame-to-frame stability inside each variant is the GPU counterpart of
-    // the render-import convergence contract: the assert compares a
-    // converged frame, not a transient one.
-    for _ in 0..3 {
-        let _ = render_one(h, &mut with_tail, &manifest_tail, 0);
-        let _ = render_one(h, &mut stripped, &manifest_stripped, 0);
-    }
-    let a = render_one(h, &mut with_tail, &manifest_tail, 0);
-    let b = render_one(h, &mut stripped, &manifest_stripped, 0);
+    // Mesh parsing and publication are asynchronous. A fixed four renders
+    // can finish before the mesh becomes ready; a black pending frame is
+    // not evidence about the neutral lens. Require both non-black output
+    // and byte stability, with a deadline so a stuck import still fails.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let visible = |bytes: &[u8]| bytes.chunks_exact(8).any(|px| {
+        half::f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.03
+    });
+    let mut previous: Option<(Vec<u8>, Vec<u8>)> = None;
+    let (a, b) = loop {
+        let a = render_one(h, &mut with_tail, &manifest_tail, 0);
+        let b = render_one(h, &mut stripped, &manifest_stripped, 0);
+        if visible(&a) && visible(&b)
+            && previous.as_ref().is_some_and(|(pa, pb)| *pa == a && *pb == b)
+        {
+            break (a, b);
+        }
+        assert!(std::time::Instant::now() < deadline,
+            "import variants did not reach stable, non-black output");
+        previous = Some((a, b));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
 
     let non_black = a
         .as_slice()
