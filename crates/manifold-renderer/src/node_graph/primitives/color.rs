@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::dispatch_standalone_2d;
 use super::standalone_pipeline::standalone_pipeline;
 
 /// Public `TYPE_ID` re-exports for callers that pre-date the `primitive!`
@@ -86,7 +87,6 @@ impl Primitive for Brightness {
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
         };
-        let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -94,27 +94,13 @@ impl Primitive for Brightness {
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 1,
-                    texture: in_tex,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 3,
-                    texture: out_tex,
-                },
-            ],
-            [width.div_ceil(16), height.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[in_tex],
+            Some(sampler),
+            out_tex,
             "node.brightness",
         );
     }
@@ -210,7 +196,6 @@ impl Primitive for ChannelMix {
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
         };
-        let (w, h) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -218,27 +203,13 @@ impl Primitive for ChannelMix {
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 1,
-                    texture: in_tex,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 3,
-                    texture: out_tex,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[in_tex],
+            Some(sampler),
+            out_tex,
             "node.channel_mixer",
         );
     }
@@ -315,7 +286,6 @@ impl Primitive for ColorRamp {
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
         };
-        let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -323,27 +293,13 @@ impl Primitive for ColorRamp {
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 1,
-                    texture: in_tex,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 3,
-                    texture: out_tex,
-                },
-            ],
-            [width.div_ceil(16), height.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[in_tex],
+            Some(sampler),
+            out_tex,
             "node.gradient_map",
         );
     }

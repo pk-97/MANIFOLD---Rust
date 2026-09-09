@@ -6,12 +6,12 @@
 //! pre-step, multi-tap composites, signed-field merges).
 
 use std::borrow::Cow;
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::GpuSamplerDesc;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -97,22 +97,13 @@ impl Primitive for TextureSum5 {
             _pad2: 0.0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture { binding: 1, texture: a },
-                GpuBinding::Texture { binding: 2, texture: b },
-                GpuBinding::Texture { binding: 3, texture: c },
-                GpuBinding::Texture { binding: 4, texture: d },
-                GpuBinding::Texture { binding: 5, texture: e },
-                GpuBinding::Sampler { binding: 6, sampler },
-                GpuBinding::Texture { binding: 7, texture: out_tex },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[a, b, c, d, e],
+            Some(sampler),
+            out_tex,
             "node.texture_sum_5",
         );
     }

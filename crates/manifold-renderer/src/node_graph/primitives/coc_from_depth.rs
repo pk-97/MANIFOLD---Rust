@@ -46,13 +46,12 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuBinding;
 
 use crate::node_graph::camera::{Camera, CameraMode};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -199,23 +198,13 @@ impl Primitive for CocFromDepth {
             _pad0: 0.0,
         };
 
-        gpu.native_enc.dispatch_compute(
+        dispatch_standalone_2d(
+            gpu,
             pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: depth_tex,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: out_tex,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            bytemuck::bytes_of(&uniforms),
+            &[depth_tex],
+            None,
+            out_tex,
             "node.coc_from_depth",
         );
     }
