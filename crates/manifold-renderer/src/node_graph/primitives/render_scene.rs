@@ -95,7 +95,12 @@ use crate::node_graph::primitive::PrimitiveDescription;
 //   Harness drains queue after commit_and_wait, reads back via
 //   headless_readback::readback_raw_halves, computes stats, writes PNG.
 //   COPY_SRC on ensure_rt_irradiance textures makes GPU readback possible.
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+fn rt_source_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MANIFOLD_RT_SOURCE_TRACE").as_deref() == Ok("1"))
+}
 pub struct RtCaptureSlot {
     pub label: String,
     pub tex: manifold_gpu::GpuTexture,
@@ -1053,6 +1058,7 @@ pub struct RenderScene {
     rt_accel_built: bool,
     rt_topology_rejected: bool,
     rt_topology_mismatch_logged: bool,
+    rt_source_trace_last_admission: Option<(u64, u64)>,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1649,6 +1655,7 @@ impl RenderScene {
             rt_accel_built: false,
             rt_topology_rejected: false,
             rt_topology_mismatch_logged: false,
+            rt_source_trace_last_admission: None,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_half2: None,
@@ -4719,6 +4726,18 @@ impl EffectNode for RenderScene {
                 continue;
             }
             let mesh_slot = object.mesh;
+            // Async mesh content still in flight (node.gltf_mesh_source
+            // parsing/uploading): the slot's buffer is allocated at full
+            // capacity but holds no geometry — consuming it builds and
+            // traces a garbage BLAS (the Corrosion warmup GPU hang). Treat
+            // exactly like `visible == false`: no draw, no shadow cast.
+            // The object's arrival flips the topo key (object count +
+            // buffer identity), so the first published frame rebuilds the
+            // accel fresh through the one-frame defer — never a refit of
+            // the garbage state.
+            if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
+                continue;
+            }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.error(format!(
                     "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
@@ -5790,6 +5809,7 @@ impl EffectNode for RenderScene {
             }
             let content_key = content_hasher.finish();
 
+            let rt_source_trace_generation = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
@@ -5878,6 +5898,21 @@ impl EffectNode for RenderScene {
 
             if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                if rt_source_trace_enabled() {
+                    log::info!(
+                        "[RT-SOURCE] accel-build action=build rebuild_epoch={} topo_key={topo_key:#x} content_key={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                        rt_source_trace_generation, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                    );
+                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                        log::info!(
+                            "[RT-SOURCE] accel-object action=build index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                            object.instance_slots, object.instances_addr
+                        );
+                        log::info!("[RT-SOURCE] accel-generations action=build index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                    }
+                }
                 // Q1 probe: what did build_accel see?
                 if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
                     eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
@@ -5940,6 +5975,21 @@ impl EffectNode for RenderScene {
                             self.rt_topology_mismatch_logged = true;
                         }
                     } else {
+                        if rt_source_trace_enabled() {
+                            log::info!(
+                                "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                                rt_source_trace_generation, accel as *const _ as usize, self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                            );
+                            for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                                log::info!(
+                                    "[RT-SOURCE] accel-object action=refit index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                                    index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                                    object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                                    object.instance_slots, object.instances_addr
+                                );
+                                log::info!("[RT-SOURCE] accel-generations action=refit index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                            }
+                        }
                         self.rt_accel_key = Some(accel_key);
                         self.rt_topology_mismatch_logged = false;
                     }
@@ -5970,6 +6020,24 @@ impl EffectNode for RenderScene {
             // the existing two-observation content rebuild settles. Strict
             // dynamic-content freshness is outside this landing.
             if rt_trace_gate(rt_ready, self.rt_accel_topo_key, topo_key) {
+                if rt_source_trace_enabled()
+                    && self.rt_source_trace_last_admission != Some((topo_key, content_key))
+                {
+                    log::info!(
+                        "[RT-SOURCE] trace-admission action=trace rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
+                        rt_source_trace_generation, self.rt_accel.as_ref().map(|accel| accel as *const _ as usize).unwrap_or(0), self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                    );
+                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
+                        log::info!(
+                            "[RT-SOURCE] trace-object index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
+                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
+                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
+                            object.instance_slots, object.instances_addr
+                        );
+                        log::info!("[RT-SOURCE] trace-generations index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                    }
+                    self.rt_source_trace_last_admission = Some((topo_key, content_key));
+                }
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
                 // emissive geometry. Hoisted to the evaluate scope (mut
