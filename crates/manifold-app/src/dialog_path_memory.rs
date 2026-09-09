@@ -12,7 +12,7 @@ use crate::user_prefs::UserPrefs;
 // ── DialogContext enum — mirrors Unity DialogContext ──────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)] // All variants ported from Unity — export/import will use them later
+#[expect(dead_code, reason = "ExportResolveXML un-suppresses when the Resolve XML export flow wires dialog path memory; un-suppress: that feature, or delete the variant at the next export-flow design pass")]
 pub enum DialogContext {
     ProjectOpen,
     ProjectSave,

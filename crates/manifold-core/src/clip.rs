@@ -189,13 +189,6 @@ impl TimelineClip {
         self.start_beat < other.end_beat() && self.end_beat() > other.start_beat
     }
 
-    pub fn has_any_effect(&self) -> bool {
-        self.translate_x != 0.0
-            || self.translate_y != 0.0
-            || self.scale != 1.0
-            || self.rotation != 0.0
-    }
-
     /// Deep clone with new ID.
     ///
     /// The clip's nested effects are also given fresh identities (via
@@ -206,15 +199,6 @@ impl TimelineClip {
         let mut cloned = self.clone();
         cloned.id = ClipId::new(crate::short_id());
         cloned.effects = self.effects.iter().map(|e| e.duplicated()).collect();
-        cloned
-    }
-
-    /// Deep clone with optionally overridden start beat.
-    pub fn clone_at(&self, start_beat: Option<Beats>) -> Self {
-        let mut cloned = self.clone_with_new_id();
-        if let Some(beat) = start_beat {
-            cloned.start_beat = beat;
-        }
         cloned
     }
 

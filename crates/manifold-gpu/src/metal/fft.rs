@@ -68,7 +68,7 @@ pub struct GpuFft {
     // Keep the graph + its tensors alive for the executable's lifetime.
     // MPSGraph's ownership model doesn't strictly require this once the
     // executable is compiled, but retaining them is cheap insurance.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "ownership-only: keeps the MPSGraph alive for the executable's lifetime; un-suppress: never")]
     graph: Retained<MPSGraph>,
 }
 

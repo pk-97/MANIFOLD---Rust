@@ -288,10 +288,6 @@ impl RecordingProvenance {
         self.recorded_project_bpm_source = TempoPointSource::Unknown;
     }
 
-    pub fn recorded_clip_count(&self) -> usize {
-        self.recorded_clips.len()
-    }
-
     pub fn tempo_change_count(&self) -> usize {
         self.tempo_changes.len()
     }
