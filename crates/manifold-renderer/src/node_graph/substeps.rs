@@ -41,9 +41,12 @@ pub struct SubstepResultPorts {
 /// One contracted repeat region in an [`crate::node_graph::execution_plan::ExecutionPlan`].
 /// `steps` are indices into `ExecutionPlan.steps` (boundary first, then the
 /// body in topological order), fixed at compile time. `held_resources` are
-/// the region-internal wires: they are excluded from per-step `free_after`
-/// for the whole repeat, so the pool never recycles a slot between
-/// iterations.
+/// every wire whose LAST READER is a region step (persistent wires
+/// excluded): they are excluded from per-step `free_after`, which would
+/// never fire on steps that only run in the region path, and the executor
+/// holds them for the whole repeat so the pool never recycles a slot
+/// between iterations. This covers external inputs consumed by the region
+/// as well as region-internal wires.
 #[derive(Debug, Clone)]
 pub struct SubstepRegion {
     pub boundary: NodeInstanceId,
@@ -103,10 +106,15 @@ pub(crate) fn derive_regions(
     use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
     use crate::node_graph::validation::GraphError;
 
-    let boundaries: Vec<(NodeInstanceId, SubstepBoundaryPorts)> = graph
+    // Sorted by NodeInstanceId: `graph.nodes()` is an AHashMap, so an
+    // unsorted walk would make region order (and therefore the contracted
+    // step order and ResourceIds of a multi-region graph) per-process
+    // random.
+    let mut boundaries: Vec<(NodeInstanceId, SubstepBoundaryPorts)> = graph
         .nodes()
         .filter_map(|inst| inst.node.substep_boundary().map(|p| (inst.id, p)))
         .collect();
+    boundaries.sort_by_key(|(id, _)| id.0);
     if boundaries.is_empty() {
         return Ok(Vec::new());
     }
