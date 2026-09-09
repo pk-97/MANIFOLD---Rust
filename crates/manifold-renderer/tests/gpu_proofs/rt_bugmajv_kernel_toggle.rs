@@ -221,12 +221,28 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     let target = h.make_target("bugmajv-helmet");
     // Converge the RT accumulation with all kernels on at view A.
     let (_px, mut f) = render_until_lit(&mut runtime, h, &target.texture, &manifest, 0, "converge");
-    // Anti-vacuity: the RT kernel really dispatched.
-    harness::assert_rt_dispatched(
-        || frame(&mut runtime, h, &target.texture, f + 1, &manifest),
-        "bug-majv",
+    // Anti-vacuity: the RT kernel really dispatched. Poll, don't assert one
+    // frame: mesh publication (background parse → staging copy → publish
+    // flip → two-observation admission settle → one-frame accel defer) is
+    // wall-clock asynchronous, and the raster composite lights several
+    // frames before RT is admitted — the 30155c607 readiness contract made
+    // a single early assert frame fire before publication landed (same fix
+    // shape as 4942c6f3d's neutral-lens wait).
+    let mut dispatched = false;
+    for _ in 0..POLL_BUDGET_FRAMES {
+        f += 1;
+        let caps = harness::capture_rt_channels(|| frame(&mut runtime, h, &target.texture, f, &manifest));
+        if !caps.is_empty() {
+            dispatched = true;
+            break;
+        }
+    }
+    assert!(
+        dispatched,
+        "bug-majv: the RT kernel never dispatched within {POLL_BUDGET_FRAMES} frames — \
+         every number this test reports is a pure-raster measurement. Drive RT through \
+         `import_rt_manifest`, not the def's node params."
     );
-    f += 2;
 
     // Disable all four kernels (RT still on), then orbit the camera. The RT
     // channels are screen-space, so every converged accumulation is stale
