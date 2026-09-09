@@ -30,6 +30,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
+use super::standalone_pipeline::active_elements;
 
 /// `seed_mode` enum labels.
 /// `EveryFrame` (0): rewrite the buffer each frame — the legacy
@@ -135,9 +136,11 @@ impl Primitive for SeedParticles {
         let Some(out_buf) = ctx.outputs.array("particles") else {
             return;
         };
-        let particle_size = std::mem::size_of::<Particle>() as u64;
-        let capacity = (out_buf.size / particle_size) as u32;
-        let active_count = active_count.min(capacity);
+        let active_count = active_elements::<Particle>(out_buf.size, active_count);
+        // seed_particles dispatches over full capacity (dead slots get
+        // zeroed state), so it needs the capacity itself, not just the
+        // clamped count.
+        let capacity = (out_buf.size / std::mem::size_of::<Particle>() as u64) as u32;
 
         let node_id = ctx.node_id;
         let owner_key = ctx.owner_key;
