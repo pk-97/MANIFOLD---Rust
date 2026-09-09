@@ -47,6 +47,11 @@ manifold-gpu/
 
 ## Failure diagnostics
 
+RT à-trous passes bind parameters through inline bytes. Each encoded dispatch
+owns its step/settings snapshot; a later pass must not overwrite parameters
+that an earlier GPU dispatch has yet to read. The existing buffer argument is
+retained for caller compatibility, but these two passes no longer upload it.
+
 Command buffers request Metal encoder execution status. On failure the session
 log records encoder labels, error states, and dispatch signposts when Metal
 supplies them. RT trace and the `node.render_scene RT*` postprocess stages
