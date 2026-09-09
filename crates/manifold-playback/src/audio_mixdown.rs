@@ -214,10 +214,11 @@ pub fn render_export_audio(
                 // Beat-anchored warp: convert render time to beat, then to source position
                 let clip_bpm = clip.recorded_bpm_resolved();
                 let src_pos = if clip_bpm > 0.0 {
-                    // Warped: pos(beat) = in_point + (beat - start_beat) × (60.0 / recorded_bpm)
+                    // Warped: pos(beat) = in_point + (beat - start_beat) × spb(recorded_bpm)
                     let beat = TempoMapConverter::seconds_to_beat(tempo_map, Seconds(now), bpm);
                     let beats_since_start = (beat - clip.start_beat).0;
-                    let source_secs_per_beat = 60.0 / clip_bpm as f64;
+                    let source_secs_per_beat =
+                        TempoMapConverter::seconds_per_beat_from_bpm(clip_bpm) as f64;
                     in_point + beats_since_start * source_secs_per_beat + encoder_delay
                 } else {
                     // Unwarped: pos(beat) = in_point + secs(beat) - secs(start_beat)

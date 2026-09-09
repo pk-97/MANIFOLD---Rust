@@ -129,7 +129,8 @@ impl<'a> PercussionTimelinePlanner<'a> {
 
             // Duration priority: per-event (from model) > binding (from SO) > default.
             let duration_beats = if percussion_event.has_duration() && analysis.bpm.0 > 0.0 {
-                let seconds_per_beat = 60.0 / analysis.bpm.0;
+                let seconds_per_beat =
+                    manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(analysis.bpm.0);
                 let raw = percussion_event.duration_seconds / seconds_per_beat;
                 Beats::from_f32(raw.clamp(0.0625, 32.0))
             } else if binding.duration_beats.0 > 0.0 {
