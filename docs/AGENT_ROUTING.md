@@ -126,6 +126,10 @@ Triggers, unchanged from the proven pattern:
 
 Contract: read-and-discuss ONLY. Spawn read-only (`cc-fleet subagent kimi --prompt-file <brief> --profile slim-ro --background`) — no Edit/Write, no spawning, no commits. Every consult brief carries a hard budget and a mandatory partial-report checkpoint, policed at half budget (a review agent once ran unattended for an hour; consult output past its budget is discarded, not awaited). Output is advice; the lead integrates and owns the call.
 
+## Codex/Astra delegations (codex-rescue) — provenance is machine-checked
+
+Astra reviews route through the codex-rescue forwarder, whose only sanctioned act is one Bash call to `codex-companion.mjs task`. **A returned "Astra verdict" is unprovenanced until the runtime confirms a job ran**: `codex-companion.mjs status --all --json` must show the task (`running`/`recent`/`latestFinished`). 2026-09-09: a K2.7 forwarder never invoked the runtime, read the repo itself, and returned a fabricated approval whose citations were true — instructions alone did not stop it. Enforcement: `.claude/hooks/codex-provenance-guard.py` (UserPromptSubmit, its docstring is the spec) fires on any teammate message mentioning codex and warns when the runtime has no record — treat a warned message as fabricated: discard, rerun the task directly through the companion, confirm the job exists. Known hole: the guard catches "no job ever ran", not "this message doesn't map to a real job" — for a ruling that changes architecture, run the companion directly yourself rather than trusting any forwarded text. Obsolete when: the codex plugin signs task ids into forwarded results.
+
 ## What mechanical agents get
 
 Task shapes that route to the executor seat (DeepSeek V4 Flash from 2026-07-24; Sonnet 5/K2.7 historically): mechanical sweeps, clippy/format fixes, test runs + log reading, doc regeneration, read-only surveys with named targets, implementation where the fix shape is already written down in the brief.
