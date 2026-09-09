@@ -120,28 +120,17 @@ crate::primitive! {
 
 impl Primitive for SinTerm {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let a = match ctx.params.get("a") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let b = match ctx.params.get("b") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let c = match ctx.params.get("c") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let a = ctx.param_f32("a", 1.0);
+
+        let b = ctx.param_f32("b", 0.0);
+
+        let c = ctx.param_f32("c", 0.0);
+
         let freq = ctx.scalar_or_param("freq", std::f32::consts::TAU);
-        let freq_scale = match ctx.params.get("freq_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let freq_scale = ctx.param_f32("freq_scale", 1.0);
+
         let time = ctx.scalar_or_param("time", 0.0);
-        let time_scale = match ctx.params.get("time_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let time_scale = ctx.param_f32("time_scale", 1.0);
 
         let Some(in_tex) = ctx.inputs.texture_2d("field") else {
             return;

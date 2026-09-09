@@ -64,10 +64,7 @@ struct InvertUniforms {
 
 impl Primitive for Invert {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let intensity = match ctx.params.get("intensity") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let intensity = ctx.param_f32("intensity", 1.0);
 
         // Resolve input/output textures up front — the borrows survive
         // the encoder's mutable borrow below.

@@ -59,10 +59,7 @@ crate::primitive! {
 
 impl Primitive for TextureSum5 {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let divisor = match ctx.params.get("divisor") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let divisor = ctx.param_f32("divisor", 1.0);
 
         let Some(a) = ctx.inputs.texture_2d("a") else {
             return;

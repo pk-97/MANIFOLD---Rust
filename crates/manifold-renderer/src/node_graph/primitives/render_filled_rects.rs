@@ -146,10 +146,8 @@ impl Primitive for RenderFilledRects {
             Some(ParamValue::Color(c)) => [c[0], c[1], c[2]],
             _ => [0.85, 0.92, 1.0],
         };
-        let alpha = match ctx.params.get("alpha") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.8,
-        };
+        let alpha = ctx.param_f32("alpha", 0.8);
+
         let rect_count = match ctx.params.get("rect_count") {
             Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
             _ => 32,

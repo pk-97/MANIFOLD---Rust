@@ -528,6 +528,16 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             },
         }
     }
+
+    /// Param-table f32 lookup with default — the stand-in for the
+    /// `match self.params.get(name) { Some(ParamValue::Float(f)) => *f, _ => default }`
+    /// prologue repeated across the primitives (BUG-elb0 cluster 2).
+    pub fn param_f32(&self, name: &str, default: f32) -> f32 {
+        match self.params.get(name) {
+            Some(crate::node_graph::parameters::ParamValue::Float(f)) => *f,
+            _ => default,
+        }
+    }
 }
 
 /// Runtime services a node may require from the executor during

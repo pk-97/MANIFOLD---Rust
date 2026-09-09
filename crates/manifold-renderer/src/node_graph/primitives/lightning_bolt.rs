@@ -414,10 +414,7 @@ impl Primitive for LightningBolt {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let strike_count = ctx.scalar_or_param("strike", 0.0).round().max(0.0) as u32;
-        let auto_beats = match ctx.params.get("auto_strike_beats") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let auto_beats = ctx.param_f32("auto_strike_beats", 0.0);
 
         // Strike detection: rising trigger count (first observation
         // arms without firing, per the cross-primitive convention) OR

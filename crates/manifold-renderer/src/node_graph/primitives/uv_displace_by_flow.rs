@@ -71,14 +71,9 @@ crate::primitive! {
 
 impl Primitive for UvDisplaceByFlow {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let weight = match ctx.params.get("weight") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.001,
-        };
-        let bias = match ctx.params.get("bias") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
+        let weight = ctx.param_f32("weight", 0.001);
+
+        let bias = ctx.param_f32("bias", 0.5);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;

@@ -118,10 +118,8 @@ crate::primitive! {
 
 impl Primitive for ToneMap {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let exposure = match ctx.params.get("exposure") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let exposure = ctx.param_f32("exposure", 1.0);
+
         let curve = match ctx.params.get("curve") {
             Some(ParamValue::Enum(n)) => *n,
             _ => 0,
@@ -130,14 +128,9 @@ impl Primitive for ToneMap {
             Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
-        let paper_white = match ctx.params.get("paper_white") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 203.0,
-        };
-        let max_nits = match ctx.params.get("max_nits") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1000.0,
-        };
+        let paper_white = ctx.param_f32("paper_white", 203.0);
+
+        let max_nits = ctx.param_f32("max_nits", 1000.0);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;

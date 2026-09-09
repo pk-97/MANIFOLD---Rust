@@ -95,22 +95,13 @@ struct PackUniforms {
 
 impl Primitive for PackChannels {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let default_r = match ctx.params.get("default_r") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let default_g = match ctx.params.get("default_g") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let default_b = match ctx.params.get("default_b") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let default_a = match ctx.params.get("default_a") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let default_r = ctx.param_f32("default_r", 0.0);
+
+        let default_g = ctx.param_f32("default_g", 0.0);
+
+        let default_b = ctx.param_f32("default_b", 0.0);
+
+        let default_a = ctx.param_f32("default_a", 1.0);
 
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;

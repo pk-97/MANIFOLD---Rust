@@ -164,10 +164,8 @@ impl Primitive for TrackPersist {
             Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
             _ => 3,
         };
-        let cut_threshold = match ctx.params.get("cut_threshold") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.25,
-        };
+        let cut_threshold = ctx.param_f32("cut_threshold", 0.25);
+
         // Hard-cut flush: a scene change invalidates every track at
         // once — grace retention would only hold ghosts of the old
         // scene on screen. This frame's detections respawn fresh.

@@ -153,14 +153,9 @@ impl Primitive for CameraOrbit {
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
         let look_y = ctx.scalar_or_param("look_y", 0.0);
         let roll = ctx.scalar_or_param("roll", 0.0);
-        let near = match ctx.params.get("near") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => DEFAULT_NEAR,
-        };
-        let far = match ctx.params.get("far") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => DEFAULT_FAR,
-        };
+        let near = ctx.param_f32("near", DEFAULT_NEAR);
+
+        let far = ctx.param_f32("far", DEFAULT_FAR);
 
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, roll, near, far);
         let pos = cam.pos;

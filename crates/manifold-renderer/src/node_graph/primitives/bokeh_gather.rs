@@ -207,10 +207,7 @@ impl Primitive for BokehGather {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let max_radius = match ctx.params.get("max_radius") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 24.0,
-        };
+        let max_radius = ctx.param_f32("max_radius", 24.0);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;

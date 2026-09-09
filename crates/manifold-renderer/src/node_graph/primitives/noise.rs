@@ -145,14 +145,9 @@ impl Primitive for Noise {
             Some(ParamValue::Float(f)) => f.round() as i32,
             _ => self.default_octaves,
         };
-        let lacunarity = match ctx.params.get("lacunarity") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 2.0,
-        };
-        let persistence = match ctx.params.get("persistence") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
+        let lacunarity = ctx.param_f32("lacunarity", 2.0);
+
+        let persistence = ctx.param_f32("persistence", 0.5);
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;

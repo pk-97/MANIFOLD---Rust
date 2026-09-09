@@ -138,23 +138,15 @@ impl Primitive for ArrayFilterDetections {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.last_kept_count = None;
-        let min_width = match ctx.params.get("min_width") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let max_width = match ctx.params.get("max_width") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let min_width = ctx.param_f32("min_width", 0.0);
+
+        let max_width = ctx.param_f32("max_width", 1.0);
+
         let min_height = ctx.scalar_or_param("min_height", 0.0);
-        let max_height = match ctx.params.get("max_height") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let min_aspect = match ctx.params.get("min_aspect") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let max_height = ctx.param_f32("max_height", 1.0);
+
+        let min_aspect = ctx.param_f32("min_aspect", 0.0);
+
         let max_aspect = ctx.scalar_or_param("max_aspect", 1000.0);
         let max_area_frac = ctx.scalar_or_param("max_area_frac", 1.0);
         // Frame aspect (width/height) corrects the aspect test from

@@ -109,14 +109,10 @@ impl Primitive for ChromaKey {
             Some(ParamValue::Vec3(v)) => *v,
             _ => [1.0, 0.0, 0.0],
         };
-        let tolerance = match ctx.params.get("tolerance") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.3,
-        };
-        let softness = match ctx.params.get("softness") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.1,
-        };
+        let tolerance = ctx.param_f32("tolerance", 0.3);
+
+        let softness = ctx.param_f32("softness", 0.1);
+
         let invert = match ctx.params.get("mode") {
             Some(ParamValue::Enum(v)) => (*v).min(1),
             Some(ParamValue::Float(f)) => (f.round() as u32).min(1),

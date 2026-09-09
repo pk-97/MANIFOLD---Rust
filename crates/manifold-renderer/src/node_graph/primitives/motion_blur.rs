@@ -166,10 +166,7 @@ impl Primitive for MotionBlur {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let max_blur_px = match ctx.params.get("max_blur_px") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 32.0,
-        };
+        let max_blur_px = ctx.param_f32("max_blur_px", 32.0);
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let shutter_angle = cam.lens.shutter_angle;

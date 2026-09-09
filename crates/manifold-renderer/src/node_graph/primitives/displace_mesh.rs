@@ -122,14 +122,9 @@ impl Primitive for DisplaceMesh {
             Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
-        let displacement = match ctx.params.get("displacement") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.2,
-        };
-        let height_bias = match ctx.params.get("height_bias") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
+        let displacement = ctx.param_f32("displacement", 0.2);
+
+        let height_bias = ctx.param_f32("height_bias", 0.5);
 
         let Some(src) = ctx.inputs.array("in") else {
             return;

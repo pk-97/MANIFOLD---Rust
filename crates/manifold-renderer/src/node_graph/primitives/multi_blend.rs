@@ -212,10 +212,7 @@ impl EffectNode for MultiBlend {
     }
 
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let divisor = match ctx.params.get("divisor") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let divisor = ctx.param_f32("divisor", 1.0);
 
         // Collect the wired inputs in port order. Unwired inputs drop out.
         let mut sources = Vec::with_capacity(self.num_inputs());

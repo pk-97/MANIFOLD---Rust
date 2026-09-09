@@ -329,18 +329,12 @@ impl Primitive for GltfMeshSource {
         };
         let recenter = matches!(ctx.params.get("recenter"), Some(ParamValue::Bool(true)));
         let fit_unit_box = fit_idx == 1;
-        let translate_x = match ctx.params.get("translate_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let translate_y = match ctx.params.get("translate_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let translate_z = match ctx.params.get("translate_z") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let translate_x = ctx.param_f32("translate_x", 0.0);
+
+        let translate_y = ctx.param_f32("translate_y", 0.0);
+
+        let translate_z = ctx.param_f32("translate_z", 0.0);
+
         let translate = [translate_x, translate_y, translate_z];
 
         // 2. Re-trigger a background parse if the effective selection (or

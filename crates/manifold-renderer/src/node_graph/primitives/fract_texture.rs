@@ -54,10 +54,7 @@ crate::primitive! {
 
 impl Primitive for FractTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let scale = match ctx.params.get("scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let scale = ctx.param_f32("scale", 1.0);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;

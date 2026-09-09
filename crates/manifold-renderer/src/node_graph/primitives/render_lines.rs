@@ -506,45 +506,28 @@ impl Primitive for RenderLines {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // ── Param read (port-shadows-param not yet used; all
         // params are static knobs on this primitive). ──
-        let edge_thickness = match ctx.params.get("edge_thickness") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.002,
-        };
+        let edge_thickness = ctx.param_f32("edge_thickness", 0.002);
+
         let closed_loop = matches!(ctx.params.get("closed_loop"), Some(ParamValue::Bool(true)));
         let show_verts = matches!(ctx.params.get("show_verts"), Some(ParamValue::Bool(true)));
-        let vert_size = match ctx.params.get("vert_size") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let vert_size = ctx.param_f32("vert_size", 1.0);
+
         let animate = matches!(ctx.params.get("animate"), Some(ParamValue::Bool(true)));
-        let speed = match ctx.params.get("speed") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let speed = ctx.param_f32("speed", 1.0);
+
         let window = match ctx.params.get("window") {
             Some(ParamValue::Float(f)) => f.clamp(0.001, 1.0),
             _ => 0.1,
         };
-        let beat_flash_amount = match ctx.params.get("beat_flash_amount") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.4,
-        };
-        let color_r = match ctx.params.get("color_r") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let color_g = match ctx.params.get("color_g") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let color_b = match ctx.params.get("color_b") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let color_a = match ctx.params.get("color_a") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let beat_flash_amount = ctx.param_f32("beat_flash_amount", 0.4);
+
+        let color_r = ctx.param_f32("color_r", 1.0);
+
+        let color_g = ctx.param_f32("color_g", 1.0);
+
+        let color_b = ctx.param_f32("color_b", 1.0);
+
+        let color_a = ctx.param_f32("color_a", 1.0);
 
         let beat = ctx.time.beats.0 as f32;
         let dt = ctx.time.delta.0 as f32;

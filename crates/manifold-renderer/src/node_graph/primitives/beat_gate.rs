@@ -91,18 +91,13 @@ impl Primitive for BeatGate {
             }
             _ => 6,
         };
-        let amount = match ctx.params.get("amount") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let amount = ctx.param_f32("amount", 1.0);
+
         let duty = match ctx.params.get("duty") {
             Some(ParamValue::Float(f)) => f.clamp(0.0, 1.0),
             _ => 0.5,
         };
-        let phase_offset = match ctx.params.get("phase") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let phase_offset = ctx.param_f32("phase", 0.0);
 
         let cycles_per_beat = NOTE_RATE_VALUES[rate_idx];
         let beats = ctx.time.beats.0 as f32;

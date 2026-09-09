@@ -73,10 +73,7 @@ struct MaskedMixUniforms {
 
 impl Primitive for MaskedMix {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let amount = match ctx.params.get("amount") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let amount = ctx.param_f32("amount", 1.0);
 
         let Some(a) = ctx.inputs.texture_2d("a") else {
             return;

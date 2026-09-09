@@ -369,10 +369,8 @@ impl Primitive for GltfAnimationSource {
             Some(ParamValue::Float(f)) => f.max(1e-6),
             _ => 1.0,
         };
-        let rate = match ctx.params.get("rate") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let rate = ctx.param_f32("rate", 1.0);
+
         let loop_mode = LoopMode::from_enum_index(
             ctx.params.get("loop_mode").and_then(ParamValue::as_scalar).unwrap_or(0.0),
         );

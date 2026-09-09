@@ -151,18 +151,11 @@ impl Primitive for Lfo {
             }
             _ => 0,
         };
-        let phase_offset = match ctx.params.get("phase") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let min = match ctx.params.get("min") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let max = match ctx.params.get("max") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let phase_offset = ctx.param_f32("phase", 0.0);
+
+        let min = ctx.param_f32("min", 0.0);
+
+        let max = ctx.param_f32("max", 1.0);
 
         // `cycles` counts how many full periods the LFO has elapsed
         // since transport zero. In Musical mode the rate is cycles
@@ -172,10 +165,8 @@ impl Primitive for Lfo {
         // wraps to a `[0, 1)` unit phase that drives every shape.
         let cycles = match rate_mode {
             1 => {
-                let angular_rate = match ctx.params.get("angular_rate") {
-                    Some(ParamValue::Float(f)) => *f,
-                    _ => 1.0,
-                };
+                let angular_rate = ctx.param_f32("angular_rate", 1.0);
+
                 ctx.time.seconds.0 as f32 * angular_rate / TAU
             }
             _ => {

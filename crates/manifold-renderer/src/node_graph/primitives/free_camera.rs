@@ -132,14 +132,9 @@ impl Primitive for FreeCamera {
         let pitch = ctx.scalar_or_param("pitch", 0.0);
         let roll = ctx.scalar_or_param("roll", 0.0);
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
-        let near = match ctx.params.get("near") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.05,
-        };
-        let far = match ctx.params.get("far") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 200.0,
-        };
+        let near = ctx.param_f32("near", 0.05);
+
+        let far = ctx.param_f32("far", 200.0);
 
         let cam = Camera::from_pos_euler([pos_x, pos_y, pos_z], yaw, pitch, roll, fov_y, near, far);
         let pos = cam.pos;

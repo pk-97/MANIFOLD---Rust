@@ -151,14 +151,9 @@ impl Primitive for FbmPerInstance {
             Some(ParamValue::Float(n)) => n.round().clamp(1.0, 12.0) as u32,
             _ => 5,
         };
-        let lacunarity = match ctx.params.get("lacunarity") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.5,
-        };
-        let gain = match ctx.params.get("gain") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.8,
-        };
+        let lacunarity = ctx.param_f32("lacunarity", 1.5);
+
+        let gain = ctx.param_f32("gain", 0.8);
 
         let Some(uv_buf) = ctx.inputs.array("uv") else {
             return;

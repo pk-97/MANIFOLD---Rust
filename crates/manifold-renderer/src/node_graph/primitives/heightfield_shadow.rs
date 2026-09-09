@@ -130,22 +130,13 @@ impl Primitive for HeightfieldShadow {
         let light_x = ctx.scalar_or_param("light_x", 0.4);
         let light_y = ctx.scalar_or_param("light_y", 0.6);
         let light_z = ctx.scalar_or_param("light_z", 0.7);
-        let steps = match ctx.params.get("steps") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 24.0,
-        };
-        let strength = match ctx.params.get("strength") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let softness = match ctx.params.get("softness") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
-        };
-        let relief = match ctx.params.get("relief") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.25,
-        };
+        let steps = ctx.param_f32("steps", 24.0);
+
+        let strength = ctx.param_f32("strength", 1.0);
+
+        let softness = ctx.param_f32("softness", 0.5);
+
+        let relief = ctx.param_f32("relief", 0.25);
 
         let Some(height_tex) = ctx.inputs.texture_2d("height") else {
             return;

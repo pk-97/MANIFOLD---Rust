@@ -69,10 +69,8 @@ crate::primitive! {
 
 impl Primitive for BeatRamp {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let rate = match ctx.params.get("rate") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let rate = ctx.param_f32("rate", 1.0);
+
         // bars > 0 shadows rate (1/bars cycles/beat); bars absent/0 keeps the
         // legacy rate behavior. See the ParamDef's SCENE_LOOP_DESIGN note.
         let rate = match ctx.params.get("bars") {

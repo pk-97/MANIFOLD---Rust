@@ -118,10 +118,8 @@ fn pipeline_key(quality: u32, weighting: u32) -> u32 {
 impl Primitive for GaussianBlurVariableWidth {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let direction = read_enum(ctx, "axis", 0);
-        let max_radius = match ctx.params.get("max_radius") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 12.0,
-        };
+        let max_radius = ctx.param_f32("max_radius", 12.0);
+
         let quality = read_enum(ctx, "quality", 1).min(2);
         let weighting = read_enum(ctx, "weighting_mode", 0).min(1);
 
