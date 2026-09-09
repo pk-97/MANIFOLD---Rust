@@ -4,9 +4,10 @@ use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::parameters::{ParamDef, ParamType};
 use crate::node_graph::ports::{ChannelSpec, NodeInput, NodeOutput, PortType};
 
+use super::params_struct::{emit_derived_args, emit_params_struct, ParamsStructOpts};
 use super::types::{
-    buffer_element_type, dim_forms, is_texture_input, is_texture_port, param_wgsl_type,
-    param_word_count, wgsl_safe_field, CodegenError, TexDim,
+    buffer_element_type, dim_forms, is_texture_input, is_texture_port, wgsl_safe_field,
+    CodegenError, TexDim,
 };
 use super::uniforms::emit_buffer_struct;
 
@@ -182,86 +183,38 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
         out.push('\n');
     }
 
-    // --- param uniform struct (scalar fields in PARAMS order, padded to a
-    // 16-byte multiple to match the setBytes buffer size). Omitted entirely when
-    // the atom has no params. A Table param (gradient_ramp's `stops`) expands to a
-    // `<name>_count: u32` header word plus a fixed `array<vec4<f32>, TABLE_LEN>`
-    // appended after the 16-byte-aligned header; the body receives it as
-    // `<name>_count: u32, <name>: array<vec4<f32>, TABLE_LEN>`. param_wgsl_type
-    // still rejects Table, so the fused region-grower keeps treating a table atom
-    // as a boundary — only this standalone path lays one out. ---
+    // --- param uniform struct via emit_params_struct: scalar fields in PARAMS
+    // order, padded to a 16-byte multiple to match the setBytes buffer size.
+    // This site's options: Vec3/Vec4/Color expansion + the Table layout (a
+    // Table param expands to a `<name>_count: u32` header word plus a fixed
+    // `array<vec4<f32>, TABLE_LEN>` appended after the 16-byte-aligned header;
+    // the body receives it as `<name>_count: u32, <name>: array<…>`), the
+    // multi-output write gates, and the optional-input use flags. Omitted
+    // entirely when the atom has no params. ---
     const TABLE_LEN: usize = 16;
     let table_params: Vec<&ParamDef> =
         params.iter().filter(|p| p.ty == ParamType::Table).collect();
     if has_uniform {
-        out.push_str("struct Params {\n");
-        let mut header_words = 0usize;
-        for p in params {
-            if p.ty == ParamType::Table {
-                continue; // emitted as count (here) + array (below)
-            }
-            let f = wgsl_safe_field(p.name.as_ref());
-            if p.ty == ParamType::Vec3 {
-                // A vec3 param expands to three consecutive f32 fields.
-                writeln!(out, "    {f}_x: f32,").unwrap();
-                writeln!(out, "    {f}_y: f32,").unwrap();
-                writeln!(out, "    {f}_z: f32,").unwrap();
-            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
-                // A vec4/color param expands to four consecutive f32 fields,
-                // reassembled as a vec4<f32> at the body call site below.
-                writeln!(out, "    {f}_x: f32,").unwrap();
-                writeln!(out, "    {f}_y: f32,").unwrap();
-                writeln!(out, "    {f}_z: f32,").unwrap();
-                writeln!(out, "    {f}_w: f32,").unwrap();
-            } else {
-                let ty = param_wgsl_type(p)?;
-                writeln!(out, "    {f}: {ty},").unwrap();
-            }
-            header_words += param_word_count(p)?;
-        }
-        // Injected non-param derived fields (frame-derived values recomputed by
-        // the atom's run() each frame from a CPU-struct input, e.g. a Camera's
-        // basis vectors) — placed right after the scalar params, mirroring the
-        // buffer path's layout (generate_standalone_buffer). Same naming/packing
-        // convention: "name" defaults to f32, "name:ty" is an explicit scalar
-        // type, "name:vec3" expands to three consecutive f32 fields.
-        for d in derived_uniforms {
-            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
-            if dty == "vec3" {
-                writeln!(out, "    {dname}_x: f32,").unwrap();
-                writeln!(out, "    {dname}_y: f32,").unwrap();
-                writeln!(out, "    {dname}_z: f32,").unwrap();
-                header_words += 3;
-            } else {
-                writeln!(out, "    {dname}: {dty},").unwrap();
-                header_words += 1;
-            }
-        }
-        for t in &table_params {
-            writeln!(out, "    {}_count: u32,", t.name).unwrap();
-            header_words += 1;
-        }
-        // Multi-output: one write-gate flag per output (in output order). For
-        // voronoi_2d this reproduces the hand uniform's write_out/write_cell_id
-        // tail exactly.
-        if multi_output {
-            for o in &tex_outputs {
-                writeln!(out, "    write_{}: u32,", o.name).unwrap();
-                header_words += 1;
-            }
-        }
-        for inp in &optional_tex_inputs {
-            writeln!(out, "    use_{}: u32,", inp.name).unwrap();
-            header_words += 1;
-        }
-        let pad_words = (4 - (header_words % 4)) % 4;
-        for i in 0..pad_words {
-            writeln!(out, "    _pad{i}: u32,").unwrap();
-        }
-        for t in &table_params {
-            writeln!(out, "    {}: array<vec4<f32>, {TABLE_LEN}>,", t.name).unwrap();
-        }
-        out.push_str("}\n\n");
+        let write_flag_names: Vec<&str> = if multi_output {
+            tex_outputs.iter().map(|o| o.name.as_ref()).collect()
+        } else {
+            Vec::new()
+        };
+        let use_flag_names: Vec<&str> =
+            optional_tex_inputs.iter().map(|i| i.name.as_ref()).collect();
+        emit_params_struct(
+            &mut out,
+            params,
+            derived_uniforms,
+            &ParamsStructOpts {
+                table_len: Some(TABLE_LEN),
+                table_params: &table_params,
+                write_flags: &write_flag_names,
+                use_flags: &use_flag_names,
+                expand_vectors: true,
+                dispatch_count: false,
+            },
+        )?;
     }
 
     // --- bindings: [uniform(0)], texture(..), [sampler], output. The uniform is
@@ -481,16 +434,7 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
             args.push(format!("params.{f}"));
         }
     }
-    for d in derived_uniforms {
-        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
-        if dty == "vec3" {
-            args.push(format!(
-                "vec3<f32>(params.{dname}_x, params.{dname}_y, params.{dname}_z)"
-            ));
-        } else {
-            args.push(format!("params.{dname}"));
-        }
-    }
+    emit_derived_args(&mut args, derived_uniforms, "");
     for t in &table_params {
         args.push(format!("params.{}_count", t.name));
         args.push(format!("params.{}", t.name));
@@ -631,54 +575,27 @@ pub(super) fn generate_standalone_buffer(
         out.push('\n');
     }
 
-    // --- param uniform: scalar params (PARAMS order) + injected element count +
-    // 16-byte pad. The count drives the dispatch guard (buffers have no
-    // `textureDimensions`) and is passed to the body as `count`. ---
-    out.push_str("struct Params {\n");
-    let mut words = 0usize;
-    for p in params {
-        let ty = param_wgsl_type(p)?; // rejects vec/table/string buffer params
-        let f = wgsl_safe_field(p.name.as_ref());
-        writeln!(out, "    {f}: {ty},").unwrap();
-        words += param_word_count(p)?; // scalar params are 1 word each
-    }
-    // Injected non-param derived fields (frame-derived values like dt_scaled),
-    // after the params. Each entry is `"name"` (f32) or `"name:ty"` for an
-    // explicit scalar type — `"frame_count:u32"` so a frame counter stays an
-    // exact integer rather than losing precision as an f32 past ~16M frames.
-    // run() packs the resolved value each frame.
-    for d in derived_uniforms {
-        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
-        if dty == "vec3" {
-            // A vec3 derived field (a camera basis vector) expands to three
-            // consecutive f32 fields, mirroring the texture path's vec3 PARAM
-            // packing — the body receives it reassembled as `vec3<f32>`. Packing
-            // as 3 scalars (not a `vec3<f32>` field) keeps the 4-byte stride the
-            // run()-side `#[repr(C)]` uniform uses, dodging the uniform vec3's
-            // 16-byte alignment.
-            writeln!(out, "    {dname}_x: f32,").unwrap();
-            writeln!(out, "    {dname}_y: f32,").unwrap();
-            writeln!(out, "    {dname}_z: f32,").unwrap();
-            words += 3;
-        } else {
-            writeln!(out, "    {dname}: {dty},").unwrap();
-            words += 1; // every supported derived scalar is one 4-byte word
-        }
-    }
-    // Optional-texture use-flags (run() packs `is_some()`), after the derived
-    // fields. The body multiplies by / branches on these to fall back when an
-    // optional texture is unwired.
-    for tex in &optional_textures {
-        writeln!(out, "    use_{}: u32,", tex.name).unwrap();
-        words += 1;
-    }
-    out.push_str("    dispatch_count: u32,\n");
-    words += 1;
-    let pad_words = (4 - (words % 4)) % 4;
-    for i in 0..pad_words {
-        writeln!(out, "    _pad{i}: u32,").unwrap();
-    }
-    out.push_str("}\n\n");
+    // --- param uniform via emit_params_struct: scalar params (PARAMS order) +
+    // the optional-texture use flags + the injected element count + 16-byte
+    // pad. Non-scalar params (vec/table/string) are rejected by
+    // param_wgsl_type (`expand_vectors: false`). The count drives the dispatch
+    // guard (buffers have no `textureDimensions`) and is passed to the body as
+    // `count`. ---
+    let use_flag_names: Vec<&str> =
+        optional_textures.iter().map(|i| i.name.as_ref()).collect();
+    emit_params_struct(
+        &mut out,
+        params,
+        derived_uniforms,
+        &ParamsStructOpts {
+            table_len: None,
+            table_params: &[],
+            write_flags: &[],
+            use_flags: &use_flag_names,
+            expand_vectors: false,
+            dispatch_count: true,
+        },
+    )?;
 
     // --- bindings: uniform(0), inputs (read), outputs (read_write) ---
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
@@ -776,16 +693,7 @@ pub(super) fn generate_standalone_buffer(
         let f = wgsl_safe_field(p.name.as_ref());
         args.push(format!("params.{f}"));
     }
-    for d in derived_uniforms {
-        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
-        if dty == "vec3" {
-            args.push(format!(
-                "vec3<f32>(params.{dname}_x, params.{dname}_y, params.{dname}_z)"
-            ));
-        } else {
-            args.push(format!("params.{dname}"));
-        }
-    }
+    emit_derived_args(&mut args, derived_uniforms, "");
     // Optional-texture use-flags, last (matching the body signature).
     for tex in &optional_textures {
         args.push(format!("params.use_{}", tex.name));
@@ -865,23 +773,25 @@ pub(super) fn generate_standalone_resolve(
 
     let mut out = String::new();
 
-    // --- param uniform (scalar params in PARAMS order + 16-byte pad). No
-    // injected count: the dispatch grid is the texture, guarded on its dims. ---
+    // --- param uniform (scalar params in PARAMS order + 16-byte pad) via
+    // emit_params_struct — no injected count: the dispatch grid is the
+    // texture, guarded on its dims. No derived fields, optional inputs, or
+    // tables on this path. ---
     let has_uniform = !params.is_empty();
     if has_uniform {
-        out.push_str("struct Params {\n");
-        let mut words = 0usize;
-        for p in params {
-            let ty = param_wgsl_type(p)?;
-            let f = wgsl_safe_field(p.name.as_ref());
-            writeln!(out, "    {f}: {ty},").unwrap();
-            words += param_word_count(p)?;
-        }
-        let pad_words = (4 - (words % 4)) % 4;
-        for i in 0..pad_words {
-            writeln!(out, "    _pad{i}: u32,").unwrap();
-        }
-        out.push_str("}\n\n");
+        emit_params_struct(
+            &mut out,
+            params,
+            &[],
+            &ParamsStructOpts {
+                table_len: None,
+                table_params: &[],
+                write_flags: &[],
+                use_flags: &[],
+                expand_vectors: false,
+                dispatch_count: false,
+            },
+        )?;
     }
 
     // --- bindings: [uniform(0)], accumulator (atomic read_write), output dst. ---
