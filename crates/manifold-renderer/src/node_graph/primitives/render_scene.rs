@@ -1652,8 +1652,607 @@ struct ObjectDraw<'ctx> {
     kind: MaterialKind,
 }
 
+// ---- BUG-trh7 stage 2: the evaluate() pass frames. `FramePrelude` carries
+// everything the preamble computes once (immutable after construction);
+// `FrameRtState` carries the evaluate-scope mutables the passes flip as they
+// run. One struct literal at the end of `frame_preliminaries` — no
+// re-derivation, no changed semantics.
+struct FramePrelude<'ctx> {
+    probe_t0: Option<std::time::Instant>,
+    objects: usize,
+    cam: crate::node_graph::camera::Camera,
+    envmap_wired: Option<&'ctx manifold_gpu::GpuTexture>,
+    atmosphere: crate::node_graph::atmosphere::Atmosphere,
+    light_data: Vec<[f32; 4]>,
+    light_count: u32,
+    casters: Vec<crate::node_graph::light::Light>,
+    shaft_light_data: Vec<[f32; 4]>,
+    shaft_light_count: u32,
+    caster_table: Vec<[f32; 4]>,
+    native_width: u32,
+    native_height: u32,
+    width: u32,
+    height: u32,
+    aspect: f32,
+    temporal_upscale: bool,
+    view_proj: [[f32; 4]; 4],
+    prev_view_proj: [[f32; 4]; 4],
+    jitter_px: (f32, f32),
+    jitter_ndc: (f32, f32),
+    prev_jitter_ndc: (f32, f32),
+    cam_motion: f32,
+    rt_enabled: bool,
+    rt_reflections: bool,
+    rt_shadows_enabled: bool,
+    rt_ao_enabled: bool,
+    rt_gi_enabled: bool,
+    rt_firefly_clamp_enabled: bool,
+    rtq: crate::node_graph::effect_node::RtQuality,
+    denoise_strength: f32,
+    denoise_iterations: u32,
+    rt_trace_w: u32,
+    rt_trace_h: u32,
+    toggle_flipped: bool,
+    reset_decision: bool,
+    upscale_just_resumed: bool,
+    velocity_wired: bool,
+    ao_mask_wired: bool,
+    denoise_feed: bool,
+    denoise_aux_ready: bool,
+    spec_hit_dist_out: Option<&'ctx manifold_gpu::GpuTexture>,
+    normals_resolve_target: Option<&'ctx manifold_gpu::GpuTexture>,
+    roughness_resolve_target: Option<&'ctx manifold_gpu::GpuTexture>,
+    diffuse_albedo_resolve_target: Option<&'ctx manifold_gpu::GpuTexture>,
+    specular_albedo_resolve_target: Option<&'ctx manifold_gpu::GpuTexture>,
+    reactive_resolve_target: Option<&'ctx manifold_gpu::GpuTexture>,
+    wants_shafts_now: bool,
+    depth_wired: bool,
+}
+
+#[derive(Default)]
+struct FrameRtState {
+    rt_ready: bool,
+    temporal_upscale_active: bool,
+    denoise_active: bool,
+    rt_rendered_this_frame: bool,
+    irr_filtered_valid: bool,
+    emissive_table_mean_power: f32,
+}
 
 impl RenderScene {
+    /// BUG-trh7 stage 2, pass 0: the frame preamble — per-frame inputs, the
+    /// light/caster tables, temporal-upscale resolution, RT toggle latches,
+    /// the ONE reset-detector call, and the camera/jitter history. Returns
+    /// None on the two early-frame aborts (no color output, zero dims) — the
+    /// caller (evaluate) returns immediately, exactly as the inline code did.
+    fn frame_preliminaries<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
+    ) -> Option<(FramePrelude<'ctx>, FrameRtState)> {
+        // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
+        // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
+        let _probe_t0 = std::env::var_os("MANIFOLD_DENOISE_PROBE")
+            .is_some()
+            .then(std::time::Instant::now);
+        let objects = self.num_objects as usize;
+        let lights_n = self.num_lights as usize;
+
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
+        // frame from this frame's wired ports (`bindings.rs`'s
+        // `NodeInputs::build_index`), then every per-light/per-object port
+        // lookup below resolves through it in O(1) instead of the
+        // `format!` + linear `iter().find` scan section 1's CPU row measured as
+        // O(objects × wired_ports) ≈ O(objects²). Port NAMES themselves are
+        // pre-formatted once in `rebuild()` (`object_port_names` /
+        // `light_port_names`) — nothing here calls `format!`.
+
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
+        let envmap_wired = ctx.inputs.texture_2d("envmap");
+        // Scene-wide atmosphere (P3). Unwired = Atmosphere::default() = fog
+        // density 0 = no fog (the shader's exp fog collapses to identity), so
+        // an unwired atmosphere is byte-identical to no atmosphere.
+        let atmosphere = ctx.inputs.atmosphere("atmosphere").unwrap_or_default();
+
+        // Build the shared lights buffer from whichever light_N ports are
+        // actually wired (unwired slots simply don't contribute — 0 lights
+        // is a valid scene state, matched by ambient + emission only). Two
+        // vec4s per light. As lights are collected, the first
+        // `MAX_SHADOW_CASTING_LIGHTS` of them whose `cast_shadows` is set
+        // (in slot order — D4/F2) are recorded as shadow casters; each
+        // caster's light-space matrix + PCF params go into the caster table
+        // below, and its slot index rides the previously-unused `.w` of the
+        // light's colour vec4 (−1.0 = not a caster). Lights beyond the cap
+        // still illuminate; they simply carry slot −1 and cast no shadow.
+        let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * 2);
+        let mut light_count: u32 = 0;
+        let mut casters: Vec<crate::node_graph::light::Light> =
+            Vec::with_capacity(MAX_SHADOW_CASTING_LIGHTS);
+        // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
+        // Point) contributes to the march — 3-vec4-per-light packing,
+        // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
+        // field-for-field:
+        //   [i*3+0] = Sun: dir-toward-light (.xyz, matches
+        //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
+        //           = Point: light world position (.xyz), .w = 1.0 (mode Point)
+        //   [i*3+1] = premultiplied color.rgb, .w = caster slot (-1 =
+        //             unshadowed glow, D2's honest cost)
+        //   [i*3+2] = .x = attenuation range (Point only; ignored for Sun)
+        // Reuses the SAME `slot` this loop already computed (the caster
+        // table below is shared, unfiltered by mode).
+        let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
+        let mut shaft_light_count: u32 = 0;
+        for i in 0..lights_n {
+            let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
+            if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
+                let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
+                    let s = casters.len() as f32;
+                    casters.push(l);
+                    s
+                } else {
+                    -1.0
+                };
+                light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
+                light_data.push([l.color[0], l.color[1], l.color[2], slot]);
+                light_count += 1;
+                let pos_or_dir = match l.mode {
+                    crate::node_graph::light::LightMode::Sun => {
+                        [-l.dir[0], -l.dir[1], -l.dir[2], 0.0]
+                    }
+                    crate::node_graph::light::LightMode::Point => {
+                        [l.pos[0], l.pos[1], l.pos[2], 1.0]
+                    }
+                };
+                shaft_light_data.push(pos_or_dir);
+                shaft_light_data.push([l.color[0], l.color[1], l.color[2], slot]);
+                shaft_light_data.push([l.range, 0.0, 0.0, 0.0]);
+                shaft_light_count += 1;
+            }
+        }
+        // D4: `@binding(8)` must ALWAYS be bound (the fragment shaders
+        // declare it unconditionally), so a zero-light scene binds one
+        // zeroed entry the shader never reads (`light_count == 0`). Skipping
+        // the binding on empty is the forbidden silent-fallback shape.
+        if light_data.is_empty() {
+            light_data.extend([[0.0f32; 4]; 2]);
+        }
+        // Same D4 always-bind discipline for `shaft_lights` — the
+        // "still-empty, pad to one zeroed stub" pass moved to just before
+        // the march dispatch (RAYTRACING_DESIGN.md section 5.2 P3 appends
+        // emissive pseudo-lights to `shaft_light_data` LATER in this
+        // function, after `opaque_draws` is built; padding here,
+        // before those appends, would leave a stub 3-vec4 at index 0 that
+        // `shaft_light_count` (still 0 at THIS point) never accounts for,
+        // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
+        // real appended entries).
+
+        // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
+        // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
+        // Columns 0–3 = shadow_view_proj; vec4 4 = (bias, kernel_half_width,
+        // texel_size, light_size). Always fully sized so `@binding(9)` is a
+        // fixed bind regardless of caster count (Bytes, copy-at-encode,
+        // hazard-free).
+        let mut caster_table: Vec<[f32; 4]> =
+            vec![[0.0; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
+        for (slot, l) in casters.iter().enumerate() {
+            let vp = l.shadow_view_proj();
+            let base = slot * CASTER_VEC4_STRIDE;
+            caster_table[base] = vp[0];
+            caster_table[base + 1] = vp[1];
+            caster_table[base + 2] = vp[2];
+            caster_table[base + 3] = vp[3];
+            // D12: `Contact` has no fixed kernel width — `kernel_half_width()`
+            // returns the sentinel `-1`, which `render_scene.wgsl`'s
+            // `shadow_factor` reads as "run the PCSS blocker-search branch,
+            // using `light_size` below" instead of the fixed PCF loop.
+            let khw = l.shadow_softness.kernel_half_width() as f32;
+            let light_size = match l.shadow_softness {
+                crate::node_graph::light::ShadowSoftness::Contact { light_size } => light_size,
+                _ => 0.0,
+            };
+            let texel = 1.0 / l.shadow_resolution.clamp(256, 4096) as f32;
+            caster_table[base + 4] = [l.shadow_bias, khw, texel, light_size];
+        }
+
+        let dims_tex = ctx.outputs.texture_2d("color")?;
+        let width = dims_tex.width;
+        let height = dims_tex.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let aspect = width as f32 / height as f32;
+        // RAYTRACING_DESIGN.md section 8.2 D22 point 1/3 (T2-B): the per-scene
+        // MetalFX Temporal toggle. When on, the WHOLE render (Pass A/B,
+        // shafts, the RT half-res ray pass) draws at RENDER res —
+        // `native_dim * RT_TEMPORAL_RENDER_SCALE_NUM / _DEN` — into
+        // `rt_temporal_color_scratch`, and MetalFX Temporal upscales that
+        // scratch color to native res as this node's `color` output at the
+        // very end of this fn. `width`/`height` (and everything downstream
+        // that reads them — MSAA/velocity/RT-mask/shadow-snapshot sizing,
+        // the jitter NDC conversion below, half-res RT dispatch dims) are
+        // shadowed to render res for exactly this reason: D22 point 3, "the
+        // RT half-res ray pass now keys off render res... that compounding
+        // is the point". `native_width`/`native_height` are kept for the
+        // two things that must stay at the TRUE canvas size: the
+        // upscaler's dst dims and the final blit destination.
+        let temporal_upscale_param = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        // A live toggle cannot resize the compiled depth/velocity attachments
+        // (see PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
+        // dimensions, rather than the pending parameter, determine whether
+        // this frame uses MetalFX's reduced-resolution render path.
+        let reduced_dims = (
+            scale_dim(width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+            scale_dim(height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+        );
+        // A live toggle does not resize the compiled graph's attachments.
+        // Keep drawing at their committed resolution until the host rebuilds,
+        // in BOTH directions (native -> reduced and reduced -> native).
+        let temporal_upscale = (temporal_upscale_param || reduced_dims != (width, height))
+            && ["depth", "velocity"].iter().all(|port| {
+                ctx.outputs.texture_2d(port)
+                    .is_some_and(|t| (t.width, t.height) == reduced_dims)
+            });
+        if temporal_upscale_param != temporal_upscale && !self.rt_temporal_unavailable_logged {
+            self.rt_temporal_unavailable_logged = true;
+            log::warn!(
+                "node.render_scene: temporal_upscale changed but the compiled depth/velocity size has not; retaining the compiled render resolution until the scene runtime rebuilds"
+            );
+        }
+        let native_width = width;
+        let native_height = height;
+        let width = if temporal_upscale {
+            scale_dim(native_width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
+        } else {
+            width
+        };
+        let height = if temporal_upscale {
+            scale_dim(native_height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
+        } else {
+            height
+        };
+        let mut view_proj = cam.view_proj(aspect);
+        // RAYTRACING_DESIGN.md section 5.2 P4: subpixel camera jitter, applied
+        // only when `temporal_upscale` is on (default off = byte-identical
+        // to before this param existed). Standard TAA/MetalFX jitter
+        // technique: add `jitter * clip.w` to clip.x/clip.y so the offset
+        // survives the perspective divide as a CONSTANT NDC shift
+        // independent of a vertex's depth. Since every point has
+        // homogeneous `w = 1`, `clip.w`'s only nonzero contribution (for
+        // this camera's projection matrices — `perspective_rh`/`ortho_rh`
+        // in `camera.rs`) comes through the z-column, so it's enough to
+        // add `jitter_ndc * view_proj[2][3]` into `view_proj[2][{0,1}]`
+        // (column-major storage: `m[col][row]`, matching `mat4_mul_vec4`'s
+        // `out[row] = sum_col m[col][row] * v[col]`). `jitter_offset`
+        // returns PIXEL units at the render resolution (now `width`/
+        // `height` above, D22); 1 pixel = `2.0 / dim` in NDC (NDC spans
+        // [-1, 1] across `dim` pixels).
+        self.jitter_frame_index = self.jitter_frame_index.wrapping_add(1);
+        // T2-B: hoisted out of the `if` below so the final MetalFX upscale
+        // call (end of this fn) can reuse the SAME jitter this frame's
+        // color/depth/velocity were rendered with — MetalFX's `reset`
+        // contract requires the jitter passed to `upscale()` match what was
+        // baked into the frame it's upscaling.
+        let mut jitter_px: (f32, f32) = (0.0, 0.0);
+        if temporal_upscale {
+            let (jx_px, jy_px) =
+                crate::metalfx_temporal_upscaler::jitter_offset(self.jitter_frame_index, 8);
+            jitter_px = (jx_px, jy_px);
+            let wz = view_proj[2][3];
+            view_proj[2][0] += (jx_px * 2.0 / width as f32) * wz;
+            view_proj[2][1] += (jy_px * 2.0 / height as f32) * wz;
+        }
+        // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the scene-level toggle
+        // (W0's `rt_enabled` ParamDef). Read once here, after jitter is
+        // folded into `view_proj` — the RT pass's `inv_view_proj` must
+        // match the SAME `view_proj` the main draw uses this frame.
+        let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        // RAYTRACING_DESIGN.md section 9 RD9 (T4): per-scene reflection toggle,
+        // gated on rt_enabled — inert when RT is off entirely. Default ON
+        // (Q3). T5 fine-tunes the spp/roughness-band constants.
+        let rt_reflections = rt_enabled
+            && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true)));
+        // RT term toggles — per-term card params. Each defaults ON = today's
+        // behavior. Inert when rt_enabled is false. Live-flip detection routes
+        // through rt_irr_needs_reset to avoid the old term smearing.
+        let rt_shadows_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_shadows"), Some(ParamValue::Bool(true)));
+        let rt_ao_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
+        let rt_gi_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
+        // RT-Stage-3 P1 (BUG-mkgh): pre-blur firefly clamp toggle. Default
+        // ON. Read once here (folded with rt_enabled like the other terms)
+        // so the tail can gate the clamp dispatch without a second param
+        // lookup after the `ctx` mutable borrows below.
+        let rt_firefly_clamp_enabled = rt_enabled
+            && matches!(ctx.params.get("rt_firefly_clamp"), Some(ParamValue::Bool(true)));
+        // RT_QUALITY_SETTINGS_DESIGN.md D5/D6: the active quality column,
+        // resolved per frame by the compositor from project settings.
+        // Copied out of ctx here — the dispatch code below runs after
+        // gpu_encoder() mutable borrows, where ctx is unreadable.
+        let rtq = ctx.rt_quality;
+        // RT-Stage-3 P4 (BUG-eytk): denoise strength/iterations copied
+        // out of ctx here — same borrow-lift pattern as rtq itself (the
+        // dispatch code below runs after gpu_encoder() mutable borrows,
+        // where ctx is unreadable).
+        let denoise_strength = rtq.denoise_strength;
+        let denoise_iterations = rtq.denoise_iterations;
+        // Trace dispatch dims (D4): one ray-resolution fraction for both
+        // dispatches, truncating u64 math per output_canvas_scale discipline.
+        let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
+        let rt_trace_h = ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
+        // Detect toggle flips: any term that was on last frame and is now off
+        // (or vice versa) needs history reset so the old signal doesn't
+        // trail. Routed through rt_irr_needs_reset — the ONE existing path
+        // (the negative-rg gate). First frame (None = no prior state) only
+        // fires the TemporalResetDetector; toggles only matter on flip.
+        let toggle_flipped = rt_enabled && (
+            self.rt_prev_toggle_shadows.is_some_and(|p| p != rt_shadows_enabled)
+            || self.rt_prev_toggle_ao.is_some_and(|p| p != rt_ao_enabled)
+            || self.rt_prev_toggle_gi.is_some_and(|p| p != rt_gi_enabled)
+            || self.rt_prev_toggle_refl.is_some_and(|p| p != rt_reflections)
+        );
+        self.rt_prev_toggle_shadows = Some(rt_shadows_enabled);
+        self.rt_prev_toggle_ao = Some(rt_ao_enabled);
+        self.rt_prev_toggle_gi = Some(rt_gi_enabled);
+        self.rt_prev_toggle_refl = Some(rt_reflections);
+        // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
+        // `false` whenever there's no resident accel yet, OR a topology
+        // (re)build hasn't completed. Every downstream "use RT shadows"
+        // decision (the raster shadow-map skip below, the WGSL
+        // `scene_params.w` RT-active flag, and the RT dispatch itself
+        // near the end of this fn) gates on `rt_enabled && rt_ready`, not
+        // `rt_enabled` alone — an RT-enabled scene with a not-yet-built
+        // accel keeps rendering the raster shadow-map path (an explicit,
+        // logged transition below) until the async build catches up.
+        // BUG-320: `rt_ready` is the LATCHED built flag, not raw
+        // `accel.ready` — a transform-only `refit_accel` in flight keeps
+        // `ready` false for a few frames, but the structure stays valid
+        // to trace with its old transforms (raytrace.rs refit contract);
+        // gating on raw `ready` here is what ping-ponged RT ↔ raster
+        // under motion.
+        if !self.rt_accel_built {
+            self.rt_accel_built = self
+                .rt_accel
+                .as_ref()
+                .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
+        }
+        let rt_ready = self.rt_accel_built && !self.rt_topology_rejected;
+        // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2, section 8.2 D22 (T2-B): the ONE
+        // `detect_reset` call site for every temporal consumer in this node
+        // (negative-`rg` gate: no second reset path). Unconditional, once
+        // per frame — the detector's own contract — so the velocity-history
+        // reset below sees cuts/seeks even on non-RT, non-upscale scenes.
+        // BUG-vn9b (motion-blur-cut-smear): under the old
+        // `will_rt_accumulate || temporal_upscale` gate the detector never
+        // advanced on those scenes, so `prev_view_proj`/`prev_model`
+        // survived a clip cut and the first post-cut frame smeared at full
+        // max_blur_px. Consumer off→on resumes now force a reset explicitly
+        // via the `*_just_resumed` latches below — that used to fall out of
+        // the gated detector's time-jump.
+        let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time);
+        // A cut/seek means this node's velocity history is stale too: clear
+        // it so the first post-cut frame takes the "no history yet"
+        // zero-velocity seeding instead of ndc deltas measured across two
+        // different scenes.
+        if reset_decision {
+            self.prev_model.iter_mut().for_each(|m| *m = None);
+            self.prev_view_proj = None;
+            self.prev_cam_state = None;
+        }
+        let upscale_just_resumed = temporal_upscale && !self.prev_temporal_upscale;
+        self.prev_temporal_upscale = temporal_upscale;
+        // D22: whether the scratch/upscaler are actually live this frame —
+        // `temporal_upscale` folded with hardware availability, assigned
+        // inside the "Ensure cached GPU resources" block below (the first
+        // point a `&GpuDevice` is available). Declared here so Pass 2 and
+        // this fn's tail (after that block's mutable borrow of `ctx` ends)
+        // can both read the final decision.
+        let temporal_upscale_active = false;
+        // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: whether the ML
+        // denoiser is actually live this frame — rt_enabled && rt_ready &&
+        // denoise_feed && hardware availability, assigned in the ensure
+        // block below. Declared here so `target` and this fn's tail can
+        // both read the final decision (same pattern as its temporal
+        // counterpart). When true, suppresses `temporal_upscale_active`
+        // (DN2: the denoiser REPLACES the plain temporal scaler).
+        let denoise_active = false;
+        // RT-Stage-3 P1 (BUG-mkgh): whether the RT trace + accumulate
+        // dispatches actually ran this frame — set true inside the
+        // `rt_ready && topo-key-match` RT block, false otherwise (the
+        // raster path serves the accel-not-ready/topo-transition frames).
+        // Gates the firefly clamp: clamping when RT didn't render is a
+        // forbidden move. Declared here (mut, assigned later) so the tail
+        // can read it — same pattern as `denoise_active`.
+        let rt_rendered_this_frame = false;
+        // RT-Stage-3 P4 (BUG-eytk): whether the post-accumulation filter
+        // ran this frame — gates the composite rebind (the composite
+        // binds `rt_irr_filtered` when true, raw history slot when false).
+        let irr_filtered_valid = false;
+        // RT-Stage-3 P1 (BUG-mkgh): the emissive table's mean power — the
+        // firefly clamp's absolute floor anchor (`max(4.0, mean_power)`).
+        // Computed inside the RT block (only there is the emissive table
+        // resident), so hoisted to this scope the way `denoise_active` is,
+        // defaulting to 0.0 (floor falls back to 4.0) on any frame RT
+        // didn't render.
+        let emissive_table_mean_power: f32 = 0.0;
+        // GBUFFER_DESIGN.md section 2 D1: lazy — `velocity` costs nothing unless a
+        // consumer actually wired it (checked once per frame, cheap: a
+        // step-output lookup, not a texture allocation).
+        let velocity_wired = ctx.outputs.texture_2d("velocity").is_some();
+        // RAYTRACING_DESIGN.md section 12 AM1: same D1 lazy rule for the
+        // ao_mask aux output.
+        let ao_mask_wired = ctx.outputs.texture_2d("ao_mask").is_some();
+        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer feed
+        // flag. When on, the forward pass writes normals + roughness +
+        // diffuse/specular albedo as additional MRT outputs. Same D1 lazy
+        // enabling: `force_consumed_outputs` gates plan allocation, and the
+        // pipeline selection below gates which shader variant runs.
+        let denoise_feed =
+            matches!(ctx.params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
+        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): specular hit-distance
+        // output — extracted early so the hit-dist extraction dispatch in
+        // the RT section below can reference it without borrowing ctx.
+        let spec_hit_dist_out = ctx.outputs.texture_2d("specular_hit_distance");
+        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer
+        // resolve targets — read early (before the ensure block's mutable
+        // ctx borrow) so denoise_aux_ready is computed once and drives
+        // every downstream production decision.
+        let normals_resolve_target = ctx.outputs.texture_2d("normals");
+        let roughness_resolve_target = ctx.outputs.texture_2d("roughness");
+        let diffuse_albedo_resolve_target = ctx.outputs.texture_2d("diffuse_albedo");
+        let specular_albedo_resolve_target = ctx.outputs.texture_2d("specular_albedo");
+        // DN-L (section 17.7): reactive mask — same all-or-none gate.
+        let reactive_resolve_target = ctx.outputs.texture_2d("reactive_mask");
+        // RAYTRACING_DESIGN.md section 17.5 DN-E/DN-G + BUG-qtkq: one engage
+        // decision per evaluate; on the live-flip frame the pre-flip plan has
+        // not allocated the feeds, so the whole denoise production path idles
+        // one frame byte-identical to flag-off and the rebuilt plan engages
+        // next frame (D17 transition shape).
+        let denoise_aux_ready = denoise_feed
+            && normals_resolve_target.is_some()
+            && roughness_resolve_target.is_some()
+            && diffuse_albedo_resolve_target.is_some()
+            && specular_albedo_resolve_target.is_some()
+            && reactive_resolve_target.is_some()
+            && spec_hit_dist_out.is_some();
+        // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
+        // whole light-shaft feature, checked once per frame like
+        // `velocity_wired`. `depth_wired` decides whether the march reads
+        // the graph-allocated resolve target or the internal one (D3:
+        // "shafts-on forces the internal Sample0 depth resolve even when
+        // `depth` is unwired").
+        let wants_shafts_now = wants_shafts(&atmosphere);
+        let depth_wired = ctx.outputs.texture_2d("depth").is_some();
+        // GBUFFER_DESIGN.md section 2 D5 (P2): `None` (no history yet) seeds to
+        // THIS frame's own `view_proj`, so a scene's first-ever evaluate()
+        // has prev == current and velocity is exactly zero — not
+        // approximately. Stored immediately (not gated on `velocity_wired`)
+        // so history is tracked continuously: if velocity is wired mid-
+        // session, the first wired frame sees the object's REAL prior
+        // motion, not a spurious first-frame zero.
+        // Periodic sources identify the equivalent copy across a coordinate
+        // wrap. Share that correspondence across velocity, RT reprojection
+        // and motion conditioning instead of clearing valid temporal history.
+        let world_offset = self.prev_cam_state.map_or([0.0; 3], |previous| {
+            cam.previous_world_offset(previous.pos, previous.world_period)
+        });
+        let prev_view_proj = self.prev_view_proj.map_or(view_proj, |previous| {
+            let translation = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [world_offset[0], world_offset[1], world_offset[2], 1.0],
+            ];
+            if world_offset == [0.0; 3] { previous } else { mat4_mul(previous, translation) }
+        });
+        self.prev_view_proj = Some(view_proj);
+        // Camera-motion magnitude for the accumulator's change gates
+        // (`AccumulateParams::cam_motion`): radians of view-direction turn
+        // plus translation weighted into the same units (0.3: at the
+        // typical 2–4 unit object distance, orbiting contributes roughly
+        // equally through both terms). First frame after load/rebuild is
+        // 0 — a held camera feeds the gates exactly 0, keeping the static
+        // path byte-identical.
+        let cam_motion = match self.prev_cam_state {
+            Some(previous) => {
+                let ppos = std::array::from_fn::<_, 3, _>(|i| previous.pos[i] - world_offset[i]);
+                let pfwd = previous.fwd;
+                let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
+                    .clamp(-1.0, 1.0);
+                let rot = d.acos();
+                let dp = ((cam.pos[0] - ppos[0]).powi(2)
+                    + (cam.pos[1] - ppos[1]).powi(2)
+                    + (cam.pos[2] - ppos[2]).powi(2))
+                .sqrt();
+                rot + dp * 0.3
+            }
+            None => 0.0,
+        };
+        self.prev_cam_state = Some(cam);
+        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
+            eprintln!(
+                "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
+                cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
+            );
+        }
+        // MetalFX velocity jitter exclusion (`velocity_jitter` uniform):
+        // this frame's and last frame's jitter as NDC offsets. MetalFX
+        // expects motion vectors jitter-free (its jitterOffset compensates
+        // the current frame); both clip varyings carry jitter baked in, so
+        // the fragment subtracts the delta. Zero when upscale is off.
+        let jitter_ndc = (
+            jitter_px.0 * 2.0 / width as f32,
+            jitter_px.1 * 2.0 / height as f32,
+        );
+        let prev_jitter_ndc = self.prev_jitter_ndc.replace(jitter_ndc).unwrap_or(jitter_ndc);
+
+        Some((
+            FramePrelude {
+                probe_t0: _probe_t0,
+                objects,
+                cam,
+                envmap_wired,
+                atmosphere,
+                light_data,
+                light_count,
+                casters,
+                shaft_light_data,
+                shaft_light_count,
+                caster_table,
+                native_width,
+                native_height,
+                width,
+                height,
+                aspect,
+                temporal_upscale,
+                view_proj,
+                prev_view_proj,
+                jitter_px,
+                jitter_ndc,
+                prev_jitter_ndc,
+                cam_motion,
+                rt_enabled,
+                rt_reflections,
+                rt_shadows_enabled,
+                rt_ao_enabled,
+                rt_gi_enabled,
+                rt_firefly_clamp_enabled,
+                rtq,
+                denoise_strength,
+                denoise_iterations,
+                rt_trace_w,
+                rt_trace_h,
+                toggle_flipped,
+                reset_decision,
+                upscale_just_resumed,
+                velocity_wired,
+                ao_mask_wired,
+                denoise_feed,
+                denoise_aux_ready,
+                spec_hit_dist_out,
+                normals_resolve_target,
+                roughness_resolve_target,
+                diffuse_albedo_resolve_target,
+                specular_albedo_resolve_target,
+                reactive_resolve_target,
+                wants_shafts_now,
+                depth_wired,
+            },
+            FrameRtState {
+                rt_ready,
+                temporal_upscale_active,
+                denoise_active,
+                rt_rendered_this_frame,
+                irr_filtered_valid,
+                emissive_table_mean_power,
+            },
+        ))
+    }
+
     pub fn new() -> Self {
         let mut s = Self {
             inputs: Vec::new(),
@@ -4226,468 +4825,72 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
-        // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
-        // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
-        let _probe_t0 = std::env::var_os("MANIFOLD_DENOISE_PROBE")
-            .is_some()
-            .then(std::time::Instant::now);
-        let objects = self.num_objects as usize;
-        let lights_n = self.num_lights as usize;
-
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
-        // frame from this frame's wired ports (`bindings.rs`'s
-        // `NodeInputs::build_index`), then every per-light/per-object port
-        // lookup below resolves through it in O(1) instead of the
-        // `format!` + linear `iter().find` scan section 1's CPU row measured as
-        // O(objects × wired_ports) ≈ O(objects²). Port NAMES themselves are
-        // pre-formatted once in `rebuild()` (`object_port_names` /
-        // `light_port_names`) — nothing here calls `format!`.
+        // BUG-trh7 stage 2: the preamble is pass 0 (`frame_preliminaries`);
+        // the structs below destructure back to the exact locals the rest of
+        // this dispatcher and the remaining inline passes already use.
         let port_index = ctx.inputs.build_index();
-
-        let cam = ctx
-            .inputs
-            .camera("camera")
-            .unwrap_or_else(Camera::default_perspective);
-        let envmap_wired = ctx.inputs.texture_2d("envmap");
-        // Scene-wide atmosphere (P3). Unwired = Atmosphere::default() = fog
-        // density 0 = no fog (the shader's exp fog collapses to identity), so
-        // an unwired atmosphere is byte-identical to no atmosphere.
-        let atmosphere = ctx.inputs.atmosphere("atmosphere").unwrap_or_default();
-
-        // Build the shared lights buffer from whichever light_N ports are
-        // actually wired (unwired slots simply don't contribute — 0 lights
-        // is a valid scene state, matched by ambient + emission only). Two
-        // vec4s per light. As lights are collected, the first
-        // `MAX_SHADOW_CASTING_LIGHTS` of them whose `cast_shadows` is set
-        // (in slot order — D4/F2) are recorded as shadow casters; each
-        // caster's light-space matrix + PCF params go into the caster table
-        // below, and its slot index rides the previously-unused `.w` of the
-        // light's colour vec4 (−1.0 = not a caster). Lights beyond the cap
-        // still illuminate; they simply carry slot −1 and cast no shadow.
-        let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * 2);
-        let mut light_count: u32 = 0;
-        let mut casters: Vec<crate::node_graph::light::Light> =
-            Vec::with_capacity(MAX_SHADOW_CASTING_LIGHTS);
-        // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
-        // Point) contributes to the march — 3-vec4-per-light packing,
-        // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
-        // field-for-field:
-        //   [i*3+0] = Sun: dir-toward-light (.xyz, matches
-        //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
-        //           = Point: light world position (.xyz), .w = 1.0 (mode Point)
-        //   [i*3+1] = premultiplied color.rgb, .w = caster slot (-1 =
-        //             unshadowed glow, D2's honest cost)
-        //   [i*3+2] = .x = attenuation range (Point only; ignored for Sun)
-        // Reuses the SAME `slot` this loop already computed (the caster
-        // table below is shared, unfiltered by mode).
-        let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
-        let mut shaft_light_count: u32 = 0;
-        for i in 0..lights_n {
-            let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
-            if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
-                let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
-                    let s = casters.len() as f32;
-                    casters.push(l);
-                    s
-                } else {
-                    -1.0
-                };
-                light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
-                light_data.push([l.color[0], l.color[1], l.color[2], slot]);
-                light_count += 1;
-                let pos_or_dir = match l.mode {
-                    crate::node_graph::light::LightMode::Sun => {
-                        [-l.dir[0], -l.dir[1], -l.dir[2], 0.0]
-                    }
-                    crate::node_graph::light::LightMode::Point => {
-                        [l.pos[0], l.pos[1], l.pos[2], 1.0]
-                    }
-                };
-                shaft_light_data.push(pos_or_dir);
-                shaft_light_data.push([l.color[0], l.color[1], l.color[2], slot]);
-                shaft_light_data.push([l.range, 0.0, 0.0, 0.0]);
-                shaft_light_count += 1;
-            }
-        }
-        // D4: `@binding(8)` must ALWAYS be bound (the fragment shaders
-        // declare it unconditionally), so a zero-light scene binds one
-        // zeroed entry the shader never reads (`light_count == 0`). Skipping
-        // the binding on empty is the forbidden silent-fallback shape.
-        if light_data.is_empty() {
-            light_data.extend([[0.0f32; 4]; 2]);
-        }
-        // Same D4 always-bind discipline for `shaft_lights` — the
-        // "still-empty, pad to one zeroed stub" pass moved to just before
-        // the march dispatch (RAYTRACING_DESIGN.md section 5.2 P3 appends
-        // emissive pseudo-lights to `shaft_light_data` LATER in this
-        // function, after `opaque_draws` is built; padding here,
-        // before those appends, would leave a stub 3-vec4 at index 0 that
-        // `shaft_light_count` (still 0 at THIS point) never accounts for,
-        // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
-        // real appended entries).
-
-        // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
-        // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
-        // Columns 0–3 = shadow_view_proj; vec4 4 = (bias, kernel_half_width,
-        // texel_size, light_size). Always fully sized so `@binding(9)` is a
-        // fixed bind regardless of caster count (Bytes, copy-at-encode,
-        // hazard-free).
-        let mut caster_table: Vec<[f32; 4]> =
-            vec![[0.0; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
-        for (slot, l) in casters.iter().enumerate() {
-            let vp = l.shadow_view_proj();
-            let base = slot * CASTER_VEC4_STRIDE;
-            caster_table[base] = vp[0];
-            caster_table[base + 1] = vp[1];
-            caster_table[base + 2] = vp[2];
-            caster_table[base + 3] = vp[3];
-            // D12: `Contact` has no fixed kernel width — `kernel_half_width()`
-            // returns the sentinel `-1`, which `render_scene.wgsl`'s
-            // `shadow_factor` reads as "run the PCSS blocker-search branch,
-            // using `light_size` below" instead of the fixed PCF loop.
-            let khw = l.shadow_softness.kernel_half_width() as f32;
-            let light_size = match l.shadow_softness {
-                crate::node_graph::light::ShadowSoftness::Contact { light_size } => light_size,
-                _ => 0.0,
-            };
-            let texel = 1.0 / l.shadow_resolution.clamp(256, 4096) as f32;
-            caster_table[base + 4] = [l.shadow_bias, khw, texel, light_size];
-        }
-
-        let Some(dims_tex) = ctx.outputs.texture_2d("color") else {
+        let Some((pre, state)) = self.frame_preliminaries(ctx, &port_index) else {
             return;
         };
-        let width = dims_tex.width;
-        let height = dims_tex.height;
-        if width == 0 || height == 0 {
-            return;
-        }
-        let aspect = width as f32 / height as f32;
-        // RAYTRACING_DESIGN.md section 8.2 D22 point 1/3 (T2-B): the per-scene
-        // MetalFX Temporal toggle. When on, the WHOLE render (Pass A/B,
-        // shafts, the RT half-res ray pass) draws at RENDER res —
-        // `native_dim * RT_TEMPORAL_RENDER_SCALE_NUM / _DEN` — into
-        // `rt_temporal_color_scratch`, and MetalFX Temporal upscales that
-        // scratch color to native res as this node's `color` output at the
-        // very end of this fn. `width`/`height` (and everything downstream
-        // that reads them — MSAA/velocity/RT-mask/shadow-snapshot sizing,
-        // the jitter NDC conversion below, half-res RT dispatch dims) are
-        // shadowed to render res for exactly this reason: D22 point 3, "the
-        // RT half-res ray pass now keys off render res... that compounding
-        // is the point". `native_width`/`native_height` are kept for the
-        // two things that must stay at the TRUE canvas size: the
-        // upscaler's dst dims and the final blit destination.
-        let temporal_upscale_param = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        // A live toggle cannot resize the compiled depth/velocity attachments
-        // (see PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
-        // dimensions, rather than the pending parameter, determine whether
-        // this frame uses MetalFX's reduced-resolution render path.
-        let reduced_dims = (
-            scale_dim(width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
-            scale_dim(height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
-        );
-        // A live toggle does not resize the compiled graph's attachments.
-        // Keep drawing at their committed resolution until the host rebuilds,
-        // in BOTH directions (native -> reduced and reduced -> native).
-        let temporal_upscale = (temporal_upscale_param || reduced_dims != (width, height))
-            && ["depth", "velocity"].iter().all(|port| {
-                ctx.outputs.texture_2d(port)
-                    .is_some_and(|t| (t.width, t.height) == reduced_dims)
-            });
-        if temporal_upscale_param != temporal_upscale && !self.rt_temporal_unavailable_logged {
-            self.rt_temporal_unavailable_logged = true;
-            log::warn!(
-                "node.render_scene: temporal_upscale changed but the compiled depth/velocity size has not; retaining the compiled render resolution until the scene runtime rebuilds"
-            );
-        }
-        let native_width = width;
-        let native_height = height;
-        let width = if temporal_upscale {
-            scale_dim(native_width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
-        } else {
-            width
-        };
-        let height = if temporal_upscale {
-            scale_dim(native_height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
-        } else {
-            height
-        };
-        let mut view_proj = cam.view_proj(aspect);
-        // RAYTRACING_DESIGN.md section 5.2 P4: subpixel camera jitter, applied
-        // only when `temporal_upscale` is on (default off = byte-identical
-        // to before this param existed). Standard TAA/MetalFX jitter
-        // technique: add `jitter * clip.w` to clip.x/clip.y so the offset
-        // survives the perspective divide as a CONSTANT NDC shift
-        // independent of a vertex's depth. Since every point has
-        // homogeneous `w = 1`, `clip.w`'s only nonzero contribution (for
-        // this camera's projection matrices — `perspective_rh`/`ortho_rh`
-        // in `camera.rs`) comes through the z-column, so it's enough to
-        // add `jitter_ndc * view_proj[2][3]` into `view_proj[2][{0,1}]`
-        // (column-major storage: `m[col][row]`, matching `mat4_mul_vec4`'s
-        // `out[row] = sum_col m[col][row] * v[col]`). `jitter_offset`
-        // returns PIXEL units at the render resolution (now `width`/
-        // `height` above, D22); 1 pixel = `2.0 / dim` in NDC (NDC spans
-        // [-1, 1] across `dim` pixels).
-        self.jitter_frame_index = self.jitter_frame_index.wrapping_add(1);
-        // T2-B: hoisted out of the `if` below so the final MetalFX upscale
-        // call (end of this fn) can reuse the SAME jitter this frame's
-        // color/depth/velocity were rendered with — MetalFX's `reset`
-        // contract requires the jitter passed to `upscale()` match what was
-        // baked into the frame it's upscaling.
-        let mut jitter_px: (f32, f32) = (0.0, 0.0);
-        if temporal_upscale {
-            let (jx_px, jy_px) =
-                crate::metalfx_temporal_upscaler::jitter_offset(self.jitter_frame_index, 8);
-            jitter_px = (jx_px, jy_px);
-            let wz = view_proj[2][3];
-            view_proj[2][0] += (jx_px * 2.0 / width as f32) * wz;
-            view_proj[2][1] += (jy_px * 2.0 / height as f32) * wz;
-        }
-        // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the scene-level toggle
-        // (W0's `rt_enabled` ParamDef). Read once here, after jitter is
-        // folded into `view_proj` — the RT pass's `inv_view_proj` must
-        // match the SAME `view_proj` the main draw uses this frame.
-        let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
-        // RAYTRACING_DESIGN.md section 9 RD9 (T4): per-scene reflection toggle,
-        // gated on rt_enabled — inert when RT is off entirely. Default ON
-        // (Q3). T5 fine-tunes the spp/roughness-band constants.
-        let rt_reflections = rt_enabled
-            && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true)));
-        // RT term toggles — per-term card params. Each defaults ON = today's
-        // behavior. Inert when rt_enabled is false. Live-flip detection routes
-        // through rt_irr_needs_reset to avoid the old term smearing.
-        let rt_shadows_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_shadows"), Some(ParamValue::Bool(true)));
-        let rt_ao_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
-        let rt_gi_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
-        // RT-Stage-3 P1 (BUG-mkgh): pre-blur firefly clamp toggle. Default
-        // ON. Read once here (folded with rt_enabled like the other terms)
-        // so the tail can gate the clamp dispatch without a second param
-        // lookup after the `ctx` mutable borrows below.
-        let rt_firefly_clamp_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_firefly_clamp"), Some(ParamValue::Bool(true)));
-        // RT_QUALITY_SETTINGS_DESIGN.md D5/D6: the active quality column,
-        // resolved per frame by the compositor from project settings.
-        // Copied out of ctx here — the dispatch code below runs after
-        // gpu_encoder() mutable borrows, where ctx is unreadable.
-        let rtq = ctx.rt_quality;
-        // RT-Stage-3 P4 (BUG-eytk): denoise strength/iterations copied
-        // out of ctx here — same borrow-lift pattern as rtq itself (the
-        // dispatch code below runs after gpu_encoder() mutable borrows,
-        // where ctx is unreadable).
-        let denoise_strength = rtq.denoise_strength;
-        let denoise_iterations = rtq.denoise_iterations;
-        // Trace dispatch dims (D4): one ray-resolution fraction for both
-        // dispatches, truncating u64 math per output_canvas_scale discipline.
-        let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
-        let rt_trace_h = ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
-        // Detect toggle flips: any term that was on last frame and is now off
-        // (or vice versa) needs history reset so the old signal doesn't
-        // trail. Routed through rt_irr_needs_reset — the ONE existing path
-        // (the negative-rg gate). First frame (None = no prior state) only
-        // fires the TemporalResetDetector; toggles only matter on flip.
-        let toggle_flipped = rt_enabled && (
-            self.rt_prev_toggle_shadows.is_some_and(|p| p != rt_shadows_enabled)
-            || self.rt_prev_toggle_ao.is_some_and(|p| p != rt_ao_enabled)
-            || self.rt_prev_toggle_gi.is_some_and(|p| p != rt_gi_enabled)
-            || self.rt_prev_toggle_refl.is_some_and(|p| p != rt_reflections)
-        );
-        self.rt_prev_toggle_shadows = Some(rt_shadows_enabled);
-        self.rt_prev_toggle_ao = Some(rt_ao_enabled);
-        self.rt_prev_toggle_gi = Some(rt_gi_enabled);
-        self.rt_prev_toggle_refl = Some(rt_reflections);
-        // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
-        // `false` whenever there's no resident accel yet, OR a topology
-        // (re)build hasn't completed. Every downstream "use RT shadows"
-        // decision (the raster shadow-map skip below, the WGSL
-        // `scene_params.w` RT-active flag, and the RT dispatch itself
-        // near the end of this fn) gates on `rt_enabled && rt_ready`, not
-        // `rt_enabled` alone — an RT-enabled scene with a not-yet-built
-        // accel keeps rendering the raster shadow-map path (an explicit,
-        // logged transition below) until the async build catches up.
-        // BUG-320: `rt_ready` is the LATCHED built flag, not raw
-        // `accel.ready` — a transform-only `refit_accel` in flight keeps
-        // `ready` false for a few frames, but the structure stays valid
-        // to trace with its old transforms (raytrace.rs refit contract);
-        // gating on raw `ready` here is what ping-ponged RT ↔ raster
-        // under motion.
-        if !self.rt_accel_built {
-            self.rt_accel_built = self
-                .rt_accel
-                .as_ref()
-                .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
-        }
-        let mut rt_ready = self.rt_accel_built && !self.rt_topology_rejected;
-        // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2, section 8.2 D22 (T2-B): the ONE
-        // `detect_reset` call site for every temporal consumer in this node
-        // (negative-`rg` gate: no second reset path). Unconditional, once
-        // per frame — the detector's own contract — so the velocity-history
-        // reset below sees cuts/seeks even on non-RT, non-upscale scenes.
-        // BUG-vn9b (motion-blur-cut-smear): under the old
-        // `will_rt_accumulate || temporal_upscale` gate the detector never
-        // advanced on those scenes, so `prev_view_proj`/`prev_model`
-        // survived a clip cut and the first post-cut frame smeared at full
-        // max_blur_px. Consumer off→on resumes now force a reset explicitly
-        // via the `*_just_resumed` latches below — that used to fall out of
-        // the gated detector's time-jump.
-        let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time);
-        // A cut/seek means this node's velocity history is stale too: clear
-        // it so the first post-cut frame takes the "no history yet"
-        // zero-velocity seeding instead of ndc deltas measured across two
-        // different scenes.
-        if reset_decision {
-            self.prev_model.iter_mut().for_each(|m| *m = None);
-            self.prev_view_proj = None;
-            self.prev_cam_state = None;
-        }
-        let upscale_just_resumed = temporal_upscale && !self.prev_temporal_upscale;
-        self.prev_temporal_upscale = temporal_upscale;
-        // D22: whether the scratch/upscaler are actually live this frame —
-        // `temporal_upscale` folded with hardware availability, assigned
-        // inside the "Ensure cached GPU resources" block below (the first
-        // point a `&GpuDevice` is available). Declared here so Pass 2 and
-        // this fn's tail (after that block's mutable borrow of `ctx` ends)
-        // can both read the final decision.
-        let mut temporal_upscale_active = false;
-        // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: whether the ML
-        // denoiser is actually live this frame — rt_enabled && rt_ready &&
-        // denoise_feed && hardware availability, assigned in the ensure
-        // block below. Declared here so `target` and this fn's tail can
-        // both read the final decision (same pattern as its temporal
-        // counterpart). When true, suppresses `temporal_upscale_active`
-        // (DN2: the denoiser REPLACES the plain temporal scaler).
-        let mut denoise_active = false;
-        // RT-Stage-3 P1 (BUG-mkgh): whether the RT trace + accumulate
-        // dispatches actually ran this frame — set true inside the
-        // `rt_ready && topo-key-match` RT block, false otherwise (the
-        // raster path serves the accel-not-ready/topo-transition frames).
-        // Gates the firefly clamp: clamping when RT didn't render is a
-        // forbidden move. Declared here (mut, assigned later) so the tail
-        // can read it — same pattern as `denoise_active`.
-        let mut rt_rendered_this_frame = false;
-        // RT-Stage-3 P4 (BUG-eytk): whether the post-accumulation filter
-        // ran this frame — gates the composite rebind (the composite
-        // binds `rt_irr_filtered` when true, raw history slot when false).
-        let mut irr_filtered_valid = false;
-        // RT-Stage-3 P1 (BUG-mkgh): the emissive table's mean power — the
-        // firefly clamp's absolute floor anchor (`max(4.0, mean_power)`).
-        // Computed inside the RT block (only there is the emissive table
-        // resident), so hoisted to this scope the way `denoise_active` is,
-        // defaulting to 0.0 (floor falls back to 4.0) on any frame RT
-        // didn't render.
-        let mut emissive_table_mean_power: f32 = 0.0;
-        // GBUFFER_DESIGN.md section 2 D1: lazy — `velocity` costs nothing unless a
-        // consumer actually wired it (checked once per frame, cheap: a
-        // step-output lookup, not a texture allocation).
-        let velocity_wired = ctx.outputs.texture_2d("velocity").is_some();
-        // RAYTRACING_DESIGN.md section 12 AM1: same D1 lazy rule for the
-        // ao_mask aux output.
-        let ao_mask_wired = ctx.outputs.texture_2d("ao_mask").is_some();
-        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer feed
-        // flag. When on, the forward pass writes normals + roughness +
-        // diffuse/specular albedo as additional MRT outputs. Same D1 lazy
-        // enabling: `force_consumed_outputs` gates plan allocation, and the
-        // pipeline selection below gates which shader variant runs.
-        let denoise_feed =
-            matches!(ctx.params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
-        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): specular hit-distance
-        // output — extracted early so the hit-dist extraction dispatch in
-        // the RT section below can reference it without borrowing ctx.
-        let spec_hit_dist_out = ctx.outputs.texture_2d("specular_hit_distance");
-        // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): denoise G-buffer
-        // resolve targets — read early (before the ensure block's mutable
-        // ctx borrow) so denoise_aux_ready is computed once and drives
-        // every downstream production decision.
-        let normals_resolve_target = ctx.outputs.texture_2d("normals");
-        let roughness_resolve_target = ctx.outputs.texture_2d("roughness");
-        let diffuse_albedo_resolve_target = ctx.outputs.texture_2d("diffuse_albedo");
-        let specular_albedo_resolve_target = ctx.outputs.texture_2d("specular_albedo");
-        // DN-L (section 17.7): reactive mask — same all-or-none gate.
-        let reactive_resolve_target = ctx.outputs.texture_2d("reactive_mask");
-        // RAYTRACING_DESIGN.md section 17.5 DN-E/DN-G + BUG-qtkq: one engage
-        // decision per evaluate; on the live-flip frame the pre-flip plan has
-        // not allocated the feeds, so the whole denoise production path idles
-        // one frame byte-identical to flag-off and the rebuilt plan engages
-        // next frame (D17 transition shape).
-        let denoise_aux_ready = denoise_feed
-            && normals_resolve_target.is_some()
-            && roughness_resolve_target.is_some()
-            && diffuse_albedo_resolve_target.is_some()
-            && specular_albedo_resolve_target.is_some()
-            && reactive_resolve_target.is_some()
-            && spec_hit_dist_out.is_some();
-        // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
-        // whole light-shaft feature, checked once per frame like
-        // `velocity_wired`. `depth_wired` decides whether the march reads
-        // the graph-allocated resolve target or the internal one (D3:
-        // "shafts-on forces the internal Sample0 depth resolve even when
-        // `depth` is unwired").
-        let wants_shafts_now = wants_shafts(&atmosphere);
-        let depth_wired = ctx.outputs.texture_2d("depth").is_some();
-        // GBUFFER_DESIGN.md section 2 D5 (P2): `None` (no history yet) seeds to
-        // THIS frame's own `view_proj`, so a scene's first-ever evaluate()
-        // has prev == current and velocity is exactly zero — not
-        // approximately. Stored immediately (not gated on `velocity_wired`)
-        // so history is tracked continuously: if velocity is wired mid-
-        // session, the first wired frame sees the object's REAL prior
-        // motion, not a spurious first-frame zero.
-        // Periodic sources identify the equivalent copy across a coordinate
-        // wrap. Share that correspondence across velocity, RT reprojection
-        // and motion conditioning instead of clearing valid temporal history.
-        let world_offset = self.prev_cam_state.map_or([0.0; 3], |previous| {
-            cam.previous_world_offset(previous.pos, previous.world_period)
-        });
-        let prev_view_proj = self.prev_view_proj.map_or(view_proj, |previous| {
-            let translation = [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [world_offset[0], world_offset[1], world_offset[2], 1.0],
-            ];
-            if world_offset == [0.0; 3] { previous } else { mat4_mul(previous, translation) }
-        });
-        self.prev_view_proj = Some(view_proj);
-        // Camera-motion magnitude for the accumulator's change gates
-        // (`AccumulateParams::cam_motion`): radians of view-direction turn
-        // plus translation weighted into the same units (0.3: at the
-        // typical 2–4 unit object distance, orbiting contributes roughly
-        // equally through both terms). First frame after load/rebuild is
-        // 0 — a held camera feeds the gates exactly 0, keeping the static
-        // path byte-identical.
-        let cam_motion = match self.prev_cam_state {
-            Some(previous) => {
-                let ppos = std::array::from_fn::<_, 3, _>(|i| previous.pos[i] - world_offset[i]);
-                let pfwd = previous.fwd;
-                let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
-                    .clamp(-1.0, 1.0);
-                let rot = d.acos();
-                let dp = ((cam.pos[0] - ppos[0]).powi(2)
-                    + (cam.pos[1] - ppos[1]).powi(2)
-                    + (cam.pos[2] - ppos[2]).powi(2))
-                .sqrt();
-                rot + dp * 0.3
-            }
-            None => 0.0,
-        };
-        self.prev_cam_state = Some(cam);
-        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
-            eprintln!(
-                "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
-                cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
-            );
-        }
-        // MetalFX velocity jitter exclusion (`velocity_jitter` uniform):
-        // this frame's and last frame's jitter as NDC offsets. MetalFX
-        // expects motion vectors jitter-free (its jitterOffset compensates
-        // the current frame); both clip varyings carry jitter baked in, so
-        // the fragment subtracts the delta. Zero when upscale is off.
-        let jitter_ndc = (
-            jitter_px.0 * 2.0 / width as f32,
-            jitter_px.1 * 2.0 / height as f32,
-        );
-        let prev_jitter_ndc = self.prev_jitter_ndc.replace(jitter_ndc).unwrap_or(jitter_ndc);
+        let FramePrelude {
+            probe_t0: _probe_t0,
+            objects,
+            cam,
+            envmap_wired,
+            atmosphere,
+            light_data,
+            light_count,
+            casters,
+            mut shaft_light_data,
+            mut shaft_light_count,
+            caster_table,
+            native_width,
+            native_height,
+            width,
+            height,
+            aspect,
+            temporal_upscale,
+            view_proj,
+            prev_view_proj,
+            jitter_px,
+            jitter_ndc,
+            prev_jitter_ndc,
+            cam_motion,
+            rt_enabled,
+            rt_reflections,
+            rt_shadows_enabled,
+            rt_ao_enabled,
+            rt_gi_enabled,
+            rt_firefly_clamp_enabled,
+            rtq,
+            denoise_strength,
+            denoise_iterations,
+            rt_trace_w,
+            rt_trace_h,
+            toggle_flipped,
+            reset_decision,
+            upscale_just_resumed,
+            velocity_wired,
+            ao_mask_wired,
+            denoise_feed,
+            denoise_aux_ready,
+            spec_hit_dist_out,
+            normals_resolve_target,
+            roughness_resolve_target,
+            diffuse_albedo_resolve_target,
+            specular_albedo_resolve_target,
+            reactive_resolve_target,
+            wants_shafts_now,
+            depth_wired,
+        } = pre;
+        let FrameRtState {
+            mut rt_ready,
+            mut temporal_upscale_active,
+            mut denoise_active,
+            mut rt_rendered_this_frame,
+            mut irr_filtered_valid,
+            mut emissive_table_mean_power,
+        } = state;
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
