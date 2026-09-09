@@ -1666,8 +1666,6 @@ struct FramePrelude<'ctx> {
     light_data: Vec<[f32; 4]>,
     light_count: u32,
     casters: Vec<crate::node_graph::light::Light>,
-    shaft_light_data: Vec<[f32; 4]>,
-    shaft_light_count: u32,
     caster_table: Vec<[f32; 4]>,
     native_width: u32,
     native_height: u32,
@@ -1709,6 +1707,11 @@ struct FramePrelude<'ctx> {
     depth_wired: bool,
 }
 
+/// The frame_preliminaries return: the shared prelude, the pass-mutable RT
+/// state, and the shaft-light table the RT block appends to and the shafts
+/// pass consumes (kept out of the prelude so it can move by value).
+type FrameInit<'ctx> = (FramePrelude<'ctx>, FrameRtState, (Vec<[f32; 4]>, u32));
+
 #[derive(Default)]
 struct FrameRtState {
     rt_ready: bool,
@@ -1725,11 +1728,337 @@ impl RenderScene {
     /// the ONE reset-detector call, and the camera/jitter history. Returns
     /// None on the two early-frame aborts (no color output, zero dims) — the
     /// caller (evaluate) returns immediately, exactly as the inline code did.
+    /// BUG-trh7 stage 2, pass 1: validate every object's required inputs,
+    /// compose its model matrix + uniforms, and get-or-compile its pipeline.
+    /// None = abort frame — the three structured-error magenta-clear returns
+    /// and the empty-draws return of the inline code, unchanged.
+    fn collect_object_draws<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
+    ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
+        let FramePrelude {
+            objects, cam, envmap_wired, atmosphere, view_proj, prev_view_proj,
+            jitter_ndc, prev_jitter_ndc, light_count, velocity_wired,
+            ao_mask_wired, denoise_aux_ready, ..
+        } = pre;
+        let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
+
+        let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(*objects);
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the sole CPU gate for the
+        // Pass A/B split below. Only `Blend` objects ever reach Pass B
+        // (`is_glass` in `gltf_import.rs` always routes a nonzero
+        // `transmission_factor` to `Blend` alpha mode, so this condition and
+        // "blend_draw_calls is non-empty" are the same fact) — checking both
+        // here keeps that invariant explicit rather than assumed.
+        let mut has_transmission = false;
+
+        for n in 0..*objects {
+            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): every object's
+            // full bundle (mesh/transform/material/17 maps/instances/
+            // visible) arrives on ONE `object_n: Object` port — resolved
+            // through `port_index` (built once per frame, above) instead of
+            // a per-lookup `NodeInputs::slot` scan, same treatment the
+            // legacy per-port lookups got.
+            let object_port = &self.object_port_names[n];
+            let object_slot_id = port_index.get(object_port.as_ref()).copied();
+            let Some(object) = object_slot_id.and_then(|s| ctx.inputs.object_slot(s)) else {
+                // Unwired `object_n` (no `node.scene_object` feeding this
+                // index yet — an in-progress edit): skip this object
+                // entirely, no error. Matches an unwired `visible` object's
+                // "no draw, no shadow" treatment below.
+                continue;
+            };
+            if !object.visible {
+                // D4: `visible == false` is no draw AND no shadow cast — an
+                // invisible object leaves no shadow. Skipping here (never
+                // pushed into `draws`) removes it from both the main pass
+                // and the shadow-caster pass below, which filters from
+                // `draws`.
+                continue;
+            }
+            let mesh_slot = object.mesh;
+            // Async mesh content still in flight (node.gltf_mesh_source
+            // parsing/uploading): the slot's buffer is allocated at full
+            // capacity but holds no geometry — consuming it builds and
+            // traces a garbage BLAS (the Corrosion warmup GPU hang). Treat
+            // exactly like `visible == false`: no draw, no shadow cast.
+            // The object's arrival flips the topo key (object count +
+            // buffer identity), so the first published frame rebuilds the
+            // accel fresh through the one-frame defer — never a refit of
+            // the garbage state.
+            if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
+                continue;
+            }
+            let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
+                ctx.error(format!(
+                    "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
+                ));
+                if let Some(target) = ctx.outputs.texture_2d("color") {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+                }
+                return None;
+            };
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+            // `mesh_n` write generation, feeds the shadow cache key below.
+            let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
+            let Some(material) = object.material else {
+                ctx.error(format!(
+                    "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
+                ));
+                if let Some(target) = ctx.outputs.texture_2d("color") {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+                }
+                return None;
+            };
+            if material.requires_envmap() && envmap_wired.is_none() {
+                ctx.error(format!(
+                    "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
+                    material.kind
+                ));
+                if let Some(target) = ctx.outputs.texture_2d("color") {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+                }
+                return None;
+            }
+            // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
+            // these lookups don't hold `ctx` borrowed (`ctx.error`/
+            // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
+            let inputs = ctx.inputs;
+            let base_color_map = object.base_color_map.and_then(|s| inputs.texture_2d_slot(s));
+            // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
+            // per-object texture ports.
+            let normal_map = object.normal_map.and_then(|s| inputs.texture_2d_slot(s));
+            let mr_map = object.mr_map.and_then(|s| inputs.texture_2d_slot(s));
+            let occlusion_map = object.occlusion_map.and_then(|s| inputs.texture_2d_slot(s));
+            let emissive_map = object.emissive_map.and_then(|s| inputs.texture_2d_slot(s));
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
+            let sheen_color_map = object.sheen_color_map.and_then(|s| inputs.texture_2d_slot(s));
+            let sheen_roughness_map =
+                object.sheen_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let iridescence_map = object.iridescence_map.and_then(|s| inputs.texture_2d_slot(s));
+            let iridescence_thickness_map =
+                object.iridescence_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let anisotropy_map = object.anisotropy_map.and_then(|s| inputs.texture_2d_slot(s));
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+            // completion sweep).
+            let clearcoat_map = object.clearcoat_map.and_then(|s| inputs.texture_2d_slot(s));
+            let clearcoat_roughness_map =
+                object.clearcoat_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let clearcoat_normal_map =
+                object.clearcoat_normal_map.and_then(|s| inputs.texture_2d_slot(s));
+            let specular_map = object.specular_map.and_then(|s| inputs.texture_2d_slot(s));
+            let specular_color_map =
+                object.specular_color_map.and_then(|s| inputs.texture_2d_slot(s));
+            let transmission_map = object.transmission_map.and_then(|s| inputs.texture_2d_slot(s));
+            let volume_thickness_map =
+                object.volume_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
+
+            // `object.transform` already defaults to `Transform::default()`
+            // (identity) when scene_object's own `transform` input is
+            // unwired (D2) — matches the old scattered params' defaults
+            // exactly (pos 0, rot 0, scale 1).
+            let t = object.transform;
+            let rot_euler = if t.billboard {
+                t.billboard_rot_euler(cam.pos)
+            } else {
+                t.rot_euler
+            };
+            let model = model_matrix(t.pos, rot_euler, t.scale);
+            // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
+            // yet — a brand-new node, or the slot right after a rebuild)
+            // seeds prev = current, giving THIS object exactly-zero
+            // first-frame velocity. Stored immediately after reading (not
+            // gated on `velocity_wired`) — see the `prev_view_proj` comment
+            // above for why continuous tracking is the correct default.
+            let prev_model_n = self.prev_model.get(n).copied().flatten().unwrap_or(model);
+            if let Some(slot) = self.prev_model.get_mut(n) {
+                *slot = Some(model);
+            }
+            let mut uniforms = build_uniforms(
+                *view_proj,
+                model,
+                cam,
+                &material,
+                object.emission_strength,
+                *light_count as f32,
+                atmosphere,
+                *prev_view_proj,
+                prev_model_n,
+            );
+            // TAA/MetalFX velocity jitter exclusion (see the field's doc):
+            // the fragment subtracts (cur − prev) from the baked-in-jitter
+            // clip varyings. Zero whenever temporal_upscale is off.
+            uniforms.velocity_jitter = [
+                jitter_ndc.0,
+                jitter_ndc.1,
+                prev_jitter_ndc.0,
+                prev_jitter_ndc.1,
+            ];
+            if base_color_map.is_some() {
+                uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
+            }
+            // IMPORT_FIDELITY_DESIGN.md D3/F-P2 presence flags.
+            if normal_map.is_some() {
+                uniforms.texture_flags[0] = 1.0; // x = normal_map present (resolve_normal's cotangent-frame gate)
+            }
+            if mr_map.is_some() {
+                uniforms.texture_flags2[0] = 1.0; // x = mr_map present (resolve_mr's gate)
+            }
+            if occlusion_map.is_some() {
+                uniforms.texture_flags2[1] = 1.0; // y = occlusion_map present (resolve_occlusion's gate)
+            }
+            if emissive_map.is_some() {
+                uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
+            }
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
+            // five new presence flags packed into the five reserved `w`/`y`
+            // slots the E1 uniform migration already left inert (no struct
+            // growth — same reuse doctrine as ior/specular_factor riding
+            // pbr_metallic_roughness.zw and clearcoat riding alpha_params.zw).
+            if sheen_color_map.is_some() {
+                uniforms.texture_flags[1] = 1.0; // y = sheen_color_map present (resolve_sheen's gate)
+            }
+            if sheen_roughness_map.is_some() {
+                uniforms.texture_flags[3] = 1.0; // w = sheen_roughness_map present
+            }
+            if iridescence_map.is_some() {
+                uniforms.texture_flags2[3] = 1.0; // w = iridescence_map present
+            }
+            if iridescence_thickness_map.is_some() {
+                uniforms.anisotropy_dispersion_params[3] = 1.0; // w = iridescence_thickness_map present
+            }
+            if anisotropy_map.is_some() {
+                uniforms.transmission_volume_params[3] = 1.0; // w = anisotropy_map present
+            }
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+            // completion sweep): every reserved single-flag `w` slot the E1
+            // migration left is now spent (see the five ifs above), so
+            // these seven new presence bits are packed as a bitmask into
+            // the LAST two reserved `w` slots (`pbr_specular_tint.w`,
+            // `volume_attenuation_color.w`) rather than growing the
+            // uniform again — `fs_pbr`'s decode does
+            // `u32(round(w)) & (1u << bit)`. Default 0.0 (no bits set) is
+            // byte-identical to before this bitmask existed.
+            let mut specular_family_flags: u32 = 0;
+            if specular_map.is_some() {
+                specular_family_flags |= 1; // bit 0 = specular_map present
+            }
+            if specular_color_map.is_some() {
+                specular_family_flags |= 2; // bit 1 = specular_color_map present
+            }
+            if transmission_map.is_some() {
+                specular_family_flags |= 4; // bit 2 = transmission_map present
+            }
+            if volume_thickness_map.is_some() {
+                specular_family_flags |= 8; // bit 3 = volume_thickness_map present
+            }
+            uniforms.pbr_specular_tint[3] = specular_family_flags as f32;
+            let mut clearcoat_family_flags: u32 = 0;
+            if clearcoat_map.is_some() {
+                clearcoat_family_flags |= 1; // bit 0 = clearcoat_map present
+            }
+            if clearcoat_roughness_map.is_some() {
+                clearcoat_family_flags |= 2; // bit 1 = clearcoat_roughness_map present
+            }
+            if clearcoat_normal_map.is_some() {
+                clearcoat_family_flags |= 4; // bit 2 = clearcoat_normal_map present
+            }
+            uniforms.volume_attenuation_color[3] = clearcoat_family_flags as f32;
+
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
+            // still in scope (it's consumed by `build_uniforms` above by
+            // reference, still live here).
+            let sampler_descs = [
+                material.base_color_sampler,
+                material.normal_sampler,
+                material.mr_sampler,
+                material.occlusion_sampler,
+                material.emissive_sampler,
+            ];
+
+            let alpha_mode = material.alpha_mode;
+            let is_blend = alpha_mode == AlphaMode::Blend;
+            let is_transmissive = is_blend && material.transmission_factor > 0.0;
+            if is_transmissive {
+                has_transmission = true;
+            }
+
+            // D11: wired instances_n draws instance_count = buffer_size / 32
+            // copies (0 → that object's draw becomes a legal instance-count-0
+            // no-op); unwired draws once via the identity stub (bound at
+            // Pass 2 — this object carries no self-owned buffer reference).
+            let instances_slot = object.instances;
+            let instances = instances_slot.and_then(|s| inputs.array_slot(s));
+            let instances_generation = instances_slot.and_then(|s| inputs.slot_generation_of(s));
+            let instance_count = match instances {
+                Some(buf) => (buf.size / instance_size) as u32,
+                None => 1,
+            };
+
+            let pipeline = {
+                let gpu = ctx.gpu_encoder();
+                self.pipeline_for(gpu.device, material.kind, *velocity_wired, *ao_mask_wired, *denoise_aux_ready, is_blend)
+                    .clone()
+            };
+
+            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
+            // object's translation (see the `sort_depth` doc comment above).
+            let world_pos = [model[3][0], model[3][1], model[3][2]];
+            let sort_depth = (world_pos[0] - cam.pos[0]) * cam.fwd[0]
+                + (world_pos[1] - cam.pos[1]) * cam.fwd[1]
+                + (world_pos[2] - cam.pos[2]) * cam.fwd[2];
+
+            draws.push(ObjectDraw {
+                vertices,
+                uniforms,
+                pipeline,
+                base_color_map,
+                normal_map,
+                mr_map,
+                occlusion_map,
+                emissive_map,
+                sheen_color_map,
+                sheen_roughness_map,
+                iridescence_map,
+                iridescence_thickness_map,
+                anisotropy_map,
+                clearcoat_map,
+                clearcoat_roughness_map,
+                clearcoat_normal_map,
+                specular_map,
+                specular_color_map,
+                transmission_map,
+                volume_thickness_map,
+                sampler_descs,
+                instances,
+                instance_count,
+                vertices_generation,
+                instances_generation,
+                alpha_mode,
+                sort_depth,
+                is_transmissive,
+                cast_shadows: object.cast_shadows,
+                kind: material.kind,
+            });
+        }
+
+        if draws.is_empty() {
+            return None;
+        }
+
+        Some((draws, has_transmission))
+    }
+
     fn frame_preliminaries<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
-    ) -> Option<(FramePrelude<'ctx>, FrameRtState)> {
+    ) -> Option<FrameInit<'ctx>> {
         // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
         // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
         let _probe_t0 = std::env::var_os("MANIFOLD_DENOISE_PROBE")
@@ -2200,8 +2529,6 @@ impl RenderScene {
                 light_data,
                 light_count,
                 casters,
-                shaft_light_data,
-                shaft_light_count,
                 caster_table,
                 native_width,
                 native_height,
@@ -2250,6 +2577,7 @@ impl RenderScene {
                 irr_filtered_valid,
                 emissive_table_mean_power,
             },
+            (shaft_light_data, shaft_light_count),
         ))
     }
 
@@ -4826,62 +5154,29 @@ impl EffectNode for RenderScene {
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         // BUG-trh7 stage 2: the preamble is pass 0 (`frame_preliminaries`);
-        // the structs below destructure back to the exact locals the rest of
-        // this dispatcher and the remaining inline passes already use.
+        // the destructure below copies the Copy fields out of the shared
+        // prelude and borrows the three read-only Vecs, so later pass calls
+        // can keep taking `&pre` (every borrow here is shared).
         let port_index = ctx.inputs.build_index();
-        let Some((pre, state)) = self.frame_preliminaries(ctx, &port_index) else {
+        let Some((pre, state, (mut shaft_light_data, mut shaft_light_count))) =
+            self.frame_preliminaries(ctx, &port_index)
+        else {
             return;
         };
         let FramePrelude {
-            probe_t0: _probe_t0,
-            objects,
-            cam,
-            envmap_wired,
-            atmosphere,
-            light_data,
-            light_count,
-            casters,
-            mut shaft_light_data,
-            mut shaft_light_count,
-            caster_table,
-            native_width,
-            native_height,
-            width,
-            height,
-            aspect,
-            temporal_upscale,
-            view_proj,
-            prev_view_proj,
-            jitter_px,
-            jitter_ndc,
-            prev_jitter_ndc,
-            cam_motion,
-            rt_enabled,
-            rt_reflections,
-            rt_shadows_enabled,
-            rt_ao_enabled,
-            rt_gi_enabled,
-            rt_firefly_clamp_enabled,
-            rtq,
-            denoise_strength,
-            denoise_iterations,
-            rt_trace_w,
-            rt_trace_h,
-            toggle_flipped,
-            reset_decision,
-            upscale_just_resumed,
-            velocity_wired,
-            ao_mask_wired,
-            denoise_feed,
-            denoise_aux_ready,
-            spec_hit_dist_out,
-            normals_resolve_target,
-            roughness_resolve_target,
-            diffuse_albedo_resolve_target,
-            specular_albedo_resolve_target,
-            reactive_resolve_target,
-            wants_shafts_now,
-            depth_wired,
+            probe_t0: _probe_t0, objects: _, cam, envmap_wired, atmosphere,
+            ref light_data, light_count: _, ref casters,
+            ref caster_table,
+            native_width, native_height, width, height, aspect, temporal_upscale,
+            view_proj, prev_view_proj, jitter_px, jitter_ndc: _, prev_jitter_ndc: _,
+            cam_motion, rt_enabled, rt_reflections, rt_shadows_enabled,
+            rt_ao_enabled, rt_gi_enabled, rt_firefly_clamp_enabled, rtq,
+            denoise_strength, denoise_iterations, rt_trace_w, rt_trace_h,
+            toggle_flipped, reset_decision, upscale_just_resumed, velocity_wired,
+            ao_mask_wired, denoise_feed, denoise_aux_ready, spec_hit_dist_out,
+            normals_resolve_target, roughness_resolve_target,
+            diffuse_albedo_resolve_target, specular_albedo_resolve_target,
+            reactive_resolve_target, wants_shafts_now, depth_wired,
         } = pre;
         let FrameRtState {
             mut rt_ready,
@@ -4894,317 +5189,14 @@ impl EffectNode for RenderScene {
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
-        // its pipeline. Structured error + magenta clear + return on the
-        // first unmet requirement (no-silent-fallbacks, matching
-        // render_mesh / render_copies).
-
-        let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
-
-        let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(objects);
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the sole CPU gate for the
-        // Pass A/B split below. Only `Blend` objects ever reach Pass B
-        // (`is_glass` in `gltf_import.rs` always routes a nonzero
-        // `transmission_factor` to `Blend` alpha mode, so this condition and
-        // "blend_draw_calls is non-empty" are the same fact) — checking both
-        // here keeps that invariant explicit rather than assumed.
-        let mut has_transmission = false;
-
-        for n in 0..objects {
-            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): every object's
-            // full bundle (mesh/transform/material/17 maps/instances/
-            // visible) arrives on ONE `object_n: Object` port — resolved
-            // through `port_index` (built once per frame, above) instead of
-            // a per-lookup `NodeInputs::slot` scan, same treatment the
-            // legacy per-port lookups got.
-            let object_port = &self.object_port_names[n];
-            let object_slot_id = port_index.get(object_port.as_ref()).copied();
-            let Some(object) = object_slot_id.and_then(|s| ctx.inputs.object_slot(s)) else {
-                // Unwired `object_n` (no `node.scene_object` feeding this
-                // index yet — an in-progress edit): skip this object
-                // entirely, no error. Matches an unwired `visible` object's
-                // "no draw, no shadow" treatment below.
-                continue;
-            };
-            if !object.visible {
-                // D4: `visible == false` is no draw AND no shadow cast — an
-                // invisible object leaves no shadow. Skipping here (never
-                // pushed into `draws`) removes it from both the main pass
-                // and the shadow-caster pass below, which filters from
-                // `draws`.
-                continue;
-            }
-            let mesh_slot = object.mesh;
-            // Async mesh content still in flight (node.gltf_mesh_source
-            // parsing/uploading): the slot's buffer is allocated at full
-            // capacity but holds no geometry — consuming it builds and
-            // traces a garbage BLAS (the Corrosion warmup GPU hang). Treat
-            // exactly like `visible == false`: no draw, no shadow cast.
-            // The object's arrival flips the topo key (object count +
-            // buffer identity), so the first published frame rebuilds the
-            // accel fresh through the one-frame defer — never a refit of
-            // the garbage state.
-            if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
-                continue;
-            }
-            let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
-                ctx.error(format!(
-                    "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
-                ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
-                return;
-            };
-            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
-            // `mesh_n` write generation, feeds the shadow cache key below.
-            let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
-            let Some(material) = object.material else {
-                ctx.error(format!(
-                    "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
-                ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
-                return;
-            };
-            if material.requires_envmap() && envmap_wired.is_none() {
-                ctx.error(format!(
-                    "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
-                    material.kind
-                ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
-                return;
-            }
-            // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
-            // these lookups don't hold `ctx` borrowed (`ctx.error`/
-            // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
-            let inputs = ctx.inputs;
-            let base_color_map = object.base_color_map.and_then(|s| inputs.texture_2d_slot(s));
-            // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
-            // per-object texture ports.
-            let normal_map = object.normal_map.and_then(|s| inputs.texture_2d_slot(s));
-            let mr_map = object.mr_map.and_then(|s| inputs.texture_2d_slot(s));
-            let occlusion_map = object.occlusion_map.and_then(|s| inputs.texture_2d_slot(s));
-            let emissive_map = object.emissive_map.and_then(|s| inputs.texture_2d_slot(s));
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
-            let sheen_color_map = object.sheen_color_map.and_then(|s| inputs.texture_2d_slot(s));
-            let sheen_roughness_map =
-                object.sheen_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
-            let iridescence_map = object.iridescence_map.and_then(|s| inputs.texture_2d_slot(s));
-            let iridescence_thickness_map =
-                object.iridescence_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
-            let anisotropy_map = object.anisotropy_map.and_then(|s| inputs.texture_2d_slot(s));
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-            // completion sweep).
-            let clearcoat_map = object.clearcoat_map.and_then(|s| inputs.texture_2d_slot(s));
-            let clearcoat_roughness_map =
-                object.clearcoat_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
-            let clearcoat_normal_map =
-                object.clearcoat_normal_map.and_then(|s| inputs.texture_2d_slot(s));
-            let specular_map = object.specular_map.and_then(|s| inputs.texture_2d_slot(s));
-            let specular_color_map =
-                object.specular_color_map.and_then(|s| inputs.texture_2d_slot(s));
-            let transmission_map = object.transmission_map.and_then(|s| inputs.texture_2d_slot(s));
-            let volume_thickness_map =
-                object.volume_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
-
-            // `object.transform` already defaults to `Transform::default()`
-            // (identity) when scene_object's own `transform` input is
-            // unwired (D2) — matches the old scattered params' defaults
-            // exactly (pos 0, rot 0, scale 1).
-            let t = object.transform;
-            let rot_euler = if t.billboard {
-                t.billboard_rot_euler(cam.pos)
-            } else {
-                t.rot_euler
-            };
-            let model = model_matrix(t.pos, rot_euler, t.scale);
-            // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
-            // yet — a brand-new node, or the slot right after a rebuild)
-            // seeds prev = current, giving THIS object exactly-zero
-            // first-frame velocity. Stored immediately after reading (not
-            // gated on `velocity_wired`) — see the `prev_view_proj` comment
-            // above for why continuous tracking is the correct default.
-            let prev_model_n = self.prev_model.get(n).copied().flatten().unwrap_or(model);
-            if let Some(slot) = self.prev_model.get_mut(n) {
-                *slot = Some(model);
-            }
-            let mut uniforms = build_uniforms(
-                view_proj,
-                model,
-                &cam,
-                &material,
-                object.emission_strength,
-                light_count as f32,
-                &atmosphere,
-                prev_view_proj,
-                prev_model_n,
-            );
-            // TAA/MetalFX velocity jitter exclusion (see the field's doc):
-            // the fragment subtracts (cur − prev) from the baked-in-jitter
-            // clip varyings. Zero whenever temporal_upscale is off.
-            uniforms.velocity_jitter = [
-                jitter_ndc.0,
-                jitter_ndc.1,
-                prev_jitter_ndc.0,
-                prev_jitter_ndc.1,
-            ];
-            if base_color_map.is_some() {
-                uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
-            }
-            // IMPORT_FIDELITY_DESIGN.md D3/F-P2 presence flags.
-            if normal_map.is_some() {
-                uniforms.texture_flags[0] = 1.0; // x = normal_map present (resolve_normal's cotangent-frame gate)
-            }
-            if mr_map.is_some() {
-                uniforms.texture_flags2[0] = 1.0; // x = mr_map present (resolve_mr's gate)
-            }
-            if occlusion_map.is_some() {
-                uniforms.texture_flags2[1] = 1.0; // y = occlusion_map present (resolve_occlusion's gate)
-            }
-            if emissive_map.is_some() {
-                uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
-            }
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
-            // five new presence flags packed into the five reserved `w`/`y`
-            // slots the E1 uniform migration already left inert (no struct
-            // growth — same reuse doctrine as ior/specular_factor riding
-            // pbr_metallic_roughness.zw and clearcoat riding alpha_params.zw).
-            if sheen_color_map.is_some() {
-                uniforms.texture_flags[1] = 1.0; // y = sheen_color_map present (resolve_sheen's gate)
-            }
-            if sheen_roughness_map.is_some() {
-                uniforms.texture_flags[3] = 1.0; // w = sheen_roughness_map present
-            }
-            if iridescence_map.is_some() {
-                uniforms.texture_flags2[3] = 1.0; // w = iridescence_map present
-            }
-            if iridescence_thickness_map.is_some() {
-                uniforms.anisotropy_dispersion_params[3] = 1.0; // w = iridescence_thickness_map present
-            }
-            if anisotropy_map.is_some() {
-                uniforms.transmission_volume_params[3] = 1.0; // w = anisotropy_map present
-            }
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-            // completion sweep): every reserved single-flag `w` slot the E1
-            // migration left is now spent (see the five ifs above), so
-            // these seven new presence bits are packed as a bitmask into
-            // the LAST two reserved `w` slots (`pbr_specular_tint.w`,
-            // `volume_attenuation_color.w`) rather than growing the
-            // uniform again — `fs_pbr`'s decode does
-            // `u32(round(w)) & (1u << bit)`. Default 0.0 (no bits set) is
-            // byte-identical to before this bitmask existed.
-            let mut specular_family_flags: u32 = 0;
-            if specular_map.is_some() {
-                specular_family_flags |= 1; // bit 0 = specular_map present
-            }
-            if specular_color_map.is_some() {
-                specular_family_flags |= 2; // bit 1 = specular_color_map present
-            }
-            if transmission_map.is_some() {
-                specular_family_flags |= 4; // bit 2 = transmission_map present
-            }
-            if volume_thickness_map.is_some() {
-                specular_family_flags |= 8; // bit 3 = volume_thickness_map present
-            }
-            uniforms.pbr_specular_tint[3] = specular_family_flags as f32;
-            let mut clearcoat_family_flags: u32 = 0;
-            if clearcoat_map.is_some() {
-                clearcoat_family_flags |= 1; // bit 0 = clearcoat_map present
-            }
-            if clearcoat_roughness_map.is_some() {
-                clearcoat_family_flags |= 2; // bit 1 = clearcoat_roughness_map present
-            }
-            if clearcoat_normal_map.is_some() {
-                clearcoat_family_flags |= 4; // bit 2 = clearcoat_normal_map present
-            }
-            uniforms.volume_attenuation_color[3] = clearcoat_family_flags as f32;
-
-            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
-            // still in scope (it's consumed by `build_uniforms` above by
-            // reference, still live here).
-            let sampler_descs = [
-                material.base_color_sampler,
-                material.normal_sampler,
-                material.mr_sampler,
-                material.occlusion_sampler,
-                material.emissive_sampler,
-            ];
-
-            let alpha_mode = material.alpha_mode;
-            let is_blend = alpha_mode == AlphaMode::Blend;
-            let is_transmissive = is_blend && material.transmission_factor > 0.0;
-            if is_transmissive {
-                has_transmission = true;
-            }
-
-            // D11: wired instances_n draws instance_count = buffer_size / 32
-            // copies (0 → that object's draw becomes a legal instance-count-0
-            // no-op); unwired draws once via the identity stub (bound at
-            // Pass 2 — this object carries no self-owned buffer reference).
-            let instances_slot = object.instances;
-            let instances = instances_slot.and_then(|s| inputs.array_slot(s));
-            let instances_generation = instances_slot.and_then(|s| inputs.slot_generation_of(s));
-            let instance_count = match instances {
-                Some(buf) => (buf.size / instance_size) as u32,
-                None => 1,
-            };
-
-            let pipeline = {
-                let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired, ao_mask_wired, denoise_aux_ready, is_blend)
-                    .clone()
-            };
-
-            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
-            // object's translation (see the `sort_depth` doc comment above).
-            let world_pos = [model[3][0], model[3][1], model[3][2]];
-            let sort_depth = (world_pos[0] - cam.pos[0]) * cam.fwd[0]
-                + (world_pos[1] - cam.pos[1]) * cam.fwd[1]
-                + (world_pos[2] - cam.pos[2]) * cam.fwd[2];
-
-            draws.push(ObjectDraw {
-                vertices,
-                uniforms,
-                pipeline,
-                base_color_map,
-                normal_map,
-                mr_map,
-                occlusion_map,
-                emissive_map,
-                sheen_color_map,
-                sheen_roughness_map,
-                iridescence_map,
-                iridescence_thickness_map,
-                anisotropy_map,
-                clearcoat_map,
-                clearcoat_roughness_map,
-                clearcoat_normal_map,
-                specular_map,
-                specular_color_map,
-                transmission_map,
-                volume_thickness_map,
-                sampler_descs,
-                instances,
-                instance_count,
-                vertices_generation,
-                instances_generation,
-                alpha_mode,
-                sort_depth,
-                is_transmissive,
-                cast_shadows: object.cast_shadows,
-                kind: material.kind,
-            });
-        }
-
-        if draws.is_empty() {
+        // its pipeline (BUG-trh7 stage 2, `collect_object_draws`). None =
+        // abort frame: structured error + magenta clear, or no visible
+        // objects — the inline code's exact early returns.
+        let Some((mut draws, has_transmission)) =
+            self.collect_object_draws(ctx, &pre, &port_index)
+        else {
             return;
-        }
+        };
 
         // Resolve resident topology before authoring RT consumer flags or
         // selecting raster fallback. Reuse this exact object list for AS work.
@@ -5352,7 +5344,7 @@ impl EffectNode for RenderScene {
             // toggled off), so the old gate read a stale rt_sun_tint with RT
             // off or with the shadow kernel disabled — a zeroed texture
             // zeroed the sun's entire direct contribution.
-            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
             // RT term toggles: rt_flags.w = RT shadow mask read gate. When
             // rt_shadows is off, shadow_factor falls through to raster shadow
             // maps. The kernel still dispatches (for AO/GI/refl), but the sv
@@ -5640,7 +5632,7 @@ impl EffectNode for RenderScene {
             self.light_frame = (self.light_frame + 1) % FRAMES_IN_FLIGHT;
             unsafe {
                 self.light_buffers[self.light_frame]
-                    .write(0, bytemuck::cast_slice(&light_data));
+                    .write(0, bytemuck::cast_slice(light_data));
             }
         }
 
@@ -6359,7 +6351,7 @@ impl EffectNode for RenderScene {
 
                 // RT-TL-C (section 16 TL5): find the ONE sun caster whose
                 // rgb tint fills out_svt — SVT_SLOT_NONE when no sun exists.
-                let svt_slot = rt_svt_slot(&casters)
+                let svt_slot = rt_svt_slot(casters)
                     .unwrap_or(manifold_gpu::raytrace::SVT_SLOT_NONE);
 
                 // RT-A3a: mask params — built for the split case when trace
@@ -7204,7 +7196,7 @@ impl EffectNode for RenderScene {
         // (this frame's ring slot) and caster table are scene-wide — every
         // object's set borrows the same ones.
         let light_buffer = &self.light_buffers[self.light_frame];
-        let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
+        let caster_bytes: &[u8] = bytemuck::cast_slice(caster_table);
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
