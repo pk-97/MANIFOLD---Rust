@@ -122,6 +122,27 @@ class Guards(unittest.TestCase):
         self.assertIsNone(self.shell_call("git status --short"))
         self.assertIsNone(self.shell_call(command, cwd=self.slot))
 
+    def test_prepared_merge_commit_is_limited_to_clean_slot_index(self):
+        def run(cwd, *args):
+            subprocess.run(["git", "-C", str(cwd), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.test", *args], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.assertTrue(self.shell_call("git commit --no-edit", cwd=self.slot))
+        (self.root / "source.txt").write_text("new content\n")
+        run(self.root, "add", "source.txt")
+        run(self.root, "commit", "-m", "source change")
+        run(self.slot, "merge", "--no-ff", "--no-commit", "main")
+        self.assertIsNone(self.shell_call("git commit --no-edit", cwd=self.slot))
+        for command in ("git commit --no-edit", "git commit -am merge", "git commit --amend"):
+            self.assertTrue(self.shell_call(command, cwd=self.root))
+        self.assertTrue(self.shell_call("git commit -am merge", cwd=self.slot))
+        (self.slot / "source.txt").write_text("unreviewed changes\n")
+        self.assertTrue(self.shell_call("git commit --no-edit", cwd=self.slot))
+        run(self.slot, "add", "source.txt")
+        self.assertIsNone(self.shell_call("git commit --no-edit", cwd=self.slot))
+        with patch.object(guard, "git", side_effect=subprocess.CalledProcessError(1, "git")):
+            self.assertFalse(guard.prepared_slot_merge(self.slot, ["--no-edit"]))
+
     def test_broad_wrapped_and_visual_checks_need_exception(self):
         for command in ("cargo test", "cargo test -p manifold-ui --workspace",
                         "RUSTC_WRAPPER= cargo clippy --workspace",
