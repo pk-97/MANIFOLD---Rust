@@ -26,10 +26,10 @@ use manifold_renderer::node_graph::primitives::{
 };
 use manifold_renderer::node_graph::primitive::PrimitiveSpec;
 use manifold_renderer::node_graph::water::{
-    AFFINE_BOUND, DEFAULT_STEP_DT, DOMAIN_ORIGIN, FAULT_INTEGER_OVERFLOW, FAULT_NONFINITE,
-    GRID_FIXED_SCALE, GRID_SPACING, PARTICLE_CAPACITY, PARTICLE_MASS, REST_DENSITY,
-    SEED_ACTIVE_PARTICLES, VELOCITY_BOUND, WATER_DOMAIN, WaterGridCell, WaterParticle,
-    classify_position,
+    AFFINE_BOUND, DEFAULT_STEP_DT, DOMAIN_ORIGIN, DYNAMIC_VISCOSITY, FAULT_INTEGER_OVERFLOW,
+    FAULT_NONFINITE, GRID_FIXED_SCALE, GRID_SPACING, PARTICLE_CAPACITY, PARTICLE_MASS,
+    REST_DENSITY, SEED_ACTIVE_PARTICLES, SOUND_SPEED_C0, VELOCITY_BOUND, WATER_DOMAIN,
+    WaterGridCell, WaterParticle, acoustic_cfl, classify_position,
 };
 
 /// The S1 f64 oracle as a test path module — the same source file the S1
@@ -1170,9 +1170,9 @@ fn water_timestep_halving_stability() {
     let dt = DEFAULT_STEP_DT;
 
     // Refinement evidence first: at t=0.5 s compare dt vs dt/2 and dt/2 vs
-    // dt/4. A first-order-in-time scheme halves its delta under refinement
-    // (ratio ~2); a ratio near 1 means an implementation defect, not scheme
-    // error. This is the escalation evidence Astra's gate asks for.
+    // dt/4. A refinement ratio at a single time is not a convergence
+    // classifier (neither chaos nor defect) without an established asymptotic
+    // regime; early-time absolute deltas are the evidence.
     let probe_t = 0.5f32;
     let probe_steps = (probe_t / dt) as usize;
     let mut pools = [
@@ -1283,6 +1283,363 @@ fn water_timestep_halving_stability() {
         report_pool.max_pos, report_pool.mean_pos, report_pool.max_rho_rel, report_pool.settle_v,
         report_impact.max_pos, report_impact.mean_pos, report_impact.max_rho_rel, report_impact.settle_v,
     );
+}
+
+/// Matched early-time probe (Astra's evidence constraint): the default pool
+/// from identical seeds, identical physical-time forcing, stopping at exactly
+/// t=0.1 s at 96, 192 and 384 substeps. Prints absolute position/density
+/// deltas, kinetic energy and the acoustic CFL per run. No refinement-ratio
+/// verdict, no chaos/defect classification, no acceptance thresholds — the
+/// hard invariants are asserted, the numbers are the evidence for the lead.
+#[test]
+fn water_timestep_early_probe() {
+    let dt = DEFAULT_STEP_DT;
+    let base_steps = 96usize; // t = 0.1 s at dt = 1/960
+    let dts = [dt, dt * 0.5, dt * 0.25];
+    let labels = ["96", "192", "384"];
+    let step_counts = [base_steps, base_steps * 2, base_steps * 4];
+
+    let mut pools = [
+        make_pool(SEED_ACTIVE_PARTICLES as u32, PARTICLE_CAPACITY as u32),
+        make_pool(SEED_ACTIVE_PARTICLES as u32, PARTICLE_CAPACITY as u32),
+        make_pool(SEED_ACTIVE_PARTICLES as u32, PARTICLE_CAPACITY as u32),
+    ];
+    for pool in &mut pools {
+        seed_pool(pool);
+    }
+
+    let mut max_cfl = [0.0f32; 3];
+    let mut max_cfl_step = [0usize; 3];
+    let mut kinetic = [0.0f64; 3];
+    let mut final_states: Vec<Vec<WaterParticle>> = Vec::new();
+    for (r, pool) in pools.iter().enumerate() {
+        for s in 0..step_counts[r] {
+            substep(pool, dts[r], BASIN_MIN, BASIN_MAX, [0.0, -9.81, 0.0]);
+            let recs = read_particles(&pool.accepted, SEED_ACTIVE_PARTICLES);
+            for p in &recs {
+                let speed = (p.velocity_density[0].powi(2)
+                    + p.velocity_density[1].powi(2)
+                    + p.velocity_density[2].powi(2))
+                .sqrt();
+                let cfl = acoustic_cfl(dts[r], p.velocity_density[3], speed, GRID_SPACING);
+                if cfl > max_cfl[r] {
+                    max_cfl[r] = cfl;
+                    max_cfl_step[r] = s;
+                }
+            }
+        }
+        assert_hard_invariants(pool, &format!("probe {} substeps", labels[r]));
+        let recs = read_particles(&pool.accepted, SEED_ACTIVE_PARTICLES);
+        kinetic[r] = recs
+            .iter()
+            .map(|p| {
+                0.5 * p.position_mass[3] as f64
+                    * (p.velocity_density[0].powi(2)
+                        + p.velocity_density[1].powi(2)
+                        + p.velocity_density[2].powi(2)) as f64
+            })
+            .sum();
+        final_states.push(recs);
+    }
+
+    let (rms_a, max_a, mean_a) = pos_delta_rms_max(&final_states[0], &final_states[1]);
+    let (rms_b, max_b, mean_b) = pos_delta_rms_max(&final_states[1], &final_states[2]);
+    let density: Vec<Vec<f32>> = final_states.iter().map(|s| density_grid(s)).collect();
+    let (drms_a, dmax_a) = grid_delta_rms_max(&density[0], &density[1]);
+    let (drms_b, dmax_b) = grid_delta_rms_max(&density[1], &density[2]);
+
+    println!("water_timestep_early_probe at t=0.1 s (default pool, identical seeds):");
+    println!(
+        "  96 vs 192 substeps: position RMS {rms_a:.6e} m, max {max_a:.6e} m, mean {mean_a:.6e} m"
+    );
+    println!(
+        "  192 vs 384 substeps: position RMS {rms_b:.6e} m, max {max_b:.6e} m, mean {mean_b:.6e} m"
+    );
+    println!(
+        "  density field deltas (64^3 mass-weighted scatter): 96v192 RMS {drms_a:.3e} max {dmax_a:.3e} kg/m^3 | 192v384 RMS {drms_b:.3e} max {dmax_b:.3e} kg/m^3"
+    );
+    println!(
+        "  kinetic energy at t=0.1 s: 96 substeps {:.6} J | 192 {:.6} J | 384 {:.6} J",
+        kinetic[0], kinetic[1], kinetic[2]
+    );
+    for r in 0..3 {
+        println!(
+            "  max acoustic CFL, {} substeps: {:.4} at substep {} (dt={:.7})",
+            labels[r], max_cfl[r], max_cfl_step[r], dts[r]
+        );
+    }
+
+    // Astra's trigger: large early-time deltas localise the divergence entry
+    // point with a per-stage comparison at t=0.02 s. Diagnostic only.
+    if rms_a > 1.0e-3 {
+        println!(
+            "  early-time position RMS {rms_a:.3e} m exceeds 1e-3 m: running 0.02 s per-stage diagnostic"
+        );
+        early_stage_diagnostic(&dts, &labels);
+    }
+}
+
+/// Per-particle displacement statistics between two runs at the same slot.
+fn pos_delta_rms_max(a: &[WaterParticle], b: &[WaterParticle]) -> (f64, f64, f64) {
+    assert_eq!(a.len(), SEED_ACTIVE_PARTICLES);
+    assert_eq!(b.len(), SEED_ACTIVE_PARTICLES);
+    let mut sum_sq = 0.0f64;
+    let mut sum = 0.0f64;
+    let mut max = 0.0f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let d = ((x.position_mass[0] - y.position_mass[0]) as f64).hypot(
+            (x.position_mass[1] - y.position_mass[1]) as f64,
+        ).hypot((x.position_mass[2] - y.position_mass[2]) as f64);
+        sum_sq += d * d;
+        sum += d;
+        max = max.max(d);
+    }
+    let n = SEED_ACTIVE_PARTICLES as f64;
+    ((sum_sq / n).sqrt(), max, sum / n)
+}
+
+/// Mass-weighted scatter of per-particle density onto the 64^3 grid: each
+/// cell reports `sum(w*m*rho)/sum(w*m)` over the particles touching it.
+fn density_grid(recs: &[WaterParticle]) -> Vec<f32> {
+    let mut mass = vec![0.0f64; GRID_CELLS];
+    let mut rho_mass = vec![0.0f64; GRID_CELLS];
+    for p in recs {
+        let x = [p.position_mass[0], p.position_mass[1], p.position_mass[2]];
+        let m = p.position_mass[3] as f64;
+        let rho = p.velocity_density[3] as f64;
+        let q = WATER_DOMAIN.position_to_q(x);
+        let (base, frac) = manifold_renderer::node_graph::water::stencil_base_frac(q);
+        let w = [
+            manifold_renderer::node_graph::water::bspline_weights(frac[0]),
+            manifold_renderer::node_graph::water::bspline_weights(frac[1]),
+            manifold_renderer::node_graph::water::bspline_weights(frac[2]),
+        ];
+        for k in 0..3 {
+            for j in 0..3 {
+                for i in 0..3 {
+                    let g = WATER_DOMAIN.grid_index(
+                        (base[0] + i as i32) as u32,
+                        (base[1] + j as i32) as u32,
+                        (base[2] + k as i32) as u32,
+                    );
+                    let w3 = (w[0][i] * w[1][j] * w[2][k]) as f64;
+                    mass[g] += w3 * m;
+                    rho_mass[g] += w3 * m * rho;
+                }
+            }
+        }
+    }
+    mass.iter()
+        .zip(rho_mass)
+        .map(|(m, rm)| if *m > 0.0 { (rm / m) as f32 } else { 0.0 })
+        .collect()
+}
+
+/// RMS and max absolute delta between two density fields over cells both
+/// runs deposited mass into.
+fn grid_delta_rms_max(a: &[f32], b: &[f32]) -> (f64, f64) {
+    let mut sum_sq = 0.0f64;
+    let mut max = 0.0f64;
+    let mut n = 0usize;
+    for (x, y) in a.iter().zip(b.iter()) {
+        if *x > 0.0 && *y > 0.0 {
+            let d = (*x - *y) as f64;
+            sum_sq += d * d;
+            max = max.max(d.abs());
+            n += 1;
+        }
+    }
+    assert!(n > 0, "no overlapping deposited cells");
+    ((sum_sq / n as f64).sqrt(), max)
+}
+
+/// Live-particle state to the f64 oracle, affine matrix read from the record
+/// (unlike `to_ref`, which pins the analytic fixture field).
+fn to_ref_live(p: &WaterParticle) -> ref_oracle::RefParticle {
+    let mut rp = ref_oracle::RefParticle::new(
+        [
+            p.position_mass[0] as f64,
+            p.position_mass[1] as f64,
+            p.position_mass[2] as f64,
+        ],
+        [
+            p.velocity_density[0] as f64,
+            p.velocity_density[1] as f64,
+            p.velocity_density[2] as f64,
+        ],
+        p.position_mass[3] as f64,
+    );
+    rp.c = [
+        [p.affine_x[0] as f64, p.affine_x[1] as f64, p.affine_x[2] as f64],
+        [p.affine_y[0] as f64, p.affine_y[1] as f64, p.affine_y[2] as f64],
+        [p.affine_z[0] as f64, p.affine_z[1] as f64, p.affine_z[2] as f64],
+    ];
+    rp
+}
+
+/// Fresh clear -> scatter mass -> scatter stress on the pool's current
+/// accepted state; returns the dequantised per-cell momentum and mass.
+fn gpu_p2g_stress_momentum(pool: &Pool, dt: f32) -> (Vec<[f64; 3]>, Vec<f64>) {
+    let k = kernels();
+    let mut enc = device().create_encoder("water-p2g-stress-only");
+
+    let clear_u = ClearGridUniforms {
+        max_capacity: ACCUM_ITEMS as i32,
+        dispatch_count: ACCUM_ITEMS,
+        _pad0: 0,
+        _pad1: 0,
+    };
+    enc.dispatch_compute(
+        &k.clear,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&clear_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &pool.accum, offset: 0 },
+        ],
+        ceil256(ACCUM_ITEMS),
+        "node.clear_grid",
+    );
+
+    let mass_u = manifold_renderer::node_graph::primitives::ScatterMassUniforms {
+        active_count: pool.active,
+        _pad0: 0,
+        _pad1: 0,
+        _pad2: 0,
+    };
+    enc.dispatch_compute(
+        &k.scatter_mass,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&mass_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &pool.accum, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
+        ],
+        ceil256(pool.active),
+        "node.mpm_scatter_mass_momentum",
+    );
+
+    let stress_u = manifold_renderer::node_graph::primitives::ScatterStressUniforms {
+        step_dt: dt,
+        active_count: pool.active,
+        _pad0: 0,
+        _pad1: 0,
+    };
+    enc.dispatch_compute(
+        &k.scatter_stress,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&stress_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &pool.accum, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: &pool.stress_out, offset: 0 },
+        ],
+        ceil256(pool.active),
+        "node.mpm_scatter_stress",
+    );
+    enc.commit_and_wait_completed();
+    assert_eq!(read_status(&pool.status), 0, "stress-stage replay faulted");
+
+    let accum = read_accum(&pool.accum);
+    let scale = GRID_FIXED_SCALE as f64;
+    let momentum: Vec<[f64; 3]> = accum
+        .chunks(4)
+        .map(|c| [c[0] as f64 / scale, c[1] as f64 / scale, c[2] as f64 / scale])
+        .collect();
+    let mass: Vec<f64> = accum.chunks(4).map(|c| c[3] as f64 / scale).collect();
+    (momentum, mass)
+}
+
+/// Per-stage localisation at t=0.02 s (19/38/76 substeps): for each
+/// resolution, replay P2G+stress on the reached state and compare the grid
+/// momentum against the f64 oracle on the same state, plus the grid momentum
+/// deltas between resolutions. Prints; classifies nothing.
+fn early_stage_diagnostic(dts: &[f32; 3], labels: &[&str; 3]) {
+    let early_steps = [19usize, 38, 76];
+    let mut gpu_momentum: Vec<Vec<[f64; 3]>> = Vec::new();
+    let mut gpu_mass: Vec<Vec<f64>> = Vec::new();
+
+    for r in 0..3 {
+        let pool = make_pool(SEED_ACTIVE_PARTICLES as u32, PARTICLE_CAPACITY as u32);
+        seed_pool(&pool);
+        for _ in 0..early_steps[r] {
+            substep(&pool, dts[r], BASIN_MIN, BASIN_MAX, [0.0, -9.81, 0.0]);
+        }
+        assert_hard_invariants(&pool, &format!("diagnostic {} substeps", labels[r]));
+        let recs = read_particles(&pool.accepted, SEED_ACTIVE_PARTICLES);
+
+        let (mom, mass) = gpu_p2g_stress_momentum(&pool, dts[r]);
+        gpu_momentum.push(mom);
+        gpu_mass.push(mass);
+
+        let refs: Vec<ref_oracle::RefParticle> = recs.iter().map(to_ref_live).collect();
+        let mut oracle = ref_oracle::RefGrid::new(64, 64, 64, GRID_SPACING as f64, [
+            DOMAIN_ORIGIN[0] as f64,
+            DOMAIN_ORIGIN[1] as f64,
+            DOMAIN_ORIGIN[2] as f64,
+        ]);
+        oracle.p2g_mass_momentum(&refs);
+        oracle.p2g_stress(
+            &refs,
+            dts[r] as f64,
+            REST_DENSITY as f64,
+            SOUND_SPEED_C0 as f64,
+            DYNAMIC_VISCOSITY as f64,
+        );
+
+        // Support filter: the same 1%-of-max-cell-mass rule the S4 transfer
+        // proof uses — lightly loaded cells carry the fixed quantum as a
+        // large relative error by construction.
+        let max_mass = oracle.mass.iter().copied().fold(0.0f64, f64::max);
+        let mut max_mom_err = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        let mut supported = 0usize;
+        let mut max_vel_err = 0.0f64;
+        for g in 0..GRID_CELLS {
+            if oracle.mass[g] >= 0.01 * max_mass {
+                supported += 1;
+                for a in 0..3 {
+                    let e = (gpu_momentum[r][g][a] - oracle.momentum[g][a]).abs();
+                    max_mom_err = max_mom_err.max(e);
+                    sum_sq += e * e;
+                }
+                let v_ref = oracle.resolved_velocity(g);
+                for a in 0..3 {
+                    let v_gpu = if gpu_mass[r][g] > 0.0 {
+                        gpu_momentum[r][g][a] / gpu_mass[r][g]
+                    } else {
+                        0.0
+                    };
+                    max_vel_err = max_vel_err.max((v_gpu - v_ref[a]).abs());
+                }
+            }
+        }
+        let rms = (sum_sq / (supported * 3) as f64).sqrt();
+        println!(
+            "  stress-stage vs f64 oracle at t=0.02 s ({} substeps, dt={:.7}): {supported} supported cells, max momentum err {max_mom_err:.3e} kg m/s, RMS {rms:.3e}, max velocity err {max_vel_err:.3e} m/s",
+            labels[r], dts[r]
+        );
+    }
+
+    for (a, b) in [(0usize, 1usize), (1, 2)] {
+        let max_mass = gpu_mass[a].iter().copied().fold(0.0f64, f64::max);
+        let mut max_d = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        let mut n = 0usize;
+        for g in 0..GRID_CELLS {
+            if gpu_mass[a][g] >= 0.01 * max_mass && gpu_mass[b][g] > 0.0 {
+                for axis in 0..3 {
+                    let d = gpu_momentum[a][g][axis] - gpu_momentum[b][g][axis];
+                    max_d = max_d.max(d.abs());
+                    sum_sq += d * d;
+                    n += 1;
+                }
+            }
+        }
+        let rms = if n > 0 { (sum_sq / n as f64).sqrt() } else { 0.0 };
+        println!(
+            "  grid momentum delta at t=0.02 s, {} vs {} substeps: max {max_d:.3e} kg m/s, RMS {rms:.3e} over {n} momentum components",
+            labels[a], labels[b]
+        );
+    }
 }
 
 /// Hard invariants every solver run must hold regardless of the acceptance
