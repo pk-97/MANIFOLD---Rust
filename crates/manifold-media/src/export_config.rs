@@ -14,13 +14,16 @@ pub struct ExportConfig {
     /// HDR export (HEVC 10-bit) vs SDR (H.264).
     pub hdr: bool,
     /// Export range start beat. 0.0 = use content range.
-    pub start_beat: f32,
+    /// f64: the project's beat domain is f64, and an f32 round-trip here can
+    /// land the export start a hair outside a clip edge, shifting which clip
+    /// owns frame 0 under exact boundary sampling.
+    pub start_beat: f64,
     /// Export range end beat. 0.0 = use content range.
-    pub end_beat: f32,
+    pub end_beat: f64,
     /// Optional audio file path for post-mux.
     pub audio_path: Option<String>,
     /// Beat position where the audio starts on the timeline.
-    pub audio_start_beat: f32,
+    pub audio_start_beat: f64,
     /// Encoder delay compensation in seconds (e.g. 0.05).
     pub audio_encoder_delay: f32,
     /// Split the export into one file per marker inside the export range.

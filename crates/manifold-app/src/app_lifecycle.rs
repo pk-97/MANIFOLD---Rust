@@ -310,8 +310,8 @@ impl Application {
             height: h,
             fps: project.settings.frame_rate,
             hdr: project.settings.export_hdr,
-            start_beat: project.timeline.export_in_beat.as_f32(),
-            end_beat: project.timeline.export_out_beat.as_f32(),
+            start_beat: project.timeline.export_in_beat.0,
+            end_beat: project.timeline.export_out_beat.0,
             audio_path: None, // TODO: wire from audio sync controller
             audio_start_beat: 0.0,
             audio_encoder_delay: 0.0,

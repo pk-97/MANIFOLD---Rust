@@ -407,30 +407,13 @@ impl Timeline {
     }
 
     /// Get active clips at a given beat into caller-provided buffer.
+    /// Exact half-open rule: a clip is active where `start <= beat < end`.
     /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
     /// before calling this. Use `get_active_clips_at_beat()` if unsure.
     /// Zero per-frame allocation — uses caller's pre-allocated buffers.
     pub fn get_active_clips_at_beat_ref(
         &self,
         beat: Beats,
-        results: &mut Vec<(usize, usize)>,
-        active_indices: &mut Vec<usize>,
-    ) {
-        self.get_active_clips_at_beat_ref_epsilon(
-            beat,
-            Beats::ZERO,
-            results,
-            active_indices,
-        );
-    }
-
-    /// Like `get_active_clips_at_beat_ref`, but clips within `boundary_epsilon`
-    /// of a start or end edge are also active. At an adjacent boundary the
-    /// later-starting clip wins.
-    pub fn get_active_clips_at_beat_ref_epsilon(
-        &self,
-        beat: Beats,
-        boundary_epsilon: Beats,
         results: &mut Vec<(usize, usize)>,
         active_indices: &mut Vec<usize>,
     ) {
@@ -441,8 +424,7 @@ impl Timeline {
             }
 
             active_indices.clear();
-            self.layers[li]
-                .collect_active_clips_at_beat_epsilon(beat, boundary_epsilon, active_indices);
+            self.layers[li].collect_active_clips_at_beat(beat, active_indices);
             for ci in active_indices.iter().copied() {
                 results.push((li, ci));
             }

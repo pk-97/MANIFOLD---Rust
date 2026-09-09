@@ -1,96 +1,74 @@
-# Clip Boundary Frame — boundary ownership rule
+# Clip Boundary Frame — exact half-open boundary rule
 
-**Status:** SHIPPED — P1–P3 on main · 2026-09-03 · k3 (lead)  
+**Status:** SHIPPED — D1/D3 superseded 2026-09-09 by D5 (exact half-open everywhere) · k3 (lead)  
 **Prerequisites:** none  
-Lifecycle: contract — cited by `PlaybackEngine` boundary-ownership implementation (`visual_boundary_epsilon`, `is_boundary_owned`, scheduler min-remaining bypass).  
+Lifecycle: contract — cited by `PlaybackEngine` sync and the export frame loop.  
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.  
 
-Shipped 2026-09-03: boundary ownership implemented via `visual_boundary_epsilon` in `PlaybackEngine` and `is_boundary_owned` in `ActiveClipRef`. The scheduler's min-remaining guard is bypassed only for boundary-owned clips, so generators, scenes, and images render at the edge while video clips keep their warm-up guard everywhere except exact boundaries.
-Peter: "playhead sitting on the same frame as the edge of a clip goes black, and so does export frame 0 at a clip boundary." The engine samples at a dimensionless point in beat time. A clip is active only where `start <= beat < end`. Park or export the playhead exactly on `end` and the active-clip query returns nothing, so the compositor clears to black. Peter's call: a clip should own its boundaries — the playhead on a clip's right edge should still show that clip's last frame, and the playhead on its left edge should show its first frame.
+Superseded 2026-09-09: the half-frame boundary epsilon (D1/D3, shipped 2026-09-03) let an incoming clip render up to half a frame early and an outgoing clip linger half a frame past its end — during playback and export, not just when parked. Peter: "both clips or the wrong clip edge showing." Replaced by the Premiere/Resolve rule (D5): a clip is active where `start <= beat < end`, exactly, in every mode — stopped, scrubbing, playing, exporting. The start edge belongs to the clip; the end edge belongs to whatever follows (the next clip, lower layers, or black).
 
 ---
 
-## 1. Audit — what exists today (verified 2026-09-03)
+## 1. Audit — the seams (rule as of 2026-09-09)
 
 | Concern | Where | What it does |
 |---|---|---|
-| Clip activity test | `crates/manifold-core/src/clip.rs:175` | `beat >= start_beat && beat < end_beat()` — half-open, the root seam. |
-| Timeline active-clip query | `crates/manifold-core/src/layer.rs:464` | `collect_active_clips_at_beat` finds point-in-interval clips per layer. |
-| Timeline query caller | `crates/manifold-playback/src/engine.rs:1085` | `query_active_timeline_clips` calls `get_active_clips_at_beat_ref(beat)`. |
-| Video/media time | `crates/manifold-playback/src/engine.rs:2140` | `compute_video_time` samples `in_point + source_elapsed` at `current_beat`. |
-| Audio clip lookup | `crates/manifold-core/src/layer.rs:320` | `is_active_at_beat` — stays half-open; audio must remain exact. |
-| Selection range | `crates/manifold-core/src/selection.rs:53` | Same half-open test — stays unchanged. |
-| Export frame loop | `crates/manifold-app/src/content_export.rs:533` | Tick advances by `dt` before sampling; frame k renders at `start + (k+1) * dt`. |
-| Parked/scrub render | `crates/manifold-playback/src/engine.rs:972` | Non-playing tick does not advance time; renders at the parked beat. |
-| f32 seams | `docs/CORE_ENGINE_MAP.md` item 6 | UI and external clocks round-trip beats through f32, so a "snapped" boundary can land a hair inside or outside the clip. |
-
-Findings: every clip type shares the same half-open point-sampling path, so all of them can black out at a boundary. No probe is needed; the logic is decisive.
+| Clip activity test | `crates/manifold-core/src/clip.rs` `is_active_at_beat` | `beat >= start_beat && beat < end_beat()` — half-open, the one rule. |
+| Timeline active-clip query | `crates/manifold-core/src/layer.rs` | `collect_active_clips_at_beat` — exact half-open, no epsilon. |
+| Timeline query caller | `crates/manifold-playback/src/engine.rs` | `query_active_timeline_clips` calls `get_active_clips_at_beat_ref(beat)`. |
+| Video/media time | `crates/manifold-playback/src/engine.rs` | `compute_video_time` samples `in_point + source_elapsed` at `current_beat`. |
+| Audio clip lookup | `crates/manifold-core/src/layer.rs` | `is_active_at_beat` — exact. |
+| Selection range | `crates/manifold-core/src/selection.rs` | Same half-open test. |
+| Export frame loop | `crates/manifold-app/src/content_export.rs` | Frame k samples at `export_start + k * dt`; frame 0's tick does not advance. |
+| Min-remaining warm-up guard | `crates/manifold-playback/src/engine.rs` (`sync_clips_to_time`) | 20ms guard zeroed when stopped/paused or exporting; live playback only. |
 
 ---
 
 ## 2. Decisions
 
-### D1: a clip owns its boundaries in the visual timeline query
-Change the timeline active-clip query so a clip is active if the playhead is inside the clip or within half a frame of its start or end. On overlap at an adjacent boundary, the later-starting clip wins. This is the boundary ownership rule.
+### D5 (2026-09-09, supersedes D1/D3): exact half-open activity, everywhere
+A clip renders when `start <= beat < end`, in every mode. No tolerance.
 
-- **Start edge.** The playhead lands exactly on `start`. The clip is active and shows its first frame.
-- **End edge.** The playhead lands exactly on `end`. The clip is active and shows its last frame.
-- **Adjacent boundary.** Clip A ends at `end`, clip B starts at `end`. The later-starting clip (B) wins the exact boundary; A still wins just before the boundary.
+- **Start edge.** The playhead on `start` shows the clip's first frame.
+- **End edge.** The playhead on a lone `end` shows the gap (lower layers or black).
+- **Adjacent boundary.** At A-end == B-start, B renders. Just before it, A renders.
 
-**Rationale:** matches Peter's expectation that the clip block owns its edges, and it also absorbs the f32 round-trip errors that push a "snapped" value a hair past a boundary.
+**Rationale:** the output must agree with the timing the timeline shows. Premiere and Resolve draw the boundary the same way: the frame at the playhead line is the frame that begins there. The epsilon put the compositor's answer half a frame away from the transport's answer, which read on stage as the wrong clip at every cut.
 
-**Rejected alternative — mid-frame sampling.** Shifts the sample point by half a frame. At a lone end boundary this still produces black, because the half-frame offset points outside the clip. Does not match Peter's right-edge expectation.
-
-**Rejected alternative — global activity rule.** Changing `is_active_at_beat` everywhere would alter audio clip selection and session launch behavior. Keep the change scoped to the visual timeline query.
+**Superseded:** D1 (a clip owns both boundaries within half a frame) and D3 (half-frame epsilon, absorbed f32 round-trip). The epsilon also hid the real export defect: frame k rendered at `start + (k+1) * dt`, so frame 0 never sampled the export start. f32 round-trip is fixed at the source instead (D6: f64 export beats).
 
 ### D2: keep logical time untouched
-`current_beat` stays the authority for transport, triggers, audio, OSC, timecode, and the sync start/stop diff. Only the visual active-clip query gets the boundary tolerance.
-
-**Rationale:** preserves exact edge semantics for everything that is not the compositor's "which clip do I draw now" decision.
-
-### D3: tolerance equals half a frame in beats
-Use `boundary_epsilon = 0.5 * frame_beat_delta`, computed from the BPM and the tick's `dt_seconds` (or `export_fixed_dt`). This is wide enough to absorb f32 round-trip and playhead-line-on-edge cases, but narrow enough that a full frame past the boundary correctly leaves the clip inactive.
+`current_beat` stays the authority for transport, triggers, audio, OSC, timecode, and the sync start/stop diff. With no epsilon there is nothing left to scope.
 
 ### D4: do not change `Selection::contains_beat`
 Selection is a beat interval for operations, not a visual sample. Its half-open semantics stay as-is.
+
+### D6 (2026-09-09): export samples frame k at `export_start + k * dt`
+The export loop's first tick does not advance the clock, so frame 0 renders the exact export start and the export spans `[start, end)` like the live compositor. `ExportConfig` beat fields are f64 end-to-end so an f32 round-trip cannot land the start a hair outside a clip edge.
 
 ---
 
 ## 3. Design body
 
-### 3.1 Computing the tolerance
+### 3.1 The rule
 ```
-frame_beat_delta = (bpm / 60.0) * dt_seconds
-boundary_epsilon = 0.5 * frame_beat_delta
+active(clip, beat) = clip.start_beat <= beat && beat < clip.end_beat()
 ```
+One rule in `Layer::collect_active_clips_at_beat`, used by every consumer. Non-overlap (a write-time invariant on `Layer`) guarantees at most one active clip per layer, so no tie-breaking exists.
 
-Use f64. The BPM comes from the project settings already synced for `current_beat`.
+### 3.2 Video time at the boundary
+`compute_video_time` uses `current_beat`. A parked playhead one frame before `end` samples the last media frame; at `end` exactly the clip is inactive.
 
-### 3.2 Timeline query change
-`Timeline::get_active_clips_at_beat_ref` and `Layer::collect_active_clips_at_beat` accept a `boundary_epsilon: Beats` parameter. A clip is a candidate if:
+### 3.3 Audio unchanged
+`Layer::active_audio_clip_at` keeps exact `is_active_at_beat`.
 
-```
-beat + epsilon >= clip.start_beat && beat - epsilon < clip.end_beat()
-```
-
-If a layer returns more than one candidate (only possible at a boundary between two adjacent clips), select the one with the later `start_beat`. If still ambiguous, prefer the shorter clip. This preserves non-overlap semantics everywhere except the boundary window.
-
-Call sites:
-- `engine.rs:1085` `query_active_timeline_clips` — pass the computed epsilon and use the same epsilon in `filter_ready_clips`.
-- All other callers pass `Beats::ZERO` to keep exact semantics.
-
-### 3.3 Video time at the boundary
-`compute_video_time` continues to use `current_beat`. With the boundary tolerance, the clip stays active at `current_beat == end`, so `source_elapsed` reaches the media duration. The video renderer clamps to the last decoded frame; if a specific decoder returns black at exact EOF, that is a decoder clamp issue, not this seam.
-
-### 3.4 Audio unchanged
-`Layer::active_audio_clip_at` keeps using exact `is_active_at_beat`. Audio should not hold a boundary note beyond its end.
+### 3.4 Min-remaining guard scope
+`sync_clips_to_time` zeroes the 20ms warm-up guard when the engine is stopped/paused or in export mode, so inspecting or encoding a clip's final frame always starts it. Live playback keeps the guard: entering a clip's tail mid-show only happens via a hiccup or a seek, and sparing the decode warm-up is worth at most one sub-frame gap there.
 
 ### 3.5 Sync and trigger invariants
 - `sync_clips_to_time` uses exact `current_beat` for start/stop diff.
 - Clip edge triggers fire at exact boundaries.
 - OSC/timecode use exact `current_beat`.
-
-The only visual change is which clips appear in `timeline_active_scratch` (and therefore `filter_ready_clips`).
 
 ---
 
@@ -98,39 +76,25 @@ The only visual change is which clips appear in `timeline_active_scratch` (and t
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| I1 | `is_active_at_beat` is unchanged. | `rg 'is_active_at_beat'` shows the same half-open implementation. |
-| I2 | Only visual timeline query uses epsilon. | `rg 'get_active_clips_at_beat_ref\|collect_active_clips_at_beat'` — only the engine call passes a non-zero epsilon. |
-| I3 | Audio and selection stay exact. | `Layer::active_audio_clip_at` and `Selection::contains_beat` keep their current signatures. |
-| I4 | At an adjacent boundary, the later clip wins. | Regression test with A `[0,8)` and B `[8,16)` parked at exactly `8.0` asserts B is active. |
-| I5 | A lone clip still owns its end boundary. | Regression test with A `[0,8)` parked at exactly `8.0` asserts A is active. |
+| I1 | One activity rule, no epsilon parameters. | `rg 'boundary_epsilon'` in `crates/manifold-core/src/{layer,timeline}.rs` is empty. |
+| I2 | Audio and selection stay exact. | `Layer::active_audio_clip_at` and `Selection::contains_beat` keep their signatures. |
+| I3 | At an adjacent boundary the incoming clip renders; just before it, the outgoing one does. | `exact_boundary_adjacent_join_shows_incoming_clip` (layer.rs). |
+| I4 | A lone end edge shows the gap; the start edge shows the clip. | `exact_boundary_end_edge_is_inactive`, `exact_boundary_start_edge_is_active` (layer.rs); `stopped_engine_shows_gap_at_lone_end_boundary`, `stopped_engine_keeps_clip_active_at_start_boundary` (engine_tick.rs). |
+| I5 | Stopped/export starts a clip with sub-frame remaining lifetime. | `stopped_engine_starts_clip_with_sub_frame_remaining` (engine_tick.rs). |
 
 ---
 
 ## 5. Phasing
 
-### P1 — visual boundary tolerance
-Add `boundary_epsilon` parameter to the timeline query, plumb the engine's half-frame epsilon, and resolve per-layer boundary ties. Regression tests: parked playhead on start edge, end edge, and adjacent boundary.
-
-Gate: tests pass; no change to audio/session behavior.
-
-### P2 — export first frame and live playback
-Pass the same epsilon through the export and playing tick paths. Regression test: export a generator clip whose in-point is at a boundary; assert frame 0 is not black.
-
-Gate: test passes; existing export e2e tests still pass.
-
-### P3 — documentation and bead closure
-Update this design doc status to SHIPPED. Close BUG-h2o8 (MANIFOLD social export renders black first frame at clip boundary).
-
-Gate: bead closed; design status updated; supersession sweep.
-
----
+Landed as one change (2026-09-09): exact query restored, epsilon plumbing removed (`visual_boundary_epsilon`, `is_boundary_owned`, scheduler bypass), warm-up guard narrowed to live playback, export frame-0 sampling + f64 export beats, regression tests rewritten to the new rule.
 
 ## 6. Decided — do not reopen
 
-- D1: boundary ownership rule for the visual timeline query.
+- D5: exact half-open activity everywhere; the end edge belongs to what follows.
 - D2: logical `current_beat` unchanged for triggers/audio/transport.
 - D4: `Selection::contains_beat` unchanged.
+- D6: export frame k samples at `export_start + k * dt`; export beats are f64.
 
 ## 7. Deferred
 
-- Extend boundary ownership to the playhead snap / timeline ruler if P1 shows the underlying UI is parking the playhead a full frame past the boundary rather than on the edge. Trigger: user still reports black after P1 lands.
+- Playhead snap / timeline ruler precision: if the UI parks the playhead a full frame past a boundary rather than on the edge, the picture will truthfully show that position — which will read as a snap bug, not a render bug. Trigger: user reports the picture disagreeing with the intended snap target after this lands.
