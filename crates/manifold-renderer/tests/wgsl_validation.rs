@@ -47,6 +47,14 @@ const PARTIAL_SHADERS: &[&str] = &[
     // exercised by the bundled-preset execute tests.
     "gaussian_blur_variable_width.wgsl",
     "radial_burst_force_field.wgsl",
+    // Live Water S4 hand-authored atomic/validate kernels: `water_common.wgsl`
+    // (constants + helpers) is concatenated ahead of each at pipeline creation
+    // (WGSL consts cannot reach the shader any other way). The composed forms
+    // are validated at pipeline creation and by the gpu-proofs value tests
+    // (tests/gpu_proofs/water_solver.rs).
+    "mpm_scatter_mass_momentum.wgsl",
+    "mpm_scatter_stress.wgsl",
+    "water_validate.wgsl",
     // IMPORT_FIDELITY_DESIGN.md D2/F-P1: prepend pbr_brdf.wgsl at
     // pipeline-creation time (Hammersley / GGX importance sample / equirect
     // direction helpers). Composed validators below.

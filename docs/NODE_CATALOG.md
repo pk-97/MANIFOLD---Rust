@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 265 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 274 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -262,23 +262,32 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (13)
+### Particles 3D (22)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
+| Clear Water Grid | `node.clear_grid` | Filter | Blanks the water solver's momentum-and-mass scratch grid between substeps. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| MPM Gather + Advect | `node.mpm_gather_advect` | Filter | Pulls the grid velocities back onto each water particle and moves it one substep, carrying its density forward. |
+| MPM Grid Velocity | `node.mpm_grid_velocity` | Filter | Turns the grid's accumulated momentum into cell velocities, adds gravity, and stops the wall and floor cells from pushing into the basin. |
+| MPM Scatter (mass+momentum) | `node.mpm_scatter_mass_momentum` | Filter | Splats each water particle's mass and momentum onto the grid of cells around it, in exact fixed-point arithmetic. |
+| MPM Scatter (stress) | `node.mpm_scatter_stress` | Filter | Recomputes each water particle's density from the grid and pushes the pressure-and-viscosity stress back onto the grid. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
+| Seed Water | `node.seed_water` | Source | Creates the starting block of water particles on a fixed lattice — the still pool the rest of the solver acts on. |
 | Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
+| Water Commit | `node.water_commit` | Filter | Accepts the new water state when validation is clean, or keeps the last good state when anything faulted. |
+| Water State | `node.water_state` | Filter | Owns the water simulation clock and persistent accepted state; the executor repeats the solver region under it. |
+| Water Validate | `node.water_validate` | Filter | Checks every live water particle for NaNs, runaway speeds and bad densities, and latches any fault into the sticky status word. |
 
 ### Control (23)
 

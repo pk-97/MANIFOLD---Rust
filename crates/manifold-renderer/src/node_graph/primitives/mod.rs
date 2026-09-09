@@ -270,6 +270,16 @@ mod vignette;
 mod voronoi_2d;
 mod voxelize_mesh;
 mod water_state;
+// Live Water S4 solver stages (docs/WATER_IMPLEMENTATION_PLAN.md section 2.2
+// stage port table). Registered by the S4 lane.
+mod clear_grid;
+mod mpm_gather_advect;
+mod mpm_grid_velocity;
+mod mpm_scatter_mass_momentum;
+mod mpm_scatter_stress;
+mod seed_water;
+mod water_commit;
+mod water_validate;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 pub(crate) mod wgsl_compute;
@@ -516,6 +526,20 @@ pub use voxelize_mesh::VoxelizeMesh;
 pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use water_state::WaterState;
+pub use clear_grid::{ACCUM_ITEMS, ClearGrid, ClearGridUniforms};
+pub use mpm_gather_advect::{GatherAdvectUniforms, MpmGatherAdvect};
+pub use mpm_grid_velocity::{
+    BASIN_MAX, BASIN_MIN, CELL_COUNT, GRAVITY, GridVelocityUniforms, MpmGridVelocity,
+};
+pub use mpm_scatter_mass_momentum::{
+    MpmScatterMassMomentum, ScatterMassUniforms, WGSL as SCATTER_MASS_WGSL,
+};
+pub use mpm_scatter_stress::{
+    MpmScatterStress, ScatterStressUniforms, WGSL as SCATTER_STRESS_WGSL,
+};
+pub use seed_water::{POOL_MAX, POOL_MIN, SeedWater, SeedWaterUniforms};
+pub use water_commit::{CommitUniforms, WaterCommit};
+pub use water_validate::{ValidateUniforms, WGSL as VALIDATE_WGSL, WaterValidate};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 
 #[cfg(test)]
