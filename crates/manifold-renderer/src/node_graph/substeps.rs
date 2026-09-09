@@ -894,6 +894,69 @@ mod tests {
     }
 
     #[test]
+    fn substeps_region_body_with_real_fusable_chain() {
+        // Freeze seam (design section 4): fusion works at the def level
+        // and the plan compiles AFTER fusion, so a body of real fusable
+        // atoms must derive as one contracted region — and the
+        // hand-written boundary (no wgsl_body) must classify as a fusion
+        // Boundary so no region ever grows across the border.
+        use crate::node_graph::PrimitiveRegistry;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(TestNode::new(
+            "src",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let boundary = graph.add_node(Box::new(TestNode::boundary()));
+        let gain_a = graph.add_node(
+            registry.construct("node.exposure").expect("node.exposure registered"),
+        );
+        let gain_b = graph.add_node(
+            registry.construct("node.exposure").expect("node.exposure registered"),
+        );
+        let consumer = graph.add_node(Box::new(TestNode::new(
+            "consumer",
+            vec![input("tex", PortType::Texture2D, true)],
+            vec![],
+        )));
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (gain_a, "in")).unwrap();
+        graph.connect((gain_a, "out"), (gain_b, "in")).unwrap();
+        graph.connect((gain_b, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 1);
+        let region = &regions[0];
+        let steps = plan.steps();
+        assert_eq!(region.steps.len(), 3);
+        assert_eq!(steps[region.steps[0]].node, boundary);
+        assert_eq!(steps[region.steps[1]].node, gain_a);
+        assert_eq!(steps[region.steps[2]].node, gain_b);
+
+        for node in [gain_a, gain_b] {
+            let inst = graph.get_node(node).expect("body node exists");
+            assert_eq!(
+                crate::node_graph::freeze::classify::fusion_kind_str(inst.node.as_ref()),
+                "pointwise",
+                "region body atoms stay freeze-eligible — fusion within a \
+                 region is the intended codegen path"
+            );
+        }
+        let boundary_inst = graph.get_node(boundary).expect("boundary exists");
+        assert!(
+            crate::node_graph::freeze::classify::fusion_kind_str(
+                boundary_inst.node.as_ref()
+            )
+            .starts_with("boundary:"),
+            "a substep boundary is a fusion Boundary — fusion can never \
+             grow across a region border"
+        );
+    }
+
+    #[test]
     fn substeps_region_absent_when_no_boundaries() {
         // Ordinary chain: no boundary → no regions, plan shape unchanged.
         let mut graph = Graph::new();
