@@ -1652,6 +1652,12 @@ struct ObjectDraw<'ctx> {
     kind: MaterialKind,
 }
 
+/// Whole-triangle vertex count of a MeshVertex buffer (the prepass draw
+/// calls' shared count — was the `vcount` closure inside evaluate()).
+fn mesh_vertex_count(buf: &manifold_gpu::GpuBuffer) -> u32 {
+    ((buf.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3) * 3
+}
+
 // ---- BUG-trh7 stage 2: the evaluate() pass frames. `FramePrelude` carries
 // everything the preamble computes once (immutable after construction);
 // `FrameRtState` carries the evaluate-scope mutables the passes flip as they
@@ -2310,6 +2316,254 @@ impl RenderScene {
             }
         }
     }
+    /// BUG-trh7 stage 2, pass 4: the split-sum IBL convolution — runs
+    /// before the main pass so the prefiltered/irradiance/LUT textures are
+    /// ready to sample (see `run_ibl_convolution`'s doc comment for the
+    /// cache-vs-correctness tradeoff). Returns the envmap slot generation
+    /// the RT block's lighting key folds in, so an env rebake snaps the
+    /// accumulator instead of fading on the EMA floor.
+    fn ibl_convolution_pass<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+    ) -> Option<u64> {
+        let envmap_generation = ctx.inputs.slot_generation("envmap");
+        {
+            let rebuild_epoch = ctx.rebuild_epoch;
+            let gpu = ctx.gpu_encoder();
+            let sampler = self.sampler.as_ref().expect("ensured").clone();
+            self.run_ibl_convolution(gpu, &sampler, pre.envmap_wired, envmap_generation, rebuild_epoch);
+            gpu.checkpoint();
+        }
+        envmap_generation
+    }
+
+    /// BUG-trh7 stage 2, pass 5: the raster shadow depth pre-passes — one
+    /// depth-only pass per caster, skipped when no light casts or when RT
+    /// shadows own the visibility (the explicit gate is load-bearing: the
+    /// ensure block never allocates the maps on that path). D6 dirty keys
+    /// and the non-PBR degrade-loud warn latch are unchanged.
+    fn raster_shadow_prepasses<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        opaque_draws: &[&ObjectDraw<'ctx>],
+        has_casters: bool,
+        will_rt_accumulate_this_frame: bool,
+        rt_ready: bool,
+    ) {
+        let FramePrelude { ref casters, rt_enabled, rt_shadows_enabled, .. } = *pre;
+        let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
+        // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
+        // 2026-07-31): phong/cel draws in an RT scene get the flat ambient
+        // recompose and NO traced env/GI — degrade loud, not silent. Once
+        // per scene instance: per-frame spam breaks the hot path, and a
+        // silent hole reads as "RT looks wrong".
+        if will_rt_accumulate_this_frame
+            && !self.rt_nonpbr_warned
+            && opaque_draws
+                .iter()
+                .any(|d| matches!(d.kind, MaterialKind::Phong | MaterialKind::Cel))
+        {
+            self.rt_nonpbr_warned = true;
+            log::warn!(
+                "render_scene: RT lighting reaches PBR materials only — this scene has \
+                 phong/cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
+            );
+        }
+        // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING when
+        // RT shadows own the visibility — the RT shadow-ray pass below
+        // replaces this entire depth-only-per-caster loop (the ensure
+        // block above never allocates `shadow_maps` when that path is
+        // the sole consumer, so this loop's `None` short-circuit would
+        // no-op each caster; the explicit gate is load-bearing).
+        // RT toggles: when rt_shadows is off, maps MUST render so the
+        // WGSL raster fallthrough path has real data to sample — the sv
+        // textures are unwritten (shadow_spp=0) and the WGSL rt_flags.w
+        // gate directs shadow_factor to the raster path below (the sv
+        // read branch is never entered).
+        if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
+            // Per-object shadow toggle: this raster depth-only pass is the
+            // ONLY place `cast_shadows == false` removes an object from —
+            // it stays in `opaque_draws` (and therefore the prepass/accel
+            // above and below) unchanged.
+            let caster_draws: Vec<&ObjectDraw> =
+                opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
+            let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
+            let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
+            for (slot, l) in casters.iter().enumerate() {
+                let Some((_, shadow_map)) = self.shadow_maps[slot].as_ref() else {
+                    continue;
+                };
+                let vp = l.shadow_view_proj();
+
+                // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this caster's
+                // dirty-check key — everything the depth-only batch below
+                // reads. `shadow_view_proj()` is a pure function of the
+                // light alone (light.rs), so a static light reproduces the
+                // exact same `vp` bytes every frame; the per-draw component
+                // list catches every other input (geometry, transforms,
+                // instancing). Hashed into a fixed hasher — zero per-frame
+                // allocation (CLAUDE.md hot-path discipline); `AHasher` is
+                // already this crate's fast-hash workhorse (`ahash::AHashMap`
+                // throughout `execution.rs`).
+                use std::hash::{Hash, Hasher};
+                let mut hasher = ahash::AHasher::default();
+                hasher.write(bytemuck::bytes_of(&vp));
+                hasher.write_u32(l.shadow_resolution);
+                hasher.write_usize(caster_draws.len());
+                for d in &caster_draws {
+                    hasher.write(bytemuck::bytes_of(&d.uniforms.model));
+                    d.vertices_generation.hash(&mut hasher);
+                    d.instances_generation.hash(&mut hasher);
+                    hasher.write_u32(mesh_vertex_count(d.vertices));
+                    hasher.write_u32(d.instance_count);
+                }
+                // D6: the rebuild-epoch term — guards against a topology
+                // rebuild carrying this primitive's own Rust state (this
+                // struct, including `shadow_cache_keys`) into a BRAND NEW
+                // executor whose slot generations reset to 0 (see
+                // `Executor::rebuild_epoch`'s doc comment for the full
+                // hazard). Folding it in means a key computed under a prior
+                // executor lifetime can never coincidentally match this one.
+                hasher.write_u64(ctx.rebuild_epoch);
+                let shadow_key = hasher.finish();
+
+                // I1: never serve on ANY mismatch — including the `None` a
+                // fresh primitive (or a resolution/topology change that
+                // reset `shadow_cache_keys`) starts with. A full match means
+                // `shadow_maps[slot]`'s PERSISTED texture (never cleared
+                // except on resolution change — see `ensure_shadow_map`)
+                // already holds exactly this content, so the depth-only
+                // batch this caster would otherwise issue is redundant.
+                if self.shadow_cache_keys[slot] == Some(shadow_key) {
+                    continue;
+                }
+                self.shadow_cache_keys[slot] = Some(shadow_key);
+
+                let shadow_uniforms: Vec<ShadowUniforms> = caster_draws
+                    .iter()
+                    .map(|d| ShadowUniforms {
+                        light_view_proj: vp,
+                        model: d.uniforms.model,
+                    })
+                    .collect();
+                let shadow_bindings: Vec<[GpuBinding; 3]> = caster_draws
+                    .iter()
+                    .zip(&shadow_uniforms)
+                    .map(|(d, su)| {
+                        [
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(su),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: d.vertices,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: d.instances.unwrap_or(identity_stub),
+                                offset: 0,
+                            },
+                        ]
+                    })
+                    .collect();
+                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = caster_draws
+                    .iter()
+                    .zip(&shadow_bindings)
+                    .map(|(d, b)| {
+                        manifold_gpu::GpuEncoder::depth_msaa_draw(
+                            &shadow_pipeline,
+                            b,
+                            mesh_vertex_count(d.vertices),
+                            d.instance_count,
+                        )
+                    })
+                    .collect();
+                ctx.gpu_encoder()
+                    .native_enc
+                    .draw_instanced_depth_only_batch(
+                        shadow_map,
+                        shadow_ds,
+                        &shadow_draws,
+                        "node.render_scene shadow",
+                    );
+            }
+        }
+    }
+
+    /// BUG-trh7 stage 2, pass 6: the opaque-only camera-space depth prepass
+    /// into `opaque_depth_snapshot` — Pass B's depth test source, the RT
+    /// shadow-ray pass's depth source, and the atrous_post/firefly guides.
+    /// Reuses the shadow pipeline with the camera's view_proj; skipped
+    /// entirely when the scene has no transmissive object and no RT.
+    fn opaque_depth_snapshot_pass<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        opaque_draws: &[&ObjectDraw<'ctx>],
+        has_transmission: bool,
+    ) {
+        let FramePrelude { view_proj, rt_enabled, .. } = *pre;
+        let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
+        if has_transmission || rt_enabled {
+            let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
+            let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
+            let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+            let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
+                .iter()
+                .map(|d| ShadowUniforms {
+                    light_view_proj: view_proj,
+                    model: d.uniforms.model,
+                })
+                .collect();
+            let cam_bindings: Vec<[GpuBinding; 3]> = opaque_draws
+                .iter()
+                .zip(&cam_uniforms)
+                .map(|(d, su)| {
+                    [
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(su),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: d.vertices,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: d.instances.unwrap_or(identity_stub),
+                            offset: 0,
+                        },
+                    ]
+                })
+                .collect();
+            let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = opaque_draws
+                .iter()
+                .zip(&cam_bindings)
+                .map(|(d, b)| {
+                    manifold_gpu::GpuEncoder::depth_msaa_draw(
+                        &opaque_depth_pipeline,
+                        b,
+                        mesh_vertex_count(d.vertices),
+                        d.instance_count,
+                    )
+                })
+                .collect();
+            ctx.gpu_encoder()
+                .native_enc
+                .draw_instanced_depth_only_batch(
+                    opaque_depth_snapshot,
+                    opaque_depth_ds,
+                    &cam_draws,
+                    "node.render_scene E2a opaque depth snapshot",
+                );
+        }
+    }
+
 
 
     /// BUG-trh7 stage 2, pass 2: resolve resident RT topology BEFORE
@@ -5702,249 +5956,37 @@ impl EffectNode for RenderScene {
         );
         let has_casters = !casters.is_empty();
 
-        // ---- Split-sum IBL convolution (IMPORT_FIDELITY_DESIGN.md
-        // D2/F-P1). Runs before the main pass so the prefiltered/irradiance/
-        // LUT textures are ready to sample; see `run_ibl_convolution`'s doc
-        // comment for the cache-vs-correctness tradeoff on the two
-        // envmap-dependent resources. ----
-        // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
-        // Hoisted out of the convolution block: the RT `lighting_key` below
-        // folds this same generation in so an env rebake snaps the
-        // accumulator instead of fading on the EMA floor.
-        let envmap_generation = ctx.inputs.slot_generation("envmap");
-        {
-            let rebuild_epoch = ctx.rebuild_epoch;
-            let gpu = ctx.gpu_encoder();
-            let sampler = self.sampler.as_ref().expect("ensured").clone();
-            self.run_ibl_convolution(gpu, &sampler, envmap_wired, envmap_generation, rebuild_epoch);
-            gpu.checkpoint();
-        }
+        // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
+        // `ibl_convolution_pass`) — returns the envmap generation the RT
+        // block's lighting key folds in.
+        let envmap_generation = self.ibl_convolution_pass(ctx, &pre);
 
-        // ---- Shadow depth pre-passes. One depth-only pass per caster
-        // (cleared once), every object drawn through that light's
-        // view-projection into its private Depth32Float map. Runs before the
-        // main lit pass so the maps are ready to sample; skipped entirely
-        // when no light casts (has_casters == false → zero passes). ----
-        let vsize = std::mem::size_of::<MeshVertex>() as u64;
-        let vcount = |buf: &manifold_gpu::GpuBuffer| ((buf.size / vsize) as u32 / 3) * 3;
-        // D11: the shadow pass instances too — bound once here, reused by
-        // Pass 2 below (both only ever take an immutable borrow of self).
-        let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: "a window must not throw an
-        // opaque shadow" — Blend objects are excluded from every caster's
-        // depth-only pass below, never just the main draw. This is the
-        // opaque/mask draw list — NOT a caster list — also feeding the
-        // camera depth prepass and the RT accel structure below, so its
-        // membership stays "every non-Blend object" regardless of that
-        // object's own `cast_shadows` toggle.
+        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the opaque/mask draw list — "a
+        // window must not throw an opaque shadow". Feeds the shadow
+        // prepasses, the camera depth prepass, and the RT accel structure;
+        // membership stays "every non-Blend object" regardless of each
+        // object's own cast_shadows toggle.
         let opaque_draws: Vec<&ObjectDraw> = draws
             .iter()
             .filter(|d| d.alpha_mode != AlphaMode::Blend)
             .collect();
-        // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
-        // 2026-07-31): phong/cel draws in an RT scene get the flat ambient
-        // recompose and NO traced env/GI — degrade loud, not silent. Once
-        // per scene instance: per-frame spam breaks the hot path, and a
-        // silent hole reads as "RT looks wrong".
-        if will_rt_accumulate_this_frame
-            && !self.rt_nonpbr_warned
-            && opaque_draws
-                .iter()
-                .any(|d| matches!(d.kind, MaterialKind::Phong | MaterialKind::Cel))
-        {
-            self.rt_nonpbr_warned = true;
-            log::warn!(
-                "render_scene: RT lighting reaches PBR materials only — this scene has \
-                 phong/cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
-            );
-        }
-        // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING when
-        // RT shadows own the visibility — the RT shadow-ray pass below
-        // replaces this entire depth-only-per-caster loop (the ensure
-        // block above never allocates `shadow_maps` when that path is
-        // the sole consumer, so this loop's `None` short-circuit would
-        // no-op each caster; the explicit gate is load-bearing).
-        // RT toggles: when rt_shadows is off, maps MUST render so the
-        // WGSL raster fallthrough path has real data to sample — the sv
-        // textures are unwritten (shadow_spp=0) and the WGSL rt_flags.w
-        // gate directs shadow_factor to the raster path below (the sv
-        // read branch is never entered).
-        if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
-            // Per-object shadow toggle: this raster depth-only pass is the
-            // ONLY place `cast_shadows == false` removes an object from —
-            // it stays in `opaque_draws` (and therefore the prepass/accel
-            // above and below) unchanged.
-            let caster_draws: Vec<&ObjectDraw> =
-                opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
-            let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
-            let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
-            for (slot, l) in casters.iter().enumerate() {
-                let Some((_, shadow_map)) = self.shadow_maps[slot].as_ref() else {
-                    continue;
-                };
-                let vp = l.shadow_view_proj();
 
-                // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this caster's
-                // dirty-check key — everything the depth-only batch below
-                // reads. `shadow_view_proj()` is a pure function of the
-                // light alone (light.rs), so a static light reproduces the
-                // exact same `vp` bytes every frame; the per-draw component
-                // list catches every other input (geometry, transforms,
-                // instancing). Hashed into a fixed hasher — zero per-frame
-                // allocation (CLAUDE.md hot-path discipline); `AHasher` is
-                // already this crate's fast-hash workhorse (`ahash::AHashMap`
-                // throughout `execution.rs`).
-                use std::hash::{Hash, Hasher};
-                let mut hasher = ahash::AHasher::default();
-                hasher.write(bytemuck::bytes_of(&vp));
-                hasher.write_u32(l.shadow_resolution);
-                hasher.write_usize(caster_draws.len());
-                for d in &caster_draws {
-                    hasher.write(bytemuck::bytes_of(&d.uniforms.model));
-                    d.vertices_generation.hash(&mut hasher);
-                    d.instances_generation.hash(&mut hasher);
-                    hasher.write_u32(vcount(d.vertices));
-                    hasher.write_u32(d.instance_count);
-                }
-                // D6: the rebuild-epoch term — guards against a topology
-                // rebuild carrying this primitive's own Rust state (this
-                // struct, including `shadow_cache_keys`) into a BRAND NEW
-                // executor whose slot generations reset to 0 (see
-                // `Executor::rebuild_epoch`'s doc comment for the full
-                // hazard). Folding it in means a key computed under a prior
-                // executor lifetime can never coincidentally match this one.
-                hasher.write_u64(ctx.rebuild_epoch);
-                let shadow_key = hasher.finish();
+        // ---- Shadow depth pre-passes (BUG-trh7 stage 2,
+        // `raster_shadow_prepasses`) — skipped when no light casts or when
+        // RT shadows own the visibility.
+        self.raster_shadow_prepasses(
+            ctx,
+            &pre,
+            &opaque_draws,
+            has_casters,
+            will_rt_accumulate_this_frame,
+            rt_ready,
+        );
 
-                // I1: never serve on ANY mismatch — including the `None` a
-                // fresh primitive (or a resolution/topology change that
-                // reset `shadow_cache_keys`) starts with. A full match means
-                // `shadow_maps[slot]`'s PERSISTED texture (never cleared
-                // except on resolution change — see `ensure_shadow_map`)
-                // already holds exactly this content, so the depth-only
-                // batch this caster would otherwise issue is redundant.
-                if self.shadow_cache_keys[slot] == Some(shadow_key) {
-                    continue;
-                }
-                self.shadow_cache_keys[slot] = Some(shadow_key);
-
-                let shadow_uniforms: Vec<ShadowUniforms> = caster_draws
-                    .iter()
-                    .map(|d| ShadowUniforms {
-                        light_view_proj: vp,
-                        model: d.uniforms.model,
-                    })
-                    .collect();
-                let shadow_bindings: Vec<[GpuBinding; 3]> = caster_draws
-                    .iter()
-                    .zip(&shadow_uniforms)
-                    .map(|(d, su)| {
-                        [
-                            GpuBinding::Bytes {
-                                binding: 0,
-                                data: bytemuck::bytes_of(su),
-                            },
-                            GpuBinding::Buffer {
-                                binding: 1,
-                                buffer: d.vertices,
-                                offset: 0,
-                            },
-                            GpuBinding::Buffer {
-                                binding: 2,
-                                buffer: d.instances.unwrap_or(identity_stub),
-                                offset: 0,
-                            },
-                        ]
-                    })
-                    .collect();
-                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = caster_draws
-                    .iter()
-                    .zip(&shadow_bindings)
-                    .map(|(d, b)| {
-                        manifold_gpu::GpuEncoder::depth_msaa_draw(
-                            &shadow_pipeline,
-                            b,
-                            vcount(d.vertices),
-                            d.instance_count,
-                        )
-                    })
-                    .collect();
-                ctx.gpu_encoder()
-                    .native_enc
-                    .draw_instanced_depth_only_batch(
-                        shadow_map,
-                        shadow_ds,
-                        &shadow_draws,
-                        "node.render_scene shadow",
-                    );
-            }
-        }
-
-        // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: opaque-only camera-
-        // space depth prepass into `opaque_depth_snapshot`, so Pass B (the
-        // transmissive/blend group, drawn after Pass A below resolves) can
-        // depth-test against Pass A's result as a real Metal depth
-        // ATTACHMENT. Reuses `shadow_pipeline`/`shadow_depth_stencil` (a
-        // depth-only pipeline + write-enabled-Less state), fed the CAMERA's
-        // `view_proj` instead of a light's — same draw set as Pass A's
-        // opaque/mask group (`opaque_draws` already excludes Blend).
-        // Skipped entirely when the scene has no transmissive object
-        // (zero-transmission = zero extra passes, same lazy contract as the
-        // shaft/velocity features above). ----
-        if has_transmission || rt_enabled {
-            let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
-            let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
-            let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
-            let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
-                .iter()
-                .map(|d| ShadowUniforms {
-                    light_view_proj: view_proj,
-                    model: d.uniforms.model,
-                })
-                .collect();
-            let cam_bindings: Vec<[GpuBinding; 3]> = opaque_draws
-                .iter()
-                .zip(&cam_uniforms)
-                .map(|(d, su)| {
-                    [
-                        GpuBinding::Bytes {
-                            binding: 0,
-                            data: bytemuck::bytes_of(su),
-                        },
-                        GpuBinding::Buffer {
-                            binding: 1,
-                            buffer: d.vertices,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 2,
-                            buffer: d.instances.unwrap_or(identity_stub),
-                            offset: 0,
-                        },
-                    ]
-                })
-                .collect();
-            let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = opaque_draws
-                .iter()
-                .zip(&cam_bindings)
-                .map(|(d, b)| {
-                    manifold_gpu::GpuEncoder::depth_msaa_draw(
-                        &opaque_depth_pipeline,
-                        b,
-                        vcount(d.vertices),
-                        d.instance_count,
-                    )
-                })
-                .collect();
-            ctx.gpu_encoder()
-                .native_enc
-                .draw_instanced_depth_only_batch(
-                    opaque_depth_snapshot,
-                    opaque_depth_ds,
-                    &cam_draws,
-                    "node.render_scene E2a opaque depth snapshot",
-                );
-        }
+        // ---- E2a/RT-D3 opaque camera-depth prepass (BUG-trh7 stage 2,
+        // `opaque_depth_snapshot_pass`) — Pass B's depth test source and the
+        // RT shadow-ray pass's depth source.
+        self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission);
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
         // shadow-ray dispatch + depth-aware upsample, reading the opaque-
@@ -7313,6 +7355,9 @@ impl EffectNode for RenderScene {
         // RT-TL-C (section 16 TL5): accumulated svt history — the just-written
         // slot after the ping flip, same ABI-stub discipline as rt_refl_tex.
         let rt_svt_tex = self.rt_svt_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        // D11: Pass 2 binds its own identity stub (each pass binds what it
+        // needs since the stage-2 carve — the ensure block guarantees it).
+        let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         let binding_sets: Vec<[GpuBinding; 46]> = draws
             .iter()
             .map(|draw| {

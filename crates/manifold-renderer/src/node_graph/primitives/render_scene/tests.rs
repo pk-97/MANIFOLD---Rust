@@ -45,7 +45,8 @@
             .unwrap();
         for marker in [
             ".ensure_gpu_resources(",
-            "if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled)",
+            ".raster_shadow_prepasses(",
+            ".opaque_depth_snapshot_pass(",
             "let objects = rt_objects;",
         ] {
             assert!(evaluate.find(marker).unwrap() > validate_call, "dispatcher consumer precedes the validate call: {marker}");
