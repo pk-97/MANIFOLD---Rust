@@ -23,6 +23,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const BASIC_SHAPE_SHAPES: &[&str] = &["Square", "Diamond", "Octagon"];
 
@@ -145,18 +146,7 @@ impl Primitive for BasicShape {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Source generator: 0 texture inputs, output at binding 1. The body
-            // does the preprocessing (uv_scale = 1/scale, enum→idx, wireframe
-            // threshold) the hand path used to bake into the uniform, so run()
-            // packs the raw params in PARAMS order. basic_shape.wgsl is the oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.basic_shape standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.basic_shape",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = BasicShapeUniforms {
             shape,

@@ -17,6 +17,7 @@ use crate::generators::mesh_common::{CurvePoint, MeshVertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`depth`
 /// f32, `steps` Int→i32, `close` Bool→u32), then the derived `outline_len`
@@ -136,19 +137,7 @@ impl Primitive for ExtrudeCurve {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (design decided #10): the runtime kernel is
-            // generated from `wgsl_body` so this atom stays pointwise/fusable
-            // in the graph compiler. extrude_curve.wgsl is retained only as
-            // the gpu_tests parity oracle. Bindings: uniform(0),
-            // buf_outline(1, gather), buf_out(2).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.extrude_curve standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.extrude_curve",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = ExtrudeCurveUniforms {
             depth,

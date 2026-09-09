@@ -15,6 +15,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `vol_res` / `vol_depth` Int params
 /// (→ i32) + pad to 16 bytes. The generated standalone kernel is single-entry,
@@ -109,18 +110,7 @@ impl Primitive for Resolve3DAccumulator {
         };
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (BUFFER→TEXTURE
-            // 3D resolve — dims/idx from textureDimensions(dst), the body reads +
-            // zeros the atomic accumulator and returns the density vec4). The
-            // shared fluid_scatter_3d.wgsl resolve_3d is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.resolve_scatter_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.resolve_scatter_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = Resolve3DUniforms {
             vol_res: vol_res as i32,

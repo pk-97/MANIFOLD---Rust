@@ -17,6 +17,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Display labels for the `kernel_size` enum, indexed by enum value.
 pub const GAUSSIAN_BLUR_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
@@ -238,19 +239,7 @@ impl Primitive for GaussianBlur {
         let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: `in` is a Gather input (the body samples it along one
-            // axis). Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3),
-            // matching the set below; the body recovers the texel step from `dims`
-            // and ignores address_mode (the sampler carries the wrap mode).
-            // separable_gaussian.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.gaussian_blur standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.gaussian_blur",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         // Pick the GpuAddressMode that matches the address_mode enum.
         // Recreate the sampler when the mode changes — cheap (state
         // object) and only happens on param edits, not per frame.

@@ -18,6 +18,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -118,17 +119,7 @@ impl Primitive for SampleVolume2D {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // MIXED-DIM: 2D output (2D wrapper), 3D `in` volume gathered at a body-
-            // computed slice coord. Generated kernel binds uniform(0)/tex_in(1)/
-            // samp(2)/dst(3). sample_volume_2d.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.slice_volume standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.slice_volume",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

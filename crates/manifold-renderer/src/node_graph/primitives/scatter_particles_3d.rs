@@ -15,6 +15,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`active_count`, `vol_res`, `vol_depth`, `scaled_energy` Int → i32), then
@@ -143,18 +144,7 @@ impl Primitive for ScatterParticles3D {
         let active_count = active_count.min(particle_capacity);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // ATOMIC 3D SCATTER — the body computes each particle's target voxel
-            // and `atomicAdd`s into the `buf_accum` accumulator). The shared
-            // fluid_scatter_3d.wgsl splat_3d is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.draw_particles_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.draw_particles_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = Splat3DUniforms {
             active_count: active_count as i32,

@@ -21,6 +21,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -139,19 +140,7 @@ impl Primitive for Voronoi2D {
         let cell_tex = cell_slot.unwrap_or(primary);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Multi-output Source: the generated kernel binds uniform(0)/dst_out(1)/
-            // dst_cell_id(2), the body returns both in a BodyOutputs struct, and the
-            // wrapper gates each store on the injected write_out/write_cell_id flags
-            // (which sit at the same offsets as the hand uniform's, so VoronoiUniforms
-            // packs the generated layout unchanged). voronoi_2d.wgsl is the oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.voronoi_2d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.voronoi_2d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = VoronoiUniforms {
             scale,

@@ -21,6 +21,7 @@ use crate::node_graph::camera::CameraMode;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const PROJECT_3D_MODES: &[&str] = &["Orthographic", "Perspective"];
 
@@ -198,16 +199,7 @@ impl Primitive for Project3D {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path, type-changing in/out + derived active_count).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.flatten_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.flatten_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = Project3DUniforms {
             mode,

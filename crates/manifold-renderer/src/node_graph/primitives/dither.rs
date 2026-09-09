@@ -16,6 +16,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -80,20 +81,7 @@ impl Primitive for Dither {
         let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: the standalone kernel is generated from the same
-            // `wgsl_body` the fusion codegen chains. Both inputs are
-            // CoincidentTexel (exact-texel, no sampler), so the generated
-            // bindings are uniform(0), in(1), pattern(2), dst(3) — matching the
-            // sampler-free binding set below. dither.wgsl is the parity oracle.
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.dither standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.dither",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = DitherUniforms {
             amount,

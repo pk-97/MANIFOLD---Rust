@@ -16,6 +16,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 crate::primitive! {
     name: PackChannels,
@@ -125,18 +126,7 @@ impl Primitive for PackChannels {
         let a_tex = ctx.inputs.texture_2d("a");
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // 4-input Coincident with optional-input use-flags. Generated kernel
-            // binds uniform(0)/r(1)/g(2)/b(3)/a(4)/samp(5)/dst(6); the body reads
-            // each channel only when its injected use flag is set, else the default.
-            // pack_channels.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.pack_rgba standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.pack_rgba",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

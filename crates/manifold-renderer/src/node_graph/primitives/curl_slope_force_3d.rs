@@ -31,6 +31,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 // Standalone-codegen uniform layout: PARAMS order (vol_res, vol_depth, curl_
 // strength, slope_strength, ref_axis_x/y/z) padded to 32 bytes — contiguous,
@@ -171,17 +172,7 @@ impl Primitive for CurlSlopeForce3D {
         };
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // `gradient` is a 3D CoincidentTexel input (own-voxel integer
-            // textureLoad, no sampler). Generated kernel binds uniform(0)/tex(1)/
-            // dst(2). curl_slope_force_3d.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.swirl_force_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.swirl_force_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = CurlSlope3DUniforms {
             vol_res,

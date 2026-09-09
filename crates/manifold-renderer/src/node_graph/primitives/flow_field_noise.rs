@@ -13,6 +13,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Output-resolution options. The flow field is low-frequency, so it
 /// tolerates being generated at reduced resolution and sampled back
@@ -151,18 +152,7 @@ impl Primitive for FlowFieldNoise {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Source generator: uniform(0)/dst(1). The body reads time/z_scale/
-            // warp_scale; the `resolution` param (output-size control, handled
-            // Rust-side) maps to the uniform's pad slot and is ignored by the body.
-            // flow_field_noise.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.flow_field_noise standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.flow_field_noise",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = FlowFieldUniforms {
             time,

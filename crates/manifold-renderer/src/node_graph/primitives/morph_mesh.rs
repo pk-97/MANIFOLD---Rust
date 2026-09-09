@@ -18,6 +18,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `t` param (f32), then the derived
 /// `weights_len` (u32), then the codegen-injected `dispatch_count`, padded
@@ -126,19 +127,7 @@ impl Primitive for MorphMesh {
         let weights_len = weights_wired.map(|buf| (buf.size / 4) as u32).unwrap_or(0);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (design decided #10): the runtime kernel is
-            // generated from `wgsl_body` so this atom stays pointwise/fusable
-            // in the graph compiler. morph_mesh.wgsl is retained only as the
-            // gpu_tests parity oracle. Bindings: uniform(0), buf_in(1),
-            // buf_b(2), buf_weights(3), buf_out(4).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.morph_mesh standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.morph_mesh",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = MorphUniforms {
             t,

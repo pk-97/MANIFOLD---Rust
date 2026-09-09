@@ -16,6 +16,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const REMAP_WRAP_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];
 pub const REMAP_FIELD_MODES: &[&str] = &["Absolute", "Relative"];
@@ -94,20 +95,7 @@ impl Primitive for Remap {
         let (width, height) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: the generated kernel binds the two textures
-            // consecutively (source, uv_field) then the sampler, so the binding
-            // set below is reordered to match (the hand remap.wgsl interleaved
-            // the sampler between them). `source` is a Gather input — the body
-            // samples it at a computed coord. remap.wgsl is the parity oracle.
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.remap standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.remap",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

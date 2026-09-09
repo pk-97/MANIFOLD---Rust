@@ -38,6 +38,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`amplitude`,
 /// `modulator_gain`, `z`, `noise_scale` f32, `active_count` Int → i32), then the
@@ -190,16 +191,7 @@ impl Primitive for SimplexNoiseForceAtParticles {
         let has_modulator: u32 = if modulator_wire.is_some() { 1 } else { 0 };
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // COINCIDENT in/particles + OPTIONAL Texture2D modulator + use-flag).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.turbulence standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.turbulence",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

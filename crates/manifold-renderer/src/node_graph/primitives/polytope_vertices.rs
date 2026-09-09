@@ -34,6 +34,7 @@ use crate::generators::mesh_common::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SH
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `shape` Enum param (u32) then the
 /// codegen-injected `dispatch_count` (= vertex capacity, the guard), padded to
@@ -138,17 +139,7 @@ impl Primitive for PolytopeVertices {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer source
-            // path; per-shape vertex tables inlined). polytope_vertices.wgsl is
-            // the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.platonic_solid_points standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.platonic_solid_points",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = PolytopeUniforms {
             shape,

@@ -16,6 +16,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const UV_STRIP_CLAMP_MODES: &[&str] = &["Horiz", "Vert", "Both"];
 
@@ -86,16 +87,7 @@ impl Primitive for UvStripClamp {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Source generator: 0 texture inputs, output at binding 1. Generated
-            // kernel binds uniform(0)/dst(1). uv_strip_clamp.wgsl is the oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.edge_stretch standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.edge_stretch",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = UvStripClampUniforms {
             width,

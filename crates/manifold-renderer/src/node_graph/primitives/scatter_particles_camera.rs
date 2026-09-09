@@ -28,6 +28,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const SCATTER_CAMERA_MODES: &[&str] = &["Perspective", "Orthographic"];
 
@@ -216,19 +217,7 @@ impl Primitive for ScatterParticlesCamera {
         };
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer ATOMIC
-            // SCATTER with camera projection — the body projects each particle
-            // and `atomicAdd`s into `buf_accum`; the camera basis arrives as four
-            // derived vec3 uniforms). The shared fluid_scatter_3d.wgsl
-            // splat_projected is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.draw_particles_camera standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.draw_particles_camera",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         // Generated binding order follows INPUTS: uniform(0), particles(1, read),
         // accum(2, atomic read_write). The hand splat_projected bound them as

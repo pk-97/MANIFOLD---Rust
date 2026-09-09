@@ -33,6 +33,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use std::borrow::Cow;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`strength`
 /// f32, `active_count` Int → i32), then the derived `frame_count` (u32), then the
@@ -159,16 +160,7 @@ impl Primitive for AntiClumpParticles {
         let has_modulator: u32 = if modulator_wire.is_some() { 1 } else { 0 };
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident + OPTIONAL Texture2D + derived frame_count + use-flag).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.anti_clump_particles standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.anti_clump_particles",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

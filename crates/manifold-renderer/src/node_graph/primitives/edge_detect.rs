@@ -23,6 +23,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 crate::primitive! {
     name: EdgeDetect,
@@ -98,18 +99,7 @@ impl Primitive for EdgeDetect {
         let texel_size_y = 1.0 / height as f32;
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: `in` is a Gather input (Sobel 3×3 neighbourhood).
-            // Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3); the body
-            // recovers the texel step from `dims` so it ignores the uniform's
-            // texel_size_x/y fields. edge_detect.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.edge_detect standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.edge_detect",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

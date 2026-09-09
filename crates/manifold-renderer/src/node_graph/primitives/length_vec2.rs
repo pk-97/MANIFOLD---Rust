@@ -9,6 +9,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 crate::primitive! {
     name: LengthVec2,
@@ -47,16 +48,7 @@ impl Primitive for LengthVec2 {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Paramless Pointwise. Generated kernel binds tex(0)/samp(1)/dst(2).
-            // length_vec2.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.vector_length standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.vector_length",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));

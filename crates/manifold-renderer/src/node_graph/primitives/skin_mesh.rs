@@ -33,6 +33,7 @@ use crate::generators::mesh_common::{JointMatrix, MeshVertex, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `joint_count` param (Int -> i32),
 /// then the derived `joints_len`/`weights_len`/`matrices_len` (u32 each),
@@ -141,14 +142,7 @@ impl Primitive for SkinMesh {
         let matrices_len = (matrices_buf.size / matrix_size) as u32;
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.skin_mesh standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.skin_mesh",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = SkinMeshUniforms {
             joint_count,

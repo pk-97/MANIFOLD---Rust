@@ -18,6 +18,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`src_cols`,
 /// `src_rows`, both Int → i32) then the codegen-injected `dispatch_count`
@@ -116,17 +117,7 @@ impl Primitive for TriangulateGrid {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer GATHER
-            // path — the body indexes the input grid global). triangulate_grid.wgsl
-            // is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.make_triangles standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.make_triangles",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = TriangulateUniforms {
             src_cols: src_cols as i32,

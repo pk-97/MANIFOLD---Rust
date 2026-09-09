@@ -79,6 +79,7 @@ use crate::node_graph::camera::{Camera, CameraMode};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -258,18 +259,7 @@ impl Primitive for SsaoGtao {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from `wgsl_body` (GatherTexel —
-            // no sampler; generated bindings are uniform(0)/depth(1)/dst(2)).
-            // ssao_gtao.wgsl is the parity oracle.
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.ssao_gtao standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.ssao_gtao",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = SsaoGtaoUniforms {
             radius,

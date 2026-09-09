@@ -16,6 +16,7 @@ use manifold_gpu::{GpuAddressMode, GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const TEXTURE_ADVECT_BOUNDARIES: &[&str] = &["Repeat", "Clamp"];
 
@@ -105,18 +106,7 @@ impl Primitive for TextureAdvect {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // `in` is a Gather input (sampled at the advected UV), `velocity` is
-            // coincident. Generated kernel binds uniform(0)/in(1)/velocity(2)/
-            // samp(3)/dst(4); the body ignores the `boundary` param (the sampler
-            // below carries the wrap mode). texture_advect.wgsl is the oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.texture_advect standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.texture_advect",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler_repeat = self.sampler_repeat.get_or_insert_with(|| {
             gpu.device.create_sampler(&GpuSamplerDesc {
                 address_mode_u: GpuAddressMode::Repeat,

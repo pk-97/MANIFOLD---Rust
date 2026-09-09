@@ -17,6 +17,7 @@ use manifold_gpu::{GpuAddressMode, GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const BLUR_3D_MODES: &[&str] = &["Scalar (density)", "Vector (force field)"];
 pub const BLUR_3D_AXES: &[&str] = &["X", "Y", "Z"];
@@ -121,14 +122,7 @@ impl Primitive for Blur3DSeparable {
         // generated kernel branches on a runtime `mode` (scalar vs vector) in one
         // kernel and binds uniform(0)/tex(1)/samp(2)/dst(3). fluid_blur_3d.wgsl's
         // two entry points are the parity oracle.
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.blur_3d standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.blur_3d",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         // Repeat, not clamp: the sim volume is toroidal, and every other volume
         // stage wraps (particle containment, the 3D splat, the central-diff
         // gradient). The legacy generator built this exact Repeat sampler; a

@@ -11,6 +11,7 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 crate::primitive! {
     name: UvField,
@@ -46,18 +47,7 @@ impl Primitive for UvField {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: paramless SOURCE atom — the generated kernel binds
-            // only its output at binding 0 (no uniform, no input, no sampler),
-            // matching the binding below. uv_field.wgsl is the parity oracle.
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.uv_field standalone codegen");
-            gpu.device.create_compute_pipeline(
-                &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.uv_field",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         gpu.native_enc.dispatch_compute(
             pipeline,

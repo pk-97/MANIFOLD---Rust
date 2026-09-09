@@ -21,6 +21,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Out-of-bounds policy labels for the `boundary` enum.
 /// `0 = Wrap` (toroidal); `1 = Discard` (skip the particle).
@@ -149,18 +150,7 @@ impl Primitive for ScatterParticles {
         let active_count = active_count.min(particle_capacity);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline_splat = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer
-            // ATOMIC SCATTER — the body computes each particle's target cell and
-            // `atomicAdd`s into the `buf_accum` accumulator; width/height are
-            // derived uniforms). scatter_particles.wgsl is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.draw_particles standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.draw_particles.splat",
-            )
-        });
+        let pipeline_splat = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = ScatterUniforms {
             active_count: active_count as i32,

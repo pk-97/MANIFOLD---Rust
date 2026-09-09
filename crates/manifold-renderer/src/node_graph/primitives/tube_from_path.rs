@@ -21,6 +21,7 @@ use crate::generators::mesh_common::{CurvePoint, MeshVertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`radius`
 /// f32, `sides` Int→i32), then the derived `path_len`/`lift_len`/
@@ -144,20 +145,7 @@ impl Primitive for TubeFromPath {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (design decided #10): the runtime kernel is
-            // generated from `wgsl_body` so this atom stays pointwise/fusable
-            // in the graph compiler. tube_from_path.wgsl is retained only as
-            // the gpu_tests parity oracle. Bindings: uniform(0),
-            // buf_path(1, gather), buf_lift(2, gather), buf_radius_scale(3,
-            // gather), buf_out(4).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.tube_from_path standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.tube_from_path",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = TubeFromPathUniforms {
             radius,

@@ -17,6 +17,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 const TAPER_AXES: &[&str] = &["X", "Y", "Z"];
 
@@ -147,19 +148,7 @@ impl Primitive for TaperMesh {
         let weights_len = weights_wired.map(|b| (b.size / 4) as u32).unwrap_or(0);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (design decided #10): the runtime kernel is
-            // generated from `wgsl_body` so this atom stays pointwise/fusable
-            // in the graph compiler. taper_mesh.wgsl is retained only as the
-            // gpu_tests parity oracle. Bindings: uniform(0), buf_in(1),
-            // buf_weights(2), buf_out(3).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.taper_mesh standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.taper_mesh",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = TaperUniforms {
             axis,

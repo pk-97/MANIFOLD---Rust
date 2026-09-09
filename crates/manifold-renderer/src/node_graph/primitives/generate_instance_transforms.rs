@@ -16,6 +16,7 @@ use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 pub const INSTANCE_LAYOUTS: &[&str] = &["Grid", "Ring", "Spiral", "Random"];
 
@@ -209,17 +210,7 @@ impl Primitive for GenerateInstanceTransforms {
         let active_count = active_count.min(capacity);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: kernel generated from the `wgsl_body` (buffer source
-            // path; self-contained wang_hash). generate_instance_transforms.wgsl
-            // is the parity oracle.
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.arrange_copies standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.arrange_copies",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = InstanceUniforms {
             max_capacity,

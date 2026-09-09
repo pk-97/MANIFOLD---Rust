@@ -14,6 +14,7 @@ use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout (NOT the hand `neighbor_smooth.wgsl`
 /// order): scalar params in PARAMS order — `grid_size` (Int → i32),
@@ -111,16 +112,7 @@ impl Primitive for NeighborSmooth {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Single-source: the kernel is generated from the `wgsl_body` (buffer
-            // standalone codegen). Bindings match: uniform(0), buf_in(1), buf_out(2).
-            gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.neighbor_smooth standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
-                "node.neighbor_smooth",
-            )
-        });
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = SmoothUniforms {
             grid_size: grid_size as i32,
