@@ -655,10 +655,11 @@ fn audio_solo_does_not_suppress_video() {
     );
 }
 
-/// Boundary-ownership regression: a clip ending exactly at the playhead still
-/// renders when stopped. Pre-fix the half-open activity test excluded it.
+/// Exact boundary rule: the playhead on a lone clip's end edge shows the gap
+/// (nothing on the layer), not the clip's last frame. The start edge owns the
+/// clip; the end edge belongs to whatever follows.
 #[test]
-fn stopped_engine_keeps_clip_active_at_end_boundary() {
+fn stopped_engine_shows_gap_at_lone_end_boundary() {
     let mut project = manifold_core::project::Project::default();
     let mut layer = manifold_core::layer::Layer::new(
         "Test".to_string(),
@@ -685,13 +686,50 @@ fn stopped_engine_keeps_clip_active_at_end_boundary() {
     let result = engine.tick(ctx);
 
     assert!(
-        result.ready_clips.iter().any(|c| c.layer_index == 0),
-        "clip ending exactly at playhead must still be ready"
+        !result.ready_clips.iter().any(|c| c.layer_index == 0),
+        "playhead exactly on a lone end edge renders the gap, not the clip"
     );
 }
 
-/// Boundary-ownership regression: a clip starting exactly at the playhead
-/// renders when stopped.
+/// The 20ms min-remaining warm-up guard applies to live playback only: parked
+/// one frame before a clip's end (sub-20ms remaining at 120bpm/60fps), the
+/// stopped engine still starts the clip so its last frame can be inspected.
+#[test]
+fn stopped_engine_starts_clip_with_sub_frame_remaining() {
+    let mut project = manifold_core::project::Project::default();
+    let mut layer = manifold_core::layer::Layer::new(
+        "Test".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+        manifold_core::Beats::ZERO,
+        manifold_core::Beats(8.0),
+    ));
+    project.timeline.layers.push(layer);
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    // One 60fps frame (1/120s = 1/240 beat at 120bpm) before the end edge.
+    engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0 - 1.0 / 60.0));
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    assert!(
+        result.ready_clips.iter().any(|c| c.layer_index == 0),
+        "stopped engine must start a clip with sub-frame remaining lifetime"
+    );
+}
+
+/// Exact boundary rule: a clip starting exactly at the playhead renders when
+/// stopped — the start edge owns the clip.
 #[test]
 fn stopped_engine_keeps_clip_active_at_start_boundary() {
     let mut project = manifold_core::project::Project::default();
@@ -725,8 +763,7 @@ fn stopped_engine_keeps_clip_active_at_start_boundary() {
     );
 }
 
-/// Boundary-ownership regression: at an adjacent boundary, the later-starting
-/// clip wins.
+/// Exact boundary rule: at an adjacent boundary, the incoming clip renders.
 #[test]
 fn stopped_engine_prefers_later_clip_at_adjacent_boundary() {
     let mut project = manifold_core::project::Project::default();

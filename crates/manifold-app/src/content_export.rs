@@ -214,8 +214,8 @@ impl ContentThread {
         };
         let bpm = project.settings.bpm;
         let (content_start, content_end) = project.timeline.content_range_beats();
-        let content_start = content_start.as_f32();
-        let content_end = content_end.as_f32();
+        let content_start = content_start.0;
+        let content_end = content_end.0;
 
         // Use config beats if set, otherwise use content range
         let start_beat = if config.start_beat > 0.0 {
@@ -248,11 +248,7 @@ impl ContentThread {
         // Derive sections from timeline markers. Empty when the setting is off or
         // no markers fall inside the range → single-export path below.
         let sections: Vec<(Beats, Beats, String)> = if base_config.split_at_markers {
-            derive_sections(
-                &project.timeline,
-                Beats::from_f32(start_beat),
-                Beats::from_f32(end_beat),
-            )
+            derive_sections(&project.timeline, Beats(start_beat), Beats(end_beat))
         } else {
             Vec::new()
         };
@@ -279,12 +275,12 @@ impl ContentThread {
             for (i, ((start, end, _name), path)) in sections.iter().zip(paths.iter()).enumerate() {
                 let mut sc = base_config.clone();
                 sc.output_path = path.clone();
-                sc.start_beat = start.as_f32();
-                sc.end_beat = end.as_f32();
+                sc.start_beat = start.0;
+                sc.end_beat = end.0;
                 // D8: audio per section uses the existing mux path — each
                 // section's audio_start_beat is its start, which the muxer
                 // turns into a zero-offset slice of the master audio.
-                sc.audio_start_beat = start.as_f32();
+                sc.audio_start_beat = start.0;
                 let prefix = format!("section {} of {}", i + 1, section_count);
                 let aborted = self.run_export_section(sc, bpm, Some(&prefix), cmd_rx, state_tx);
                 if aborted {
@@ -350,9 +346,9 @@ impl ContentThread {
         // Calculate timing
         let mut tempo_map = project.tempo_map.clone();
         let start_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats::from_f32(start_beat), bpm);
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(start_beat), bpm);
         let end_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats::from_f32(end_beat), bpm);
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(end_beat), bpm);
         let duration = end_seconds - start_seconds;
         let total_frames = (duration * export_config.fps).0.round() as u32;
         let frame_dt = 1.0 / export_config.fps as f64;
@@ -396,8 +392,8 @@ impl ContentThread {
         // borrows its buffers (Rust drops locals in reverse declaration order).
         let export_audio = match manifold_playback::audio_mixdown::render_export_audio(
             project,
-            Beats::from_f32(start_beat),
-            Beats::from_f32(end_beat),
+            Beats(start_beat),
+            Beats(end_beat),
             bpm,
             &mut tempo_map,
             &tapped_layers,
@@ -495,7 +491,7 @@ impl ContentThread {
         // by the caller, before the section loop).
         let start_time = self
             .engine
-            .beat_to_timeline_time(Beats::from_f32(start_beat));
+            .beat_to_timeline_time(Beats(start_beat));
         self.engine.seek_to(start_time);
         self.engine.play();
 
@@ -545,7 +541,10 @@ impl ContentThread {
                     realtime_now: Seconds::ZERO,
                     pre_render_dt: Seconds(frame_dt),
                     frame_count: u64::MAX,
-                    export_fixed_dt: Seconds(frame_dt),
+                    // Zero: warm-up uses the accumulating clock. The absolute
+                    // export clock (origin + frame_count * dt) starts at the
+                    // frame loop, after the re-seek below.
+                    export_fixed_dt: Seconds::ZERO,
                 };
                 let warmup_result = self.engine.tick(warmup_ctx);
                 self.engine.reclaim_tick_result(warmup_result);
@@ -564,11 +563,15 @@ impl ContentThread {
             // Re-seek to start — warmup ticks advanced the engine
             let start_time = self
                 .engine
-                .beat_to_timeline_time(Beats::from_f32(start_beat));
+                .beat_to_timeline_time(Beats(start_beat));
             self.engine.seek_to(start_time);
         }
 
         // 5. Export frame loop.
+        //    The engine is parked at the export start; pin that as the clock
+        //    origin so each frame's tick sets time absolutely
+        //    (origin + frame_idx * frame_dt) instead of accumulating dt.
+        self.engine.set_export_origin(start_time);
         //    Each iteration is wrapped in an autoreleasepool to drain Metal's
         //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;
@@ -700,10 +703,17 @@ impl ContentThread {
         offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<ExportFrameFailure> {
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
+        // Frame k samples the timeline at export_start + k * frame_dt via the
+        // engine's absolute export clock (origin pinned before the loop), so
+        // frame 0 renders the exact export start and the export spans
+        // [start, end) like the live compositor. dt-driven effect state does
+        // not integrate on the first frame — it renders the state at the
+        // export start, then advances one frame per output frame.
+        let this_dt = if frame_idx == 0 { 0.0 } else { frame_dt };
         let ctx = TickContext {
-            dt_seconds: Seconds(frame_dt),
+            dt_seconds: Seconds(this_dt),
             realtime_now: Seconds(frame_idx as f64 * frame_dt),
-            pre_render_dt: Seconds(frame_dt),
+            pre_render_dt: Seconds(this_dt),
             frame_count: frame_idx as u64,
             export_fixed_dt: Seconds(frame_dt),
         };
@@ -733,7 +743,7 @@ impl ContentThread {
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            frame_dt,
+            this_dt,
             frame_idx as u64,
             true,
             self.editing_service.data_version(),

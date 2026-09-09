@@ -13,8 +13,8 @@ use crate::headless_harness::headless_content_thread;
 struct ExportReproArgs {
     project: PathBuf,
     output: PathBuf,
-    start: f32,
-    end: f32,
+    start: f64,
+    end: f64,
     width: u32,
     height: u32,
     fps: f32,
@@ -40,6 +40,11 @@ fn parse_args(args: &[String]) -> Result<ExportReproArgs, String> {
             .parse()
             .map_err(|_| format!("{flag} must be a number"))
     };
+    let parse_f64 = |flag: &str| -> Result<f64, String> {
+        value(flag)?
+            .parse()
+            .map_err(|_| format!("{flag} must be a number"))
+    };
     let parse_u32 = |flag: &str| -> Result<u32, String> {
         value(flag)?
             .parse()
@@ -48,8 +53,8 @@ fn parse_args(args: &[String]) -> Result<ExportReproArgs, String> {
     let result = ExportReproArgs {
         project,
         output,
-        start: parse("--start")?,
-        end: parse("--end")?,
+        start: parse_f64("--start")?,
+        end: parse_f64("--end")?,
         width: parse_u32("--width")?,
         height: parse_u32("--height")?,
         fps: parse("--fps")?,

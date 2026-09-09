@@ -4144,7 +4144,6 @@ mod occlusion_tests {
             is_looping: false,
             is_video: false,
             is_muted: false,
-            is_boundary_owned: false,
             layer_id: manifold_core::LayerId::new(format!("layer-{layer_index}")),
         }
     }
@@ -4283,7 +4282,6 @@ mod render_skip_tests {
             is_looping: false,
             is_video: false,
             is_muted: false,
-            is_boundary_owned: false,
             layer_id: manifold_core::LayerId::new(format!("layer-{layer_index}")),
         }
     }
