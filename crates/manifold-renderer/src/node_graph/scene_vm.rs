@@ -405,7 +405,9 @@ pub enum CameraVm {
     Free(Box<FreeCameraRow>),
     LookAt(Box<LookAtCameraRow>),
     Loop(Box<LoopCameraRow>),
-    Custom { node_doc_id: u32 },
+    /// An uncurated producer (including a modifier switch) can still feed
+    /// a recognized downstream lens and cinematic tail.
+    Custom { node_doc_id: u32, lens: Option<LensRow> },
 }
 
 /// Payload for [`EnvironmentVm::Importer`] (boxed — see [`LightRow`]).
@@ -1103,7 +1105,7 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
                     node_id = next;
                     continue;
                 }
-                None => return CameraVm::Custom { node_doc_id: node.id },
+                None => return CameraVm::Custom { node_doc_id: node.id, lens: trace_lens(level, node.id) },
             }
         }
         break;
@@ -1123,7 +1125,7 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
         t if t == LOOP_CAMERA_TYPE_ID => {
             CameraVm::Loop(Box::new(LoopCameraRow { node_doc_id: node.id, lens }))
         }
-        _ => CameraVm::Custom { node_doc_id: node.id },
+        _ => CameraVm::Custom { node_doc_id: node.id, lens },
     }
 }
 
@@ -1905,7 +1907,33 @@ mod tests {
             vec![wire(1, "out", 10, "camera"), wire(10, "color", 20, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
-        assert!(matches!(vm.camera, CameraVm::Custom { node_doc_id: 1 }));
+        assert!(matches!(vm.camera, CameraVm::Custom { node_doc_id: 1, .. }));
+    }
+
+    #[test]
+    fn camera_switch_preserves_shared_lens_and_tail_for_both_selections() {
+        for select in [0, 1] {
+            let mut d = importer_shaped_def();
+            d.nodes.extend([
+                with_param(node(30, "node.camera_switch", None), "select", SerializedParamValue::Enum { value: select }),
+                node(31, LOOP_CAMERA_TYPE_ID, None),
+                node(32, MOTION_BLUR_TYPE_ID, None),
+                node(33, BOKEH_GATHER_TYPE_ID, None),
+            ]);
+            d.wires.retain(|w| !(w.to_node == 2 && w.to_port == "camera"));
+            d.wires.extend([
+                wire(1, "out", 30, "a"),
+                wire(31, "out", 30, "b"),
+                wire(30, "out", 2, "camera"),
+            ]);
+            let vm = SceneVm::from_def(&d).unwrap();
+            let CameraVm::Custom { node_doc_id: 30, lens: Some(lens) } = vm.camera else {
+                panic!("switch must retain shared lens: {:?}", vm.camera);
+            };
+            assert_eq!(lens.node_doc_id, 2);
+            assert_eq!(lens.motion_blur_doc_id, Some(32));
+            assert_eq!(lens.bokeh_doc_id, Some(33));
+        }
     }
 
     /// BUG-194: a `node.gltf_mesh_source` with a known `source_vertex_count`

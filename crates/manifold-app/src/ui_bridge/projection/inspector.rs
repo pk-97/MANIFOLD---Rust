@@ -810,13 +810,13 @@ pub fn sync_inspector_data(
                             // BEFORE the consuming matches below (reads the
                             // VM's own case analysis, never re-derives graph
                             // topology).
-                            let camera_sections = {
+                            let (camera_sections, camera_param_doc_ids) = {
                                 use manifold_renderer::node_graph::scene_vm::CameraVm;
                                 let mut ids = match &vm.camera {
                                     CameraVm::Orbit(c) => vec![c.node_doc_id],
                                     CameraVm::Free(c) => vec![c.node_doc_id],
                                     CameraVm::LookAt(c) => vec![c.node_doc_id],
-                                    CameraVm::Loop(c) => vec![c.node_doc_id],
+                                    CameraVm::Loop(_) => Vec::new(),
                                     CameraVm::Custom { .. } | CameraVm::None => Vec::new(),
                                 };
                                 let lens_id = match &vm.camera {
@@ -824,7 +824,8 @@ pub fn sync_inspector_data(
                                     CameraVm::Free(c) => c.lens.as_ref().map(|l| l.node_doc_id),
                                     CameraVm::LookAt(c) => c.lens.as_ref().map(|l| l.node_doc_id),
                                     CameraVm::Loop(c) => c.lens.as_ref().map(|l| l.node_doc_id),
-                                    CameraVm::Custom { .. } | CameraVm::None => None,
+                                    CameraVm::Custom { lens, .. } => lens.as_ref().map(|l| l.node_doc_id),
+                                    CameraVm::None => None,
                                 };
                                 if let Some(id) = lens_id {
                                     ids.push(id);
@@ -838,7 +839,8 @@ pub fn sync_inspector_data(
                                     CameraVm::Free(c) => c.lens.as_ref(),
                                     CameraVm::LookAt(c) => c.lens.as_ref(),
                                     CameraVm::Loop(c) => c.lens.as_ref(),
-                                    CameraVm::Custom { .. } | CameraVm::None => None,
+                                    CameraVm::Custom { lens, .. } => lens.as_ref(),
+                                    CameraVm::None => None,
                                 };
                                 if let Some(lens) = tail_ids {
                                     if let Some(id) = lens.motion_blur_doc_id {
@@ -848,7 +850,9 @@ pub fn sync_inspector_data(
                                         ids.push(id);
                                     }
                                 }
-                                sections_for_doc_ids(def.as_ref(), &ids)
+                                let sections = sections_for_doc_ids(def.as_ref(), &ids);
+                                let shared_only = matches!(vm.camera, CameraVm::Custom { .. } | CameraVm::Loop(_));
+                                (sections, shared_only.then_some(ids))
                             };
                             let world_sections = {
                                 use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, EnvironmentVm};
@@ -1019,6 +1023,7 @@ pub fn sync_inspector_data(
                                 lights,
                                 camera,
                                 camera_sections,
+                                camera_param_doc_ids,
                                 world_sections,
                                 // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
                                 // Loop's panel surface is deleted — the loop

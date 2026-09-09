@@ -19,6 +19,8 @@
 //! handling) — never a new mutation path. No direct project mutation and no
 //! shared-lock wrapper types appear anywhere in this file (section 4 negative gate).
 
+mod camera;
+
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
@@ -545,6 +547,10 @@ pub struct SceneSetupVm {
     /// P2 slice 2a: the REAL P1 section string(s) covering the camera family
     /// (the camera atom + its lens, if wired) — see `ObjectKnownRow::sections`.
     pub camera_sections: Vec<String>,
+    /// Custom/loop cameras expose only their shared lens and cinematic tail.
+    /// Ownership disambiguates rows sharing the importer's "Camera" section.
+    /// None preserves the full section for ordinary camera sources.
+    pub camera_param_doc_ids: Option<Vec<u32>>,
     /// P2 slice 2a: the REAL P1 section string(s) covering World (the
     /// environment/bake node + the atmosphere/fog node, whichever are
     /// wired) — see `ObjectKnownRow::sections`.
@@ -1699,8 +1705,19 @@ impl ScenePanel {
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
-        mut cy: f32,
+        cy: f32,
         sections: &[String],
+    ) -> f32 {
+        self.build_filtered_properties_owned(tree, inner_x, inner_w, cy, (sections, None))
+    }
+
+    fn build_filtered_properties_owned(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        (sections, owner_ids): (&[String], Option<&[u32]>),
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
@@ -1721,7 +1738,13 @@ impl ScenePanel {
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
-                if p.spec.section.as_deref() == Some(section.as_str()) && !retained.contains(&i) {
+                // Scene exposure IDs are stamped as {owner_doc_id}_{param}.
+                let owned = owner_ids.is_none_or(|ids| {
+                    p.id.as_ref().split('_').next()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .is_some_and(|id| ids.contains(&id))
+                });
+                if p.spec.section.as_deref() == Some(section.as_str()) && owned && !retained.contains(&i) {
                     retained.push(i);
                 }
             }
@@ -2277,33 +2300,6 @@ impl ScenePanel {
             cy += ROW_H;
         }
         cy
-    }
-
-    /// P2 slice 2a: replaced the per-family Orbit/Free/LookAt row lists
-    /// (plus the separate Lens sub-section) with one `build_filtered_
-    /// properties` pass over `vm.camera_sections` (the camera atom's REAL
-    /// P1 section, plus the lens's if wired — see
-    /// `SceneSetupVm::camera_sections`'s doc comment). Custom/None fallback
-    /// messaging (no camera vocabulary matched, or the port is unwired)
-    /// stays panel-shaped, unchanged.
-    fn build_camera_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, cy: f32, vm: &SceneSetupVm) -> f32 {
-        match &vm.camera {
-            CameraRowVm::Orbit(_) | CameraRowVm::Free(_) | CameraRowVm::LookAt(_) => {
-                self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections)
-            }
-            CameraRowVm::Custom => {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Custom (edit in graph)", label_style());
-                cy + ROW_H
-            }
-            CameraRowVm::None => {
-                // `render_scene`'s `camera` port is REQUIRED (unlike
-                // envmap/atmosphere) — every shipped path (importer,
-                // Scene Starter) always wires one, so there is no "Add
-                // camera" action in v1 (D3).
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No camera wired", label_style());
-                cy + ROW_H
-            }
-        }
     }
 
     /// P2 slice 2a: STRUCTURAL chrome only — display name + up/down/remove.
@@ -3057,7 +3053,7 @@ mod tests {
             objects: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
-            camera_sections: Vec::new(), world_sections: Vec::new(),
+            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         })));
         let mut tree = UITree::new();
@@ -3154,7 +3150,7 @@ mod tests {
                     exposure_ev: mrow(RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false, exposed: false }),
                 }),
             })),
-            camera_sections: Vec::new(), world_sections: Vec::new(),
+            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         }
     }
@@ -3770,7 +3766,7 @@ mod tests {
     /// fixture the scene type-in / fine-scrub tests need. `azalea_shaped_vm`'s
     /// `world_sections` is empty, so it can't exercise the unified properties
     /// card's rows.
-    fn world_transform_vm() -> (SceneSetupVm, ParamSurface) {
+    pub(super) fn world_transform_vm() -> (SceneSetupVm, ParamSurface) {
         let mut vm = azalea_shaped_vm();
         vm.world_sections = vec!["Transform".to_string()];
         let surface = ParamSurface {
