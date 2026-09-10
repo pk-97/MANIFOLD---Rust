@@ -216,6 +216,21 @@ fn warmup_simulation_frame(frame_id: u64) -> crate::node_graph::substeps::Simula
 }
 
 impl GeneratorRenderer {
+    /// Return the first sticky runtime fatal from a live generator. Export
+    /// uses this after rendering and before handing the frame to the encoder.
+    pub fn runtime_fatal_error(&self) -> Option<String> {
+        let current = self.simulation_frame?;
+        self.layer_generators
+            .values()
+            .filter(|state| {
+                state
+                    .generator
+                    .last_simulation_frame()
+                    .is_some_and(|frame| frame.frame_id == current.frame_id && frame.epoch == current.epoch)
+            })
+            .find_map(|state| state.generator.runtime_fatal_error().map(str::to_owned))
+    }
+
     pub fn new(
         device: Arc<GpuDevice>,
         width: u32,

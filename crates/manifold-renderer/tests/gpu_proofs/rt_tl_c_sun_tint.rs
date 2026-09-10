@@ -252,7 +252,7 @@ fn run_tlc_fixture(
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
-        &objects,
+        objects,
         &final_alpha_textures,
         &depth_tex,
         &out_sv,

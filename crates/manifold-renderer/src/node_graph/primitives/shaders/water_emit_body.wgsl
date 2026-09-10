@@ -25,6 +25,8 @@ fn body(
     grid_spacing: f32,
     rest_density: f32,
     rate: f32,
+    repeat: f32,
+    velocity_y: f32,
     first_free: i32,
     birth_lo: u32,
     birth_hi: u32,
@@ -44,17 +46,21 @@ fn body(
     let nx = u32(floor((emit_max_x - emit_min_x) / spacing + 0.5));
     let ny = u32(floor((emit_max_y - emit_min_y) / spacing + 0.5));
     let nz = u32(floor((emit_max_z - emit_min_z) / spacing + 0.5));
+    if (nx == 0u || ny == 0u || nz == 0u) {
+        return out;
+    }
     // Row-major lattice, cell-centred — the same layout node.seed_water uses,
     // so emitted water continues the lattice seamlessly.
-    let ix = ordinal % nx;
-    let iy = (ordinal / nx) % ny;
-    let iz = ordinal / (nx * ny);
+    let lattice_ordinal = select(ordinal, ordinal % (nx * ny * nz), repeat > 0.5);
+    let ix = lattice_ordinal % nx;
+    let iy = (lattice_ordinal / nx) % ny;
+    let iz = lattice_ordinal / (nx * ny);
     let pos = vec3<f32>(emit_min_x, emit_min_y, emit_min_z)
         + (vec3<f32>(f32(ix), f32(iy), f32(iz)) + vec3<f32>(0.5)) * spacing;
     let mass = rest_density * spacing * spacing * spacing; // S1 PARTICLE_MASS
     return Element(
         vec4<f32>(pos, mass),
-        vec4<f32>(0.0, 0.0, 0.0, rest_density),
+        vec4<f32>(0.0, velocity_y, 0.0, rest_density),
         vec4<f32>(0.0),
         vec4<f32>(0.0),
         vec4<f32>(0.0),

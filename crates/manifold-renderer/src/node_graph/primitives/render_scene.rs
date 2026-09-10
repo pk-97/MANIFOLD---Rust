@@ -843,6 +843,9 @@ pub struct RenderScene {
     /// unavailable" degradation, so a performer leaving `temporal_upscale`
     /// on on unsupported hardware doesn't spam the log every frame.
     rt_temporal_unavailable_logged: bool,
+    /// Once-per-transition diagnostic for the explicit raster fallback used
+    /// when a valid water scene requests ray tracing.
+    water_rt_fallback_logged: bool,
     /// Per-object-slot previous-frame `model` matrix (GBUFFER_DESIGN.md section 2
     /// D5, P2), indexed by object slot `n`. `None` at a slot means "no
     /// history yet" — the frame that finds `None` there seeds
@@ -1632,6 +1635,7 @@ impl RenderScene {
             denoise_gate_blocked_logged: false,
             rt_temporal_upscaler: None,
             rt_temporal_unavailable_logged: false,
+            water_rt_fallback_logged: false,
             prev_model: Vec::new(),
             prev_view_proj: None,
             prev_cam_state: None,
@@ -4602,7 +4606,16 @@ impl EffectNode for RenderScene {
         // (W0's `rt_enabled` ParamDef). Read once here, after jitter is
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
-        let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        let rt_requested = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        let rt_enabled = rt_requested && !has_water;
+        if has_water && rt_requested {
+            if !self.water_rt_fallback_logged {
+                log::warn!("node.render_scene: Water uses raster rendering; ray tracing is unavailable for water scenes");
+                self.water_rt_fallback_logged = true;
+            }
+        } else {
+            self.water_rt_fallback_logged = false;
+        }
         // RAYTRACING_DESIGN.md section 9 RD9 (T4): per-scene reflection toggle,
         // gated on rt_enabled — inert when RT is off entirely. Default ON
         // (Q3). T5 fine-tunes the spp/roughness-band constants.
@@ -5468,13 +5481,12 @@ impl EffectNode for RenderScene {
         // panic.
         if has_water
             && (has_transmission
-                || rt_enabled
                 || temporal_upscale
                 || wants_shafts_now
                 || opaque_scene_color_target_format != Some(manifold_gpu::GpuTextureFormat::Rgba16Float))
         {
             ctx.error(format!(
-                "node.render_scene: water is incompatible with this scene in V1 (section 7 explicit limits) — transmission/Blend objects ({has_transmission}), raytracing ({rt_enabled}), temporal upscaling ({temporal_upscale}), volumetric shafts ({wants_shafts_now}), non-Rgba16Float color output ({:?})",
+                "node.render_scene: water is incompatible with this scene in V1 (section 7 explicit limits) — transmission/Blend objects ({has_transmission}), temporal upscaling ({temporal_upscale}), volumetric shafts ({wants_shafts_now}), non-Rgba16Float color output ({:?})",
                 opaque_scene_color_target_format
             ));
             if let Some(target) = ctx.outputs.texture_2d("color") {

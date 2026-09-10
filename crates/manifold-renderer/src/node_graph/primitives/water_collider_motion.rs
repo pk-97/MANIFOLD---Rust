@@ -162,6 +162,18 @@ impl ColliderMotion {
         let speed_fault = speed > VELOCITY_BOUND;
         if speed_fault {
             self.speed_faulted = true;
+            // Unsupported motion must not advance the accepted collider. Keep
+            // the visible transform coherent with the particle acceptance.
+            return ColliderSample {
+                transform: Transform {
+                    pos: self.previous,
+                    rot_euler: target.rot_euler,
+                    scale: target.scale,
+                    billboard: target.billboard,
+                },
+                velocity: [0.0; 3],
+                speed_fault: true,
+            };
         }
 
         self.last_pos = pos;
@@ -254,7 +266,11 @@ impl Primitive for WaterColliderMotion {
                 .state
                 .as_deref_mut()
                 .expect("WaterColliderMotion requires a StateStore");
-            store.insert(node_id, owner_key, motion);
+            if let Some(existing) = store.get::<ColliderMotion>(node_id, owner_key) {
+                *existing = motion;
+            } else {
+                store.insert(node_id, owner_key, motion);
+            }
         }
         ctx.outputs.set_transform("transform", sample.transform);
         ctx.outputs
@@ -314,14 +330,14 @@ mod tests {
             assert!(!s.speed_fault);
         }
 
-        // Frame 2: stroke 0.2 m over 4 substeps of dt = 1/960 → frame speed
-        // 0.2/(4*DT) = 48 m/s, well above the 4 m/s bound (fault asserted in
-        // the speed test below; here we check the interpolation shape).
-        let stroke = stroke_frame(&mut motion, 0, 2, 1.2);
+        // Frame 2: use the proof bound so this fixture exercises interpolation
+        // without being rejected as unsupported collider motion.
+        let displacement = 4.0 * 4.0 * DT;
+        let stroke = stroke_frame(&mut motion, 0, 2, 1.0 + displacement);
         let expected_frac = [0.25f32, 0.5, 0.75, 1.0];
-        let expected_v = 0.2 / (4.0 * DT);
+        let expected_v = displacement / (4.0 * DT);
         for (i, s) in stroke.iter().enumerate() {
-            let expected_y = 1.0 + 0.2 * expected_frac[i];
+            let expected_y = 1.0 + displacement * expected_frac[i];
             assert!(
                 (s.transform.pos[1] - expected_y).abs() < 1.0e-6,
                 "substep {i}: pos {} != {expected_y}",
@@ -338,14 +354,14 @@ mod tests {
         }
         // The final accepted transform IS the target: the displayed cube and
         // the collision geometry share one wire.
-        assert_eq!(stroke[3].transform.pos[1], 1.2);
+        assert_eq!(stroke[3].transform.pos[1], 1.0 + displacement);
     }
 
     #[test]
     fn collider_motion_resets_without_artificial_launch() {
         let mut motion = ColliderMotion::default();
-        let _ = stroke_frame(&mut motion, 0, 1, 2.0);
-        assert!(motion.last_pos[1] > 1.9);
+        let _ = stroke_frame(&mut motion, 0, 1, 1.0 + 4.0 * 4.0 * DT);
+        assert!(motion.last_pos[1] > 1.0);
         // Reset: sim time regresses (a boundary reset frame schedules zero
         // ticks, so the regression is first visible on the next advancing
         // substep). The target has also moved (reappearance elsewhere).
@@ -362,7 +378,7 @@ mod tests {
     #[test]
     fn collider_motion_epoch_change_reinitialises() {
         let mut motion = ColliderMotion::default();
-        let _ = stroke_frame(&mut motion, 0, 1, 2.0);
+        let _ = stroke_frame(&mut motion, 0, 1, 1.0 + 4.0 * 4.0 * DT);
         // Seek: epoch bumps and the sim clock restarts below the last
         // observation. Both signals are present; either alone must suffice.
         let s = motion.sample(7, 100, true, DT, 0, 4, DT, target_at(1.0, 1.0, 1.0));
@@ -385,10 +401,16 @@ mod tests {
             "stroke at exactly the 4 m/s bound must not fault"
         );
         assert!(!ok[3].speed_fault);
-        // Fast stroke: 2 m in one frame → ~470 m/s.
+        // Fast stroke: 2 m in one frame → ~470 m/s. Every rejected sample
+        // keeps the last accepted transform and reports zero velocity.
+        let accepted_before = motion.last_pos;
         let bad = stroke_frame(&mut motion, 0, 3, 3.0);
-        assert!(bad[0].speed_fault, "fast stroke must fault");
-        assert!(bad[3].speed_fault);
+        for sample in &bad {
+            assert!(sample.speed_fault, "fast stroke must fault");
+            assert_eq!(sample.transform.pos, accepted_before);
+            assert_eq!(sample.velocity, [0.0; 3]);
+        }
+        assert_eq!(motion.last_pos, accepted_before);
     }
 
     #[test]

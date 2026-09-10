@@ -39,6 +39,33 @@ use manifold_renderer::node_graph::{ParamValue, PrimitiveRegistry};
 use manifold_renderer::preset_runtime::PresetRuntime;
 
 const WATER_JSON: &str = include_str!("../assets/generator-presets/WaterPrototype.json");
+const WATER_BASELINE_JSON: &str = include_str!("../assets/generator-presets/WaterPrototypeBaseline.json");
+
+#[test]
+fn water_presets_keep_stationary_camera_and_solver_geometry() {
+    for source in [WATER_JSON, WATER_BASELINE_JSON] {
+        let value: serde_json::Value = serde_json::from_str(source).expect("water preset JSON");
+        let nodes = value.get("nodes").and_then(serde_json::Value::as_array).expect("top-level nodes");
+        if source == WATER_JSON {
+            let water = nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String("water".into()))).expect("water group");
+            let water_nodes = water["group"]["nodes"].as_array().expect("water nodes");
+            let emit = water_nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String("emit".into()))).expect("emit node");
+            assert_eq!(emit["params"]["rate"]["value"].as_f64(), None, "rate is wired from the exposed pour control");
+            assert_eq!(emit["params"]["repeat"]["value"].as_f64(), Some(1.0));
+            assert_eq!(emit["params"]["velocity_y"]["value"].as_f64(), Some(-1.0));
+        }
+        let scene = nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String("scene".into()))).expect("scene group");
+        let group_nodes = scene.get("group").and_then(|g| g.get("nodes")).and_then(serde_json::Value::as_array).expect("scene nodes");
+        assert!(group_nodes.iter().all(|node| node.get("nodeId") != Some(&serde_json::Value::String("orbitSweep".into()))));
+        let camera = group_nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String("camera".into()))).expect("camera node");
+        assert_eq!(camera["params"]["orbit"]["value"].as_f64(), Some(0.698132));
+        for (id, x) in [("strip0Xform", -0.9375), ("strip1Xform", -0.5625), ("strip2Xform", -0.1875), ("strip3Xform", 0.1875), ("strip4Xform", 0.5625), ("strip5Xform", 0.9375)] {
+            let node = group_nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String(id.into()))).expect("floor transform");
+            assert_eq!(node["params"]["pos_x"]["value"].as_f64(), Some(x));
+            assert_eq!(node["params"]["pos_y"]["value"].as_f64(), Some(0.245));
+        }
+    }
+}
 
 /// The one-layer/one-clip generator project, in the exact shape
 /// `manifold-app`'s `generator_editor_fixture` builds it.

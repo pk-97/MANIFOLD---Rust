@@ -30,11 +30,13 @@
 //! stream is the faithful measurement.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::Seconds;
 use manifold_gpu::GpuDevice;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::headless_readback::readback_to_srgb_png;
 use manifold_renderer::node_graph::{PrimitiveRegistry, substeps::SimulationFrame};
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
@@ -51,6 +53,7 @@ struct Args {
     frames: u32,
     warmup: u32,
     overrides: Vec<(String, f32)>,
+    capture_dir: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -61,6 +64,7 @@ fn parse_args() -> Result<Args, String> {
         frames: 120,
         warmup: 8,
         overrides: Vec::new(),
+        capture_dir: None,
     };
     while let Some(flag) = argv.next() {
         let value = argv
@@ -87,6 +91,7 @@ fn parse_args() -> Result<Args, String> {
                 let v: f32 = v.parse().map_err(|e| format!("bad value for {id}: {e}"))?;
                 args.overrides.push((id.to_string(), v));
             }
+            "--capture-dir" => args.capture_dir = Some(PathBuf::from(value)),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -141,13 +146,17 @@ fn percentile(sorted: &[f64], pct: usize) -> f64 {
 }
 
 fn main() {
-    let args = match parse_args() {
+    let mut args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(2);
         }
     };
+    if args.capture_dir.is_some() {
+        args.width = 640;
+        args.height = 480;
+    }
 
     let json_path = format!("{GENERATOR_PRESETS_DIR}/WaterPrototype.json");
     let json = std::fs::read_to_string(&json_path)
@@ -193,6 +202,29 @@ fn main() {
         FORMAT,
         "water-stage-profile-target",
     );
+
+    // Opt-in production visual verification. This deliberately bypasses GPU
+    // timestamp profiling and reuses the same fixed-step render path as the
+    // profile warmup. It advances 181 simulation frames and saves three
+    // 640x480 images.
+    if let Some(dir) = &args.capture_dir {
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+        for frame in 0_u32..=180 {
+            render_frame(&device, &mut runtime, &target, &manifest, frame, args.width, args.height);
+            if let Some(err) = runtime.runtime_fatal_error() {
+                panic!("water frame {frame}: {err}");
+            }
+            if matches!(frame, 0 | 90 | 180) {
+                let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height);
+                let path = dir.join(format!("water_{frame:06}.png"));
+                std::fs::write(&path, &png).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+                println!("water capture frame={frame} path={} bytes={}", path.display(), png.len());
+                assert!(!png.is_empty(), "water capture produced an empty image");
+            }
+        }
+        println!("water capture complete: 3 frames at {}x{}", args.width, args.height);
+        return;
+    }
 
     let Some(sampler) = device.create_timestamp_sampler(8192) else {
         eprintln!("error: device does not support GPU counter sampling");

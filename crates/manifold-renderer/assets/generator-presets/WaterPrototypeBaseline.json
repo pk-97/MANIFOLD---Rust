@@ -8,7 +8,7 @@
     "oscPrefix": "waterPrototypeBaseline",
     "available": false,
     "isLineBased": false,
-    "description": "Perf baseline for WaterPrototype: identical basin/cube/camera/light scene with every water group, wire, and interface input removed and a static cube transform. Measurement fixture only — not a user preset.",
+    "description": "Live water demo baseline with a continuous pour and repeated cube dip. The camera starts stationary and can be modulated by the user. If ray tracing is requested, water uses the raster path; transparent objects, temporal upscaling, and volumetric shafts are unsupported.",
     "params": [],
     "bindings": []
   },
@@ -72,33 +72,13 @@
                 "type": "Float",
                 "value": 0.5
               },
+              "orbit": {
+                "type": "Float",
+                "value": 0.698132
+              },
               "tilt": {
                 "type": "Float",
                 "value": 0.95
-              }
-            }
-          },
-          {
-            "id": 63,
-            "nodeId": "orbitSweep",
-            "typeId": "node.lfo",
-            "handle": "orbit sweep",
-            "params": {
-              "rate": {
-                "type": "Enum",
-                "value": 0
-              },
-              "shape": {
-                "type": "Enum",
-                "value": 0
-              },
-              "min": {
-                "type": "Float",
-                "value": 0.35
-              },
-              "max": {
-                "type": "Float",
-                "value": 0.85
               }
             }
           },
@@ -110,7 +90,7 @@
             "params": {
               "fog_density": {
                 "type": "Float",
-                "value": 0.02
+                "value": 0.245
               },
               "height_falloff": {
                 "type": "Float",
@@ -526,7 +506,7 @@
           {
             "id": 92,
             "nodeId": "strip0Mesh",
-            "typeId": "node.grid_mesh",
+            "typeId": "node.cube_mesh",
             "handle": "strip 0 mesh",
             "params": {
               "resolution_x": {
@@ -555,12 +535,15 @@
             "params": {
               "pos_x": {
                 "type": "Float",
-                "value": -1.65
+                "value": -0.9375
               },
               "pos_y": {
                 "type": "Float",
-                "value": 0.02
-              }
+                "value": 0.245
+              },
+              "scale_x": { "type": "Float", "value": 0.375 },
+              "scale_y": { "type": "Float", "value": 0.01 },
+              "scale_z": { "type": "Float", "value": 2.25 }
             }
           },
           {
@@ -572,7 +555,7 @@
           {
             "id": 95,
             "nodeId": "strip1Mesh",
-            "typeId": "node.grid_mesh",
+            "typeId": "node.cube_mesh",
             "handle": "strip 1 mesh",
             "params": {
               "resolution_x": {
@@ -601,12 +584,15 @@
             "params": {
               "pos_x": {
                 "type": "Float",
-                "value": -0.99
+                "value": -0.5625
               },
               "pos_y": {
                 "type": "Float",
-                "value": 0.02
-              }
+                "value": 0.245
+              },
+              "scale_x": { "type": "Float", "value": 0.375 },
+              "scale_y": { "type": "Float", "value": 0.01 },
+              "scale_z": { "type": "Float", "value": 2.25 }
             }
           },
           {
@@ -618,7 +604,7 @@
           {
             "id": 98,
             "nodeId": "strip2Mesh",
-            "typeId": "node.grid_mesh",
+            "typeId": "node.cube_mesh",
             "handle": "strip 2 mesh",
             "params": {
               "resolution_x": {
@@ -647,12 +633,15 @@
             "params": {
               "pos_x": {
                 "type": "Float",
-                "value": -0.33
+                "value": -0.1875
               },
               "pos_y": {
                 "type": "Float",
-                "value": 0.02
-              }
+                "value": 0.245
+              },
+              "scale_x": { "type": "Float", "value": 0.375 },
+              "scale_y": { "type": "Float", "value": 0.01 },
+              "scale_z": { "type": "Float", "value": 2.25 }
             }
           },
           {
@@ -664,7 +653,7 @@
           {
             "id": 101,
             "nodeId": "strip3Mesh",
-            "typeId": "node.grid_mesh",
+            "typeId": "node.cube_mesh",
             "handle": "strip 3 mesh",
             "params": {
               "resolution_x": {
@@ -693,12 +682,15 @@
             "params": {
               "pos_x": {
                 "type": "Float",
-                "value": 0.33
+                "value": 0.1875
               },
               "pos_y": {
                 "type": "Float",
-                "value": 0.02
-              }
+                "value": 0.245
+              },
+              "scale_x": { "type": "Float", "value": 0.375 },
+              "scale_y": { "type": "Float", "value": 0.01 },
+              "scale_z": { "type": "Float", "value": 2.25 }
             }
           },
           {
@@ -710,7 +702,7 @@
           {
             "id": 104,
             "nodeId": "strip4Mesh",
-            "typeId": "node.grid_mesh",
+            "typeId": "node.cube_mesh",
             "handle": "strip 4 mesh",
             "params": {
               "resolution_x": {
@@ -739,12 +731,15 @@
             "params": {
               "pos_x": {
                 "type": "Float",
-                "value": 0.99
+                "value": 0.5625
               },
               "pos_y": {
                 "type": "Float",
-                "value": 0.02
-              }
+                "value": 0.245
+              },
+              "scale_x": { "type": "Float", "value": 0.375 },
+              "scale_y": { "type": "Float", "value": 0.01 },
+              "scale_z": { "type": "Float", "value": 2.25 }
             }
           },
           {
@@ -756,7 +751,7 @@
           {
             "id": 107,
             "nodeId": "strip5Mesh",
-            "typeId": "node.grid_mesh",
+            "typeId": "node.cube_mesh",
             "handle": "strip 5 mesh",
             "params": {
               "resolution_x": {
@@ -785,12 +780,15 @@
             "params": {
               "pos_x": {
                 "type": "Float",
-                "value": 1.65
+                "value": 0.9375
               },
               "pos_y": {
                 "type": "Float",
-                "value": 0.02
-              }
+                "value": 0.245
+              },
+              "scale_x": { "type": "Float", "value": 0.375 },
+              "scale_y": { "type": "Float", "value": 0.01 },
+              "scale_z": { "type": "Float", "value": 2.25 }
             }
           },
           {
@@ -823,12 +821,6 @@
           }
         ],
         "wires": [
-          {
-            "fromNode": 63,
-            "fromPort": "out",
-            "toNode": 62,
-            "toPort": "orbit"
-          },
           {
             "fromNode": 73,
             "fromPort": "vertices",

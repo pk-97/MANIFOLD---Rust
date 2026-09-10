@@ -41,10 +41,17 @@ struct Params {
 @compute @workgroup_size(256)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
-    if (idx >= params.active_count) {
+    if (idx >= arrayLength(&buf_particles)) {
         return;
     }
     let p = buf_particles[idx];
+    // Preserve the complete candidate buffer when a caller supplies a live
+    // prefix. Downstream stages consume the allocated range and must never
+    // observe an unwritten tail.
+    if (idx >= params.active_count) {
+        buf_particles_out[idx] = p;
+        return;
+    }
     let m = p.position_mass.w;
     var out_rec = p;
     if (m == 0.0) {

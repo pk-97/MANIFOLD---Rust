@@ -328,10 +328,13 @@ only after that comparison passes; a mismatch is a numerical failure escalated
 to Astra/Peter before S7, not a lane tuning task. The density fault bound alone
 is not a stability guarantee.
 
-GPU fault propagation and accepted-state retention are same-substep. CPU reporting
-uses a bounded ring and completed prior submissions only; never wait for same-frame
-readback in the live path. Include the first fault bit and node in `ctx.error` once
-per transition. Full and live-overload are nonfatal statuses, not shader faults.
+GPU particle rejection remains same-substep. CPU reporting uses a bounded ring and
+completed prior submissions only; when a fault completes, the visible collider
+restores the last verified frame pose with bounded notification latency. There is
+no same-substep CPU pose guarantee: collider and particle publication are not fully
+atomic on the live path, and we never wait for same-frame readback. Include the
+first fault bit and node in `ctx.error` once per transition. Full and live-overload
+are nonfatal statuses, not shader faults.
 
 ## 6. Colliders, events and lifecycle
 
@@ -452,6 +455,10 @@ snapshots → water fullscreen depth-tested shading pass → refresh public dept
 water surface depth → existing supported post processing. Reuse the current E2a
 snapshot allocation/load path, broadening its condition to `has_transmission ||
 has_water || rt_enabled`, preserving the existing RT branch for ordinary scenes.
+When a valid water scene requests `rt_enabled`, `render_scene` keeps the request
+stored but explicitly disables RT for that scene and logs that Water uses raster
+rendering because ray tracing is unavailable for water scenes. The water raster
+path remains authoritative until a dedicated water RT path exists.
 After Pass A resolve, retain the existing single-sample `opaque_depth_snapshot` and
 opaque colour snapshot unchanged for refraction. Load a distinct single-sample
 Depth32Float water-pass attachment initialized from opaque depth; water fragments
@@ -473,12 +480,15 @@ pull a foreground opaque object through the water. Beer-Lambert attenuation is
 Fresnel blends reflected and transmitted light; do not add two full-energy images.
 
 **Explicit V1 compatibility limits:** reject a water scene with any Blend object,
-RT enabled, temporal upscaling/denoising, volumetric shafts, or multiple water sets.
+temporal upscaling/denoising, volumetric shafts, or multiple water sets. An RT
+request uses the explicit raster fallback documented above and is reported once
+per transition; it does not produce the scene-error magenta output.
 Reject partial water input sets during graph validation/rebuild before allocation.
 Validate camera, material and dynamic compatibility at evaluation, before capability
 fallbacks or pass encoding. Use `EffectNodeContext::error`, clear colour to magenta
 (the existing scene error convention), clear depth to 1 and auxiliary outputs to
-zero, then return. Never retain stale water output or silently disable a user setting.
+zero, then return. Never retain stale water output or silently disable a user setting;
+the RT request is the documented raster-policy exception.
 Depth-aware spatial post effects can consume
 the updated depth; temporal motion feeds are not claimed. These limits are visible
 in the preset description. Supporting intersecting transparent objects and reliable

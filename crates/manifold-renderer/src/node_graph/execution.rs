@@ -18,7 +18,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::layer_skin::LayerSkinRegistry;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
+use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId, SubstepFrameContext};
 use crate::node_graph::execution_plan::{ExecutionPlan, ExecutionStep, ResourceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
@@ -1742,6 +1742,53 @@ impl Executor {
             step_scalar(ports.time),
             step_scalar(ports.index),
         ];
+
+        // Observe opted-in region nodes once per output frame, before the
+        // repeat. This is deliberately read-only and also runs when the
+        // boundary schedules zero iterations (pause / zero time scale).
+        let effective_advancing = graph
+            .get_node(region.boundary)
+            .and_then(|inst| inst.node.substep_effective_advancing())
+            .or_else(|| self.simulation_frame.map(|f| f.advancing));
+        for &body_idx in &region.steps[1..] {
+            let body_step = &plan.steps()[body_idx];
+            if !self.live_steps.get(body_idx).copied().unwrap_or(false) {
+                continue;
+            }
+            let observes = graph
+                .get_node(body_step.node)
+                .is_some_and(|inst| inst.node.observes_substep_frame());
+            if !observes {
+                continue;
+            }
+            self.input_scratch.clear();
+            for &(port_name, res) in &body_step.inputs {
+                if let Some(slot) = self.backend.slot_for(res) {
+                    self.input_scratch.push((port_name, slot));
+                }
+            }
+            let backend_ref: &dyn Backend = &*self.backend;
+            let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                .with_pending(&self.slot_pending);
+            let mut observed_frame = self.simulation_frame;
+            if let Some(advancing) = effective_advancing
+                && let Some(frame) = observed_frame.as_mut()
+            {
+                frame.advancing = advancing;
+            }
+            let inst = graph
+                .get_node_mut(body_step.node)
+                .expect("substep observer node present");
+            let mut ctx = SubstepFrameContext {
+                params: &inst.params,
+                inputs,
+                simulation_frame: observed_frame,
+                state: state.as_deref_mut(),
+                node_id: body_step.node,
+                owner_key,
+            };
+            inst.node.observe_substep_frame(&mut ctx);
+        }
         let mut iteration = 0u32;
         while let Some([dt, step_time, _idx]) = graph
             .get_node_mut(region.boundary)

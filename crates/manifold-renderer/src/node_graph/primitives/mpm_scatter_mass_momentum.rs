@@ -25,7 +25,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use crate::node_graph::water::{SEED_ACTIVE_PARTICLES, WaterParticle};
+use crate::node_graph::water::{PARTICLE_CAPACITY, WaterParticle};
 
 /// Hand-authored standalone kernel (see module doc): `water_common.wgsl`
 /// concatenated ahead of the stage source. Composed form is validated at
@@ -65,7 +65,7 @@ crate::primitive! {
             name: Cow::Borrowed("active_count"),
             label: "Active Particles",
             ty: ParamType::Int,
-            default: ParamValue::Float(SEED_ACTIVE_PARTICLES as f32),
+            default: ParamValue::Float(PARTICLE_CAPACITY as f32),
             range: Some((0.0, 2_000_000.0)),
             enum_values: &[],
         },
@@ -109,7 +109,9 @@ impl Primitive for MpmScatterMassMomentum {
         &[("accumulator", "out"), ("status", "status_out")]
     }
 
-    // run() dispatches `active_count` threads, not pool capacity.
+    // The default covers the whole allocated pool; zero-mass records are
+    // skipped by the kernel. An explicit active_count remains a bounded fast
+    // path for callers that maintain a smaller live prefix.
     fn fused_dispatch_count_param(&self) -> Option<&'static str> {
         Some("active_count")
     }
@@ -132,7 +134,7 @@ impl Primitive for MpmScatterMassMomentum {
         };
         let capacity = (particles.size / std::mem::size_of::<WaterParticle>() as u64) as u32;
         let active_count = ctx
-            .scalar_or_param("active_count", SEED_ACTIVE_PARTICLES as f32)
+            .scalar_or_param("active_count", PARTICLE_CAPACITY as f32)
             .round()
             .max(0.0) as u32;
         let active_count = active_count.min(capacity);

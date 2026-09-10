@@ -755,6 +755,12 @@ impl ContentThread {
         // the frame is encoded.
         self.content_pipeline.flush_all_background_work();
 
+        if let Some(message) = self.content_pipeline.runtime_export_error(&mut self.engine) {
+            let message = format!("Generator simulation failed at frame {frame_idx}: {message}");
+            log::error!("[Export] {message}");
+            return Some(ExportFrameFailure { message, gpu: false });
+        }
+
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;

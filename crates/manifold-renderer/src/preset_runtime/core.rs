@@ -1522,6 +1522,15 @@ impl PresetRuntime {
         &self.errors
     }
 
+    /// A runtime fatal raised by a stateful node while evaluating this frame.
+    /// Unlike `errors()`, this is sticky runtime state and is intended for
+    /// deterministic export failure handling.
+    pub fn runtime_fatal_error(&self) -> Option<&str> {
+        self.graph
+            .nodes()
+            .find_map(|instance| instance.node.simulation_error())
+    }
+
     /// Every def-baked node param this runtime's card bindings overwrote at build
     /// (BUG-1l7f), including the ones [`crate::node_graph::is_baseline_shadow`]
     /// keeps out of [`Self::errors`]. The assertable form of the diagnostic: a

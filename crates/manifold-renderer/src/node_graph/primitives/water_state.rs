@@ -32,6 +32,23 @@ use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 use crate::node_graph::transform::Transform;
 use crate::node_graph::water::WaterParticle;
 
+struct StatusReadbackSlot {
+    buffer: manifold_gpu::GpuBuffer,
+    ticket: u64,
+    generation: u64,
+    collider: Transform,
+}
+
+pub struct StatusReadbackRing {
+    event: manifold_gpu::GpuEvent,
+    slots: Vec<StatusReadbackSlot>,
+    reported: bool,
+    faulted: bool,
+    next_ticket: u64,
+    generation: u64,
+    last_frame_id: Option<u64>,
+}
+
 crate::primitive! {
     name: WaterState,
     type_id: "node.water_state",
@@ -96,6 +113,9 @@ crate::primitive! {
         pending_ticks: std::cell::Cell<u32> = std::cell::Cell::new(0),
         tick_base: std::cell::Cell<f64> = std::cell::Cell::new(0.0),
         last_step_hz: std::cell::Cell<f64> = std::cell::Cell::new(960.0),
+        effective_advancing: std::cell::Cell<bool> = std::cell::Cell::new(false),
+        status_ring: Option<StatusReadbackRing> = None,
+        fatal_error: Option<String> = None,
     },
 }
 
@@ -113,10 +133,19 @@ struct WaterBoundaryState {
     overload_reported: bool,
     last_reset_trigger: Option<i32>,
     last_collider: Transform,
+    verified_collider: Transform,
+    verified_ticket: u64,
     capacity_bytes: u64,
 }
 
 impl NodeState for WaterBoundaryState {}
+
+fn accept_verified_pose(state: &mut WaterBoundaryState, ticket: u64, pose: Transform) {
+    if ticket > state.verified_ticket {
+        state.verified_ticket = ticket;
+        state.verified_collider = pose;
+    }
+}
 
 const BOUNDARY_RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {
@@ -130,6 +159,74 @@ const BOUNDARY_RESULTS: &[SubstepResultPorts] = &[
 ];
 
 impl WaterState {
+    fn reset_status_ring(&mut self) {
+        if let Some(ring) = &mut self.status_ring {
+            ring.reported = false;
+            ring.faulted = false;
+            ring.generation = ring.generation.wrapping_add(1);
+            ring.last_frame_id = None;
+        }
+        self.fatal_error = None;
+    }
+
+    fn poll_status_ring(&mut self, ctx: &mut EffectNodeContext<'_, '_>, state: &mut WaterBoundaryState) {
+        let Some(ring) = &mut self.status_ring else { return };
+        let completed = ring.event.signaled_value();
+        let mut restore_verified = false;
+        for slot in &mut ring.slots {
+            if slot.ticket == 0 || slot.ticket > completed {
+                continue;
+            }
+            let ptr = slot.buffer.mapped_ptr().expect("status readback buffer must be mapped");
+            let status = unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) };
+            let ticket = slot.ticket;
+            let collider = slot.collider;
+            slot.ticket = 0;
+            if slot.generation != ring.generation { continue; }
+            if status != 0 && !ring.reported {
+                ring.reported = true;
+                ring.faulted = true;
+                let message = format!("WaterState: solver fault status 0x{status:08x}");
+                self.fatal_error = Some(message.clone());
+                ctx.error(message);
+                self.effective_advancing.set(false);
+                self.pending_ticks.set(0);
+                restore_verified = true;
+            } else if status == 0 {
+                accept_verified_pose(state, ticket, collider);
+            }
+        }
+        if restore_verified {
+            state.last_collider = state.verified_collider;
+        }
+    }
+
+    fn schedule_status_readback(&mut self, ctx: &mut EffectNodeContext<'_, '_>, collider: Transform) {
+        let Some(status_out) = ctx.outputs.array("status_out") else { return };
+        let Some(gpu) = ctx.gpu.as_deref_mut() else { return };
+        if self.status_ring.is_none() {
+            let event = gpu.device.create_event();
+            let mut slots = Vec::with_capacity(3);
+            for _ in 0..3 {
+                let buffer = gpu.device.create_buffer_shared(4);
+                slots.push(StatusReadbackSlot { buffer, ticket: 0, generation: 0, collider: Transform::default() });
+            }
+            self.status_ring = Some(StatusReadbackRing { event, slots, reported: false, faulted: false, next_ticket: 0, generation: 0, last_frame_id: None });
+        }
+        let ring = self.status_ring.as_mut().expect("status ring initialized");
+        let frame_id = ctx.simulation_frame.map(|f| f.frame_id);
+        if ring.faulted || ring.last_frame_id == frame_id { return; }
+        ring.last_frame_id = frame_id;
+        let Some(slot) = ring.slots.iter_mut().find(|slot| slot.ticket == 0) else { return };
+        ring.next_ticket = ring.next_ticket.saturating_add(1).max(1);
+        let ticket = ring.next_ticket;
+        gpu.native_enc.copy_buffer_to_buffer(status_out, &slot.buffer, 4);
+        gpu.native_enc.signal_event_value(&ring.event, ticket);
+        slot.ticket = ticket;
+        slot.generation = ring.generation;
+        slot.collider = collider;
+    }
+
     fn clock_config(&self, ctx: &EffectNodeContext<'_, '_>) -> (f64, u32) {
         let step_hz = match ctx.params.get("step_hz") {
             Some(ParamValue::Float(f)) => f64::from(f.max(1.0)),
@@ -144,6 +241,7 @@ impl WaterState {
 }
 
 impl Primitive for WaterState {
+    fn simulation_error(&self) -> Option<&str> { self.fatal_error.as_deref() }
     fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
         crate::node_graph::effect_node::NodeRequires {
             state_store: true,
@@ -219,6 +317,8 @@ impl Primitive for WaterState {
                     overload_reported: false,
                     last_reset_trigger: None,
                     last_collider: Transform::default(),
+                    verified_collider: Transform::default(),
+                    verified_ticket: 0,
                     capacity_bytes: out_size,
                 },
             }
@@ -244,6 +344,11 @@ impl Primitive for WaterState {
         };
 
         let time_scale = ctx.scalar_or_param("time_scale", 1.0).clamp(0.0, 1.0);
+        self.poll_status_ring(ctx, &mut s);
+        self.effective_advancing.set(
+            ctx.simulation_frame
+                .is_some_and(|f| f.advancing && time_scale > 0.0),
+        );
         let (step_hz, max_substeps) = self.clock_config(ctx);
         self.last_step_hz.set(step_hz);
 
@@ -253,6 +358,7 @@ impl Primitive for WaterState {
         // collider from collider_seed.
         let mut reset_fired = false;
         if !s.seeded || epoch_changed || reset_edge {
+            if epoch_changed || reset_edge { self.reset_status_ring(); }
             if let (Some(seed_buf), Some(out_buf)) =
                 (ctx.inputs.array("seed"), ctx.outputs.array("out"))
             {
@@ -275,6 +381,8 @@ impl Primitive for WaterState {
             s.overload_reported = false;
             s.last_frame_id = None;
             s.last_collider = ctx.inputs.transform("collider_seed").unwrap_or_default();
+            s.verified_collider = s.last_collider;
+            s.verified_ticket = 0;
             reset_fired = epoch_changed || reset_edge;
         }
 
@@ -292,41 +400,56 @@ impl Primitive for WaterState {
                 // Reset dominates: zero ticks this frame. A duplicate frame
                 // renders the accepted state again without advancing.
             }
+            Some(_) if self.fatal_error.is_some()
+                || self.status_ring.as_ref().is_some_and(|ring| ring.faulted) => {}
             Some(f) if !f.advancing || time_scale <= 0.0 => {
                 s.last_frame_id = Some(f.frame_id);
             }
             Some(f) => {
                 s.last_frame_id = Some(f.frame_id);
                 let h = 1.0 / step_hz;
-                s.accumulator += f.delta.0 * f64::from(time_scale);
-                let mut whole = (s.accumulator / h).floor();
-                s.accumulator -= whole * h;
-                if whole > f64::from(max_substeps) {
-                    let dropped = (whole - f64::from(max_substeps)) as u32;
-                    s.dropped_ticks += dropped;
-                    whole = f64::from(max_substeps);
+                let accumulated = s.accumulator + f.delta.0 * f64::from(time_scale);
+                let due_whole = (accumulated / h).floor();
+                let mut whole = due_whole;
+                if due_whole > f64::from(max_substeps) {
+                    let dropped = (due_whole - f64::from(max_substeps)) as u32;
                     if f.exporting {
-                        // Export never trades simulation time for frame rate.
-                        overload_error = Some(format!(
-                            "WaterState: simulation overload in export — dropped \
-                             {dropped} ticks; raise the step budget or slow the \
-                             input schedule"
+                        self.fatal_error = Some(format!(
+                            "WaterState: simulation overload in export — requested {dropped} extra ticks"
                         ));
+                        self.effective_advancing.set(false);
+                        self.pending_ticks.set(0);
+                        ctx.outputs.set_scalar("step_count", ParamValue::Float(0.0));
+                        return;
                     } else if !s.overload_reported {
+                        s.dropped_ticks += dropped;
+                        whole = f64::from(max_substeps);
                         s.overload_reported = true;
                         overload_error = Some(format!(
                             "WaterState: simulation overload — dropping whole ticks \
                              (total dropped: {})",
                             s.dropped_ticks
                         ));
+                    } else {
+                        s.dropped_ticks += dropped;
+                        whole = f64::from(max_substeps);
                     }
                 }
+                s.accumulator = accumulated - due_whole * h;
                 self.tick_base.set(s.sim_time);
                 s.sim_time += whole * h;
                 ticks = whole as u32;
             }
         }
+        if self.fatal_error.is_some()
+            || self.status_ring.as_ref().is_some_and(|ring| ring.faulted)
+        {
+            ticks = 0;
+            self.effective_advancing.set(false);
+        }
         self.pending_ticks.set(ticks);
+
+        self.schedule_status_readback(ctx, s.last_collider);
 
         // Write the clock state back, then the frame's scalar/transform
         // outputs and any deferred error.
@@ -335,7 +458,11 @@ impl Primitive for WaterState {
                 .state
                 .as_deref_mut()
                 .expect("WaterState requires a StateStore");
-            store.insert(node_id, owner_key, s);
+            if let Some(existing) = store.get::<WaterBoundaryState>(node_id, owner_key) {
+                *existing = s;
+            } else {
+                store.insert(node_id, owner_key, s);
+            }
         }
         ctx.outputs
             .set_scalar("step_count", ParamValue::Float(ticks as f32));
@@ -346,6 +473,10 @@ impl Primitive for WaterState {
         if let Some(msg) = overload_error {
             ctx.error(msg);
         }
+    }
+
+    fn clear_state(&mut self) {
+        self.reset_status_ring();
     }
 
     fn substep_iteration(&mut self, iteration: u32) -> Option<[f32; 3]> {
@@ -360,6 +491,10 @@ impl Primitive for WaterState {
             (self.tick_base.get() + (f64::from(iteration) + 1.0) * dt) as f32,
             iteration as f32,
         ])
+    }
+
+    fn substep_effective_advancing(&self) -> Option<bool> {
+        Some(self.effective_advancing.get())
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -407,6 +542,23 @@ mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
     use crate::node_graph::ports::{ArrayType, PortType};
+
+    #[test]
+    fn verified_collider_accepts_highest_ticket_only() {
+        let pose2 = Transform { pos: [2.0, 0.0, 0.0], ..Transform::default() };
+        let pose4 = Transform { pos: [4.0, 0.0, 0.0], ..Transform::default() };
+        let mut state = WaterBoundaryState {
+            accumulator: 0.0, sim_time: 0.0, last_frame_id: None, epoch: 0,
+            seeded: true, dropped_ticks: 0, overload_reported: false,
+            last_reset_trigger: None, last_collider: pose4,
+            verified_collider: Transform::default(), verified_ticket: 0,
+            capacity_bytes: 0,
+        };
+        accept_verified_pose(&mut state, 4, pose4);
+        accept_verified_pose(&mut state, 2, pose2);
+        assert_eq!(state.verified_ticket, 4);
+        assert_eq!(state.verified_collider.pos, pose4.pos);
+    }
 
     #[test]
     fn water_state_declares_boundary_contract() {

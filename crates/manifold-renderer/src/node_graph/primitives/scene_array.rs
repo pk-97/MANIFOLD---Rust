@@ -475,7 +475,7 @@ mod gpu_tests {
     ) -> Vec<InstanceTransform> {
         (0..capacity)
             .map(|w| {
-                if w >= behind + ahead + 1 {
+                if w > behind + ahead {
                     return InstanceTransform { pos_scale: [0.0; 4], rot_pad: [0.0; 4] };
                 }
                 let c = base_cell - behind as i32 + w as i32;
@@ -675,10 +675,14 @@ mod gpu_tests {
                     0.0,
                 ]
             };
-            for w in 0..(BEHIND + MAX_AHEAD) as usize {
+            for (w, transform) in gpu_data
+                .iter()
+                .enumerate()
+                .take((BEHIND + MAX_AHEAD) as usize)
+            {
                 let c = base_cell - BEHIND as i32 + w as i32;
                 assert_eq!(
-                    gpu_data[w].rot_pad,
+                    transform.rot_pad,
                     rot_of(c),
                     "slot {w} (cell {c}) must hash its Euclidean residue"
                 );
@@ -731,7 +735,7 @@ mod gpu_tests {
                     for (w, (a, b)) in phase_0.iter().zip(phase_1.iter()).enumerate() {
                         // Surplus slots mask to zero-scale in BOTH windows —
                         // no translation demand there.
-                        if w as u32 >= BEHIND + MAX_AHEAD + 1 {
+                        if w as u32 > BEHIND + MAX_AHEAD {
                             assert_eq!(a.pos_scale, [0.0; 4], "slot {w} must be masked at phase 0");
                             assert_eq!(b.pos_scale, [0.0; 4], "slot {w} must be masked at phase ~1");
                             continue;

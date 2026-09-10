@@ -27,7 +27,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::water::{
-    DEFAULT_STEP_DT, SEED_ACTIVE_PARTICLES, WaterParticle,
+    DEFAULT_STEP_DT, PARTICLE_CAPACITY, WaterParticle,
 };
 
 /// Hand-authored standalone kernel (see module doc): `water_common.wgsl`
@@ -78,7 +78,7 @@ crate::primitive! {
             name: Cow::Borrowed("active_count"),
             label: "Active Particles",
             ty: ParamType::Int,
-            default: ParamValue::Float(SEED_ACTIVE_PARTICLES as f32),
+            default: ParamValue::Float(PARTICLE_CAPACITY as f32),
             range: Some((0.0, 2_000_000.0)),
             enum_values: &[],
         },
@@ -148,15 +148,10 @@ impl Primitive for MpmScatterStress {
         };
         let capacity = (particles.size / std::mem::size_of::<WaterParticle>() as u64) as u32;
         let active_count = ctx
-            .scalar_or_param("active_count", SEED_ACTIVE_PARTICLES as f32)
+            .scalar_or_param("active_count", PARTICLE_CAPACITY as f32)
             .round()
             .max(0.0) as u32;
         let active_count = active_count.min(capacity);
-        if active_count == 0 {
-            ctx.mark_gpu_accessed();
-            return;
-        }
-
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Hand-authored standalone kernel: the generated buffer wrapper
@@ -202,7 +197,9 @@ impl Primitive for MpmScatterStress {
                     offset: 0,
                 },
             ],
-            [active_count.div_ceil(256), 1, 1],
+            // Dispatch the complete allocation so particles_out is copied
+            // for the inactive tail even when active_count is short or zero.
+            [capacity.div_ceil(256), 1, 1],
             "node.mpm_scatter_stress",
         );
     }

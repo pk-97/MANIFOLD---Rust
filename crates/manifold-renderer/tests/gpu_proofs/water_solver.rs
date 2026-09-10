@@ -17,19 +17,18 @@ use std::sync::{Arc, OnceLock};
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
 use manifold_renderer::node_graph::freeze::codegen::ENTRY;
-use manifold_renderer::node_graph::primitives::{
-    ACCUM_ITEMS, BASIN_MAX, BASIN_MIN, CELL_COUNT, ClearGrid, ClearGridUniforms,
-    CommitUniforms, GatherAdvectUniforms, GridVelocityUniforms, MpmGatherAdvect,
-    MpmGridVelocity, MpmScatterMassMomentum, MpmScatterStress, SeedWater, SeedWaterUniforms,
-    ValidateUniforms, WaterCommit, WaterValidate, SCATTER_MASS_WGSL, SCATTER_STRESS_WGSL,
-    VALIDATE_WGSL,
-};
 use manifold_renderer::node_graph::primitive::PrimitiveSpec;
+use manifold_renderer::node_graph::primitives::{
+    ClearGrid, ClearGridUniforms, CommitUniforms, GatherAdvectUniforms, GridVelocityUniforms,
+    MpmGatherAdvect, MpmGridVelocity, MpmScatterMassMomentum, MpmScatterStress, SeedWater,
+    SeedWaterUniforms, ValidateUniforms, WaterCommit, WaterValidate, ACCUM_ITEMS, BASIN_MAX,
+    BASIN_MIN, CELL_COUNT, SCATTER_MASS_WGSL, SCATTER_STRESS_WGSL, VALIDATE_WGSL,
+};
 use manifold_renderer::node_graph::water::{
-    AFFINE_BOUND, DEFAULT_STEP_DT, DOMAIN_ORIGIN, DYNAMIC_VISCOSITY, FAULT_INTEGER_OVERFLOW,
-    FAULT_NONFINITE, GRID_FIXED_SCALE, GRID_SPACING, PARTICLE_CAPACITY, PARTICLE_MASS,
-    REST_DENSITY, SEED_ACTIVE_PARTICLES, SOUND_SPEED_C0, VELOCITY_BOUND, WATER_DOMAIN,
-    WaterGridCell, WaterParticle, acoustic_cfl, classify_position,
+    acoustic_cfl, classify_position, WaterGridCell, WaterParticle, AFFINE_BOUND, DEFAULT_STEP_DT,
+    DOMAIN_ORIGIN, DYNAMIC_VISCOSITY, FAULT_INTEGER_OVERFLOW, FAULT_NONFINITE, GRID_FIXED_SCALE,
+    GRID_SPACING, PARTICLE_CAPACITY, PARTICLE_MASS, REST_DENSITY, SEED_ACTIVE_PARTICLES,
+    SOUND_SPEED_C0, VELOCITY_BOUND, WATER_DOMAIN,
 };
 
 /// The S1 f64 oracle as a test path module — the same source file the S1
@@ -99,17 +98,100 @@ fn read_status(buf: &GpuBuffer) -> u32 {
     unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) }
 }
 
+fn write_particle_at(buf: &GpuBuffer, index: usize, particle: &WaterParticle) {
+    unsafe {
+        buf.write(
+            (index * PARTICLE_BYTES as usize) as u64,
+            bytemuck::bytes_of(particle),
+        );
+    }
+}
+
+fn dispatch_mass_and_stress(pool: &Pool) {
+    let mass_u = manifold_renderer::node_graph::primitives::ScatterMassUniforms {
+        active_count: pool.active,
+        _pad0: 0,
+        _pad1: 0,
+        _pad2: 0,
+    };
+    let stress_u = manifold_renderer::node_graph::primitives::ScatterStressUniforms {
+        step_dt: DEFAULT_STEP_DT,
+        active_count: pool.active,
+        _pad0: 0,
+        _pad1: 0,
+    };
+    let mut enc = device().create_encoder("water-dispatch-regression");
+    enc.dispatch_compute(
+        &kernels().scatter_mass,
+        &[
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&mass_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
+        ],
+        ceil256(pool.capacity),
+        "node.mpm_scatter_mass_momentum",
+    );
+    enc.commit_and_wait_completed();
+    assert_eq!(read_status(&pool.status), 0, "mass scatter faulted");
+
+    let mut enc = device().create_encoder("water-dispatch-regression-stress");
+    enc.dispatch_compute(
+        &kernels().scatter_stress,
+        &[
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&stress_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &pool.stress_out,
+                offset: 0,
+            },
+        ],
+        ceil256(pool.capacity),
+        "node.mpm_scatter_stress",
+    );
+    enc.commit_and_wait_completed();
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures (mirrors of the S1 affine fixture — analytically affine field so
 // the f64 oracle cannot agree with the f32 path by construction).
 // ---------------------------------------------------------------------------
 
 const FIELD_A: [f64; 3] = [0.3, -0.5, 0.2];
-const FIELD_B: [[f64; 3]; 3] = [
-    [0.4, 0.2, -0.1],
-    [0.0, -0.3, 0.25],
-    [0.15, 0.1, 0.2],
-];
+const FIELD_B: [[f64; 3]; 3] = [[0.4, 0.2, -0.1], [0.0, -0.3, 0.25], [0.15, 0.1, 0.2]];
 
 fn field_v(x: [f64; 3]) -> [f64; 3] {
     let mut v = FIELD_A;
@@ -284,7 +366,7 @@ fn seed_pool(pool: &Pool) {
         pool_min_y: 0.234375,
         pool_min_z: -1.0,
         pool_max_x: 1.0,
-        pool_max_y: 0.75,
+        pool_max_y: 0.734375,
         pool_max_z: 1.0,
         grid_spacing: GRID_SPACING,
         rest_density: REST_DENSITY,
@@ -297,8 +379,15 @@ fn seed_pool(pool: &Pool) {
     enc.dispatch_compute(
         &kernels().seed,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
         ],
         ceil256(pool.capacity),
         "node.seed_water",
@@ -336,8 +425,15 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.clear,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&clear_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accum, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&clear_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accum,
+                offset: 0,
+            },
         ],
         ceil256(ACCUM_ITEMS),
         "node.clear_grid",
@@ -352,17 +448,37 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.scatter_mass,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&mass_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.accum, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&mass_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
         ],
-        ceil256(pool.active),
+        // Scan the allocated pool so a high-index live particle participates
+        // when the caller's active prefix reaches it.
+        ceil256(pool.capacity),
         "node.mpm_scatter_mass_momentum",
     );
     if probe_stages {
         enc.commit_and_wait_completed();
-        println!("  after scatter_mass: status={:#x}", read_status(&pool.status));
+        println!(
+            "  after scatter_mass: status={:#x}",
+            read_status(&pool.status)
+        );
         enc = device().create_encoder("water-substep");
     }
 
@@ -375,18 +491,40 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.scatter_stress,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&stress_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.accum, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &pool.stress_out, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&stress_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &pool.stress_out,
+                offset: 0,
+            },
         ],
-        ceil256(pool.active),
+        ceil256(pool.capacity),
         "node.mpm_scatter_stress",
     );
     if probe_stages {
         enc.commit_and_wait_completed();
-        println!("  after scatter_stress: status={:#x}", read_status(&pool.status));
+        println!(
+            "  after scatter_stress: status={:#x}",
+            read_status(&pool.status)
+        );
         enc = device().create_encoder("water-substep");
     }
 
@@ -410,9 +548,20 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.grid_velocity,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&grid_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accum, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.grid, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&grid_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.grid,
+                offset: 0,
+            },
         ],
         ceil256(CELL_COUNT),
         "node.mpm_grid_velocity",
@@ -427,10 +576,25 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.gather,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&gather_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.stress_out, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.grid, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.candidate, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&gather_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.stress_out,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.grid,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.candidate,
+                offset: 0,
+            },
         ],
         ceil256(pool.capacity),
         "node.mpm_gather_advect",
@@ -445,10 +609,25 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.validate,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&validate_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.candidate, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.status, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&validate_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.candidate,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.status,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
         ],
         ceil256(pool.capacity),
         "node.water_validate",
@@ -463,11 +642,30 @@ fn substep_inner(
     enc.dispatch_compute(
         &k.commit,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&commit_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.candidate, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &pool.accepted, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&commit_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.candidate,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
         ],
         ceil256(pool.capacity),
         "node.water_commit",
@@ -479,6 +677,76 @@ fn substep_inner(
 // ---------------------------------------------------------------------------
 // Proofs
 // ---------------------------------------------------------------------------
+
+#[test]
+fn water_scatter_kernels_reach_high_index_particle() {
+    let capacity = 65_538u32;
+    let pool = make_pool(capacity, capacity);
+    let particle = make_particle(
+        lattice_pos([12.0, 12.0, 12.0]),
+        [0.25, -0.1, 0.05],
+        [[0.0; 3]; 3],
+        PARTICLE_MASS,
+    );
+    write_particle_at(&pool.accepted, capacity as usize - 1, &particle);
+
+    dispatch_mass_and_stress(&pool);
+
+    let accum = read_accum(&pool.accum);
+    let mass: i32 = accum.chunks_exact(4).map(|cell| cell[3]).sum();
+    let momentum: i32 = accum
+        .chunks_exact(4)
+        .map(|cell| cell[0].abs() + cell[1].abs() + cell[2].abs())
+        .sum();
+    assert!(mass > 0, "high-index particle contributed no grid mass");
+    assert!(
+        momentum > 0,
+        "high-index particle contributed no grid momentum"
+    );
+
+    let stress = read_particles(&pool.stress_out, capacity as usize);
+    assert!(
+        stress[capacity as usize - 1].velocity_density[3] > 0.0,
+        "high-index particle did not receive stress density"
+    );
+}
+
+#[test]
+fn water_stress_primitive_preserves_tail_for_zero_and_one_active() {
+    let capacity = 256u32;
+    let sentinel = make_particle([9.0, 8.0, 7.0], [6.0, 5.0, 4.0], [[3.0; 3]; 3], 2.0);
+    for active in [0u32, 1u32] {
+        let pool = make_pool(active, capacity);
+        let input = make_particle(
+            lattice_pos([12.0, 12.0, 12.0]),
+            [0.25, -0.1, 0.05],
+            [[0.0; 3]; 3],
+            PARTICLE_MASS,
+        );
+        write_particle_at(&pool.accepted, 0, &input);
+        for index in active as usize..capacity as usize {
+            write_particle_at(&pool.accepted, index, &sentinel);
+            write_particle_at(&pool.stress_out, index, &sentinel);
+        }
+
+        // Distinct poison makes this prove the stress primitive copies the
+        // inactive input tail, rather than merely leaving its output intact.
+        let poison = make_particle([-1.0, -2.0, -3.0], [-4.0, -5.0, -6.0], [[-7.0; 3]; 3], 8.0);
+        for index in active as usize..capacity as usize {
+            write_particle_at(&pool.stress_out, index, &poison);
+        }
+
+        dispatch_mass_and_stress(&pool);
+        let output = read_particles(&pool.stress_out, capacity as usize);
+        for (index, record) in output.iter().enumerate().skip(active as usize) {
+            assert_eq!(
+                bytemuck::bytes_of(record),
+                bytemuck::bytes_of(&sentinel),
+                "stress tail slot {index} changed for active_count={active}"
+            );
+        }
+    }
+}
 
 /// Channel layout + seed values: the GPU seed kernel must reproduce the
 /// deterministic h/2 lattice byte-for-byte against the CPU formula, with a
@@ -508,8 +776,15 @@ fn water_seed_lattice_matches_cpu() {
     enc.dispatch_compute(
         &kernels().seed,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &buf,
+                offset: 0,
+            },
         ],
         ceil256(capacity),
         "node.seed_water",
@@ -543,9 +818,15 @@ fn water_seed_lattice_matches_cpu() {
             assert_eq!(p.affine_x, [0.0; 4]);
             assert_eq!(p.affine_y, [0.0; 4]);
             assert_eq!(p.affine_z, [0.0; 4]);
-            assert_eq!(p.previous_position, [expected[0], expected[1], expected[2], 0.0]);
+            assert_eq!(
+                p.previous_position,
+                [expected[0], expected[1], expected[2], 0.0]
+            );
         } else {
-            assert_eq!(p.position_mass, [0.0; 4], "inactive tail slot {idx} not zeroed");
+            assert_eq!(
+                p.position_mass, [0.0; 4],
+                "inactive tail slot {idx} not zeroed"
+            );
             assert_eq!(p.velocity_density, [0.0; 4]);
         }
     }
@@ -558,8 +839,18 @@ fn water_seed_lattice_matches_cpu() {
 fn water_signed_scatter_and_overflow() {
     // Two particles moving in -x/-y with nonzero affine state.
     let particles = [
-        make_particle(lattice_pos([10.0, 10.0, 10.0]), [-0.25, -0.1, 0.05], field_b_f32(), PARTICLE_MASS),
-        make_particle(lattice_pos([10.5, 10.5, 10.5]), [-0.4, 0.2, -0.15], field_b_f32(), PARTICLE_MASS),
+        make_particle(
+            lattice_pos([10.0, 10.0, 10.0]),
+            [-0.25, -0.1, 0.05],
+            field_b_f32(),
+            PARTICLE_MASS,
+        ),
+        make_particle(
+            lattice_pos([10.5, 10.5, 10.5]),
+            [-0.4, 0.2, -0.15],
+            field_b_f32(),
+            PARTICLE_MASS,
+        ),
     ];
     let pbuf = particle_buffer(256);
     write_particles(&pbuf, &particles);
@@ -578,10 +869,25 @@ fn water_signed_scatter_and_overflow() {
     enc.dispatch_compute(
         &kernels().scatter_mass,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &pbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &accum, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &status, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &status,
+                offset: 0,
+            },
         ],
         ceil256(2),
         "node.mpm_scatter_mass_momentum",
@@ -606,11 +912,7 @@ fn water_signed_scatter_and_overflow() {
         for k in 0..3 {
             for j in 0..3 {
                 for i in 0..3 {
-                    let cell = [
-                        base[0] + i as i32,
-                        base[1] + j as i32,
-                        base[2] + k as i32,
-                    ];
+                    let cell = [base[0] + i as i32, base[1] + j as i32, base[2] + k as i32];
                     let g = WATER_DOMAIN.grid_index(cell[0] as u32, cell[1] as u32, cell[2] as u32);
                     let w3 = w[0][i] * w[1][j] * w[2][k];
                     let d = [
@@ -646,21 +948,25 @@ fn water_signed_scatter_and_overflow() {
             touched_negative = true;
         }
     }
-    assert!(touched_negative, "fixture must produce negative momentum cells");
+    assert!(
+        touched_negative,
+        "fixture must produce negative momentum cells"
+    );
 
     // Total momentum sanity vs the analytic sum (dequantised).
     let total_mom: f64 = gpu
         .chunks(4)
-        .map(|c| {
-            (c[0] as f64 + c[1] as f64 + c[2] as f64) / GRID_FIXED_SCALE as f64
-        })
+        .map(|c| (c[0] as f64 + c[1] as f64 + c[2] as f64) / GRID_FIXED_SCALE as f64)
         .sum();
-    let expected_mom: f64 = particles.iter().map(|p| {
+    let expected_mom: f64 = particles
+        .iter()
+        .map(|p| {
         let m = p.position_mass[3] as f64;
         m * (p.velocity_density[0] as f64
             + p.velocity_density[1] as f64
             + p.velocity_density[2] as f64)
-    }).sum();
+        })
+        .sum();
     assert!(
         (total_mom - expected_mom).abs() < 1e-6,
         "total momentum {total_mom} != {expected_mom}"
@@ -683,10 +989,7 @@ fn water_signed_scatter_and_overflow() {
     let centre = WATER_DOMAIN.grid_index(20, 20, 20);
     let near_max = i32::MAX - 1;
     unsafe {
-        accum2.write(
-            (centre * 4 + 3) as u64 * 4,
-            bytemuck::bytes_of(&near_max),
-        );
+        accum2.write((centre * 4 + 3) as u64 * 4, bytemuck::bytes_of(&near_max));
     }
     let status2 = device().create_buffer_shared(4);
     status2.zero_fill();
@@ -700,10 +1003,25 @@ fn water_signed_scatter_and_overflow() {
     enc2.dispatch_compute(
         &kernels().scatter_mass,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms2) },
-            GpuBinding::Buffer { binding: 1, buffer: &pbuf2, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &accum2, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &status2, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms2),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pbuf2,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &accum2,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &status2,
+                offset: 0,
+            },
         ],
         ceil256(1),
         "node.mpm_scatter_mass_momentum",
@@ -748,26 +1066,38 @@ fn water_gpu_transfer_matches_f64() {
         [0.0, 0.0, 0.0],
     );
 
-    assert_eq!(read_status(&pool.status), 0, "transfer fixture must not fault");
+    assert_eq!(
+        read_status(&pool.status),
+        0,
+        "transfer fixture must not fault"
+    );
     let candidate = read_particles(&pool.candidate, n);
 
     // Diagnostic first: what did the accumulator hold after the substep?
     let accum = read_accum(&pool.accum);
-    let accum_mass: f64 = accum.chunks(4).map(|c| c[3] as f64).sum::<f64>() / GRID_FIXED_SCALE as f64;
+    let accum_mass: f64 =
+        accum.chunks(4).map(|c| c[3] as f64).sum::<f64>() / GRID_FIXED_SCALE as f64;
     let accum_mom: f64 = accum
         .chunks(4)
         .map(|c| (c[0].unsigned_abs() + c[1].unsigned_abs() + c[2].unsigned_abs()) as f64)
-        .sum::<f64>() / GRID_FIXED_SCALE as f64;
+        .sum::<f64>()
+        / GRID_FIXED_SCALE as f64;
     let nonzero_cells = accum.chunks(4).filter(|c| c[3] != 0).count();
     println!("accumulator after substep: {nonzero_cells} nonempty cells, total mass {accum_mass:.6} kg, |momentum| sum {accum_mom:.6}");
 
     // f64 oracle over identical inputs: P2G + stress + G2P.
     let refs: Vec<ref_oracle::RefParticle> = particles.iter().map(to_ref).collect();
-    let mut grid = ref_oracle::RefGrid::new(64, 64, 64, GRID_SPACING as f64, [
+    let mut grid = ref_oracle::RefGrid::new(
+        64,
+        64,
+        64,
+        GRID_SPACING as f64,
+        [
         DOMAIN_ORIGIN[0] as f64,
         DOMAIN_ORIGIN[1] as f64,
         DOMAIN_ORIGIN[2] as f64,
-    ]);
+        ],
+    );
     grid.p2g_mass_momentum(&refs);
     grid.p2g_stress(
         &refs,
@@ -827,7 +1157,8 @@ fn water_gpu_transfer_matches_f64() {
                         (base[2] + k as i32) as u32,
                     );
                     let w3 = w[0][i] * w[1][j] * w[2][k];
-                    quantised_mass[g] += quantise(w3 * p.position_mass[3]) as f64 / GRID_FIXED_SCALE as f64;
+                    quantised_mass[g] +=
+                        quantise(w3 * p.position_mass[3]) as f64 / GRID_FIXED_SCALE as f64;
                 }
             }
         }
@@ -839,7 +1170,11 @@ fn water_gpu_transfer_matches_f64() {
     // at the original particle positions.
     for ((src, cand), _pr) in particles.iter().zip(candidate.iter()).zip(advected.iter()) {
         let mut rho_cpu = 0f64;
-        let x = [src.position_mass[0], src.position_mass[1], src.position_mass[2]];
+        let x = [
+            src.position_mass[0],
+            src.position_mass[1],
+            src.position_mass[2],
+        ];
         let q = WATER_DOMAIN.position_to_q(x);
         let (base, frac) = manifold_renderer::node_graph::water::stencil_base_frac(q);
         let w = [
@@ -901,12 +1236,16 @@ fn water_gpu_transfer_matches_f64() {
 
     // Grid mass conservation: dequantised total vs particle total.
     let accum = read_accum(&pool.accum);
-    let accum_mass: f64 = accum.chunks(4).map(|c| c[3] as f64).sum::<f64>() / GRID_FIXED_SCALE as f64;
+    let accum_mass: f64 =
+        accum.chunks(4).map(|c| c[3] as f64).sum::<f64>() / GRID_FIXED_SCALE as f64;
     let accum_mom: f64 = accum
         .chunks(4)
         .map(|c| (c[0].unsigned_abs() + c[1].unsigned_abs() + c[2].unsigned_abs()) as f64)
-        .sum::<f64>() / GRID_FIXED_SCALE as f64;
-    println!("accumulator after substep: total mass {accum_mass:.6} kg, |momentum| sum {accum_mom:.6}");
+        .sum::<f64>()
+        / GRID_FIXED_SCALE as f64;
+    println!(
+        "accumulator after substep: total mass {accum_mass:.6} kg, |momentum| sum {accum_mom:.6}"
+    );
     let total_mass: f64 = accum
         .chunks(4)
         .map(|c| c[3] as f64 / GRID_FIXED_SCALE as f64)
@@ -959,27 +1298,65 @@ fn water_fault_retains_last_valid_state() {
     enc.dispatch_compute(
         &kernels().validate,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&validate_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &candidate_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &status_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &status_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&validate_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &candidate_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &status_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &status_buf,
+                offset: 0,
+            },
         ],
         ceil256(n as u32),
         "node.water_validate",
     );
     enc.commit_and_wait_completed();
     let bits = read_status(&status_buf);
-    assert_ne!(bits & FAULT_NONFINITE, 0, "NaN candidate must latch FAULT_NONFINITE");
+    assert_ne!(
+        bits & FAULT_NONFINITE,
+        0,
+        "NaN candidate must latch FAULT_NONFINITE"
+    );
 
     let mut enc = device().create_encoder("water-commit");
     enc.dispatch_compute(
         &kernels().commit,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&commit_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &accepted_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &candidate_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &status_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &out_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&commit_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &accepted_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &candidate_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &status_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &out_buf,
+                offset: 0,
+            },
         ],
         ceil256(n as u32),
         "node.water_commit",
@@ -1006,10 +1383,25 @@ fn water_fault_retains_last_valid_state() {
     enc.dispatch_compute(
         &kernels().validate,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&validate_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &candidate_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &status_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &status_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&validate_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &candidate_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &status_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &status_buf,
+                offset: 0,
+            },
         ],
         ceil256(n as u32),
         "node.water_validate",
@@ -1027,11 +1419,30 @@ fn water_fault_retains_last_valid_state() {
     enc.dispatch_compute(
         &kernels().commit,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&commit_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &accepted_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &candidate_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &status_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &out_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&commit_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &accepted_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &candidate_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &status_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &out_buf,
+                offset: 0,
+            },
         ],
         ceil256(n as u32),
         "node.water_commit",
@@ -1064,7 +1475,11 @@ fn water_static_pool_settling() {
             step == 0,
         );
         if step < 3 || step == substeps - 1 {
-            println!("substep {}: status={:#x}", step + 1, read_status(&pool.status));
+            println!(
+                "substep {}: status={:#x}",
+                step + 1,
+                read_status(&pool.status)
+            );
         }
         if (step + 1) % 240 == 0 {
             let recs = read_particles(&pool.accepted, SEED_ACTIVE_PARTICLES);
@@ -1087,12 +1502,20 @@ fn water_static_pool_settling() {
                     .sqrt()
                 })
                 .fold(0.0f32, f32::max);
-            println!("t={:.2}s: mean |v| {:.4} m/s, max |v| {:.4} m/s", (step + 1) as f32 * DEFAULT_STEP_DT, mean_v, max_v);
+            println!(
+                "t={:.2}s: mean |v| {:.4} m/s, max |v| {:.4} m/s",
+                (step + 1) as f32 * DEFAULT_STEP_DT,
+                mean_v,
+                max_v
+            );
         }
     }
 
     let bits = read_status(&pool.status);
-    assert_eq!(bits, 0, "static pool must run clean, got fault bits {bits:#x}");
+    assert_eq!(
+        bits, 0,
+        "static pool must run clean, got fault bits {bits:#x}"
+    );
     let accepted = read_particles(&pool.accepted, PARTICLE_CAPACITY);
 
     // Zero live-particle loss + mass conservation + containment.
@@ -1133,9 +1556,12 @@ fn water_static_pool_settling() {
             let x = p.position_mass[0];
             let y = p.position_mass[1];
             let z = p.position_mass[2];
-            x > BASIN_MIN[0] + band && x < BASIN_MAX[0] - band
-                && y > BASIN_MIN[1] + band && y < BASIN_MAX[1] - band
-                && z > BASIN_MIN[2] + band && z < BASIN_MAX[2] - band
+            x > BASIN_MIN[0] + band
+                && x < BASIN_MAX[0] - band
+                && y > BASIN_MIN[1] + band
+                && y < BASIN_MAX[1] - band
+                && z > BASIN_MIN[2] + band
+                && z < BASIN_MAX[2] - band
         })
         .map(|p| p.velocity_density[3])
         .collect();
@@ -1272,7 +1698,11 @@ fn water_timestep_halving_stability() {
     }
     let report_impact = compare_runs(&impact_a, &impact_b, dt, "impact");
     assert_eq!(read_status(&impact_a.status), 0, "impact run (dt) faulted");
-    assert_eq!(read_status(&impact_b.status), 0, "impact run (dt/2) faulted");
+    assert_eq!(
+        read_status(&impact_b.status),
+        0,
+        "impact run (dt/2) faulted"
+    );
     // Same escalation contract as the pool above: deltas recorded as
     // evidence, hard invariants asserted, acceptance thresholds await Astra.
     assert_hard_invariants(&impact_a, "impact dt");
@@ -1386,9 +1816,9 @@ fn pos_delta_rms_max(a: &[WaterParticle], b: &[WaterParticle]) -> (f64, f64, f64
     let mut sum = 0.0f64;
     let mut max = 0.0f64;
     for (x, y) in a.iter().zip(b.iter()) {
-        let d = ((x.position_mass[0] - y.position_mass[0]) as f64).hypot(
-            (x.position_mass[1] - y.position_mass[1]) as f64,
-        ).hypot((x.position_mass[2] - y.position_mass[2]) as f64);
+        let d = ((x.position_mass[0] - y.position_mass[0]) as f64)
+            .hypot((x.position_mass[1] - y.position_mass[1]) as f64)
+            .hypot((x.position_mass[2] - y.position_mass[2]) as f64);
         sum_sq += d * d;
         sum += d;
         max = max.max(d);
@@ -1469,9 +1899,21 @@ fn to_ref_live(p: &WaterParticle) -> ref_oracle::RefParticle {
         p.position_mass[3] as f64,
     );
     rp.c = [
-        [p.affine_x[0] as f64, p.affine_x[1] as f64, p.affine_x[2] as f64],
-        [p.affine_y[0] as f64, p.affine_y[1] as f64, p.affine_y[2] as f64],
-        [p.affine_z[0] as f64, p.affine_z[1] as f64, p.affine_z[2] as f64],
+        [
+            p.affine_x[0] as f64,
+            p.affine_x[1] as f64,
+            p.affine_x[2] as f64,
+        ],
+        [
+            p.affine_y[0] as f64,
+            p.affine_y[1] as f64,
+            p.affine_y[2] as f64,
+        ],
+        [
+            p.affine_z[0] as f64,
+            p.affine_z[1] as f64,
+            p.affine_z[2] as f64,
+        ],
     ];
     rp
 }
@@ -1491,8 +1933,15 @@ fn gpu_p2g_stress_momentum(pool: &Pool, dt: f32) -> (Vec<[f64; 3]>, Vec<f64>) {
     enc.dispatch_compute(
         &k.clear,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&clear_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accum, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&clear_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accum,
+                offset: 0,
+            },
         ],
         ceil256(ACCUM_ITEMS),
         "node.clear_grid",
@@ -1507,10 +1956,25 @@ fn gpu_p2g_stress_momentum(pool: &Pool, dt: f32) -> (Vec<[f64; 3]>, Vec<f64>) {
     enc.dispatch_compute(
         &k.scatter_mass,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&mass_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.accum, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&mass_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
         ],
         ceil256(pool.active),
         "node.mpm_scatter_mass_momentum",
@@ -1525,11 +1989,30 @@ fn gpu_p2g_stress_momentum(pool: &Pool, dt: f32) -> (Vec<[f64; 3]>, Vec<f64>) {
     enc.dispatch_compute(
         &k.scatter_stress,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&stress_u) },
-            GpuBinding::Buffer { binding: 1, buffer: &pool.accepted, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &pool.accum, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &pool.status, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &pool.stress_out, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&stress_u),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &pool.accepted,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &pool.accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &pool.status,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &pool.stress_out,
+                offset: 0,
+            },
         ],
         ceil256(pool.active),
         "node.mpm_scatter_stress",
@@ -1541,7 +2024,13 @@ fn gpu_p2g_stress_momentum(pool: &Pool, dt: f32) -> (Vec<[f64; 3]>, Vec<f64>) {
     let scale = GRID_FIXED_SCALE as f64;
     let momentum: Vec<[f64; 3]> = accum
         .chunks(4)
-        .map(|c| [c[0] as f64 / scale, c[1] as f64 / scale, c[2] as f64 / scale])
+        .map(|c| {
+            [
+                c[0] as f64 / scale,
+                c[1] as f64 / scale,
+                c[2] as f64 / scale,
+            ]
+        })
         .collect();
     let mass: Vec<f64> = accum.chunks(4).map(|c| c[3] as f64 / scale).collect();
     (momentum, mass)
@@ -1570,11 +2059,17 @@ fn early_stage_diagnostic(dts: &[f32; 3], labels: &[&str; 3]) {
         gpu_mass.push(mass);
 
         let refs: Vec<ref_oracle::RefParticle> = recs.iter().map(to_ref_live).collect();
-        let mut oracle = ref_oracle::RefGrid::new(64, 64, 64, GRID_SPACING as f64, [
+        let mut oracle = ref_oracle::RefGrid::new(
+            64,
+            64,
+            64,
+            GRID_SPACING as f64,
+            [
             DOMAIN_ORIGIN[0] as f64,
             DOMAIN_ORIGIN[1] as f64,
             DOMAIN_ORIGIN[2] as f64,
-        ]);
+            ],
+        );
         oracle.p2g_mass_momentum(&refs);
         oracle.p2g_stress(
             &refs,
@@ -1633,7 +2128,11 @@ fn early_stage_diagnostic(dts: &[f32; 3], labels: &[&str; 3]) {
                 }
             }
         }
-        let rms = if n > 0 { (sum_sq / n as f64).sqrt() } else { 0.0 };
+        let rms = if n > 0 {
+            (sum_sq / n as f64).sqrt()
+        } else {
+            0.0
+        };
         println!(
             "  grid momentum delta at t=0.02 s, {} vs {} substeps: max {max_d:.3e} kg m/s, RMS {rms:.3e} over {n} momentum components",
             labels[a], labels[b]
@@ -1686,16 +2185,20 @@ fn compare_runs(a: &Pool, b: &Pool, dt: f32, label: &str) -> HalvingReport {
     let mut sum_pos = 0.0f64;
     let mut max_rho_rel = 0.0f64;
     let mut sum_v = 0.0f64;
-    for (x, y) in pa[..SEED_ACTIVE_PARTICLES].iter().zip(pb[..SEED_ACTIVE_PARTICLES].iter()) {
-        let d = ((x.position_mass[0] - y.position_mass[0]) as f64).hypot(
-            (x.position_mass[1] - y.position_mass[1]) as f64,
-        ).hypot((x.position_mass[2] - y.position_mass[2]) as f64);
+    for (x, y) in pa[..SEED_ACTIVE_PARTICLES]
+        .iter()
+        .zip(pb[..SEED_ACTIVE_PARTICLES].iter())
+    {
+        let d = ((x.position_mass[0] - y.position_mass[0]) as f64)
+            .hypot((x.position_mass[1] - y.position_mass[1]) as f64)
+            .hypot((x.position_mass[2] - y.position_mass[2]) as f64);
         max_pos = max_pos.max(d);
         sum_pos += d;
         let ra = x.velocity_density[3] as f64;
         let rb = y.velocity_density[3] as f64;
         max_rho_rel = max_rho_rel.max((ra - rb).abs() / REST_DENSITY as f64);
-        sum_v += (x.velocity_density[0].powi(2) + x.velocity_density[1].powi(2)
+        sum_v += (x.velocity_density[0].powi(2)
+            + x.velocity_density[1].powi(2)
             + x.velocity_density[2].powi(2)) as f64;
     }
     let n = SEED_ACTIVE_PARTICLES as f64;
@@ -1724,12 +2227,14 @@ mod graph_chain {
     use manifold_gpu::GpuTextureFormat;
     use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_renderer::node_graph::depth_rule::DepthRule;
+    use manifold_renderer::node_graph::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    };
     use manifold_renderer::node_graph::primitives::Value;
-    use manifold_renderer::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
     use manifold_renderer::node_graph::{
-        EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor, FrameTime, Graph,
-        MetalBackend, NodeInstanceId, ParamDef, ParamValue as NodeParamValue, ParamValues,
-        ResourceId, compile,
+        compile, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor, FrameTime,
+        Graph, MetalBackend, NodeInstanceId, ParamDef, ParamValue as NodeParamValue, ParamValues,
+        ResourceId,
     };
 
     /// Test-only producer for `Array(WaterParticle)` — CPU-written fixture
@@ -1878,10 +2383,19 @@ mod graph_chain {
         }
     }
 
-    fn resource_for(plan: &ExecutionPlan, node: NodeInstanceId, port: &str, is_input: bool) -> ResourceId {
+    fn resource_for(
+        plan: &ExecutionPlan,
+        node: NodeInstanceId,
+        port: &str,
+        is_input: bool,
+    ) -> ResourceId {
         for step in plan.steps() {
             if step.node == node {
-                let pool = if is_input { &step.inputs } else { &step.outputs };
+                let pool = if is_input {
+                    &step.inputs
+                } else {
+                    &step.outputs
+                };
                 for &(name, id) in pool {
                     if name == port {
                         return id;
@@ -1924,27 +2438,39 @@ mod graph_chain {
         g.set_param(v_dt, "value", NodeParamValue::Float(DEFAULT_STEP_DT))
             .unwrap();
         let v_zero = g.add_node(Box::new(Value::new()));
-        g.set_param(v_zero, "value", NodeParamValue::Float(0.0)).unwrap();
+        g.set_param(v_zero, "value", NodeParamValue::Float(0.0))
+            .unwrap();
 
         g.connect((v_dt, "out"), (clear, "step_dt")).unwrap();
-        g.connect((water_src, "out"), (scatter_mass, "particles")).unwrap();
-        g.connect((status_src, "out"), (scatter_mass, "status")).unwrap();
-        g.connect((clear, "out"), (scatter_mass, "accumulator")).unwrap();
-        g.connect((scatter_mass, "out"), (scatter_stress, "accumulator")).unwrap();
-        g.connect((scatter_mass, "status_out"), (scatter_stress, "status")).unwrap();
-        g.connect((water_src, "out"), (scatter_stress, "particles")).unwrap();
-        g.connect((scatter_stress, "out"), (grid, "accumulator")).unwrap();
-        g.connect((scatter_stress, "status_out"), (validate, "status")).unwrap();
-        g.connect((scatter_stress, "particles_out"), (gather, "particles")).unwrap();
+        g.connect((water_src, "out"), (scatter_mass, "particles"))
+            .unwrap();
+        g.connect((status_src, "out"), (scatter_mass, "status"))
+            .unwrap();
+        g.connect((clear, "out"), (scatter_mass, "accumulator"))
+            .unwrap();
+        g.connect((scatter_mass, "out"), (scatter_stress, "accumulator"))
+            .unwrap();
+        g.connect((scatter_mass, "status_out"), (scatter_stress, "status"))
+            .unwrap();
+        g.connect((water_src, "out"), (scatter_stress, "particles"))
+            .unwrap();
+        g.connect((scatter_stress, "out"), (grid, "accumulator"))
+            .unwrap();
+        g.connect((scatter_stress, "status_out"), (validate, "status"))
+            .unwrap();
+        g.connect((scatter_stress, "particles_out"), (gather, "particles"))
+            .unwrap();
         g.connect((grid, "out"), (gather, "grid")).unwrap();
-        g.connect((v_dt, "out"), (scatter_stress, "step_dt")).unwrap();
+        g.connect((v_dt, "out"), (scatter_stress, "step_dt"))
+            .unwrap();
         g.connect((v_dt, "out"), (gather, "step_dt")).unwrap();
         for axis in ["gravity_x", "gravity_y", "gravity_z"] {
             g.connect((v_zero, "out"), (grid, axis)).unwrap();
         }
         g.connect((gather, "out"), (validate, "particles")).unwrap();
         g.connect((gather, "out"), (commit, "candidate")).unwrap();
-        g.connect((validate, "status_out"), (commit, "status")).unwrap();
+        g.connect((validate, "status_out"), (commit, "status"))
+            .unwrap();
         g.connect((water_src, "out"), (commit, "accepted")).unwrap();
         g.connect((commit, "out"), (sink, "in")).unwrap();
 
@@ -1959,9 +2485,17 @@ mod graph_chain {
         ] {
             g.set_param(grid, name, NodeParamValue::Float(val)).unwrap();
         }
-        g.set_param(scatter_mass, "active_count", NodeParamValue::Float(n as f32))
+        g.set_param(
+            scatter_mass,
+            "active_count",
+            NodeParamValue::Float(n as f32),
+        )
             .unwrap();
-        g.set_param(scatter_stress, "active_count", NodeParamValue::Float(n as f32))
+        g.set_param(
+            scatter_stress,
+            "active_count",
+            NodeParamValue::Float(n as f32),
+        )
             .unwrap();
         g.set_param(validate, "validate_count", NodeParamValue::Float(n as f32))
             .unwrap();
@@ -1986,26 +2520,22 @@ mod graph_chain {
         let status_buf = device().create_buffer_shared(4);
         status_buf.zero_fill();
 
-        let mut backend = MetalBackend::new(
-            Arc::clone(device()),
-            16,
-            16,
-            GpuTextureFormat::Rgba16Float,
-        );
+        let mut backend =
+            MetalBackend::new(Arc::clone(device()), 16, 16, GpuTextureFormat::Rgba16Float);
         // The bare executor path allocates no array buffers — pre-bind every
         // wire (the scatter gpu_tests pattern) and alias the atomic outputs
         // onto their input slots via the chain-builder's alias API, exactly
         // what graph_loader does for aliased_array_io pairs in production.
         let _fixture_slot = backend.pre_bind_array(r_water, fixture_buf);
         let status_slot = backend.pre_bind_array(r_status, status_buf);
-        let accum_slot = backend.pre_bind_array(r_clear, device().create_buffer_shared(ACCUM_BYTES));
+        let accum_slot =
+            backend.pre_bind_array(r_clear, device().create_buffer_shared(ACCUM_BYTES));
         backend.alias_array_resource(r_scatter_out, accum_slot);
         backend.alias_array_resource(r_scatter_status, status_slot);
         backend.alias_array_resource(r_stress_out, accum_slot);
         backend.alias_array_resource(r_stress_status, status_slot);
         backend.alias_array_resource(r_validate_status, status_slot);
-        let _particles_out_slot =
-            backend.pre_bind_array(r_particles_out, particle_buffer(n));
+        let _particles_out_slot = backend.pre_bind_array(r_particles_out, particle_buffer(n));
         let _grid_slot = backend.pre_bind_array(
             r_grid,
             device().create_buffer_shared(GRID_BYTES * GRID_CELLS as u64),
@@ -2033,18 +2563,32 @@ mod graph_chain {
         // The committed state landed in commit.out's buffer (a pure select:
         // candidate when the status word is clean).
         let committed = read_particles(
-            exec.backend().array_buffer(commit_slot).expect("commit buffer retained"),
+            exec.backend()
+                .array_buffer(commit_slot)
+                .expect("commit buffer retained"),
             n,
         );
 
         let refs: Vec<ref_oracle::RefParticle> = particles.iter().map(to_ref).collect();
-        let mut oracle = ref_oracle::RefGrid::new(64, 64, 64, GRID_SPACING as f64, [
+        let mut oracle = ref_oracle::RefGrid::new(
+            64,
+            64,
+            64,
+            GRID_SPACING as f64,
+            [
             DOMAIN_ORIGIN[0] as f64,
             DOMAIN_ORIGIN[1] as f64,
             DOMAIN_ORIGIN[2] as f64,
-        ]);
+            ],
+        );
         oracle.p2g_mass_momentum(&refs);
-        oracle.p2g_stress(&refs, DEFAULT_STEP_DT as f64, REST_DENSITY as f64, 10.0, 0.001);
+        oracle.p2g_stress(
+            &refs,
+            DEFAULT_STEP_DT as f64,
+            REST_DENSITY as f64,
+            10.0,
+            0.001,
+        );
         let advected = oracle.g2p_advect(&refs, DEFAULT_STEP_DT as f64);
 
         let mut max_v_err = 0.0f64;
@@ -2058,8 +2602,14 @@ mod graph_chain {
         println!(
             "water_graph_chain_single_substep: max velocity error {max_v_err:.3e} m/s, max position error {max_x_err:.3e} m"
         );
-        assert!(max_v_err <= 1.0e-3, "graph chain velocity error {max_v_err}");
-        assert!(max_x_err <= 1.0e-5, "graph chain position error {max_x_err}");
+        assert!(
+            max_v_err <= 1.0e-3,
+            "graph chain velocity error {max_v_err}"
+        );
+        assert!(
+            max_x_err <= 1.0e-5,
+            "graph chain position error {max_x_err}"
+        );
     }
 }
 
@@ -2127,12 +2677,21 @@ mod s5 {
                 5 => (-0.15, -0.15),
                 _ => (0.05, -0.1),
             };
-            let pos = [centre[0] + dx, centre[1] + 0.02 * (i % 3) as f32, centre[2] + dz];
+            let pos = [
+                centre[0] + dx,
+                centre[1] + 0.02 * (i % 3) as f32,
+                centre[2] + dz,
+            ];
             // Every 5th slot is inactive; slot 3 is beyond any radius.
             if i % 5 == 4 {
                 out.push(WaterParticle::zeroed());
             } else if i == 3 {
-                let mut p = make_particle([1.5, 2.0, 1.5], [0.1, 0.2, 0.3], [[0.0; 3]; 3], PARTICLE_MASS);
+                let mut p = make_particle(
+                    [1.5, 2.0, 1.5],
+                    [0.1, 0.2, 0.3],
+                    [[0.0; 3]; 3],
+                    PARTICLE_MASS,
+                );
                 p.velocity_density[3] = 900.0;
                 out.push(p);
             } else {
@@ -2156,9 +2715,20 @@ mod s5 {
         enc.dispatch_compute(
             &impulse_pipeline(),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: buf_in, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: buf_out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: buf_in,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: buf_out,
+                    offset: 0,
+                },
             ],
             ceil256(capacity),
             "node.water_impulse",
@@ -2179,7 +2749,14 @@ mod s5 {
         let fixture = impulse_fixture(capacity as usize);
         let expected: Vec<[f32; 3]> = fixture
             .iter()
-            .map(|p| impulse_delta([p.position_mass[0], p.position_mass[1], p.position_mass[2]], centre, radius, impulse))
+            .map(|p| {
+                impulse_delta(
+                    [p.position_mass[0], p.position_mass[1], p.position_mass[2]],
+                    centre,
+                    radius,
+                    impulse,
+                )
+            })
             .collect();
 
         let buf_in = particle_buffer(capacity as usize);
@@ -2224,7 +2801,10 @@ mod s5 {
             // Inactive slots: byte-identical pass-through.
             if fixture[i].position_mass[3] == 0.0 {
                 assert_eq!(g.position_mass[3], 0.0, "inactive slot {i} gained mass");
-                assert_eq!(g.velocity_density, [0.0; 4], "inactive slot {i} gained velocity");
+                assert_eq!(
+                    g.velocity_density, [0.0; 4],
+                    "inactive slot {i} gained velocity"
+                );
                 continue;
             }
             for ((gv, &fv), &e_a) in g
@@ -2238,7 +2818,10 @@ mod s5 {
                 max_err = max_err.max((dv - expected_x as f64 * e_a as f64).abs());
             }
             // Density and affine state untouched.
-            assert_eq!(g.velocity_density[3], fixture[i].velocity_density[3], "slot {i} density drifted");
+            assert_eq!(
+                g.velocity_density[3], fixture[i].velocity_density[3],
+                "slot {i} density drifted"
+            );
         }
         println!(
             "impulse scenario substeps={substeps} trigger={trigger}: applied={applied}, total dv_y {total:.6} m/s, max per-particle err {max_err:.3e}"
@@ -2321,7 +2904,10 @@ mod s5 {
                 std::mem::swap(&mut current_in, &mut current_out);
             }
         }
-        assert_eq!(applies, 1, "the queued event fires exactly once, on the first actual substep");
+        assert_eq!(
+            applies, 1,
+            "the queued event fires exactly once, on the first actual substep"
+        );
         let gpu = read_particles(current_in, capacity as usize);
         let mut moved = 0usize;
         for (i, g) in gpu.iter().enumerate() {
@@ -2344,6 +2930,8 @@ mod s5 {
         birth_lo: u32,
         birth_hi: u32,
         first_free: u32,
+        repeat: f32,
+        velocity_y: f32,
     ) {
         let uniforms = EmitUniforms {
             emit_min_x: EMIT_MIN[0],
@@ -2355,21 +2943,32 @@ mod s5 {
             grid_spacing: GRID_SPACING,
             rest_density: REST_DENSITY,
             rate: 100.0,
+            repeat,
+            velocity_y,
             first_free: first_free as i32,
             birth_lo,
             birth_hi,
             dispatch_count: capacity,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
         let mut enc = device().create_encoder("water-emit");
         enc.dispatch_compute(
             &emit_pipeline(),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: buf_in, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: buf_out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: buf_in,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: buf_out,
+                    offset: 0,
+                },
             ],
             ceil256(capacity),
             "node.water_emit",
@@ -2428,12 +3027,29 @@ mod s5 {
         let mut reports = 0u32;
         for _substep in 0..24u32 {
             step_time += S5_DT;
-            let plan = cursor.advance(0, step_time, 100.0, S5_DT as f64, first_free, capacity, 1024);
+            let plan = cursor.advance(
+                0,
+                step_time,
+                100.0,
+                S5_DT as f64,
+                first_free,
+                capacity,
+                1024,
+            );
             if plan.report_full {
                 reports += 1;
             }
             if plan.hi > plan.lo {
-                dispatch_emit(current_in, current_out, capacity, plan.lo, plan.hi, first_free);
+                dispatch_emit(
+                    current_in,
+                    current_out,
+                    capacity,
+                    plan.lo,
+                    plan.hi,
+                    first_free,
+                    0.0,
+                    0.0,
+                );
                 std::mem::swap(&mut current_in, &mut current_out);
             }
         }
@@ -2441,24 +3057,43 @@ mod s5 {
         let gpu = read_particles(current_in, capacity as usize);
         // Seeded prefix byte-identical.
         let gpu_prefix: Vec<u8> = bytemuck::cast_slice(&gpu[..first_free as usize]).to_vec();
-        assert_eq!(gpu_prefix, prefix_bytes, "emission overwrote the seeded prefix");
+        assert_eq!(
+            gpu_prefix, prefix_bytes,
+            "emission overwrote the seeded prefix"
+        );
         // 24 substeps at 100/s = 2 or 3 births (2.5 expected; floor chain).
         let born = cursor.born();
-        assert!((2..=3).contains(&born), "born {born} outside the fractional-carry window");
+        assert!(
+            (2..=3).contains(&born),
+            "born {born} outside the fractional-carry window"
+        );
         let spacing = GRID_SPACING * 0.5;
-        for (slot, p) in gpu.iter().enumerate().skip(first_free as usize).take(born as usize) {
+        for (slot, p) in gpu
+            .iter()
+            .enumerate()
+            .skip(first_free as usize)
+            .take(born as usize)
+        {
             let ordinal = slot - first_free as usize;
             let expected_pos = emit_lattice_pos(ordinal as u32, spacing);
             assert_eq!(
                 p.position_mass,
-                [expected_pos[0], expected_pos[1], expected_pos[2], PARTICLE_MASS],
+                [
+                    expected_pos[0],
+                    expected_pos[1],
+                    expected_pos[2],
+                    PARTICLE_MASS
+                ],
                 "birth ordinal {ordinal} off the lattice"
             );
             assert_eq!(p.velocity_density, [0.0, 0.0, 0.0, REST_DENSITY]);
             assert_eq!(p.affine_x, [0.0; 4]);
             assert_eq!(p.affine_y, [0.0; 4]);
             assert_eq!(p.affine_z, [0.0; 4]);
-            assert_eq!(p.previous_position, [expected_pos[0], expected_pos[1], expected_pos[2], 0.0]);
+            assert_eq!(
+                p.previous_position,
+                [expected_pos[0], expected_pos[1], expected_pos[2], 0.0]
+            );
         }
         // Unborn tail stays inactive.
         for (i, p) in gpu.iter().enumerate().skip((first_free + born) as usize) {
@@ -2469,17 +3104,42 @@ mod s5 {
         let mut full_reports = reports;
         for _substep in 0..64u32 {
             step_time += S5_DT;
-            let plan = cursor.advance(0, step_time, 1.0e6, S5_DT as f64, first_free, capacity, 1024);
+            let plan = cursor.advance(
+                0,
+                step_time,
+                1.0e6,
+                S5_DT as f64,
+                first_free,
+                capacity,
+                1024,
+            );
             if plan.report_full {
                 full_reports += 1;
             }
             if plan.hi > plan.lo {
-                dispatch_emit(current_in, current_out, capacity, plan.lo, plan.hi, first_free);
+                dispatch_emit(
+                    current_in,
+                    current_out,
+                    capacity,
+                    plan.lo,
+                    plan.hi,
+                    first_free,
+                    0.0,
+                    0.0,
+                );
                 std::mem::swap(&mut current_in, &mut current_out);
             }
         }
-        assert_eq!(cursor.born(), capacity - first_free, "emission stops exactly at the tail size");
-        assert_eq!(full_reports, reports + 1, "Full reported once at exhaustion");
+        assert_eq!(
+            cursor.born(),
+            capacity - first_free,
+            "emission stops exactly at the tail size"
+        );
+        assert_eq!(
+            full_reports,
+            reports + 1,
+            "Full reported once at exhaustion"
+        );
         let gpu = read_particles(current_in, capacity as usize);
         let gpu_prefix: Vec<u8> = bytemuck::cast_slice(&gpu[..first_free as usize]).to_vec();
         assert_eq!(gpu_prefix, prefix_bytes, "prefix touched after Full");
@@ -2512,14 +3172,14 @@ mod s5 {
         use manifold_renderer::node_graph::ports::{
             ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
         };
-        use manifold_renderer::node_graph::StateStore;
+        use manifold_renderer::node_graph::primitives::Value;
         use manifold_renderer::node_graph::substeps::SimulationFrame;
         use manifold_renderer::node_graph::transform::Transform;
-        use manifold_renderer::node_graph::primitives::Value;
+        use manifold_renderer::node_graph::StateStore;
         use manifold_renderer::node_graph::{
-            EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor, FrameTime,
-            Graph, MetalBackend, NodeInstanceId, ParamDef, ParamValue as NodeParamValue,
-            ParamValues, ResourceId, compile,
+            compile, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor,
+            FrameTime, Graph, MetalBackend, NodeInstanceId, ParamDef, ParamValue as NodeParamValue,
+            ParamValues, ResourceId,
         };
 
         /// Records every Transform seen on its input wire — the display
@@ -2669,10 +3329,19 @@ mod s5 {
             }
         }
 
-        fn resource_for(plan: &ExecutionPlan, node: NodeInstanceId, port: &str, is_input: bool) -> ResourceId {
+        fn resource_for(
+            plan: &ExecutionPlan,
+            node: NodeInstanceId,
+            port: &str,
+            is_input: bool,
+        ) -> ResourceId {
             for step in plan.steps() {
                 if step.node == node {
-                    let pool = if is_input { &step.inputs } else { &step.outputs };
+                    let pool = if is_input {
+                        &step.inputs
+                    } else {
+                        &step.outputs
+                    };
                     for &(name, id) in pool {
                         if name == port {
                             return id;
@@ -2733,11 +3402,14 @@ mod s5 {
         g.connect((v_time, "out"), (motion, "step_time")).unwrap();
         g.connect((v_index, "out"), (motion, "step_index")).unwrap();
         g.connect((v_count, "out"), (motion, "step_count")).unwrap();
-        g.connect((target, "transform"), (motion, "target")).unwrap();
+        g.connect((target, "transform"), (motion, "target"))
+            .unwrap();
         g.connect((motion, "transform"), (capture_t, "in")).unwrap();
         g.connect((motion, "velocity"), (capture_v, "in")).unwrap();
-        g.connect((motion, "transform"), (collide, "collider")).unwrap();
-        g.connect((motion, "velocity"), (collide, "collider_velocity")).unwrap();
+        g.connect((motion, "transform"), (collide, "collider"))
+            .unwrap();
+        g.connect((motion, "velocity"), (collide, "collider_velocity"))
+            .unwrap();
         g.connect((source, "out"), (collide, "in")).unwrap();
         g.connect((collide, "out"), (sink, "in")).unwrap();
 
@@ -2745,12 +3417,8 @@ mod s5 {
         let r_source_out = resource_for(&plan, source, "out", false);
         let r_collide_out = resource_for(&plan, collide, "out", false);
 
-        let mut backend = MetalBackend::new(
-            Arc::clone(device()),
-            16,
-            16,
-            GpuTextureFormat::Rgba16Float,
-        );
+        let mut backend =
+            MetalBackend::new(Arc::clone(device()), 16, 16, GpuTextureFormat::Rgba16Float);
         let source_buf = particle_buffer(8);
         source_buf.zero_fill();
         let _source_slot = backend.pre_bind_array(r_source_out, source_buf);
@@ -2788,14 +3456,7 @@ mod s5 {
                     advancing: true,
                     exporting: false,
                 });
-                exec.execute_frame_with_state(
-                    &mut g,
-                    &plan,
-                    frame_time(),
-                    &mut gpu,
-                    &mut store,
-                    0,
-                );
+                exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 0);
                 native_enc.commit_and_wait_completed();
             }
         }
@@ -2922,9 +3583,20 @@ mod s5 {
         enc.dispatch_compute(
             &collide_pipeline(),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &buf_in, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &buf_out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &buf_in,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &buf_out,
+                    offset: 0,
+                },
             ],
             ceil256(n as u32),
             "node.water_collide_box",
@@ -2937,12 +3609,12 @@ mod s5 {
         for (i, g) in gpu.iter().enumerate().take(5) {
             let p = &fixture[i];
             let pos = [g.position_mass[0], g.position_mass[1], g.position_mass[2]];
-            let v = [g.velocity_density[0], g.velocity_density[1], g.velocity_density[2]];
-            let d = [
-                pos[0] - centre[0],
-                pos[1] - centre[1],
-                pos[2] - centre[2],
+            let v = [
+                g.velocity_density[0],
+                g.velocity_density[1],
+                g.velocity_density[2],
             ];
+            let d = [pos[0] - centre[0], pos[1] - centre[1], pos[2] - centre[2]];
             let ad = [d[0].abs(), d[1].abs(), d[2].abs()];
             // Post-projection penetration: how far inside the box the
             // particle remains on its worst axis (0 when on a face).
@@ -2961,7 +3633,11 @@ mod s5 {
             // CPU mirror of the projection: min-penetration-axis push +
             // relative normal velocity removal.
             let mut exp_pos = [p.position_mass[0], p.position_mass[1], p.position_mass[2]];
-            let mut exp_v = [p.velocity_density[0], p.velocity_density[1], p.velocity_density[2]];
+            let mut exp_v = [
+                p.velocity_density[0],
+                p.velocity_density[1],
+                p.velocity_density[2],
+            ];
             let pd = [
                 exp_pos[0] - centre[0],
                 exp_pos[1] - centre[1],
@@ -2978,11 +3654,30 @@ mod s5 {
                 let mut best = dx_lo;
                 let mut axis = 0usize;
                 let mut sgn = -1.0f32;
-                if dx_hi < best { best = dx_hi; axis = 0; sgn = 1.0; }
-                if dy_lo < best { best = dy_lo; axis = 1; sgn = -1.0; }
-                if dy_hi < best { best = dy_hi; axis = 1; sgn = 1.0; }
-                if dz_lo < best { best = dz_lo; axis = 2; sgn = -1.0; }
-                if dz_hi < best { axis = 2; sgn = 1.0; }
+                if dx_hi < best {
+                    best = dx_hi;
+                    axis = 0;
+                    sgn = 1.0;
+                }
+                if dy_lo < best {
+                    best = dy_lo;
+                    axis = 1;
+                    sgn = -1.0;
+                }
+                if dy_hi < best {
+                    best = dy_hi;
+                    axis = 1;
+                    sgn = 1.0;
+                }
+                if dz_lo < best {
+                    best = dz_lo;
+                    axis = 2;
+                    sgn = -1.0;
+                }
+                if dz_hi < best {
+                    axis = 2;
+                    sgn = 1.0;
+                }
                 exp_pos[axis] = centre[axis] + sgn * half[axis];
                 // Into-surface normal component removed; the collider
                 // velocity is zero in this fixture.
@@ -3025,6 +3720,11 @@ mod s5 {
         // Basin half: the below-floor particle may not hold a downward
         // velocity (identical rule to mpm_grid_velocity's boundary path).
         let floor = &gpu[5];
+        assert!(
+            (floor.position_mass[1] - basin_floor_y).abs() <= 1.0e-6,
+            "basin penetration was not projected: y={} floor={basin_floor_y}",
+            floor.position_mass[1]
+        );
         assert!(
             floor.velocity_density[1] >= 0.0,
             "basin floor velocity must be clamped upward: {}",

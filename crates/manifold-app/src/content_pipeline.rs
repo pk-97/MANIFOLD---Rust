@@ -4010,6 +4010,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    /// Return a typed runtime fatal raised by a generator during this frame.
+    /// The export path checks this before encoding, after all generator work
+    /// has been submitted and background work has been flushed.
+    pub fn runtime_export_error(
+        &mut self,
+        engine: &mut PlaybackEngine,
+    ) -> Option<String> {
+        let (renderers, _) = engine.split_renderer_project();
+        renderers.iter_mut().find_map(|renderer| {
+            renderer
+                .as_any_mut()
+                .downcast_mut::<GeneratorRenderer>()
+                .and_then(|generator| generator.runtime_fatal_error())
+        })
+    }
+
     /// Export output texture (post-tonemap, post-effects).
     pub fn export_output_texture(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.output_texture()

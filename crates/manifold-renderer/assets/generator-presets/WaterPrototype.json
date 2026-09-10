@@ -8,14 +8,14 @@
     "oscPrefix": "waterPrototype",
     "available": true,
     "isLineBased": false,
-    "description": "MLS-MPM live water in the scene graph (WATER_SIMULATION_DESIGN.md). Three groups: Water (solver — fixed-step substepped liquid, one box collider shared with the displayed cube), Surface (splat depth/thickness, bilateral smooth, view normals, dielectric material), Scene (basin, sun/fill, orbit camera, depth-tested water pass). Clip trigger strikes the pool (impulse); the cube dips on each beat while Cube Strike is held. V1 compatibility limits (enforced, magenta error frame): no Blend/transparent objects, no raytracing, no temporal upscaling, no volumetric shafts, Rgba16Float canvas only; the water camera must match the scene camera. Groups flatten to the same behavior.",
+    "description": "Live water demo with a continuous pour and repeated cube dip. The camera starts stationary and can be modulated by the user. If ray tracing is requested, water uses the raster path; transparent objects, temporal upscaling, and volumetric shafts are unsupported.",
     "params": [
       {
         "id": "pourRate",
         "name": "Pour Rate",
         "min": 0.0,
         "max": 2000.0,
-        "defaultValue": 0.0,
+        "defaultValue": 1000.0,
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
@@ -37,7 +37,7 @@
         "name": "Cube Strike",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.0,
+        "defaultValue": 1.0,
         "wholeNumbers": true,
         "isToggle": true,
         "isTrigger": false,
@@ -70,7 +70,7 @@
       {
         "id": "pourRate",
         "label": "Pour Rate",
-        "defaultValue": 0.0,
+        "defaultValue": 1000.0,
         "target": { "kind": "node", "nodeId": "pourRateSrc", "param": "value" },
         "convert": { "type": "Float" }
       },
@@ -84,7 +84,7 @@
       {
         "id": "cubeStrike",
         "label": "Cube Strike",
-        "defaultValue": 0.0,
+        "defaultValue": 1.0,
         "target": { "kind": "node", "nodeId": "strikeSrc", "param": "value" },
         "convert": { "type": "Float" }
       },
@@ -126,12 +126,21 @@
           { "id": 11, "nodeId": "water_in", "typeId": "system.group_input", "handle": "input" },
           { "id": 12, "nodeId": "seed", "typeId": "node.seed_water", "handle": "seed", "params": {} },
           { "id": 13, "nodeId": "state", "typeId": "node.water_state", "handle": "state", "params": {} },
-          { "id": 14, "nodeId": "pourRateSrc", "typeId": "node.value", "handle": "pour rate", "params": { "value": { "type": "Float", "value": 0.0 } } },
+          { "id": 14, "nodeId": "pourRateSrc", "typeId": "node.value", "handle": "pour rate", "params": { "value": { "type": "Float", "value": 1000.0 } } },
           { "id": 15, "nodeId": "impulseSrc", "typeId": "node.value", "handle": "impulse strength", "params": { "value": { "type": "Float", "value": 0.5 } } },
           { "id": 16, "nodeId": "simSpeedSrc", "typeId": "node.value", "handle": "simulation speed", "params": { "value": { "type": "Float", "value": 1.0 } } },
           { "id": 17, "nodeId": "resetSrc", "typeId": "node.value", "handle": "reset", "params": { "value": { "type": "Float", "value": 0.0 } } },
           { "id": 18, "nodeId": "impulse", "typeId": "node.water_impulse", "handle": "impulse", "params": {} },
-          { "id": 19, "nodeId": "emit", "typeId": "node.water_emit", "handle": "emit", "params": {} },
+          { "id": 19, "nodeId": "emit", "typeId": "node.water_emit", "handle": "emit", "params": {
+            "emit_min_x": { "type": "Float", "value": -0.75 },
+            "emit_max_x": { "type": "Float", "value": -0.55 },
+            "emit_min_y": { "type": "Float", "value": 1.05 },
+            "emit_max_y": { "type": "Float", "value": 1.15 },
+            "emit_min_z": { "type": "Float", "value": 0.05 },
+            "emit_max_z": { "type": "Float", "value": 0.25 },
+            "repeat": { "type": "Float", "value": 1.0 },
+            "velocity_y": { "type": "Float", "value": -1.0 }
+          } },
           { "id": 20, "nodeId": "clear", "typeId": "node.clear_grid", "handle": "clear grid", "params": {} },
           { "id": 21, "nodeId": "scatter", "typeId": "node.mpm_scatter_mass_momentum", "handle": "scatter mass momentum", "params": {} },
           { "id": 22, "nodeId": "stress", "typeId": "node.mpm_scatter_stress", "handle": "stress", "params": {} },
@@ -230,10 +239,10 @@
             "ior": { "type": "Float", "value": 1.333 },
             "metallic": { "type": "Float", "value": 0.0 },
             "roughness": { "type": "Float", "value": 0.04 },
-            "volume_attenuation_distance": { "type": "Float", "value": 2.0 },
-            "volume_attenuation_color_r": { "type": "Float", "value": 0.7 },
-            "volume_attenuation_color_g": { "type": "Float", "value": 0.9 },
-            "volume_attenuation_color_b": { "type": "Float", "value": 0.95 }
+            "volume_attenuation_distance": { "type": "Float", "value": 0.75 },
+            "volume_attenuation_color_r": { "type": "Float", "value": 0.25 },
+            "volume_attenuation_color_g": { "type": "Float", "value": 0.65 },
+            "volume_attenuation_color_b": { "type": "Float", "value": 0.9 }
           } },
           { "id": 48, "nodeId": "surface_out", "typeId": "system.group_output", "handle": "output" }
         ],
@@ -286,13 +295,8 @@
             "distance": { "type": "Float", "value": 5.2 },
             "fov_y": { "type": "Float", "value": 0.7 },
             "look_y": { "type": "Float", "value": 0.5 },
+            "orbit": { "type": "Float", "value": 0.698132 },
             "tilt": { "type": "Float", "value": 0.95 }
-          } },
-          { "id": 63, "nodeId": "orbitSweep", "typeId": "node.lfo", "handle": "orbit sweep", "params": {
-            "rate": { "type": "Enum", "value": 0 },
-            "shape": { "type": "Enum", "value": 0 },
-            "min": { "type": "Float", "value": 0.35 },
-            "max": { "type": "Float", "value": 0.85 }
           } },
           { "id": 64, "nodeId": "fog", "typeId": "node.atmosphere", "handle": "fog", "params": {
             "fog_density": { "type": "Float", "value": 0.02 },
@@ -323,17 +327,20 @@
             "pos_y": { "type": "Float", "value": 2.5 },
             "pos_z": { "type": "Float", "value": -2.0 }
           } },
-          { "id": 68, "nodeId": "strikeSrc", "typeId": "node.value", "handle": "cube strike", "params": { "value": { "type": "Float", "value": 0.0 } } },
+          { "id": 68, "nodeId": "strikeSrc", "typeId": "node.value", "handle": "cube strike", "params": { "value": { "type": "Float", "value": 1.0 } } },
+          { "id": 112, "nodeId": "strikeGateAmount", "typeId": "node.math", "handle": "strike gate amount", "params": {
+            "op": { "type": "Enum", "value": 2 }
+          } },
           { "id": 69, "nodeId": "strikeHeight", "typeId": "node.affine_scalar", "handle": "strike height", "params": {
-            "scale": { "type": "Float", "value": -0.25 },
-            "offset": { "type": "Float", "value": 0.9 }
+            "scale": { "type": "Float", "value": -0.4 },
+            "offset": { "type": "Float", "value": 1.15 }
           } },
           { "id": 70, "nodeId": "strikeClock", "typeId": "node.beat_gate", "handle": "strike clock", "params": {
-            "rate": { "type": "Enum", "value": 2 },
+            "rate": { "type": "Enum", "value": 0 },
             "duty": { "type": "Float", "value": 0.5 }
           } },
           { "id": 71, "nodeId": "strikeEase", "typeId": "node.trigger_ease_to", "handle": "strike ease", "params": {
-            "window_beats": { "type": "Float", "value": 0.4 }
+            "window_beats": { "type": "Float", "value": 2.0 }
           } },
           { "id": 72, "nodeId": "cubeTarget", "typeId": "node.transform_3d", "handle": "cube target", "params": {} },
           { "id": 73, "nodeId": "cubeMesh", "typeId": "node.cube_mesh", "handle": "cube mesh", "params": {
@@ -367,8 +374,8 @@
           { "id": 80, "nodeId": "wallNMesh", "typeId": "node.cube_mesh", "handle": "wall n mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 81, "nodeId": "wallNXform", "typeId": "node.transform_3d", "handle": "wall n", "params": {
             "pos_y": { "type": "Float", "value": 0.8 },
-            "pos_z": { "type": "Float", "value": 1.98 },
-            "scale_x": { "type": "Float", "value": 4.0 },
+            "pos_z": { "type": "Float", "value": 1.165 },
+            "scale_x": { "type": "Float", "value": 2.25 },
             "scale_y": { "type": "Float", "value": 1.6 },
             "scale_z": { "type": "Float", "value": 0.08 }
           } },
@@ -376,94 +383,64 @@
           { "id": 83, "nodeId": "wallSMesh", "typeId": "node.cube_mesh", "handle": "wall s mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 84, "nodeId": "wallSXform", "typeId": "node.transform_3d", "handle": "wall s", "params": {
             "pos_y": { "type": "Float", "value": 0.8 },
-            "pos_z": { "type": "Float", "value": -1.98 },
-            "scale_x": { "type": "Float", "value": 4.0 },
+            "pos_z": { "type": "Float", "value": -1.165 },
+            "scale_x": { "type": "Float", "value": 2.25 },
             "scale_y": { "type": "Float", "value": 1.6 },
             "scale_z": { "type": "Float", "value": 0.08 }
           } },
           { "id": 85, "nodeId": "wallSObj", "typeId": "node.scene_object", "handle": "Wall S" },
           { "id": 86, "nodeId": "wallEMesh", "typeId": "node.cube_mesh", "handle": "wall e mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 87, "nodeId": "wallEXform", "typeId": "node.transform_3d", "handle": "wall e", "params": {
-            "pos_x": { "type": "Float", "value": 1.98 },
+            "pos_x": { "type": "Float", "value": 1.165 },
             "pos_y": { "type": "Float", "value": 0.8 },
             "scale_x": { "type": "Float", "value": 0.08 },
             "scale_y": { "type": "Float", "value": 1.6 },
-            "scale_z": { "type": "Float", "value": 4.0 }
+            "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 88, "nodeId": "wallEObj", "typeId": "node.scene_object", "handle": "Wall E" },
           { "id": 89, "nodeId": "wallWMesh", "typeId": "node.cube_mesh", "handle": "wall w mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 90, "nodeId": "wallWXform", "typeId": "node.transform_3d", "handle": "wall w", "params": {
-            "pos_x": { "type": "Float", "value": -1.98 },
+            "pos_x": { "type": "Float", "value": -1.165 },
             "pos_y": { "type": "Float", "value": 0.8 },
             "scale_x": { "type": "Float", "value": 0.08 },
             "scale_y": { "type": "Float", "value": 1.6 },
-            "scale_z": { "type": "Float", "value": 4.0 }
+            "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 91, "nodeId": "wallWObj", "typeId": "node.scene_object", "handle": "Wall W" },
-          { "id": 92, "nodeId": "strip0Mesh", "typeId": "node.grid_mesh", "handle": "strip 0 mesh", "params": {
-            "resolution_x": { "type": "Int", "value": 1 },
-            "resolution_y": { "type": "Int", "value": 4 },
-            "size_x": { "type": "Float", "value": 0.66 },
-            "size_y": { "type": "Float", "value": 3.96 }
-          } },
+          { "id": 92, "nodeId": "strip0Mesh", "typeId": "node.cube_mesh", "handle": "strip 0 mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 93, "nodeId": "strip0Xform", "typeId": "node.transform_3d", "handle": "strip 0", "params": {
-            "pos_x": { "type": "Float", "value": -1.65 },
-            "pos_y": { "type": "Float", "value": 0.02 }
+            "pos_x": { "type": "Float", "value": -0.9375 },
+            "pos_y": { "type": "Float", "value": 0.245 }, "scale_x": { "type": "Float", "value": 0.375 }, "scale_y": { "type": "Float", "value": 0.01 }, "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 94, "nodeId": "strip0Obj", "typeId": "node.scene_object", "handle": "Strip 0" },
-          { "id": 95, "nodeId": "strip1Mesh", "typeId": "node.grid_mesh", "handle": "strip 1 mesh", "params": {
-            "resolution_x": { "type": "Int", "value": 1 },
-            "resolution_y": { "type": "Int", "value": 4 },
-            "size_x": { "type": "Float", "value": 0.66 },
-            "size_y": { "type": "Float", "value": 3.96 }
-          } },
+          { "id": 95, "nodeId": "strip1Mesh", "typeId": "node.cube_mesh", "handle": "strip 1 mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 96, "nodeId": "strip1Xform", "typeId": "node.transform_3d", "handle": "strip 1", "params": {
-            "pos_x": { "type": "Float", "value": -0.99 },
-            "pos_y": { "type": "Float", "value": 0.02 }
+            "pos_x": { "type": "Float", "value": -0.5625 },
+            "pos_y": { "type": "Float", "value": 0.245 }, "scale_x": { "type": "Float", "value": 0.375 }, "scale_y": { "type": "Float", "value": 0.01 }, "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 97, "nodeId": "strip1Obj", "typeId": "node.scene_object", "handle": "Strip 1" },
-          { "id": 98, "nodeId": "strip2Mesh", "typeId": "node.grid_mesh", "handle": "strip 2 mesh", "params": {
-            "resolution_x": { "type": "Int", "value": 1 },
-            "resolution_y": { "type": "Int", "value": 4 },
-            "size_x": { "type": "Float", "value": 0.66 },
-            "size_y": { "type": "Float", "value": 3.96 }
-          } },
+          { "id": 98, "nodeId": "strip2Mesh", "typeId": "node.cube_mesh", "handle": "strip 2 mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 99, "nodeId": "strip2Xform", "typeId": "node.transform_3d", "handle": "strip 2", "params": {
-            "pos_x": { "type": "Float", "value": -0.33 },
-            "pos_y": { "type": "Float", "value": 0.02 }
+            "pos_x": { "type": "Float", "value": -0.1875 },
+            "pos_y": { "type": "Float", "value": 0.245 }, "scale_x": { "type": "Float", "value": 0.375 }, "scale_y": { "type": "Float", "value": 0.01 }, "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 100, "nodeId": "strip2Obj", "typeId": "node.scene_object", "handle": "Strip 2" },
-          { "id": 101, "nodeId": "strip3Mesh", "typeId": "node.grid_mesh", "handle": "strip 3 mesh", "params": {
-            "resolution_x": { "type": "Int", "value": 1 },
-            "resolution_y": { "type": "Int", "value": 4 },
-            "size_x": { "type": "Float", "value": 0.66 },
-            "size_y": { "type": "Float", "value": 3.96 }
-          } },
+          { "id": 101, "nodeId": "strip3Mesh", "typeId": "node.cube_mesh", "handle": "strip 3 mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 102, "nodeId": "strip3Xform", "typeId": "node.transform_3d", "handle": "strip 3", "params": {
-            "pos_x": { "type": "Float", "value": 0.33 },
-            "pos_y": { "type": "Float", "value": 0.02 }
+            "pos_x": { "type": "Float", "value": 0.1875 },
+            "pos_y": { "type": "Float", "value": 0.245 }, "scale_x": { "type": "Float", "value": 0.375 }, "scale_y": { "type": "Float", "value": 0.01 }, "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 103, "nodeId": "strip3Obj", "typeId": "node.scene_object", "handle": "Strip 3" },
-          { "id": 104, "nodeId": "strip4Mesh", "typeId": "node.grid_mesh", "handle": "strip 4 mesh", "params": {
-            "resolution_x": { "type": "Int", "value": 1 },
-            "resolution_y": { "type": "Int", "value": 4 },
-            "size_x": { "type": "Float", "value": 0.66 },
-            "size_y": { "type": "Float", "value": 3.96 }
-          } },
+          { "id": 104, "nodeId": "strip4Mesh", "typeId": "node.cube_mesh", "handle": "strip 4 mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 105, "nodeId": "strip4Xform", "typeId": "node.transform_3d", "handle": "strip 4", "params": {
-            "pos_x": { "type": "Float", "value": 0.99 },
-            "pos_y": { "type": "Float", "value": 0.02 }
+            "pos_x": { "type": "Float", "value": 0.5625 },
+            "pos_y": { "type": "Float", "value": 0.245 }, "scale_x": { "type": "Float", "value": 0.375 }, "scale_y": { "type": "Float", "value": 0.01 }, "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 106, "nodeId": "strip4Obj", "typeId": "node.scene_object", "handle": "Strip 4" },
-          { "id": 107, "nodeId": "strip5Mesh", "typeId": "node.grid_mesh", "handle": "strip 5 mesh", "params": {
-            "resolution_x": { "type": "Int", "value": 1 },
-            "resolution_y": { "type": "Int", "value": 4 },
-            "size_x": { "type": "Float", "value": 0.66 },
-            "size_y": { "type": "Float", "value": 3.96 }
-          } },
+          { "id": 107, "nodeId": "strip5Mesh", "typeId": "node.cube_mesh", "handle": "strip 5 mesh", "params": { "size": { "type": "Float", "value": 1.0 } } },
           { "id": 108, "nodeId": "strip5Xform", "typeId": "node.transform_3d", "handle": "strip 5", "params": {
-            "pos_x": { "type": "Float", "value": 1.65 },
-            "pos_y": { "type": "Float", "value": 0.02 }
+            "pos_x": { "type": "Float", "value": 0.9375 },
+            "pos_y": { "type": "Float", "value": 0.245 }, "scale_x": { "type": "Float", "value": 0.375 }, "scale_y": { "type": "Float", "value": 0.01 }, "scale_z": { "type": "Float", "value": 2.25 }
           } },
           { "id": 109, "nodeId": "strip5Obj", "typeId": "node.scene_object", "handle": "Strip 5" },
           { "id": 110, "nodeId": "renderer", "typeId": "node.render_scene", "handle": "scene", "params": {
@@ -473,8 +450,9 @@
           { "id": 111, "nodeId": "scene_out", "typeId": "system.group_output", "handle": "output" }
         ],
         "wires": [
-          { "fromNode": 63, "fromPort": "out", "toNode": 62, "toPort": "orbit" },
-          { "fromNode": 68, "fromPort": "out", "toNode": 69, "toPort": "a" },
+          { "fromNode": 68, "fromPort": "out", "toNode": 112, "toPort": "a" },
+          { "fromNode": 70, "fromPort": "out", "toNode": 112, "toPort": "b" },
+          { "fromNode": 112, "fromPort": "out", "toNode": 69, "toPort": "a" },
           { "fromNode": 69, "fromPort": "out", "toNode": 71, "toPort": "target" },
           { "fromNode": 70, "fromPort": "out", "toNode": 71, "toPort": "trigger" },
           { "fromNode": 71, "fromPort": "out", "toNode": 72, "toPort": "pos_y" },

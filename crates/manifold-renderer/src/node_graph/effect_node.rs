@@ -63,6 +63,16 @@ pub struct FrameTime {
     pub frame_count: i64,
 }
 
+/// Read-only observation context for one substep region's output frame.
+pub struct SubstepFrameContext<'ctx> {
+    pub params: &'ctx ParamValues,
+    pub inputs: NodeInputs<'ctx>,
+    pub simulation_frame: Option<crate::node_graph::substeps::SimulationFrame>,
+    pub state: Option<&'ctx mut StateStore>,
+    pub node_id: NodeInstanceId,
+    pub owner_key: OwnerKey,
+}
+
 /// Resolved per-frame RT quality values — samples per pixel for each
 /// RT term plus ray-tracing dispatch resolution. Lives in manifold-renderer
 /// (next to FrameTime) and is set per-frame by the compositor via
@@ -617,6 +627,18 @@ pub trait EffectNode: Send {
 
     /// Run one frame of GPU work: read inputs, write outputs.
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
+
+    /// Whether this node wants one read-only observation before a substep
+    /// region repeats. Opt-in keeps ordinary graphs on the existing path.
+    fn observes_substep_frame(&self) -> bool { false }
+
+    /// Observe frame inputs even when the region has zero substeps.
+    fn observe_substep_frame(&mut self, _ctx: &mut SubstepFrameContext<'_>) {}
+
+    /// Effective clock state resolved by a substep boundary after evaluate.
+    fn substep_effective_advancing(&self) -> Option<bool> { None }
+
+    fn simulation_error(&self) -> Option<&str> { None }
 
     /// Post-frame capture phase for state-capture primitives. Called
     /// AFTER every node's `evaluate` has run for the frame — so by

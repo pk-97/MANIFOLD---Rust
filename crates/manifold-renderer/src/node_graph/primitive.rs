@@ -43,7 +43,7 @@
 
 use std::sync::OnceLock;
 
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, SubstepFrameContext};
 use crate::node_graph::parameters::ParamDef;
 use crate::node_graph::ports::{NodeInput, NodeOutput};
 
@@ -272,6 +272,11 @@ pub trait Primitive: PrimitiveSpec {
     /// just routed through the authoring layer for boilerplate-free
     /// definition.
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
+
+    fn observes_substep_frame(&self) -> bool { false }
+    fn observe_substep_frame(&mut self, _ctx: &mut SubstepFrameContext<'_>) {}
+    fn substep_effective_advancing(&self) -> Option<bool> { None }
+    fn simulation_error(&self) -> Option<&str> { None }
 
     /// Mirror of [`EffectNode::reconfigure`](crate::node_graph::effect_node::EffectNode::reconfigure).
     /// Default no-op. Override to react to a param change that alters
@@ -667,6 +672,14 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         Primitive::run(self, ctx);
     }
+    fn observes_substep_frame(&self) -> bool { Primitive::observes_substep_frame(self) }
+    fn observe_substep_frame(&mut self, ctx: &mut SubstepFrameContext<'_>) {
+        Primitive::observe_substep_frame(self, ctx);
+    }
+    fn substep_effective_advancing(&self) -> Option<bool> {
+        Primitive::substep_effective_advancing(self)
+    }
+    fn simulation_error(&self) -> Option<&str> { Primitive::simulation_error(self) }
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         Primitive::late_capture(self, ctx);
     }

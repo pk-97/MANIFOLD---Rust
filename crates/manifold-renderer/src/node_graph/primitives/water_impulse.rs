@@ -22,7 +22,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::effect_node::{EffectNodeContext, SubstepFrameContext};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
@@ -257,12 +257,41 @@ crate::primitive! {
 }
 
 impl Primitive for WaterImpulse {
-    /// The velocity change is a pure per-element read-modify-write — the
-    /// output aliases the input wire.
-    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
-        &[("in", "out")]
+    fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+        crate::node_graph::effect_node::NodeRequires { state_store: true, gpu_encoder: true }
     }
 
+    fn observes_substep_frame(&self) -> bool {
+        true
+    }
+
+    fn observe_substep_frame(&mut self, ctx: &mut SubstepFrameContext<'_>) {
+        let Some(frame) = ctx.simulation_frame else { return };
+        if frame.advancing {
+            return;
+        }
+        let trigger_count = ctx
+            .inputs
+            .scalar("trigger_count")
+            .and_then(|v| v.as_scalar())
+            .unwrap_or(0.0);
+        let mut latch = ctx
+            .state
+            .as_deref_mut()
+            .and_then(|store| store.get::<ImpulseEventLatch>(ctx.node_id, ctx.owner_key).copied())
+            .unwrap_or_default();
+        let _ = latch.sample(frame.epoch, frame.frame_id, false, latch.last_step_time, trigger_count);
+        if let Some(store) = ctx.state.as_deref_mut() {
+            if let Some(existing) = store.get::<ImpulseEventLatch>(ctx.node_id, ctx.owner_key) {
+                *existing = latch;
+            } else {
+                store.insert(ctx.node_id, ctx.owner_key, latch);
+            }
+        }
+    }
+
+    /// The output is a distinct working buffer so failed candidates cannot
+    /// overwrite WaterState's accepted particle buffer.
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -338,8 +367,8 @@ impl Primitive for WaterImpulse {
             ));
         }
         if !decision.apply {
-            // No event this substep: the output aliases the input, so the
-            // wire is already correct — nothing to dispatch.
+            let gpu = ctx.gpu_encoder();
+            gpu.native_enc.copy_buffer_to_buffer(in_buf, out_buf, in_buf.size.min(out_buf.size));
             ctx.mark_gpu_accessed();
             return;
         }
@@ -356,6 +385,7 @@ impl Primitive for WaterImpulse {
         };
 
         let gpu = ctx.gpu_encoder();
+        gpu.native_enc.copy_buffer_to_buffer(in_buf, out_buf, in_buf.size.min(out_buf.size));
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Codegen path (mandatory for per-element GPU atoms): the kernel
             // is generated from the `wgsl_body` so the atom participates in
@@ -410,7 +440,11 @@ fn store_latch(ctx: &mut EffectNodeContext<'_, '_>, node_id: crate::node_graph::
         .state
         .as_deref_mut()
         .expect("WaterImpulse requires a StateStore");
-    store.insert(node_id, owner_key, latch);
+    if let Some(existing) = store.get::<ImpulseEventLatch>(node_id, owner_key) {
+        *existing = latch;
+    } else {
+        store.insert(node_id, owner_key, latch);
+    }
 }
 
 #[cfg(test)]
@@ -437,11 +471,11 @@ mod tests {
     }
 
     #[test]
-    fn impulse_registers_aliases_and_is_a_trigger_latch() {
+    fn impulse_uses_distinct_particle_buffers_and_is_a_trigger_latch() {
         let prim = WaterImpulse::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.water_impulse");
-        assert_eq!(node.aliased_array_io(), &[("in", "out")]);
+        assert!(node.aliased_array_io().is_empty());
         assert!(node.is_trigger_latch());
     }
 
@@ -562,6 +596,26 @@ mod tests {
         assert!(!d.apply, "no burst on resume");
         let d = latch.sample(0, 4, true, t(4, 0), 5.0);
         assert!(d.apply, "a genuinely new event still fires");
+    }
+
+    #[test]
+    fn impulse_zero_time_scale_observation_never_replays_on_resume() {
+        let mut latch = ImpulseEventLatch::default();
+        let _ = latch.sample(0, 1, true, t(1, 0), 0.0);
+        let d = latch.sample(0, 2, false, 0.0, 2.0);
+        assert!(!d.apply);
+        let d = latch.sample(0, 3, true, t(3, 0), 2.0);
+        assert!(!d.apply);
+    }
+
+    #[test]
+    fn impulse_fractional_advancing_observation_keeps_trigger_for_next_tick() {
+        let mut latch = ImpulseEventLatch::default();
+        let _ = latch.sample(0, 1, true, t(1, 0), 0.0);
+        // Advancing frame with no completed tick still queues the event.
+        let d = latch.sample(0, 2, true, t(2, 0), 1.0);
+        assert!(d.apply, "the first later substep consumes the retained event");
+        assert_eq!(latch.pending(), 0);
     }
 
     #[test]

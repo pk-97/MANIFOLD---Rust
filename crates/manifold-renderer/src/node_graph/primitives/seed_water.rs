@@ -27,7 +27,7 @@ use crate::node_graph::water::{
 /// onto the floor and sloshing through the settling proof.
 pub const POOL_MIN: [f32; 3] = [-1.0, 0.234375, -1.0];
 /// Default pool box top (0.5 m deep from [`POOL_MIN`]).
-pub const POOL_MAX: [f32; 3] = [1.0, 0.75, 1.0];
+pub const POOL_MAX: [f32; 3] = [1.0, 0.734375, 1.0];
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (the six
 /// pool bounds, `grid_spacing`, `rest_density`, then the allocation-only
@@ -241,6 +241,15 @@ mod tests {
         assert!(wgsl.contains("position_mass"), "WATER_PARTICLE_SPECS field order");
         assert!(wgsl.contains("fn body"), "body fragment embedded");
         assert!(wgsl.contains("WATER_FIXED_SCALE"), "water_common include prepended");
+    }
+
+    #[test]
+    fn default_pool_seed_count_matches_active_count() {
+        let spacing = GRID_SPACING * 0.5;
+        let nx = ((POOL_MAX[0] - POOL_MIN[0]) / spacing + 0.5).floor() as usize;
+        let ny = ((POOL_MAX[1] - POOL_MIN[1]) / spacing + 0.5).floor() as usize;
+        let nz = ((POOL_MAX[2] - POOL_MIN[2]) / spacing + 0.5).floor() as usize;
+        assert_eq!(nx * ny * nz, crate::node_graph::water::SEED_ACTIVE_PARTICLES);
     }
 
     /// Drift gate: the WGSL common file hardcodes the S1 domain constants

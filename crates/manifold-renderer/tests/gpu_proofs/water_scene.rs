@@ -1039,10 +1039,24 @@ fn water_scene_rejects_unsupported_combinations() {
         assert_scene_error_convention(&render(&json, &registry), "Blend object in scene");
     }
 
-    // 6. rt_enabled on.
+    // 6. rt_enabled on: valid water scenes use the explicit raster fallback,
+    // preserving the raster output while reporting the unsupported RT mode.
     {
-        let json = assemble(&full, None, "\"rt_enabled\":{\"type\":\"Bool\",\"value\":true}");
-        assert_scene_error_convention(&render(&json, &registry), "rt_enabled");
+        let raster = render(&assemble(&full, None, ""), &registry);
+        let rt_json = assemble(&full, None, "\"rt_enabled\":{\"type\":\"Bool\",\"value\":true}");
+        let rt = render(&rt_json, &registry);
+        assert_eq!(rt.color, raster.color, "water RT request must use the raster output");
+        for (i, px) in rt.color.chunks_exact(8).enumerate() {
+            let rgb = [
+                f16::from_le_bytes([px[0], px[1]]).to_f32(),
+                f16::from_le_bytes([px[2], px[3]]).to_f32(),
+                f16::from_le_bytes([px[4], px[5]]).to_f32(),
+            ];
+            assert!(
+                !(rgb[0] == 1.0 && rgb[1] == 0.0 && rgb[2] == 1.0),
+                "water RT fallback pixel {i} must not be magenta"
+            );
+        }
     }
 
     // 7. temporal_upscale on, with depth+velocity wired so the D22 gate's
@@ -1102,7 +1116,7 @@ fn water_scene_rejects_unsupported_combinations() {
         }
     }
 
-    println!("[water_scene] all 9 rejection subcases asserted the magenta/1.0 scene-error convention");
+    println!("[water_scene] unsupported-combination checks asserted the expected error or raster-fallback convention");
 }
 
 // ---------------------------------------------------------------------------

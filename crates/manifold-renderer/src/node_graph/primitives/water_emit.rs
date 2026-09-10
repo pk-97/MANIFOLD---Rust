@@ -89,6 +89,20 @@ impl EmitCursor {
         capacity: u32,
         lattice_count: u32,
     ) -> EmitPlan {
+        self.advance_with_repeat(epoch, step_time, rate, step_dt, first_free, capacity, lattice_count, false)
+    }
+
+    pub fn advance_with_repeat(
+        &mut self,
+        epoch: u64,
+        step_time: f32,
+        rate: f64,
+        step_dt: f64,
+        first_free: u32,
+        capacity: u32,
+        lattice_count: u32,
+        repeat: bool,
+    ) -> EmitPlan {
         // Reset with the boundary: first observation, epoch change (seek /
         // project load), or the clock restarted (a reset frame schedules zero
         // ticks, so the regression shows up on the next advancing substep).
@@ -114,7 +128,14 @@ impl EmitCursor {
         // emission box, whichever is smaller. A positive rate with an
         // already-exhausted tail or a zero-lattice box reports Full on the
         // first advance — a visible misconfiguration, not a silent no-op.
-        let max_born = capacity.saturating_sub(first_free).min(lattice_count);
+        let tail = capacity.saturating_sub(first_free);
+        let max_born = if lattice_count == 0 {
+            0
+        } else if repeat {
+            tail
+        } else {
+            tail.min(lattice_count)
+        };
         let full = rate > 0.0 && self.born >= max_born && (self.born > 0 || max_born == 0);
         if self.born > max_born {
             self.born = max_born;
@@ -140,10 +161,10 @@ impl EmitCursor {
 }
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (the six
-/// emission box bounds, `grid_spacing`, `rest_density`, `rate`, then the
-/// allocation-only `first_free` Int -> i32), then the derived `birth_lo` /
+/// emission box bounds, `grid_spacing`, `rest_density`, `rate`, `repeat`,
+/// `velocity_y`, then the allocation-only `first_free` Int -> i32), then the derived `birth_lo` /
 /// `birth_hi` window (u32) packed per dispatch by `run()`, then the
-/// codegen-injected `dispatch_count`. 10 + 2 + 1 = 13 words -> 3 pads = 64
+/// codegen-injected `dispatch_count`. 12 + 3 = 15 words -> 1 pad = 64
 /// bytes. Field order must match the generated WGSL `Params` exactly.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -157,22 +178,24 @@ pub struct EmitUniforms {
     pub grid_spacing: f32,
     pub rest_density: f32,
     pub rate: f32,
+    pub repeat: f32,
+    pub velocity_y: f32,
     pub first_free: i32,
     pub birth_lo: u32,
     pub birth_hi: u32,
     pub dispatch_count: u32,
     pub _pad0: u32,
-    pub _pad1: u32,
-    pub _pad2: u32,
 }
 
 crate::primitive! {
     name: WaterEmit,
     type_id: "node.water_emit",
-    purpose: "Emit new Live Water particles deterministically (design step 1): birth cell-centred h/2-spacing lattice records into the unused tail of the particle wire at the configured rate in particles/s, with the fractional remainder carrying forward across substeps. Ordinal births fill slots from `first_free` (where the seed lattice ends) — no GPU append or readback; the per-owner cursor lives CPU-side and resets with the boundary clock. Capacity exhaustion or a drained emission box stops emission and reports Full once per episode while existing water continues untouched. Inactive slots stay inactive until born; no recycling, drains, or particle death in V1. `rate` accepts a wire (pour envelopes) or the param. Runs as the first stage of the repeated water region body, before the grid transfer stages.",
+    purpose: "Emit new Live Water particles deterministically into the unused tail at the configured rate. Finite mode fills one lattice box; repeat mode wraps lattice positions while fresh slots remain, allowing a continuous pour. Capacity exhaustion or a degenerate emission box reports Full once per episode while existing water continues untouched.",
     inputs: {
         in: Array(WaterParticle) required,
         rate: ScalarF32 optional,
+        repeat: ScalarF32 optional,
+        velocity_y: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         step_time: ScalarF32 optional,
     },
@@ -253,6 +276,22 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("repeat"),
+            label: "Repeat pour",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("velocity_y"),
+            label: "Initial vertical velocity",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-20.0, 20.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("first_free"),
             label: "First free slot",
             ty: ParamType::Int,
@@ -262,7 +301,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "First stage of the repeated water region body (design step 1): `water_state.out -> water_emit -> water_impulse -> clear_grid -> ...`. Wire `rate` from an envelope/Value node for pours; leave it at 0 for a still pool. `step_dt`/`step_time` come from node.water_state's step outputs. `first_free` must match node.seed_water's lattice count (default 65,536): it is where the unused tail begins. The output aliases the input wire (pure per-element birth into zeroed slots).",
+    composition_notes: "First stage of the repeated water region body (design step 1): `water_state.out -> water_emit -> water_impulse -> clear_grid -> ...`. Wire `rate` from an envelope/Value node for pours; set `repeat` above 0.5 for a continuously repeating nozzle and use `velocity_y` to clear each wrapped lattice cycle. `step_dt`/`step_time` come from node.water_state's step outputs. `first_free` must match node.seed_water's lattice count (default 65,536): it is where the unused tail begins.",
     examples: [],
     picker: { label: "Water Emit", category: Atom },
     summary: "Pours new water particles into the unused tail of the particle buffer at a set rate, on the same lattice as the seed.",
@@ -277,12 +316,8 @@ crate::primitive! {
 }
 
 impl Primitive for WaterEmit {
-    /// The birth is a pure per-element write into an inactive slot — the
-    /// output aliases the input wire.
-    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
-        &[("in", "out")]
-    }
-
+    /// The output is a distinct working buffer so failed candidates cannot
+    /// overwrite WaterState's accepted particle buffer.
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -349,6 +384,8 @@ impl Primitive for WaterEmit {
             }
             count
         };
+        let repeat = ctx.scalar_or_param("repeat", read("repeat", 0.0)) > 0.5;
+        let velocity_y = ctx.scalar_or_param("velocity_y", read("velocity_y", 0.0));
         let first_free = read("first_free", SEED_ACTIVE_PARTICLES as f32).max(0.0) as u32;
         let rate = ctx.scalar_or_param("rate", 0.0) as f64;
         let step_dt = ctx.scalar_or_param("step_dt", 0.0) as f64;
@@ -368,7 +405,7 @@ impl Primitive for WaterEmit {
         };
         let frame = ctx.simulation_frame;
         let epoch = frame.map(|f| f.epoch).unwrap_or(0);
-        let plan = cursor.advance(
+        let plan = cursor.advance_with_repeat(
             epoch,
             step_time,
             rate,
@@ -376,13 +413,18 @@ impl Primitive for WaterEmit {
             first_free,
             capacity,
             lattice_count,
+            repeat,
         );
         {
             let store = ctx
                 .state
                 .as_deref_mut()
                 .expect("WaterEmit requires a StateStore");
-            store.insert(node_id, owner_key, cursor);
+            if let Some(existing) = store.get::<EmitCursor>(node_id, owner_key) {
+                *existing = cursor;
+            } else {
+                store.insert(node_id, owner_key, cursor);
+            }
         }
         if plan.report_full {
             ctx.error(
@@ -392,13 +434,14 @@ impl Primitive for WaterEmit {
             );
         }
         if plan.hi <= plan.lo {
-            // No births this substep: the output aliases the input, so the
-            // wire is already correct — nothing to dispatch.
+            let gpu = ctx.gpu_encoder();
+            gpu.native_enc.copy_buffer_to_buffer(in_buf, out_buf, in_buf.size.min(out_buf.size));
             ctx.mark_gpu_accessed();
             return;
         }
 
         let gpu = ctx.gpu_encoder();
+        gpu.native_enc.copy_buffer_to_buffer(in_buf, out_buf, in_buf.size.min(out_buf.size));
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Codegen path (mandatory for per-element GPU atoms): the kernel
             // is generated from the `wgsl_body` so the atom participates in
@@ -421,13 +464,13 @@ impl Primitive for WaterEmit {
             grid_spacing,
             rest_density: read("rest_density", REST_DENSITY),
             rate: rate as f32,
+            repeat: if repeat { 1.0 } else { 0.0 },
+            velocity_y,
             first_free: first_free as i32,
             birth_lo: plan.lo,
             birth_hi: plan.hi,
             dispatch_count: capacity,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
 
         // uniform(0), in(1), out(2).
@@ -483,11 +526,11 @@ mod tests {
     }
 
     #[test]
-    fn emit_registers_and_aliases() {
+    fn emit_uses_distinct_particle_buffers() {
         let prim = WaterEmit::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.water_emit");
-        assert_eq!(node.aliased_array_io(), &[("in", "out")]);
+        assert!(node.aliased_array_io().is_empty());
     }
 
     #[test]
@@ -523,6 +566,18 @@ mod tests {
         assert_eq!(windows[0].hi - windows[0].lo, 0);
         assert!(windows[8].hi == windows[8].lo, "9th substep still carrying");
         assert_eq!(windows[9].hi - windows[9].lo, 1, "first birth at the 10th substep");
+    }
+
+    #[test]
+    fn emit_cursor_repeat_fills_tail_beyond_one_lattice_cycle() {
+        let mut cursor = EmitCursor::default();
+        let mut total = 0;
+        for substep in 0..20 {
+            let plan = cursor.advance_with_repeat(0, t(1, substep), 960.0, DT as f64, 100, 120, 4, true);
+            total += plan.hi - plan.lo;
+        }
+        assert_eq!(total, 20);
+        assert_eq!(cursor.born(), 20);
     }
 
     #[test]
@@ -566,6 +621,10 @@ mod tests {
         let plan = cursor.advance(0, t(1, 0), 100.0, DT as f64, 0, 131_072, 0);
         assert_eq!(plan.hi - plan.lo, 0);
         assert!(plan.report_full, "a zero-lattice box is a visible misconfiguration");
+        let mut repeating = EmitCursor::default();
+        let plan = repeating.advance_with_repeat(0, t(1, 0), 100.0, DT as f64, 0, 131_072, 0, true);
+        assert_eq!(plan.hi - plan.lo, 0);
+        assert!(plan.report_full, "repeat mode must reject a zero-lattice box");
     }
 
     #[test]

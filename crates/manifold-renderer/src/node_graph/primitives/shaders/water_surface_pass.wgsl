@@ -101,18 +101,35 @@ fn fs_water(in: VsOut) -> FsOut {
     let opaque_raw = textureLoad(opaque_depth, coord, 0);
     let opaque_vz = view_z_of(opaque_raw);
     let water_vz = view_z_of(raw);
-    let thickness_eff = clamp(min(splat_thickness, opaque_vz - water_vz), 0.0, 1e3);
+    // Both terms are metres along the view axis. Keep the gap non-negative
+    // when the opaque depth is clear or numerically in front of the splat.
+    let view_ray_z = max(abs(normalize(view_pos).z), 1e-4);
+    let axial_gap = max(opaque_vz - water_vz, 0.0);
+    let opaque_ray_length = axial_gap / view_ray_z;
+    let thickness_eff = clamp(min(splat_thickness, opaque_ray_length), 0.0, 1e3);
 
     // Refraction: displace the opaque-scene sample along the refracted dir,
     // scaled by the effective thickness. Reject a displacement that lands
     // behind a FOREGROUND opaque surface (would pull it through the water).
     let eta = 1.0 / u.ior;
     var refr_uv = in.uv;
-    let refr = refract(-v, n, eta);
-    if refr.x * refr.x + refr.y * refr.y + refr.z * refr.z > 0.5 {
-        let off = vec2<f32>(refr.x, -refr.y) * thickness_eff * 0.5;
-        let cand = clamp(in.uv + off, vec2<f32>(0.0), vec2<f32>(1.0));
-        let cand_coord = vec2<i32>(cand * u.screen_dims.xy);
+    // Refraction is evaluated in view space, then the displaced endpoint is
+    // projected through the same perspective model used by view_pos_of.
+    // Adding a world-space direction directly to UVs breaks with orbit/FOV/
+    // aspect changes and makes the distortion camera-dependent.
+    let refr_view_normal = normalize(vec3<f32>(n_view.x, n_view.y, -n_view.z));
+    let refr_view = refract(-normalize(-view_pos), refr_view_normal, eta);
+    if dot(refr_view, refr_view) > 0.5 {
+        let endpoint = view_pos + refr_view * thickness_eff;
+        let endpoint_z = max(-endpoint.z, 1e-4);
+        let endpoint_ndc = vec2<f32>(
+            endpoint.x / (u.tan_half_fov * u.aspect * endpoint_z),
+            endpoint.y / (u.tan_half_fov * endpoint_z));
+        let cand = clamp(vec2<f32>(endpoint_ndc.x * 0.5 + 0.5,
+                                   0.5 - endpoint_ndc.y * 0.5),
+                         vec2<f32>(0.0), vec2<f32>(1.0));
+        let cand_coord = vec2<i32>(min(cand * u.screen_dims.xy,
+                                       u.screen_dims.xy - vec2<f32>(1.0)));
         let cand_opaque_raw = textureLoad(opaque_depth, cand_coord, 0);
         if view_z_of(cand_opaque_raw) >= water_vz - 1e-3 {
             refr_uv = cand;

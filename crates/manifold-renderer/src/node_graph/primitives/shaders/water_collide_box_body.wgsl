@@ -84,12 +84,12 @@ fn body(
 
     // Static basin — identical rule and geometry to mpm_grid_velocity's
     // boundary path, applied to the particle after advection.
-    if (pos.x <= basin_min_x) { v.x = max(v.x, 0.0); }
-    if (pos.x >= basin_max_x) { v.x = min(v.x, 0.0); }
-    if (pos.y <= basin_min_y) { v.y = max(v.y, 0.0); }
-    if (pos.y >= basin_max_y) { v.y = min(v.y, 0.0); }
-    if (pos.z <= basin_min_z) { v.z = max(v.z, 0.0); }
-    if (pos.z >= basin_max_z) { v.z = min(v.z, 0.0); }
+    if (pos.x <= basin_min_x) { pos.x = basin_min_x; v.x = max(v.x, 0.0); }
+    if (pos.x >= basin_max_x) { pos.x = basin_max_x; v.x = min(v.x, 0.0); }
+    if (pos.y <= basin_min_y) { pos.y = basin_min_y; v.y = max(v.y, 0.0); }
+    if (pos.y >= basin_max_y) { pos.y = basin_max_y; v.y = min(v.y, 0.0); }
+    if (pos.z <= basin_min_z) { pos.z = basin_min_z; v.z = max(v.z, 0.0); }
+    if (pos.z >= basin_max_z) { pos.z = basin_max_z; v.z = min(v.z, 0.0); }
 
     out.position_mass = vec4<f32>(pos, m);
     out.velocity_density = vec4<f32>(v, e_particles.velocity_density.w);
