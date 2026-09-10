@@ -228,7 +228,9 @@ impl Oracle {
 /// `n = floor(extent/spacing + 0.5)` records per axis.
 fn seed_positions(lo: [f32; 3], hi: [f32; 3], grid_spacing: f32) -> Vec<[f32; 3]> {
     let spacing = grid_spacing * 0.5;
-    let n = |extent: f32| ((extent / spacing + 0.5).floor() as u32).max(0);
+    // `as u32` saturates negatives to 0, matching seed_water's WGSL
+    // u32() conversion of the same formula.
+    let n = |extent: f32| (extent / spacing + 0.5).floor() as u32;
     let (nx, ny, nz) = (n(hi[0] - lo[0]), n(hi[1] - lo[1]), n(hi[2] - lo[2]));
     let mut out = Vec::with_capacity((nx * ny * nz) as usize);
     for iz in 0..nz {
@@ -286,7 +288,7 @@ fn seed_water_node() -> String {
         fparam("pool_max_z", format!("{:.6}", POOL_MAX[2])),
         fparam("grid_spacing", GRID_SPACING),
         fparam("rest_density", 1000.0),
-        format!("\"max_capacity\":{{\"type\":\"Int\",\"value\":131072}}"),
+        "\"max_capacity\":{\"type\":\"Int\",\"value\":131072}".to_string(),
     ]
     .join(",");
     format!("{{\"id\":2,\"typeId\":\"node.seed_water\",\"nodeId\":\"seed\",\"params\":{{{params}}}}},")
@@ -305,16 +307,16 @@ fn grid_object(
 ) -> (String, String) {
     let (grid, tris, xf, mat) = (base, base + 1, base + 2, base + 3);
     let grid_params = [
-        format!("\"max_capacity\":{{\"type\":\"Int\",\"value\":256}}"),
-        format!("\"resolution_x\":{{\"type\":\"Int\",\"value\":2}}"),
-        format!("\"resolution_y\":{{\"type\":\"Int\",\"value\":2}}"),
+        "\"max_capacity\":{\"type\":\"Int\",\"value\":256}".to_string(),
+        "\"resolution_x\":{\"type\":\"Int\",\"value\":2}".to_string(),
+        "\"resolution_y\":{\"type\":\"Int\",\"value\":2}".to_string(),
         fparam("size_x", format!("{:.4}", size[0])),
         fparam("size_y", format!("{:.4}", size[1])),
     ]
     .join(",");
     let tris_params = [
-        format!("\"src_cols\":{{\"type\":\"Int\",\"value\":2}}"),
-        format!("\"src_rows\":{{\"type\":\"Int\",\"value\":2}}"),
+        "\"src_cols\":{\"type\":\"Int\",\"value\":2}".to_string(),
+        "\"src_rows\":{\"type\":\"Int\",\"value\":2}".to_string(),
     ]
     .join(",");
     let xf_params = [
@@ -329,7 +331,7 @@ fn grid_object(
         fparam("color_g", format!("{:.4}", color[1])),
         fparam("color_b", format!("{:.4}", color[2])),
         fparam("color_a", 1.0),
-        format!("\"alpha_mode\":{{\"type\":\"Enum\",\"value\":0}}"),
+        "\"alpha_mode\":{\"type\":\"Enum\",\"value\":0}".to_string(),
     ]
     .join(",");
     let nodes = format!(
@@ -361,7 +363,7 @@ fn blend_object_nodes(base: u32, _slot: u32) -> String {
         fparam("color_g", 1.0),
         fparam("color_b", 1.0),
         fparam("color_a", 0.5),
-        format!("\"alpha_mode\":{{\"type\":\"Enum\",\"value\":2}}"),
+        "\"alpha_mode\":{\"type\":\"Enum\",\"value\":2}".to_string(),
         fparam("transmission", 1.0),
     ]
     .join(",");

@@ -467,7 +467,7 @@ pub(crate) mod cpu_reference {
         fn covered_at(&self, x: i32, y: i32) -> bool {
             let cx = x.clamp(0, self.w - 1);
             let cy = y.clamp(0, self.h - 1);
-            self.coverage.map_or(true, |c| c[(cy * self.w + cx) as usize] >= 0.5)
+            self.coverage.is_none_or(|c| c[(cy * self.w + cx) as usize] >= 0.5)
         }
     }
 

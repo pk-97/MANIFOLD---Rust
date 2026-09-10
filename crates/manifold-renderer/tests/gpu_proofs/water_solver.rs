@@ -882,14 +882,13 @@ fn water_gpu_transfer_matches_f64() {
         .fold(0.0f32, f32::max) as f64;
     let mut max_grid_v = 0.0f64;
     let mut supported = 0usize;
-    for g in 0..GRID_CELLS {
-        let mass = resolved[g].velocity_mass[3] as f64;
+    for (g, cell) in resolved.iter().enumerate() {
+        let mass = cell.velocity_mass[3] as f64;
         if mass >= 0.01 * max_cell_mass {
             supported += 1;
             let v_ref = grid.resolved_velocity(g);
-            for a in 0..3 {
-                max_grid_v =
-                    max_grid_v.max((resolved[g].velocity_mass[a] as f64 - v_ref[a]).abs());
+            for (vel_a, v_ref_a) in cell.velocity_mass.iter().zip(v_ref.iter()) {
+                max_grid_v = max_grid_v.max((*vel_a as f64 - v_ref_a).abs());
             }
         }
     }
@@ -999,9 +998,9 @@ fn water_fault_retains_last_valid_state() {
     // of a clean candidate, and a clean status commits the candidate.
     let clean_candidate = accepted.clone();
     write_particles(&candidate_buf, &clean_candidate);
-    let mut pre = FAULT_INTEGER_OVERFLOW;
+    let pre = FAULT_INTEGER_OVERFLOW;
     unsafe {
-        status_buf.write(0, bytemuck::bytes_of(&mut pre));
+        status_buf.write(0, bytemuck::bytes_of(&pre));
     }
     let mut enc = device().create_encoder("water-validate-sticky");
     enc.dispatch_compute(
@@ -1593,22 +1592,22 @@ fn early_stage_diagnostic(dts: &[f32; 3], labels: &[&str; 3]) {
         let mut sum_sq = 0.0f64;
         let mut supported = 0usize;
         let mut max_vel_err = 0.0f64;
-        for g in 0..GRID_CELLS {
-            if oracle.mass[g] >= 0.01 * max_mass {
+        for (g, &mass_g) in oracle.mass.iter().enumerate() {
+            if mass_g >= 0.01 * max_mass {
                 supported += 1;
-                for a in 0..3 {
-                    let e = (gpu_momentum[r][g][a] - oracle.momentum[g][a]).abs();
+                for (gpu_a, &mom_a) in gpu_momentum[r][g].iter().zip(oracle.momentum[g].iter()) {
+                    let e = (gpu_a - mom_a).abs();
                     max_mom_err = max_mom_err.max(e);
                     sum_sq += e * e;
                 }
                 let v_ref = oracle.resolved_velocity(g);
-                for a in 0..3 {
+                for (v_ref_a, &mom_a) in v_ref.iter().zip(gpu_momentum[r][g].iter()) {
                     let v_gpu = if gpu_mass[r][g] > 0.0 {
-                        gpu_momentum[r][g][a] / gpu_mass[r][g]
+                        mom_a / gpu_mass[r][g]
                     } else {
                         0.0
                     };
-                    max_vel_err = max_vel_err.max((v_gpu - v_ref[a]).abs());
+                    max_vel_err = max_vel_err.max((v_gpu - v_ref_a).abs());
                 }
             }
         }
@@ -1624,10 +1623,10 @@ fn early_stage_diagnostic(dts: &[f32; 3], labels: &[&str; 3]) {
         let mut max_d = 0.0f64;
         let mut sum_sq = 0.0f64;
         let mut n = 0usize;
-        for g in 0..GRID_CELLS {
-            if gpu_mass[a][g] >= 0.01 * max_mass && gpu_mass[b][g] > 0.0 {
-                for axis in 0..3 {
-                    let d = gpu_momentum[a][g][axis] - gpu_momentum[b][g][axis];
+        for (g, (&ma, &mb)) in gpu_mass[a].iter().zip(gpu_mass[b].iter()).enumerate() {
+            if ma >= 0.01 * max_mass && mb > 0.0 {
+                for (pa, &pb) in gpu_momentum[a][g].iter().zip(gpu_momentum[b][g].iter()) {
+                    let d = pa - pb;
                     max_d = max_d.max(d.abs());
                     sum_sq += d * d;
                     n += 1;
@@ -2228,10 +2227,15 @@ mod s5 {
                 assert_eq!(g.velocity_density, [0.0; 4], "inactive slot {i} gained velocity");
                 continue;
             }
-            for a in 0..3 {
-                let dv = (g.velocity_density[a] - fixture[i].velocity_density[a]) as f64;
+            for ((gv, &fv), &e_a) in g
+                .velocity_density
+                .iter()
+                .zip(fixture[i].velocity_density.iter())
+                .zip(e.iter())
+            {
+                let dv = (*gv - fv) as f64;
                 total += dv;
-                max_err = max_err.max((dv - expected_x as f64 * e[a] as f64).abs());
+                max_err = max_err.max((dv - expected_x as f64 * e_a as f64).abs());
             }
             // Density and affine state untouched.
             assert_eq!(g.velocity_density[3], fixture[i].velocity_density[3], "slot {i} density drifted");
@@ -2440,21 +2444,21 @@ mod s5 {
         assert_eq!(gpu_prefix, prefix_bytes, "emission overwrote the seeded prefix");
         // 24 substeps at 100/s = 2 or 3 births (2.5 expected; floor chain).
         let born = cursor.born();
-        assert!(born >= 2 && born <= 3, "born {born} outside the fractional-carry window");
+        assert!((2..=3).contains(&born), "born {born} outside the fractional-carry window");
         let spacing = GRID_SPACING * 0.5;
-        for slot in first_free as usize..(first_free + born) as usize {
+        for (slot, p) in gpu.iter().enumerate().skip(first_free as usize).take(born as usize) {
             let ordinal = slot - first_free as usize;
             let expected_pos = emit_lattice_pos(ordinal as u32, spacing);
             assert_eq!(
-                gpu[slot].position_mass,
+                p.position_mass,
                 [expected_pos[0], expected_pos[1], expected_pos[2], PARTICLE_MASS],
                 "birth ordinal {ordinal} off the lattice"
             );
-            assert_eq!(gpu[slot].velocity_density, [0.0, 0.0, 0.0, REST_DENSITY]);
-            assert_eq!(gpu[slot].affine_x, [0.0; 4]);
-            assert_eq!(gpu[slot].affine_y, [0.0; 4]);
-            assert_eq!(gpu[slot].affine_z, [0.0; 4]);
-            assert_eq!(gpu[slot].previous_position, [expected_pos[0], expected_pos[1], expected_pos[2], 0.0]);
+            assert_eq!(p.velocity_density, [0.0, 0.0, 0.0, REST_DENSITY]);
+            assert_eq!(p.affine_x, [0.0; 4]);
+            assert_eq!(p.affine_y, [0.0; 4]);
+            assert_eq!(p.affine_z, [0.0; 4]);
+            assert_eq!(p.previous_position, [expected_pos[0], expected_pos[1], expected_pos[2], 0.0]);
         }
         // Unborn tail stays inactive.
         for (i, p) in gpu.iter().enumerate().skip((first_free + born) as usize) {
@@ -2479,8 +2483,8 @@ mod s5 {
         let gpu = read_particles(current_in, capacity as usize);
         let gpu_prefix: Vec<u8> = bytemuck::cast_slice(&gpu[..first_free as usize]).to_vec();
         assert_eq!(gpu_prefix, prefix_bytes, "prefix touched after Full");
-        for slot in first_free as usize..capacity as usize {
-            assert_ne!(gpu[slot].position_mass[3], 0.0, "tail slot {slot} not born");
+        for (slot, p) in gpu.iter().enumerate().skip(first_free as usize) {
+            assert_ne!(p.position_mass[3], 0.0, "tail slot {slot} not born");
         }
         println!(
             "water_emit: {} substeps -> {} born, Full once, prefix intact",

@@ -969,16 +969,18 @@ fn water_surface_translated_camera_normals() {
         let normals = render_normals(cam);
         let mut acc = [0.0f32; 3];
         let mut count = 0usize;
-        for i in 0..normals.len() {
-            let n = normals[i];
+        for (i, n) in normals.iter().copied().enumerate() {
             if n[3] < 0.5 {
                 continue;
             }
             // Rotate the view-space normal into world space:
             // n_world = right*n.x + up*n.y + fwd*n.z.
             let mut nw = [0.0f32; 3];
-            for a in 0..3 {
-                nw[a] = cam.right[a] * n[0] + cam.up[a] * n[1] + cam.fwd[a] * n[2];
+            for (nwa, ((&r, &u), &f)) in nw
+                .iter_mut()
+                .zip(cam.right.iter().zip(cam.up.iter()).zip(cam.fwd.iter()))
+            {
+                *nwa = r * n[0] + u * n[1] + f * n[2];
             }
             let len = (nw[0] * nw[0] + nw[1] * nw[1] + nw[2] * nw[2]).sqrt();
             assert!(len > 0.5, "covered normal {i} nearly zero-length: {nw:?}");
