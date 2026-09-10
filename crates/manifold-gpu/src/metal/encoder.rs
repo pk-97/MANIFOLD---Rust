@@ -830,6 +830,54 @@ impl GpuEncoder {
         }
     }
 
+    /// Draw a fullscreen triangle with a render pipeline and a depth
+    /// attachment. Colour loads (the caller composites over an existing
+    /// image); depth loads its current contents and stores fragments that
+    /// pass the given depth-stencil state (WATER_SIMULATION_DESIGN.md
+    /// section 7's depth-tested water shading pass).
+    pub fn draw_fullscreen_depth(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        target: &GpuTexture,
+        depth: &GpuTexture,
+        depth_stencil: &GpuDepthStencilState,
+        bindings: &[GpuBinding],
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(MTLLoadAction::Load);
+            color.setStoreAction(MTLStoreAction::Store);
+        }
+        let depth_att = unsafe { desc.depthAttachment() };
+        unsafe {
+            depth_att.setTexture(Some(&depth.raw));
+            depth_att.setLoadAction(MTLLoadAction::Load);
+            depth_att.setStoreAction(MTLStoreAction::Store);
+        }
+
+        let enc = self.make_render_encoder(&desc, label);
+        unsafe {
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
+            enc.setRenderPipelineState(&pipeline.state);
+            enc.setDepthStencilState(Some(&depth_stencil.raw));
+        }
+
+        apply_bindings_draw_fullscreen(&enc, pipeline, bindings);
+
+        unsafe {
+            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
+    }
+
     /// Draw a fullscreen triangle with viewport positioning.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_fullscreen_viewport(
