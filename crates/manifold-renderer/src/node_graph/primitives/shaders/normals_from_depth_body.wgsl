@@ -9,8 +9,12 @@
 // neighbour on an axis falls back to the single covered side; a pixel with
 // no covered neighbours at all gets the toward-camera fallback (0,0,-1) —
 // never a heightmap normal, never smoothing uncovered pixels into liquid.
-// Output: view-space normal in RGB (toward-camera hemisphere, -z forward in
-// this view convention), coverage in A (0 empty, 1 occupied).
+// Output: view-space normal in RGB (toward-camera hemisphere = NEGATIVE z
+// here: screen x right / screen y down makes cross(ddx, ddy) face the
+// camera with z <= 0, see the flip below), coverage in A (0 empty,
+// 1 occupied). Consumers using the depth_common view_pos frame (in-front =
+// -z, toward-camera = +z) must negate z once — water_surface_pass.wgsl
+// does.
 
 // Covered test on the R8Unorm coverage texture (0 empty, 1 occupied).
 fn nfd_covered(coverage_tex: texture_2d<f32>, c: vec2<i32>, dims_i: vec2<i32>) -> bool {

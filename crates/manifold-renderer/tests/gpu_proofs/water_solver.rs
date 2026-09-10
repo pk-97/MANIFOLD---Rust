@@ -2209,7 +2209,7 @@ mod s5 {
         let mut current_out = buf_out;
         let d = latch.sample(0, 1, true, step_time, 0.0);
         assert!(!d.apply, "arming observation must not fire");
-        for i in 0..substeps {
+        for _i in 0..substeps {
             step_time += S5_DT;
             let d = latch.sample(0, 2, true, step_time, trigger);
             if d.apply {
@@ -2308,7 +2308,7 @@ mod s5 {
         let mut applies = 0u32;
         let mut current_in = &buf_in;
         let mut current_out = &buf_out;
-        for i in 0..4u32 {
+        for _i in 0..4u32 {
             step_time += S5_DT;
             let d = latch.sample(0, 3, true, step_time, 1.0);
             if d.apply {
@@ -2422,7 +2422,7 @@ mod s5 {
         let mut current_in = &buf_in;
         let mut current_out = &buf_out;
         let mut reports = 0u32;
-        for substep in 0..24u32 {
+        for _substep in 0..24u32 {
             step_time += S5_DT;
             let plan = cursor.advance(0, step_time, 100.0, S5_DT as f64, first_free, capacity, 1024);
             if plan.report_full {
@@ -2463,7 +2463,7 @@ mod s5 {
 
         // Full: pour hard into the remaining tail until exhaustion.
         let mut full_reports = reports;
-        for substep in 0..64u32 {
+        for _substep in 0..64u32 {
             step_time += S5_DT;
             let plan = cursor.advance(0, step_time, 1.0e6, S5_DT as f64, first_free, capacity, 1024);
             if plan.report_full {
