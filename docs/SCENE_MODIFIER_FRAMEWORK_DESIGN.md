@@ -5,6 +5,8 @@
 Lifecycle: contract — the modifier descriptor, D1–D8 decisions, and INV-M1..M9 invariants are the cited contract for any future modifier kind.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
+**Proposed successor (2026-09-10):** [Mathematical Scene Modifier Programme](SCENE_MODIFIER_PROGRAMME.md) and [Preset Architecture](SCENE_MODIFIER_PRESET_ARCHITECTURE.md) propose file-defined, repeated modifier instances and ordered expansion. They do not change shipped behaviour yet. This document's derived-list/Rust-descriptor rules remain current until the foundation migration lands; geometry and compatibility invariants must be preserved.
+
 A scene modifier is to a 3D scene what an effect is to a 2D layer: a named,
 carded, triggerable behavior the performer adds, tunes, enables, and removes
 without seeing the graph. Scene Loop was the prototype; this design generalizes

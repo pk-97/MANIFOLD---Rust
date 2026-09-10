@@ -5,6 +5,8 @@
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before
 starting any phase.
 
+**Modifier integration companion (proposed 2026-09-10):** [Splat Modifiers](SCENE_SPLAT_MODIFIERS_DESIGN.md) connects this proposed source/render pipeline to file-defined scene modifiers. This document retains importer, channel layout, sort and renderer ownership; the companion depends on those phases and does not claim they are implemented.
+
 Peter's directive (2026-07-04 phone brainstorm): Gaussian splats "will definitely be
 important." The frame: static 3D-scan assets should "come alive." Scans increasingly
 ship as splats, and per-splat attributes (position/scale/rotation/color/opacity) are
