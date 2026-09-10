@@ -199,9 +199,14 @@ impl Primitive for WaterCollideBox {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let step_dt = ctx.scalar_or_param("step_dt", DEFAULT_STEP_DT);
         let Some(in_buf) = ctx.inputs.array("in") else {
+            // Aliased out shares the input's buffer, so a no-dispatch path
+            // leaves the wire coherent; mark GPU access for the executor's
+            // stale-data debug_assert.
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(collider) = ctx.inputs.transform("collider") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let collider_velocity = match ctx.inputs.scalar("collider_velocity") {
@@ -209,11 +214,13 @@ impl Primitive for WaterCollideBox {
             _ => [0.0; 3],
         };
         let Some(out_buf) = ctx.outputs.array("out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let particle_size = std::mem::size_of::<WaterParticle>() as u64;
         let capacity = (in_buf.size.min(out_buf.size) / particle_size) as u32;
         if capacity == 0 {
+            ctx.mark_gpu_accessed();
             return;
         }
 

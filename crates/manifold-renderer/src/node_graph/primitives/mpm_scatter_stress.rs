@@ -128,15 +128,22 @@ impl Primitive for MpmScatterStress {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let step_dt = ctx.scalar_or_param("step_dt", DEFAULT_STEP_DT);
         let Some(particles) = ctx.inputs.array("particles") else {
+            // Aliased outputs share their input wires' buffers, so a
+            // no-dispatch path leaves the wire coherent; mark GPU access for
+            // the executor's stale-data debug_assert.
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(accum) = ctx.outputs.array("out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(particles_out) = ctx.outputs.array("particles_out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(status_out) = ctx.outputs.array("status_out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let capacity = (particles.size / std::mem::size_of::<WaterParticle>() as u64) as u32;
@@ -146,6 +153,7 @@ impl Primitive for MpmScatterStress {
             .max(0.0) as u32;
         let active_count = active_count.min(capacity);
         if active_count == 0 {
+            ctx.mark_gpu_accessed();
             return;
         }
 

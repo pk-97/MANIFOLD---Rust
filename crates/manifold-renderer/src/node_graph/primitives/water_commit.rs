@@ -78,15 +78,22 @@ impl Primitive for WaterCommit {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(accepted) = ctx.inputs.array("accepted") else {
+            // Aliased out shares the accepted input's buffer, so a no-dispatch
+            // path leaves the wire coherent; mark GPU access for the
+            // executor's stale-data debug_assert.
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(candidate) = ctx.inputs.array("candidate") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(out_buf) = ctx.outputs.array("out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(status) = ctx.inputs.array("status") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         // Full capacity: live slots are selected, inactive slots pass through
@@ -97,6 +104,7 @@ impl Primitive for WaterCommit {
             .min(out_buf.size)
             / std::mem::size_of::<WaterParticle>() as u64) as u32;
         if capacity == 0 {
+            ctx.mark_gpu_accessed();
             return;
         }
 

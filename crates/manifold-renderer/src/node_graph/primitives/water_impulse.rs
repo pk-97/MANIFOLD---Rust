@@ -281,14 +281,20 @@ impl Primitive for WaterImpulse {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(in_buf) = ctx.inputs.array("in") else {
+            // Aliased out shares the input's buffer, so a no-dispatch path
+            // leaves the wire coherent; mark GPU access for the executor's
+            // stale-data debug_assert.
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(out_buf) = ctx.outputs.array("out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let particle_size = std::mem::size_of::<WaterParticle>() as u64;
         let capacity = (in_buf.size.min(out_buf.size) / particle_size) as u32;
         if capacity == 0 {
+            ctx.mark_gpu_accessed();
             return;
         }
 
@@ -311,6 +317,7 @@ impl Primitive for WaterImpulse {
             // the region should not have run; hold state, pass through.
             None => {
                 store_latch(ctx, node_id, owner_key, latch);
+                ctx.mark_gpu_accessed();
                 return;
             }
         };
@@ -333,6 +340,7 @@ impl Primitive for WaterImpulse {
         if !decision.apply {
             // No event this substep: the output aliases the input, so the
             // wire is already correct — nothing to dispatch.
+            ctx.mark_gpu_accessed();
             return;
         }
 

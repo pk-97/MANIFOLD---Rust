@@ -132,12 +132,18 @@ impl Primitive for WaterValidate {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(particles) = ctx.inputs.array("particles") else {
+            // Aliased status_out shares the status input's buffer, so a
+            // no-dispatch path leaves the wire coherent; mark GPU access for
+            // the executor's stale-data debug_assert.
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(status_in) = ctx.inputs.array("status") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(status_out) = ctx.outputs.array("status_out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let capacity = (particles.size / std::mem::size_of::<WaterParticle>() as u64) as u32;
@@ -147,6 +153,7 @@ impl Primitive for WaterValidate {
             .max(0.0) as u32;
         let validate_count = validate_count.min(capacity);
         if validate_count == 0 {
+            ctx.mark_gpu_accessed();
             return;
         }
         let read_param = |name: &str, default: f32| match ctx.params.get(name) {
