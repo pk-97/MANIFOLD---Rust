@@ -305,6 +305,7 @@ fn render_ui_scene(
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "dmxcard"
+        || scene == "water_lifecycle"
     {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
@@ -318,6 +319,9 @@ fn render_ui_scene(
         // replacing the inspector. `dmxcard` (LED_STRIPS_DESIGN MVP-P3c L3) is
         // the same shape: the selected DMX layer's LED Fill card is the subject —
         // without the inspector the card's Change button never renders.
+        // `water_lifecycle` (WATER_IMPLEMENTATION_PLAN.md S8) joins the set:
+        // the selected WaterPrototype layer's exposed-param card is the subject
+        // the lifecycle flow's live-value asserts read.
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
@@ -979,6 +983,27 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     // The live app's per-frame `push_state` feeds the RT Quality panel; the
     // harness has no per-frame push, so mirror it here — a tier click's label
     // repaint proves command → project → sync round-tripped.
+    ui.rt_quality_panel.configure(data.project.settings.rt_quality);
+}
+
+/// `sync_data` minus the inspector configure, for the script runner's
+/// NON-rebuild frames. The live app pairs `sync_inspector_data` with a
+/// structural rebuild (`app_render.rs`'s `needs_structural_sync` gate) —
+/// `InspectorCompositePanel::configure_gen_params` reconfigures the cards
+/// unconditionally, and `ParamCardPanel::configure` resets the built-row host
+/// state (`row_host.slider_ids`), so a configure on a frame that does not
+/// rebuild leaves the cards with no built rows and the per-frame value sync
+/// (`push_state` → `sync_card_values`) silently no-ops: stale value text
+/// until the next rebuild. The runner used to run the full `sync_data` on
+/// every `advance_frame`; gating it to rebuild frames (matching the live
+/// seam) is what lets a non-structural param write — a scrub commit, a
+/// content-side value change — show up in the card's value text in place.
+fn sync_data_no_inspector(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
+    sync_project_data(ui, &data.project, data.active, &data.selection);
+    // Zoom so the fixture's clips fit the lane width (set before build so the
+    // ruler ticks and the clip rects agree on px/beat).
+    ui.viewport.set_zoom(zoom_ppb);
+    // Same unconditional rt-quality mirror `sync_data` carries — display-only.
     ui.rt_quality_panel.configure(data.project.settings.rt_quality);
 }
 

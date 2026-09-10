@@ -144,6 +144,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "bug047"
         || scene == "envmod"
         || scene == "dmxcard"
+        || scene == "water_lifecycle"
     {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
@@ -465,6 +466,27 @@ impl Runner {
                     action: action_desc,
                     status: "ok",
                     detail: format!("clock -> {:.3}s ({frames} filmstrip tile(s))", self.clock),
+                    artifact: None,
+                }
+            }
+            AutomationAction::SetTransport { playing } => {
+                // WATER_LIFECYCLE_FLOW: deterministic transport-state seed.
+                // Both observable halves of the two-thread transport state are
+                // owned by this runner headless (the content thread that would
+                // ack a Play/Pause command doesn't exist and the channel is
+                // undrained by design) — set them together so the production
+                // PlayPause branch and the button text stay real observables.
+                // Engine-side pause semantics (clock freeze, no catch-up) are
+                // NOT emulated here; they are proven by the playback engine's
+                // own pause tests.
+                self.content_state.is_playing = *playing;
+                data.content.is_playing = *playing;
+                self.advance_frame(ui, data, zoom_ppb, render, false);
+                StepResult {
+                    index,
+                    action: action_desc,
+                    status: "ok",
+                    detail: format!("transport playing -> {playing}"),
                     artifact: None,
                 }
             }
@@ -1058,6 +1080,27 @@ impl Runner {
             if result.structural_change {
                 self.needs_structural_sync = true;
             }
+            // WATER_LIFECYCLE_FLOW: mirror a dispatched transport command into
+            // the runner-owned transport state — the headless stand-in for the
+            // content thread's snapshot ack (the command channel is undrained
+            // by design, so without this mirror the PlayPause branch could
+            // never read `is_playing == true` and the button text could never
+            // change). Runs AFTER dispatch so the branch saw the pre-command
+            // state, exactly as the live app's branch reads the last snapshot.
+            // Engine-side pause semantics (clock freeze, no catch-up) stay in
+            // the playback engine's own tests; this is the UI wiring only.
+            match action {
+                PanelAction::Transport(manifold_ui::TransportAction::PlayPause) => {
+                    let now_playing = !self.content_state.is_playing;
+                    self.content_state.is_playing = now_playing;
+                    data.content.is_playing = now_playing;
+                }
+                PanelAction::Transport(manifold_ui::TransportAction::Stop) => {
+                    self.content_state.is_playing = false;
+                    data.content.is_playing = false;
+                }
+                _ => {}
+            }
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
             // mirrored arm set it directly).
@@ -1138,7 +1181,20 @@ impl Runner {
         render: &mut RenderState,
         scrolled_in_place: bool,
     ) {
-        super::sync_data(ui, data, zoom_ppb);
+        // Mirror the live seam's inspector gating (see
+        // `sync_data_no_inspector`): the full sync — including the card
+        // configure — only on frames that rebuild; a configure without a
+        // rebuild wipes the cards' built rows and the value plane no-ops.
+        // Order preserved from the original seam: the sync runs FIRST (as
+        // `sync_data` always did), then the tween settle + overlay read.
+        let will_rebuild = self.needs_structural_sync
+            || ui.inspector.drawer_anim_active()
+            || ui.overlay_dirty;
+        if will_rebuild {
+            super::sync_data(ui, data, zoom_ppb);
+        } else {
+            super::sync_data_no_inspector(ui, data, zoom_ppb);
+        }
         // BUG-073 fix shape (b): this driver has no per-frame timer, so a
         // tween a dispatch just armed (e.g. a newly-armed drawer growing a
         // card's row count) would otherwise sit at its t=0 state forever —

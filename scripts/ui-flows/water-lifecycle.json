@@ -1,0 +1,186 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Water — Prototype 1" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Water — Prototype 2" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "WATER" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Impulse Strength" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Cube Strike" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Simulation Speed" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Reset" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.impulseStrength.value" } },
+      "check": { "TextEquals": "0.50" }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.simSpeed.value" } },
+      "check": { "TextEquals": "1.00" }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.simReset.value" } },
+      "check": { "TextEquals": "0" }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.cubeStrike" } },
+      "check": { "TextEquals": "OFF" }
+    }
+  },
+  {
+    "SetParam": {
+      "param": { "GeneratorParam": { "param": "impulseStrength" } },
+      "value": 1.25
+    }
+  },
+  { "Step": { "frames": 1 } },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.impulseStrength.value" } },
+      "check": { "TextEquals": "1.25" }
+    }
+  },
+  {
+    "SetParam": {
+      "param": { "GeneratorParam": { "param": "cubeStrike" } },
+      "value": 1.0
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.cubeStrike" } },
+      "check": { "TextEquals": "ON" }
+    }
+  },
+  { "Step": { "frames": 4 } },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.cubeStrike" } },
+      "check": { "TextEquals": "ON" }
+    }
+  },
+  {
+    "SetParam": {
+      "param": { "GeneratorParam": { "param": "cubeStrike" } },
+      "value": 0.0
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.cubeStrike" } },
+      "check": { "TextEquals": "OFF" }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "transport.play" } },
+      "check": { "TextEquals": "PLAY" }
+    }
+  },
+  { "SetTransport": { "playing": true } },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "transport.play" } },
+      "check": { "TextEquals": "PAUSE" }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "transport.play" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "transport.play" } },
+      "check": { "TextEquals": "PLAY" }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "transport.play" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "transport.play" } },
+      "check": { "TextEquals": "PAUSE" }
+    }
+  },
+  { "Step": { "frames": 2 } },
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Water — Prototype 2" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "SetParam": {
+      "param": { "GeneratorParam": { "param": "simReset" } },
+      "value": 1.0
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.simReset.value" } },
+      "check": { "TextEquals": "1" }
+    }
+  },
+  { "Step": { "frames": 10 } },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.simReset.value" } },
+      "check": { "TextEquals": "1" }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "param_row.impulseStrength.value" } },
+      "check": { "TextEquals": "1.25" }
+    }
+  },
+  "Snapshot",
+  "Dump"
+]

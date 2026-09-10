@@ -56,7 +56,8 @@
       "envelope-modulation",
       "scene-card",
       "calibrated-param",
-      "param-step"
+      "param-step",
+      "water-lifecycle"
     ],
     "crates/manifold-ui/src/panels/param_slider_shared/": [
       "inspector",
@@ -66,7 +67,11 @@
       "scene-setup",
       "scene-card",
       "calibrated-param",
-      "param-step"
+      "param-step",
+      "water-lifecycle"
+    ],
+    "crates/manifold-ui/src/panels/transport.rs": [
+      "water-lifecycle"
     ],
     "crates/manifold-app/src/ui_bridge/projection/timeline.rs": [
       "drag-clip",
@@ -128,6 +133,7 @@
     "audio-dock-toggle": "inspector",
     "audio-dock-scroll": "audiosends",
     "calibrated-param-card-reads-manifest": "inspector",
+    "water-lifecycle": "water_lifecycle",
     "drag-clip-release-over-inspector": "timeline",
     "scene-setup-ux-p2-demo": "gltfscene",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",

@@ -52,6 +52,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "empty" => Some(empty_scene()),
         "envmod" => Some(envelope_modulation_scene()),
         "dmxcard" => Some(dmxcard_scene()),
+        "water_lifecycle" => Some(water_lifecycle_scene()),
         _ => None,
     }
 }
@@ -1181,7 +1182,7 @@ fn dmxcard_scene() -> SceneData {
     // would eat them) so the PNG pins the orientation: LED 0 at the bottom,
     // strip 0 at the left.
     let mut pixels = vec![0u8; 8 * 120 * 4];
-    let mut set = |pixels: &mut [u8], led: usize, strip: usize, rgb: [u8; 3]| {
+    let set = |pixels: &mut [u8], led: usize, strip: usize, rgb: [u8; 3]| {
         let o = (led * 8 + strip) * 4;
         pixels[o] = rgb[0];
         pixels[o + 1] = rgb[1];
@@ -1221,6 +1222,36 @@ fn dmxcard_scene() -> SceneData {
     selection.select_layer(lid("led-1"));
 
     SceneData { project, content, active: Some(1), selection }
+}
+
+/// WATER_IMPLEMENTATION_PLAN.md S8 "adjacent-clip/gap/pause/reset flow"
+/// scene (`scripts/ui-flows/water-lifecycle.json`): ONE generator layer
+/// running the bundled WaterPrototype preset, with TWO generator clips —
+/// clip A at beats 0-8, a 4-beat gap, clip B at beats 12-24 — so the
+/// lifecycle flow walks strikes → pause → resume → second clip → reset
+/// against real adjacency/gap geometry. Built exactly like
+/// `generator_editor_fixture` (registry def seeds the exposed-param card:
+/// pourRate / impulseStrength / cubeStrike / simSpeed / simReset), selected +
+/// active so the inspector card is the flow's live-value readout. The
+/// engine-side legs of the same lifecycle (impulse physics, clip-edge/gap
+/// preservation across pause, preset round-trip on reload) are proven by the
+/// water_ gate tests at the branch tip — this scene owns the UI wiring only.
+fn water_lifecycle_scene() -> SceneData {
+    let pid = PresetTypeId::from_string("WaterPrototype".to_string());
+    let mut layer = Layer::new_generator("WATER".into(), pid, 0);
+    layer.layer_id = lid("water");
+    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    layer.clips.push(TimelineClip::new_generator(Beats(12.0), Beats(12.0)));
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![layer];
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("water"));
+
+    SceneData { project, content, active: Some(0), selection }
 }
 
 /// One layer per state, so a single real render shows the whole state matrix in

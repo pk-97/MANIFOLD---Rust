@@ -42,6 +42,18 @@ pub enum AutomationAction {
     Step {
         frames: u32,
     },
+    /// WATER_LIFECYCLE_FLOW: seed the local transport-playing state. Headless
+    /// the script runner owns the transport observable itself (no content
+    /// thread drains the command channel, so a Play/Pause command has no ack
+    /// to mirror) — this sets that local state so the production
+    /// `TransportAction::PlayPause` branch (which reads `content_state`) and
+    /// the transport button text are real observables a flow can assert. It
+    /// does NOT emulate engine-side pause semantics (clock freeze, no
+    /// catch-up) — those live in the playback engine's own tests. Live mode
+    /// (P3): equivalent to the transport ack arriving on the snapshot channel.
+    SetTransport {
+        playing: bool,
+    },
     /// Emit the extended dump (section 3) to the run's output dir / reply.
     Dump,
     /// Emit a PNG of the current UI to the run's output dir / reply.
