@@ -32,7 +32,10 @@
 //! 0–48 beats on a `Project::default`) — and runs the SAME `drive_soak`
 //! content-thread loop the `.manifold` path runs. Report-only: there is no
 //! per-preset baseline gate (I1/I2/D3/D4 are project-fixture mechanics), so
-//! it exits 0 on a successful run.
+//! it exits 0 on a successful run. `--param key=value` (repeatable, the
+//! render-generator-preset spelling) stamps exposed outer-card values
+//! through the real `set_base_param` funnel before the content thread
+//! starts, so the load is present from frame 0.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -57,6 +60,12 @@ pub fn run(args: &[String]) -> ! {
         Some(p) if !p.starts_with("--") => p.clone(),
         _ => usage_exit("missing <project|glb> argument"),
     };
+
+    // `--param` is generator-mode-only — reject on a file input rather than
+    // silently ignoring it (no-silent-fallbacks).
+    if args.iter().any(|a| a == "--param") {
+        usage_exit("--param is only valid with --generator-preset");
+    }
 
     // D7 extension dispatch: `.glb`/`.gltf` route to the import-graph sibling
     // loop (never a wrapper project, never through the loader/content
@@ -141,7 +150,7 @@ fn usage_exit(msg: &str) -> ! {
     );
     eprintln!(
         "   or: cargo xtask perf-soak --generator-preset <PresetId> --seconds N \
-         [--start <beats>] (WATER S8, report-only)"
+         [--start <beats>] [--param key=value ...] (WATER S8, report-only)"
     );
     eprintln!(
         "   or: cargo xtask perf-soak <file.glb|.gltf> [--size WxH] [--frames N] [--profile] \
@@ -196,13 +205,54 @@ fn run_generator_preset_mode(args: &[String]) -> ! {
         None => None,
     };
 
-    let project = match generator_project(&preset) {
+    // `--param key=value`, repeatable, render-generator-preset spelling.
+    // Values are stamped through the real set_base_param funnel below, so a
+    // typo'd key fails BEFORE the content thread starts, not mid-soak.
+    let mut params: Vec<(String, f32)> = Vec::new();
+    for i in 0..args.len() {
+        if args[i] != "--param" {
+            continue;
+        }
+        let Some(kv) = args.get(i + 1) else {
+            usage_exit("--param needs a key=value argument");
+        };
+        let Some((k, v)) = kv.split_once('=') else {
+            usage_exit(&format!("--param expects key=value, got '{kv}'"));
+        };
+        let value: f32 = match v.parse() {
+            Ok(v) => v,
+            Err(_) => usage_exit(&format!("--param value for '{k}' must be a number, got '{v}'")),
+        };
+        params.push((k.to_string(), value));
+    }
+
+    let mut project = match generator_project(&preset) {
         Some(p) => p,
         None => usage_exit(&format!(
             "'{preset}' is not a bundled generator preset (see \
              crates/manifold-renderer/assets/generator-presets/)"
         )),
     };
+
+    // Stamp the pokes into the layer manifest before the thread starts:
+    // the per-frame render path forwards this same manifest through the
+    // bindings, so the load is present from frame 0 — the same contract
+    // `water_preset_roundtrip_modulates` proves survives save/reload.
+    if !params.is_empty() {
+        let layer = &mut project.timeline.layers[0];
+        let gp = layer
+            .gen_params_mut()
+            .expect("change_generator_type seeds the manifest");
+        for (k, v) in &params {
+            if !gp.set_base_param(k, *v) {
+                let known: Vec<&str> = gp.params.iter().map(|p| p.spec.id.as_str()).collect();
+                usage_exit(&format!(
+                    "unknown param '{k}' for preset '{preset}' — exposed params: {}",
+                    known.join(", ")
+                ));
+            }
+        }
+    }
 
     match drive_soak(
         project,
