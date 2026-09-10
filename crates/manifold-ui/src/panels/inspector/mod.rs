@@ -1464,6 +1464,8 @@ mod tests {
     #[test]
     fn drawer_audio_click_uses_clicked_card_when_indices_match() {
         use crate::panels::param_slider_shared::{AudioCardState, AudioRowState};
+        use crate::panels::param_card::ParamCardKind;
+        use crate::intent::{IntentRegistry, Gesture};
         let mut inspector = InspectorCompositePanel::new();
         let mut tree = UITree::new();
         for (scope, name) in [(0, "Master"), (1, "Layer")] {
@@ -1475,32 +1477,48 @@ mod tests {
             inspector.effects[scope].push(card);
         }
         let card = &inspector.effects[1][0];
-        let drawer = &card.row_host.audio_configs[0].as_ref().unwrap().0;
-        let button = *drawer.button_ids().iter().find(|&&node| matches!(drawer.resolve_action(node),
-            Some(PanelAction::Root(RootAction::AudioDrawerClick(_, _, AudioDrawerClick::Custom))))).unwrap();
-        let pid = card.rows[0].id.clone();
-        let actions = inspector.audio_drawer_intent(button, GraphParamTarget::Effect(0), &pid, AudioDrawerClick::Custom);
+        let mut registry = IntentRegistry::new();
+        card.register_intents(&mut registry);
+        let (button, target, pid) = (card.first_node()..card.first_node() + card.node_count()).find_map(|i| {
+            let node = tree.id_at(i);
+            match registry.resolve(&tree, Some(node), Gesture::Click) {
+                Some(PanelAction::Root(RootAction::AudioDrawerClick(target, pid, AudioDrawerClick::Custom))) => Some((node, target, pid)),
+                _ => None,
+            }
+        }).unwrap();
+        let master_height = inspector.effects[0][0].compute_height();
+        let layer_height = inspector.effects[1][0].compute_height();
+        let actions = inspector.audio_drawer_intent(button, target, &pid, AudioDrawerClick::Custom);
         assert!(matches!(actions.as_slice(), [PanelAction::Params(crate::ParamsAction::ModConfigTabChanged)]));
-        assert!(inspector.effects[1][0].state.mod_state.audio_matrix_open[0]);
-        assert!(!inspector.effects[0][0].state.mod_state.audio_matrix_open[0]);
+        // A rebuild projects the opened matrix without changing the other card.
+        inspector.effects[1][0].build(&mut UITree::new(), Rect::new(350.0, 0.0, 340.0, 600.0));
+        assert!(inspector.effects[1][0].compute_height() > layer_height);
+        assert_eq!(inspector.effects[0][0].compute_height(), master_height);
     }
 
     #[test]
     fn drawer_free_intent_reads_scrolled_bounds_and_live_period() {
+        use crate::panels::param_card::ParamCardKind;
+        use crate::intent::{IntentRegistry, Gesture};
         let mut inspector = InspectorCompositePanel::new();
         let mut config = mk_config(ParamCardKind::Effect, "Driver", 1);
         config.rows[0].modulation.driver_active = true;
         let mut card = ParamCardPanel::new();
         card.configure(&config);
-        card.state.mod_state.driver_expanded[0] = true;
         let mut tree = UITree::new();
         card.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 600.0));
-        let drawer = card.row_host.driver_config_ids[0].as_ref().unwrap();
-        let button = *drawer.button_ids().iter().find(|&&node| matches!(drawer.resolve_action(node),
-            Some(PanelAction::Root(RootAction::BeginDriverPeriodTextInput { .. })))).unwrap();
-        let action = drawer.resolve_action(button).unwrap().clone();
-        tree.offset_node_and_children(drawer.container, -37.0);
-        card.state.mod_state.driver_free_period[0] = Some(3.5);
+        let mut registry = IntentRegistry::new();
+        card.register_intents(&mut registry);
+        let (button, action) = (card.first_node()..card.first_node() + card.node_count()).find_map(|i| {
+            let node = tree.id_at(i);
+            match registry.resolve(&tree, Some(node), Gesture::Click) {
+                Some(action @ PanelAction::Root(RootAction::BeginDriverPeriodTextInput { .. })) => Some((node, action)),
+                _ => None,
+            }
+        }).unwrap();
+        tree.offset_nodes(card.first_node(), card.node_count(), -37.0);
+        config.rows[0].modulation.driver_free_period = Some(3.5);
+        card.configure(&config);
         inspector.effects[0].push(card);
         let refreshed = inspector.refresh_driver_period_intent(button, &tree, action);
         assert!(matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })

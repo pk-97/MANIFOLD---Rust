@@ -2617,7 +2617,13 @@ impl ScenePanel {
                         // its panel is docked to, which can differ from the
                         // app's active layer.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        actions.extend(self.properties_row_action(row, role, *node_id, target));
+                        for mut action in self.properties_row_action(row, role, *node_id, target) {
+                            if let PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. }) = &mut action {
+                                *anchor = tree.get_bounds(*node_id);
+                                *value = self.properties_card.mod_state.driver_effective_period(row);
+                            }
+                            actions.push(action);
+                        }
                     }
                 }
                 match &self.state {

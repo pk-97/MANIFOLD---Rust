@@ -383,9 +383,7 @@ pub(crate) fn build_driver_config(
         slider_font_size: FONT_SIZE,
         theme: Theme::INSPECTOR.with_accent(color::DRIVER_ACTIVE_C32).tinted(),
     };
-    let dids = drawer::build(tree, parent, x, y, w, &spec, key);
-
-    dids
+    drawer::build(tree, parent, x, y, w, &spec, key)
 }
 
 
@@ -569,10 +567,8 @@ pub(crate) fn build_envelope_config(
         None
     };
 
-    if show_action {
-        if action_idx == 1 {
-            step_slider = dids.sliders.get(usize::from(show_decay)).cloned();
-        }
+    if show_action && action_idx == 1 {
+        step_slider = dids.sliders.get(usize::from(show_decay)).cloned();
     }
 
     EnvelopeConfigIds {
@@ -770,8 +766,7 @@ pub(crate) fn build_ableton_config(
         slider_font_size: FONT_SIZE,
         theme: Theme::INSPECTOR.with_accent(color::ABL_BADGE_C32).tinted(),
     };
-    let dids = drawer::build(tree, parent, x, y, w, &spec, key);
-    dids
+    drawer::build(tree, parent, x, y, w, &spec, key)
 }
 
 
