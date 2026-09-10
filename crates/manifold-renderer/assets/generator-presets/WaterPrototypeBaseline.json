@@ -1,0 +1,1168 @@
+{
+  "version": 2,
+  "name": "Water — Prototype (No Water Baseline)",
+  "presetMetadata": {
+    "id": "WaterPrototypeBaseline",
+    "displayName": "Water — Prototype (No Water Baseline)",
+    "category": "Sim",
+    "oscPrefix": "waterPrototypeBaseline",
+    "available": false,
+    "isLineBased": false,
+    "description": "Perf baseline for WaterPrototype: identical basin/cube/camera/light scene with every water group, wire, and interface input removed and a static cube transform. Measurement fixture only — not a user preset.",
+    "params": [],
+    "bindings": []
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 60,
+      "nodeId": "scene",
+      "typeId": "group",
+      "handle": "Scene",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "cubeTransform",
+              "portType": "Transform"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "color",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "colliderTarget",
+              "portType": "Transform"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 61,
+            "nodeId": "scene_in",
+            "typeId": "system.group_input",
+            "handle": "input"
+          },
+          {
+            "id": 62,
+            "nodeId": "camera",
+            "typeId": "node.orbit_camera",
+            "handle": "camera",
+            "params": {
+              "distance": {
+                "type": "Float",
+                "value": 5.2
+              },
+              "fov_y": {
+                "type": "Float",
+                "value": 0.7
+              },
+              "look_y": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "tilt": {
+                "type": "Float",
+                "value": 0.95
+              }
+            }
+          },
+          {
+            "id": 63,
+            "nodeId": "orbitSweep",
+            "typeId": "node.lfo",
+            "handle": "orbit sweep",
+            "params": {
+              "rate": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "min": {
+                "type": "Float",
+                "value": 0.35
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.85
+              }
+            }
+          },
+          {
+            "id": 64,
+            "nodeId": "fog",
+            "typeId": "node.atmosphere",
+            "handle": "fog",
+            "params": {
+              "fog_density": {
+                "type": "Float",
+                "value": 0.02
+              },
+              "height_falloff": {
+                "type": "Float",
+                "value": 0.3
+              }
+            }
+          },
+          {
+            "id": 65,
+            "nodeId": "environment",
+            "typeId": "node.bake_environment",
+            "handle": "environment",
+            "params": {
+              "fill": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "intensity": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 66,
+            "nodeId": "sun",
+            "typeId": "node.light",
+            "handle": "sun",
+            "params": {
+              "aim_y": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "cast_shadows": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "intensity": {
+                "type": "Float",
+                "value": 1.2
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "pos_x": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 7.0
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": 67,
+            "nodeId": "fill",
+            "typeId": "node.light",
+            "handle": "fill light",
+            "params": {
+              "cast_shadows": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.86
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.78
+              },
+              "intensity": {
+                "type": "Float",
+                "value": 0.35
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "pos_x": {
+                "type": "Float",
+                "value": -3.0
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 2.5
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": -2.0
+              }
+            }
+          },
+          {
+            "id": 72,
+            "nodeId": "cubeTarget",
+            "typeId": "node.transform_3d",
+            "handle": "cube target",
+            "params": {}
+          },
+          {
+            "id": 73,
+            "nodeId": "cubeMesh",
+            "typeId": "node.cube_mesh",
+            "handle": "cube mesh",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": 74,
+            "nodeId": "cubeMat",
+            "typeId": "node.phong_material",
+            "handle": "cube material",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.85
+              }
+            }
+          },
+          {
+            "id": 75,
+            "nodeId": "cubeObj",
+            "typeId": "node.scene_object",
+            "handle": "Cube"
+          },
+          {
+            "id": 76,
+            "nodeId": "wallMat",
+            "typeId": "node.phong_material",
+            "handle": "wall material",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 0.55
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.45
+              }
+            }
+          },
+          {
+            "id": 77,
+            "nodeId": "floorMatA",
+            "typeId": "node.phong_material",
+            "handle": "floor dark",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.2
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.22
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.2
+              }
+            }
+          },
+          {
+            "id": 78,
+            "nodeId": "floorMatB",
+            "typeId": "node.phong_material",
+            "handle": "floor light",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 0.7
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.72
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.75
+              }
+            }
+          },
+          {
+            "id": 80,
+            "nodeId": "wallNMesh",
+            "typeId": "node.cube_mesh",
+            "handle": "wall n mesh",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 81,
+            "nodeId": "wallNXform",
+            "typeId": "node.transform_3d",
+            "handle": "wall n",
+            "params": {
+              "pos_y": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 1.98
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 4.0
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.6
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 0.08
+              }
+            }
+          },
+          {
+            "id": 82,
+            "nodeId": "wallNObj",
+            "typeId": "node.scene_object",
+            "handle": "Wall N"
+          },
+          {
+            "id": 83,
+            "nodeId": "wallSMesh",
+            "typeId": "node.cube_mesh",
+            "handle": "wall s mesh",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 84,
+            "nodeId": "wallSXform",
+            "typeId": "node.transform_3d",
+            "handle": "wall s",
+            "params": {
+              "pos_y": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": -1.98
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 4.0
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.6
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 0.08
+              }
+            }
+          },
+          {
+            "id": 85,
+            "nodeId": "wallSObj",
+            "typeId": "node.scene_object",
+            "handle": "Wall S"
+          },
+          {
+            "id": 86,
+            "nodeId": "wallEMesh",
+            "typeId": "node.cube_mesh",
+            "handle": "wall e mesh",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 87,
+            "nodeId": "wallEXform",
+            "typeId": "node.transform_3d",
+            "handle": "wall e",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 1.98
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 0.08
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.6
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 4.0
+              }
+            }
+          },
+          {
+            "id": 88,
+            "nodeId": "wallEObj",
+            "typeId": "node.scene_object",
+            "handle": "Wall E"
+          },
+          {
+            "id": 89,
+            "nodeId": "wallWMesh",
+            "typeId": "node.cube_mesh",
+            "handle": "wall w mesh",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 90,
+            "nodeId": "wallWXform",
+            "typeId": "node.transform_3d",
+            "handle": "wall w",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -1.98
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 0.08
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.6
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 4.0
+              }
+            }
+          },
+          {
+            "id": 91,
+            "nodeId": "wallWObj",
+            "typeId": "node.scene_object",
+            "handle": "Wall W"
+          },
+          {
+            "id": 92,
+            "nodeId": "strip0Mesh",
+            "typeId": "node.grid_mesh",
+            "handle": "strip 0 mesh",
+            "params": {
+              "resolution_x": {
+                "type": "Int",
+                "value": 1
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 4
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 0.66
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 3.96
+              }
+            }
+          },
+          {
+            "id": 93,
+            "nodeId": "strip0Xform",
+            "typeId": "node.transform_3d",
+            "handle": "strip 0",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -1.65
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.02
+              }
+            }
+          },
+          {
+            "id": 94,
+            "nodeId": "strip0Obj",
+            "typeId": "node.scene_object",
+            "handle": "Strip 0"
+          },
+          {
+            "id": 95,
+            "nodeId": "strip1Mesh",
+            "typeId": "node.grid_mesh",
+            "handle": "strip 1 mesh",
+            "params": {
+              "resolution_x": {
+                "type": "Int",
+                "value": 1
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 4
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 0.66
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 3.96
+              }
+            }
+          },
+          {
+            "id": 96,
+            "nodeId": "strip1Xform",
+            "typeId": "node.transform_3d",
+            "handle": "strip 1",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -0.99
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.02
+              }
+            }
+          },
+          {
+            "id": 97,
+            "nodeId": "strip1Obj",
+            "typeId": "node.scene_object",
+            "handle": "Strip 1"
+          },
+          {
+            "id": 98,
+            "nodeId": "strip2Mesh",
+            "typeId": "node.grid_mesh",
+            "handle": "strip 2 mesh",
+            "params": {
+              "resolution_x": {
+                "type": "Int",
+                "value": 1
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 4
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 0.66
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 3.96
+              }
+            }
+          },
+          {
+            "id": 99,
+            "nodeId": "strip2Xform",
+            "typeId": "node.transform_3d",
+            "handle": "strip 2",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -0.33
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.02
+              }
+            }
+          },
+          {
+            "id": 100,
+            "nodeId": "strip2Obj",
+            "typeId": "node.scene_object",
+            "handle": "Strip 2"
+          },
+          {
+            "id": 101,
+            "nodeId": "strip3Mesh",
+            "typeId": "node.grid_mesh",
+            "handle": "strip 3 mesh",
+            "params": {
+              "resolution_x": {
+                "type": "Int",
+                "value": 1
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 4
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 0.66
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 3.96
+              }
+            }
+          },
+          {
+            "id": 102,
+            "nodeId": "strip3Xform",
+            "typeId": "node.transform_3d",
+            "handle": "strip 3",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 0.33
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.02
+              }
+            }
+          },
+          {
+            "id": 103,
+            "nodeId": "strip3Obj",
+            "typeId": "node.scene_object",
+            "handle": "Strip 3"
+          },
+          {
+            "id": 104,
+            "nodeId": "strip4Mesh",
+            "typeId": "node.grid_mesh",
+            "handle": "strip 4 mesh",
+            "params": {
+              "resolution_x": {
+                "type": "Int",
+                "value": 1
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 4
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 0.66
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 3.96
+              }
+            }
+          },
+          {
+            "id": 105,
+            "nodeId": "strip4Xform",
+            "typeId": "node.transform_3d",
+            "handle": "strip 4",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 0.99
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.02
+              }
+            }
+          },
+          {
+            "id": 106,
+            "nodeId": "strip4Obj",
+            "typeId": "node.scene_object",
+            "handle": "Strip 4"
+          },
+          {
+            "id": 107,
+            "nodeId": "strip5Mesh",
+            "typeId": "node.grid_mesh",
+            "handle": "strip 5 mesh",
+            "params": {
+              "resolution_x": {
+                "type": "Int",
+                "value": 1
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 4
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 0.66
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 3.96
+              }
+            }
+          },
+          {
+            "id": 108,
+            "nodeId": "strip5Xform",
+            "typeId": "node.transform_3d",
+            "handle": "strip 5",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 1.65
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.02
+              }
+            }
+          },
+          {
+            "id": 109,
+            "nodeId": "strip5Obj",
+            "typeId": "node.scene_object",
+            "handle": "Strip 5"
+          },
+          {
+            "id": 110,
+            "nodeId": "renderer",
+            "typeId": "node.render_scene",
+            "handle": "scene",
+            "params": {
+              "lights": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "objects": {
+                "type": "Float",
+                "value": 11.0
+              }
+            }
+          },
+          {
+            "id": 111,
+            "nodeId": "scene_out",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 63,
+            "fromPort": "out",
+            "toNode": 62,
+            "toPort": "orbit"
+          },
+          {
+            "fromNode": 73,
+            "fromPort": "vertices",
+            "toNode": 75,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 74,
+            "fromPort": "out",
+            "toNode": 75,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 61,
+            "fromPort": "cubeTransform",
+            "toNode": 75,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 80,
+            "fromPort": "vertices",
+            "toNode": 82,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 76,
+            "fromPort": "out",
+            "toNode": 82,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 81,
+            "fromPort": "transform",
+            "toNode": 82,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 83,
+            "fromPort": "vertices",
+            "toNode": 85,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 76,
+            "fromPort": "out",
+            "toNode": 85,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 84,
+            "fromPort": "transform",
+            "toNode": 85,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 86,
+            "fromPort": "vertices",
+            "toNode": 88,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 76,
+            "fromPort": "out",
+            "toNode": 88,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 87,
+            "fromPort": "transform",
+            "toNode": 88,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 89,
+            "fromPort": "vertices",
+            "toNode": 91,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 76,
+            "fromPort": "out",
+            "toNode": 91,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 90,
+            "fromPort": "transform",
+            "toNode": 91,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 92,
+            "fromPort": "vertices",
+            "toNode": 94,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 77,
+            "fromPort": "out",
+            "toNode": 94,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 93,
+            "fromPort": "transform",
+            "toNode": 94,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 95,
+            "fromPort": "vertices",
+            "toNode": 97,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 78,
+            "fromPort": "out",
+            "toNode": 97,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 96,
+            "fromPort": "transform",
+            "toNode": 97,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 98,
+            "fromPort": "vertices",
+            "toNode": 100,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 77,
+            "fromPort": "out",
+            "toNode": 100,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 99,
+            "fromPort": "transform",
+            "toNode": 100,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 101,
+            "fromPort": "vertices",
+            "toNode": 103,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 78,
+            "fromPort": "out",
+            "toNode": 103,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 102,
+            "fromPort": "transform",
+            "toNode": 103,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 104,
+            "fromPort": "vertices",
+            "toNode": 106,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 77,
+            "fromPort": "out",
+            "toNode": 106,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 105,
+            "fromPort": "transform",
+            "toNode": 106,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 107,
+            "fromPort": "vertices",
+            "toNode": 109,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 78,
+            "fromPort": "out",
+            "toNode": 109,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 108,
+            "fromPort": "transform",
+            "toNode": 109,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 62,
+            "fromPort": "out",
+            "toNode": 110,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 64,
+            "fromPort": "atmosphere",
+            "toNode": 110,
+            "toPort": "atmosphere"
+          },
+          {
+            "fromNode": 65,
+            "fromPort": "envmap",
+            "toNode": 110,
+            "toPort": "envmap"
+          },
+          {
+            "fromNode": 66,
+            "fromPort": "out",
+            "toNode": 110,
+            "toPort": "light_0"
+          },
+          {
+            "fromNode": 67,
+            "fromPort": "out",
+            "toNode": 110,
+            "toPort": "light_1"
+          },
+          {
+            "fromNode": 75,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_0"
+          },
+          {
+            "fromNode": 82,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_1"
+          },
+          {
+            "fromNode": 85,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_2"
+          },
+          {
+            "fromNode": 88,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_3"
+          },
+          {
+            "fromNode": 91,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_4"
+          },
+          {
+            "fromNode": 94,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_5"
+          },
+          {
+            "fromNode": 97,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_6"
+          },
+          {
+            "fromNode": 100,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_7"
+          },
+          {
+            "fromNode": 103,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_8"
+          },
+          {
+            "fromNode": 106,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_9"
+          },
+          {
+            "fromNode": 109,
+            "fromPort": "object",
+            "toNode": 110,
+            "toPort": "object_10"
+          },
+          {
+            "fromNode": 110,
+            "fromPort": "color",
+            "toNode": 111,
+            "toPort": "color"
+          },
+          {
+            "fromNode": 62,
+            "fromPort": "out",
+            "toNode": 111,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "transform",
+            "toNode": 111,
+            "toPort": "colliderTarget"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "transform",
+            "toNode": 75,
+            "toPort": "transform"
+          }
+        ]
+      }
+    },
+    {
+      "id": 120,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 60,
+      "fromPort": "color",
+      "toNode": 120,
+      "toPort": "in"
+    }
+  ]
+}

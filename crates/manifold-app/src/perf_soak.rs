@@ -24,6 +24,15 @@
 //! report-only: exit codes there are 0 = pass, 2 = usage error (this file's
 //! dispatcher, see `run()`), 3 = run failure (import/convergence); it never
 //! returns exit code 1 (I3/I4 don't apply to it).
+//!
+//! WATER S8: `perf-soak --generator-preset <PresetId> --seconds N` builds the
+//! project IN MEMORY — one generator layer in the exact shape
+//! `ui_snapshot::fixtures::generator_editor_fixture` builds (layer named for
+//! the preset, `change_generator_type`, one `TimelineClip::new_generator`
+//! 0–48 beats on a `Project::default`) — and runs the SAME `drive_soak`
+//! content-thread loop the `.manifold` path runs. Report-only: there is no
+//! per-preset baseline gate (I1/I2/D3/D4 are project-fixture mechanics), so
+//! it exits 0 on a successful run.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -38,6 +47,12 @@ use crate::headless_harness::headless_content_thread;
 /// every path ends in `std::process::exit` (mirrors `ui_snapshot::run`'s
 /// convention).
 pub fn run(args: &[String]) -> ! {
+    // WATER S8: `--generator-preset` builds the project in memory and soaks
+    // it through the same drive loop — no `.manifold`/`.glb` input at all.
+    if args.get(1).map(String::as_str) == Some("--generator-preset") {
+        run_generator_preset_mode(args);
+    }
+
     let project_path = match args.get(1) {
         Some(p) if !p.starts_with("--") => p.clone(),
         _ => usage_exit("missing <project|glb> argument"),
@@ -125,6 +140,10 @@ fn usage_exit(msg: &str) -> ! {
          [--start <beats>] [--update-baseline] [--profile]"
     );
     eprintln!(
+        "   or: cargo xtask perf-soak --generator-preset <PresetId> --seconds N \
+         [--start <beats>] (WATER S8, report-only)"
+    );
+    eprintln!(
         "   or: cargo xtask perf-soak <file.glb|.gltf> [--size WxH] [--frames N] [--profile] \
          (D7 import-graph mode, report-only)"
     );
@@ -135,27 +154,157 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
     args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
 }
 
-/// Returns `Ok(true)` if the gate passed, `Ok(false)` if it failed a
-/// threshold (I1/I2) — the process still exits cleanly in both cases, only
-/// the exit code differs. `Err` is a run failure (load, tick, or IO error).
-fn run_soak(
-    project_path_str: &str,
+/// WATER S8 — `perf-soak --generator-preset <PresetId> --seconds N
+/// [--start <beats>]`. Builds the project in memory (the exact
+/// `generator_editor_fixture` shape), soaks it through the shared
+/// [`drive_soak`] loop, writes the same `frames.jsonl`/`summary.json`
+/// session plus a `perf_soak_stats.json`, and prints the session dir.
+/// Report-only: no baseline gate exists for presets (the D3/D4 gate is
+/// project-fixture mechanics), so `--update-baseline`/`--profile` are
+/// rejected and a successful run always exits 0.
+fn run_generator_preset_mode(args: &[String]) -> ! {
+    let preset = match args.get(2) {
+        Some(p) if !p.starts_with("--") => p.clone(),
+        _ => usage_exit("missing <PresetId> argument after --generator-preset"),
+    };
+    // No-silent-fallbacks: flags that mean something in project mode but
+    // have no definition here are rejected, not ignored.
+    for flag in ["--update-baseline", "--profile"] {
+        if args.iter().any(|a| a == flag) {
+            usage_exit(&format!(
+                "{flag} is only valid for a .manifold project input; --generator-preset is \
+                 report-only (no per-preset baseline)"
+            ));
+        }
+    }
+    if crate::perf_soak_import::is_glb_path(&preset) {
+        usage_exit("--generator-preset takes a bundled preset id, not a file path");
+    }
+
+    let seconds = match arg_value(args, "--seconds") {
+        Some(s) => match s.parse::<f64>() {
+            Ok(v) if v > 0.0 => v,
+            _ => usage_exit("--seconds must be a positive number"),
+        },
+        None => usage_exit("--seconds N is required"),
+    };
+    let start_beats = match arg_value(args, "--start") {
+        Some(s) => match s.parse::<f64>() {
+            Ok(v) => Some(v),
+            Err(_) => usage_exit("--start must be a number of beats"),
+        },
+        None => None,
+    };
+
+    let project = match generator_project(&preset) {
+        Some(p) => p,
+        None => usage_exit(&format!(
+            "'{preset}' is not a bundled generator preset (see \
+             crates/manifold-renderer/assets/generator-presets/)"
+        )),
+    };
+
+    match drive_soak(
+        project,
+        &format!("generator preset '{preset}'"),
+        &preset,
+        &format!("generator-preset:{preset}"),
+        seconds,
+        start_beats,
+    ) {
+        Ok(outcome) => {
+            // Same stats JSON the project path writes, mode-tagged; sits in
+            // the profiling session next to frames.jsonl.
+            let stats_json = serde_json::json!({
+                "mode": "generator-preset",
+                "preset": preset,
+                "machine": current_machine(),
+                "seconds": seconds,
+                "start_beats": start_beats,
+                "frame_count": outcome.stats.frame_count,
+                "min_ms": outcome.stats.min_ms,
+                "p50_ms": outcome.stats.p50_ms,
+                "p95_ms": outcome.stats.p95_ms,
+                "max_ms": outcome.stats.max_ms,
+                "worst_frame": outcome.worst_frame_breakdown,
+                "profiling_session_dir": outcome.session_dir.display().to_string(),
+            });
+            let stats_path = outcome.session_dir.join("perf_soak_stats.json");
+            if let Err(e) = std::fs::write(
+                &stats_path,
+                serde_json::to_string_pretty(&stats_json).unwrap(),
+            ) {
+                eprintln!("perf-soak: write {}: {e}", stats_path.display());
+                std::process::exit(3);
+            }
+            eprintln!("perf-soak: stats written to {}", stats_path.display());
+            eprintln!(
+                "perf-soak: profiling session dir: {} (frames.jsonl)",
+                outcome.session_dir.display()
+            );
+            eprintln!("perf-soak: report-only (no baseline gate for presets)");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("perf-soak: {e}");
+            std::process::exit(3);
+        }
+    }
+}
+
+/// Build the one-layer/one-clip generator project in memory — the exact
+/// shape `ui_snapshot::fixtures::generator_editor_fixture` builds, spelled
+/// out here because that helper is private to its module and takes UI state
+/// this mode doesn't need. `None` when `preset` isn't a bundled generator
+/// preset id (mirrors the fixture's own guard).
+fn generator_project(preset: &str) -> Option<manifold_core::project::Project> {
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::preset_def::PresetKind;
+    use manifold_core::types::LayerType;
+    use manifold_core::{Beats, PresetTypeId};
+
+    let pid = PresetTypeId::from_string(preset.to_string());
+    let is_generator = manifold_renderer::node_graph::bundled_preset_type_ids(PresetKind::Generator)
+        .any(|id| id == pid);
+    if !is_generator {
+        return None;
+    }
+
+    let mut layer = Layer::new(preset.into(), LayerType::Generator, 0);
+    layer.change_generator_type(pid);
+    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+
+    let mut project = manifold_core::project::Project::default();
+    project.timeline.layers = vec![layer];
+    Some(project)
+}
+
+/// Everything [`drive_soak`] reports back to its caller: the profiling
+/// session dir (`frames.jsonl`/`summary.json` live inside), the wall-time
+/// stats, and the worst frame's own per-section breakdown.
+struct SoakOutcome {
+    session_dir: PathBuf,
+    stats: Stats,
+    worst_frame_breakdown: Option<FrameRecord>,
+}
+
+/// The shared headless content-thread soak: build the `ContentThread`,
+/// install the profiler, and pace `tick_frame` off the REAL
+/// `FrameTimer::wait_for_deadline` until the deadline — the exact per-frame
+/// work path the live app runs, regardless of how the `Project` was
+/// obtained (`.manifold` load or WATER S8 in-memory generator build). The
+/// I1/I2 threshold + baseline gate is the project path's own follow-up,
+/// not part of the drive.
+#[allow(clippy::too_many_arguments)]
+fn drive_soak(
+    project: manifold_core::project::Project,
+    describe: &str,
+    label: &str,
+    source: &str,
     seconds: f64,
     start_beats: Option<f64>,
-    update_baseline: bool,
-) -> Result<bool, String> {
-    let project_path = Path::new(project_path_str);
-
-    // Same load path `fixtures.rs`'s `project_scene` uses — the app's real
-    // `ProjectIOService::open_project_from_path` route, with the
-    // embedded-preset install hook so project-local forked presets resolve
-    // correctly (BUG-036).
-    let project = manifold_io::loader::load_project_with(
-        project_path,
-        crate::project_io::install_embedded_presets,
-    )
-    .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
-
+) -> Result<SoakOutcome, String> {
     let width = project.settings.output_width.max(1) as u32;
     let height = project.settings.output_height.max(1) as u32;
     let frame_rate = project.settings.frame_rate as f64;
@@ -181,11 +330,8 @@ fn run_soak(
         .unwrap_or_else(|| "unknown".to_string());
 
     ct.profiler = Some(manifold_profiler::ProfileSession::new(
-        project_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "project".to_string()),
-        project_path.display().to_string(),
+        label.to_string(),
+        source.to_string(),
         (width, height),
         frame_rate as f32,
         gpu_name,
@@ -202,9 +348,8 @@ fn run_soak(
         .map_err(|e| format!("spawn drain thread: {e}"))?;
 
     eprintln!(
-        "perf-soak: soaking '{}' for {seconds:.1}s at {frame_rate:.1} fps \
+        "perf-soak: soaking {describe} for {seconds:.1}s at {frame_rate:.1} fps \
          ({width}x{height}, bpm={:.1}{})",
-        project_path.display(),
         bpm.0,
         start_beats.map(|b| format!(", start={b:.1} beats")).unwrap_or_default(),
     );
@@ -250,16 +395,49 @@ fn run_soak(
         );
     }
 
-    let baseline_path = baseline_path_for(project_path);
-    let machine = current_machine();
+    Ok(SoakOutcome { session_dir, stats, worst_frame_breakdown })
+}
 
+/// Returns `Ok(true)` if the gate passed, `Ok(false)` if it failed a
+/// threshold (I1/I2) — the process still exits cleanly in both cases, only
+/// the exit code differs. `Err` is a run failure (load, tick, or IO error).
+fn run_soak(
+    project_path_str: &str,
+    seconds: f64,
+    start_beats: Option<f64>,
+    update_baseline: bool,
+) -> Result<bool, String> {
+    let project_path = Path::new(project_path_str);
+
+    // Same load path `fixtures.rs`'s `project_scene` uses — the app's real
+    // `ProjectIOService::open_project_from_path` route, with the
+    // embedded-preset install hook so project-local forked presets resolve
+    // correctly (BUG-036).
+    let project = manifold_io::loader::load_project_with(
+        project_path,
+        crate::project_io::install_embedded_presets,
+    )
+    .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
+
+    let label = project_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "project".to_string());
+    let source = project_path.display().to_string();
+    // The project path describes itself by path, exactly as before the
+    // WATER S8 factor (byte-identical soak line).
+    let describe = source.clone();
+
+    let outcome = drive_soak(project, &describe, &label, &source, seconds, start_beats)?;
+
+    let stats = &outcome.stats;
     // Stats JSON: written every run (not flag-gated — only the BASELINE
     // write is flag-gated per I3/D4). Sits next to the profiling session
     // for a human/agent to read the acceptance-demo evidence from.
     let stats_json = serde_json::json!({
         "mode": "project",
         "project": project_path.display().to_string(),
-        "machine": machine,
+        "machine": current_machine(),
         "seconds": seconds,
         "start_beats": start_beats,
         "frame_count": stats.frame_count,
@@ -267,23 +445,20 @@ fn run_soak(
         "p50_ms": stats.p50_ms,
         "p95_ms": stats.p95_ms,
         "max_ms": stats.max_ms,
-        "worst_frame": worst_frame_breakdown,
-        "profiling_session_dir": session_dir.display().to_string(),
+        "worst_frame": outcome.worst_frame_breakdown,
+        "profiling_session_dir": outcome.session_dir.display().to_string(),
     });
-    let stats_path = session_dir.join("perf_soak_stats.json");
+    let stats_path = outcome.session_dir.join("perf_soak_stats.json");
     std::fs::write(&stats_path, serde_json::to_string_pretty(&stats_json).unwrap())
         .map_err(|e| format!("write {}: {e}", stats_path.display()))?;
     eprintln!("perf-soak: stats written to {}", stats_path.display());
 
-    // I1 — hard fail: any frame over 20ms (max_ms > 20 <=> some frame > 20ms).
-    const HARD_FAIL_MS: f64 = 20.0;
-    let hard_fail = stats.max_ms > HARD_FAIL_MS;
-    if hard_fail {
-        eprintln!(
-            "perf-soak: FAIL (I1) — max frame {:.2}ms exceeds the {HARD_FAIL_MS}ms hard budget",
-            stats.max_ms
-        );
-    }
+    // I1 — hard fail, printed before any baseline handling (same order the
+    // pre-S8 code printed it in).
+    let i1_hard_fail = hard_fail(stats);
+
+    let baseline_path = baseline_path_for(project_path);
+    let machine = current_machine();
 
     if update_baseline {
         // D4/I3: baseline write is flag-gated — this is the ONLY place the
@@ -305,7 +480,7 @@ fn run_soak(
         std::fs::write(&baseline_path, serde_json::to_string_pretty(&baseline).unwrap())
             .map_err(|e| format!("write {}: {e}", baseline_path.display()))?;
         eprintln!("perf-soak: baseline written to {}", baseline_path.display());
-        return Ok(!hard_fail);
+        return Ok(!i1_hard_fail);
     }
 
     // D3 — regression fail: p95 > baseline p95 * 1.15. No baseline yet is a
@@ -350,11 +525,25 @@ fn run_soak(
         );
     }
 
-    let passed = !hard_fail && !regressed;
+    let passed = !i1_hard_fail && !regressed;
     if passed {
         eprintln!("perf-soak: PASS");
     }
     Ok(passed)
+}
+
+/// I1 — hard fail: any frame over 20ms (max_ms > 20 <=> some frame > 20ms).
+const HARD_FAIL_MS: f64 = 20.0;
+
+fn hard_fail(stats: &Stats) -> bool {
+    let hard_fail = stats.max_ms > HARD_FAIL_MS;
+    if hard_fail {
+        eprintln!(
+            "perf-soak: FAIL (I1) — max frame {:.2}ms exceeds the {HARD_FAIL_MS}ms hard budget",
+            stats.max_ms
+        );
+    }
+    hard_fail
 }
 
 /// Sampler capacity in spans (two counter samples per span). Sized generously
