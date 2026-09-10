@@ -77,6 +77,9 @@ impl DriverConfigIds {
         if node_id == self.triplet_btn_id {
             return Some(DriverConfigAction::Triplet);
         }
+        if node_id == self.frame_align_btn_id {
+            return Some(DriverConfigAction::ToggleFrameAligned);
+        }
         if node_id == self.invert_btn_id {
             return Some(DriverConfigAction::Invert);
         }

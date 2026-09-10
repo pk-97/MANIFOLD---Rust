@@ -1409,6 +1409,7 @@ fn add_driver_effect_undo_roundtrip() {
         trim_max: 1.0,
         reversed: false,
         free_period_beats: None,
+            frame_aligned: false,
         legacy_param_index: None,
         is_paused_by_user: false,
     };
@@ -1630,6 +1631,7 @@ fn make_driver() -> ParameterDriver {
         trim_max: 1.0,
         reversed: false,
         free_period_beats: None,
+            frame_aligned: false,
         legacy_param_index: None,
         is_paused_by_user: false,
     }
@@ -2116,6 +2118,7 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
             trim_max: 1.0,
             reversed: false,
             free_period_beats: None,
+            frame_aligned: false,
             legacy_param_index: None,
             is_paused_by_user: false,
         },
@@ -2130,6 +2133,7 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
             trim_max: 1.0,
             reversed: false,
             free_period_beats: None,
+            frame_aligned: false,
             legacy_param_index: None,
             is_paused_by_user: false,
         },

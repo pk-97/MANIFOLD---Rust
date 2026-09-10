@@ -136,6 +136,7 @@ pub(crate) fn effects_to_surfaces(
     effects: &[PresetInstance],
     osc_scope: OscScope<'_>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    timing: (manifold_core::Bpm, f32),
 ) -> Vec<ParamSurface> {
     effects
         .iter()
@@ -150,6 +151,7 @@ pub(crate) fn effects_to_surfaces(
                 automation_latched,
                 // Effects are always the curated outer card.
                 SurfaceVisibility::CuratedCard,
+                timing,
             )
         })
         .collect()
@@ -214,6 +216,7 @@ fn param_surface(
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     visibility: SurfaceVisibility,
+    timing: (manifold_core::Bpm, f32),
 ) -> Option<ParamSurface> {
     use manifold_core::preset_def::PresetKind;
     let preset_type = inst.effect_type();
@@ -348,6 +351,7 @@ fn param_surface(
         n,
         |id| row_index_of.get(id).copied(),
         automation_latched,
+        timing,
     );
     for (row, rm) in rows.iter_mut().zip(mod_rows) {
         row.modulation = rm;
@@ -447,6 +451,7 @@ pub(crate) fn gen_params_to_surface(
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     visibility: SurfaceVisibility,
+    timing: (manifold_core::Bpm, f32),
 ) -> ParamSurface {
     param_surface(
         gp,
@@ -456,6 +461,7 @@ pub(crate) fn gen_params_to_surface(
         clip_string_params,
         automation_latched,
         visibility,
+        timing,
     )
     .expect("generator param_surface always yields a config")
 }
@@ -520,6 +526,7 @@ pub(crate) fn modifier_surfaces(
     vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
     layer_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    timing: (manifold_core::Bpm, f32),
 ) -> Vec<ParamSurface> {
     use manifold_core::effect_graph_def::BindingTarget;
     use manifold_renderer::node_graph::scene_modifier::{descriptor_for, EnableDecl, LOOP_KIND_ID};
@@ -531,6 +538,7 @@ pub(crate) fn modifier_surfaces(
         None,
         automation_latched,
         SurfaceVisibility::All,
+        timing,
     );
     let bindings = def
         .preset_metadata

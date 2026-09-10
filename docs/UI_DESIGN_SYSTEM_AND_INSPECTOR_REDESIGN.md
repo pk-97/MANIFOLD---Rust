@@ -277,7 +277,7 @@ problem; relocation is a separate call).
 3. **LFO drawer redesign — keep the grid, neaten it, add a free period. ✅ SHIPPED 2026-06-24.**
    The earlier "grids → dropdowns (blanket)" decision is **reversed.** Eyeballing the grid, Peter:
    *"this is actually good and useful"* — keep it as a button grid, just make it **standardised,
-   ordered, neat, logical.** What shipped, three uniform-width button rows:
+   ordered, neat, logical.** The drawer uses uniform-width button rows:
    - **Row 1 — Rate grid:** the 11 beat-division cells (1/32…32), now **uniform width** (were
      ragged/proportional). Lights the base division in sync mode; none in free mode.
    - **Row 2 — Rate detail:** `[Straight][Dotted][Triplet][Free]`. The feel trio replaces the
@@ -291,6 +291,16 @@ problem; relocation is a separate call).
      the LFO cycles every **p beats** → polyrhythm against the bar. The type-in takes a single
      **beats** number (`3`, `1.5`, `0.375`); fractions/bars stay the grid's job (unambiguous).
      `evaluate_with_period()` is the shared core; grid/feel click clears free (back to sync).
+   - **Frame align (2026-09-10).** A fourth-row toggle releases exact musical sync for
+     consistent output-frame periods. The division/free period remains the requested rate;
+     the active button shows actual frames/cycle and Hz. `frameAligned` defaults false and
+     is omitted when off; edits use the normal undoable driver command path.
+     The nearest whole-frame period wins (ties longer). Square uses even counts, minimum 2,
+     for equal on/off halves. Sine needs at least 3 samples to avoid zero-crossing-only output;
+     triangle/saw need 2; random needs 1. Timing uses configured output FPS and absolute
+     timeline seconds, anchored at time zero. Seeks/exports repeat; changing BPM, FPS,
+     division or shape may change period and phase. Phase, invert and trim remain available.
+     Invalid timing gives neutral 0.5 and an invalid-timing readout. No extra rendering or smoothing.
    Audio Source/Feature/Band grids were **not** touched (they stay grids). The blanket dropdown
    conversion is dropped.
 4. **Merge the chrome header to one row. ✅ SHIPPED 2026-06-24.** Layer chrome was three stacked

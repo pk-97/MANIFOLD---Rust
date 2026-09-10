@@ -17,14 +17,15 @@ pub(crate) enum ModTab {
 }
 
 
-// Height of the driver (LFO) drawer container. Three button rows + pads:
+// Height of the driver (LFO) drawer container. Four rows + pads:
 //   1. the 11-cell beat-division grid (sync rate),
 //   2. the feel + free + invert modifiers (Straight/Dotted/Triplet/Free/Invert),
-//   3. the 5 waveform-shape icons.
+//   3. the waveform-shape icons and invert,
+//   4. frame alignment and effective rate.
 // Derived from the shared drawer metrics so the card's reserved height can't
 // drift from what's actually drawn (mirrors `audio_config_height`).
 pub(crate) fn driver_config_height() -> f32 {
-    crate::panels::drawer::uniform_rows_height(3)
+    crate::panels::drawer::uniform_rows_height(4)
 }
 
 
@@ -343,6 +344,15 @@ pub(crate) fn build_driver_config(
         .collect();
     row3_buttons.push(DrawerButton::new("Invert", is_reversed));
 
+    let frame_aligned = mod_state.driver_frame_aligned[param_idx];
+    let frame_label = if frame_aligned {
+        match mod_state.driver_frame_rate[param_idx] {
+            Some((frames, hz)) => format!("Frame align: {frames} frames/cycle · {hz:.2} Hz"),
+            None => "Frame align: invalid timing".to_string(),
+        }
+    } else {
+        "Frame align (release beat sync)".to_string()
+    };
     let spec = DrawerSpec {
         rows: vec![
             DrawerRow::Buttons {
@@ -352,6 +362,11 @@ pub(crate) fn build_driver_config(
             },
             DrawerRow::Buttons { buttons: row2_buttons, width: ButtonWidth::Uniform, label: None },
             DrawerRow::Buttons { buttons: row3_buttons, width: ButtonWidth::Uniform, label: None },
+            DrawerRow::Buttons {
+                buttons: vec![DrawerButton::new(frame_label, frame_aligned)],
+                width: ButtonWidth::Uniform,
+                label: None,
+            },
         ],
         btn_font_size,
         slider_font_size: FONT_SIZE,
@@ -371,6 +386,7 @@ pub(crate) fn build_driver_config(
     let wave_base = BEAT_DIV_COUNT + 4;
     let wave_btn_ids: [NodeId; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
     let invert_btn_id = ids[wave_base + WAVEFORM_COUNT];
+    let frame_align_btn_id = ids[wave_base + WAVEFORM_COUNT + 1];
 
     DriverConfigIds {
         _container_id: dids.container,
@@ -380,6 +396,7 @@ pub(crate) fn build_driver_config(
         triplet_btn_id,
         free_btn_id,
         invert_btn_id,
+        frame_align_btn_id,
         wave_btn_ids,
     }
 }

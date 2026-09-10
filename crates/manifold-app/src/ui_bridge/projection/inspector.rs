@@ -55,6 +55,7 @@ pub fn sync_inspector_data(
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     led_preview: Option<&crate::content_state::LedPreview>,
 ) {
+    let driver_timing = (ui.driver_bpm.unwrap_or(project.settings.bpm), project.settings.frame_rate);
     // Audio Setup modal — refresh its current device + send list while it's
     // open. Resolving the device through the directory once per sync (only while
     // the modal is up) gives each send row its real channel name, grouped or
@@ -334,6 +335,7 @@ pub fn sync_inspector_data(
                                     node_doc_id,
                                     param_key,
                                     automation_latched,
+                                    driver_timing,
                                 )),
                                 value: v,
                             };
@@ -1005,6 +1007,7 @@ pub fn sync_inspector_data(
                                     None,
                                     automation_latched,
                                     SurfaceVisibility::All,
+                                    driver_timing,
                                 )
                             });
                             SceneSetupState::Live(Box::new(SceneSetupVm {
@@ -1103,6 +1106,7 @@ pub fn sync_inspector_data(
         &project.settings.master_effects,
         OscScope::Master,
         automation_latched,
+        driver_timing,
     );
     attach_audio_sends(&mut master_configs, &project.audio_setup);
     ui.inspector.configure_master_effects(&master_configs);
@@ -1162,7 +1166,7 @@ pub fn sync_inspector_data(
             let mut layer_effects = layer
                 .effects
                 .as_ref()
-                .map(|e| effects_to_surfaces(e, OscScope::Layer(lid), automation_latched))
+                .map(|e| effects_to_surfaces(e, OscScope::Layer(lid), automation_latched, driver_timing))
                 .unwrap_or_default();
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector
@@ -1187,6 +1191,7 @@ pub fn sync_inspector_data(
                         automation_latched,
                         // The main inspector's generator CARD is curated.
                         SurfaceVisibility::CuratedCard,
+                        driver_timing,
                     )
                 });
             if let Some(c) = gen_config.as_mut() {
@@ -1229,7 +1234,7 @@ pub fn sync_inspector_data(
                     // SAME def + VM (the UI never reads the graph).
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
                     Some((
-                        modifier_surfaces(gp, &def, &vm, lid, automation_latched),
+                        modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing),
                         picker,
                     ))
                 })();
@@ -1381,6 +1386,7 @@ pub(crate) fn build_card_modulation(
     n: usize,
     resolve: impl Fn(&str) -> Option<usize>,
     latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    timing: (manifold_core::Bpm, f32),
 ) -> Vec<RowMod> {
     let mut rows = vec![RowMod::default(); n];
     if let Some(ref drivers) = inst.drivers {
@@ -1401,6 +1407,11 @@ pub(crate) fn build_card_modulation(
             row.driver_dotted = d.beat_division.is_dotted();
             row.driver_triplet = d.beat_division.is_triplet();
             row.driver_free_period = d.free_period_beats;
+            row.driver_frame_aligned = d.frame_aligned;
+            row.driver_frame_rate = if d.frame_aligned {
+                d.effective_period_frames(timing.0, timing.1)
+                    .map(|frames| (frames, timing.1 / frames as f32))
+            } else { None };
         }
     }
     if let Some(ref envelopes) = inst.envelopes {
@@ -1552,10 +1563,11 @@ pub(crate) fn lookup_param_mod_for_id(
     inst: &PresetInstance,
     param_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    timing: (manifold_core::Bpm, f32),
 ) -> (Vec<RowMod>, AudioCardState) {
     let resolve = |id: &str| (id == param_id).then_some(0);
     (
-        build_card_modulation(inst, 1, resolve, automation_latched),
+        build_card_modulation(inst, 1, resolve, automation_latched, timing),
         build_audio_card_state(inst, 1, resolve),
     )
 }
@@ -1580,6 +1592,7 @@ pub(crate) fn scene_row_modulation(
     node_doc_id: u32,
     param_key: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    timing: (manifold_core::Bpm, f32),
 ) -> manifold_ui::panels::scene_setup_panel::RowModulation {
     // Instance graph first; a TRACKING instance (graph: None — fresh
     // imports) resolves against the effective catalog def instead.
@@ -1593,7 +1606,7 @@ pub(crate) fn scene_row_modulation(
             )
         });
     match real_id {
-        Some(id) => row_modulation_for_id(inst, &id, automation_latched),
+        Some(id) => row_modulation_for_id(inst, &id, automation_latched, timing),
         None => manifold_ui::panels::scene_setup_panel::RowModulation::default(),
     }
 }
@@ -1602,12 +1615,13 @@ pub(crate) fn row_modulation_for_id(
     inst: Option<&PresetInstance>,
     param_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    timing: (manifold_core::Bpm, f32),
 ) -> manifold_ui::panels::scene_setup_panel::RowModulation {
     use manifold_ui::panels::scene_setup_panel::RowModulation;
     let Some(inst) = inst else {
         return RowModulation::default();
     };
-    let (m, a) = lookup_param_mod_for_id(inst, param_id, automation_latched);
+    let (m, a) = lookup_param_mod_for_id(inst, param_id, automation_latched, timing);
     let row = &m[0];
     let audio_row = &a.rows[0];
     RowModulation {
@@ -1620,6 +1634,8 @@ pub(crate) fn row_modulation_for_id(
         driver_dotted: row.driver_dotted,
         driver_triplet: row.driver_triplet,
         driver_free_period: row.driver_free_period,
+        driver_frame_aligned: row.driver_frame_aligned,
+        driver_frame_rate: row.driver_frame_rate,
         envelope_active: row.envelope_active,
         target_norm: row.target_norm,
         env_decay: row.env_decay,
@@ -1664,6 +1680,7 @@ mod param_mod_lookup_tests {
             trim_max: 0.9,
             reversed: false,
             free_period_beats: None,
+            frame_aligned: false,
             legacy_param_index: None,
             is_paused_by_user: false,
         }
@@ -1675,11 +1692,32 @@ mod param_mod_lookup_tests {
     /// position — it just doesn't need that position, because it always
     /// reports at index 0.
     #[test]
+    fn frame_align_readout_tracks_clock_without_rebuilding_for_small_bpm_changes() {
+        let mut project = Project::default();
+        project.settings.bpm = manifold_core::Bpm(164.0);
+        project.settings.frame_rate = 24.0;
+        let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
+        let mut d = driver_for("intensity");
+        d.frame_aligned = true;
+        d.beat_division = BeatDivision::Sixteenth;
+        d.waveform = DriverWaveform::Square;
+        inst.drivers = Some(vec![d]);
+        project.settings.master_effects.push(inst);
+        let mut ui = UIRoot::new();
+        assert!(!ui.sync_driver_bpm(&project, manifold_core::Bpm(164.0)));
+        assert!(!ui.sync_driver_bpm(&project, manifold_core::Bpm(165.0)));
+        assert!(ui.sync_driver_bpm(&project, manifold_core::Bpm(100.0)));
+        let (rows, _) = lookup_param_mod_for_id(&project.settings.master_effects[0],
+            "intensity", &[], (ui.driver_bpm.unwrap(), 24.0));
+        assert_eq!(rows[0].driver_frame_rate, Some((4, 6.0)));
+    }
+
+    #[test]
     fn lookup_finds_the_named_params_driver_regardless_of_manifest_position() {
         let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
         inst.drivers = Some(vec![driver_for("intensity")]);
 
-        let (modulation, _audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
+        let (modulation, _audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert!(modulation[0].driver_active);
         assert_eq!(modulation[0].trim_min, 0.1);
         assert_eq!(modulation[0].trim_max, 0.9);
@@ -1693,7 +1731,7 @@ mod param_mod_lookup_tests {
         let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
         inst.drivers = Some(vec![driver_for("fill")]);
 
-        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
+        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert!(!modulation[0].driver_active);
         assert!(!audio.rows[0].active);
     }
@@ -1704,7 +1742,7 @@ mod param_mod_lookup_tests {
     #[test]
     fn lookup_on_unmodulated_param_returns_idle_slot() {
         let inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
-        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
+        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert!(!modulation[0].driver_active);
         assert!(!modulation[0].envelope_active);
         assert!(!audio.rows[0].active);

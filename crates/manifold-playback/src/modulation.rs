@@ -37,15 +37,20 @@ use manifold_core::project::Project;
 // not changed.
 
 /// Map a driver's normalized output onto a target parameter's value range.
-fn driver_target_value(driver: &ParameterDriver, current_beat: Beats, min: f32, max: f32) -> f32 {
+fn driver_target_value(
+    driver: &ParameterDriver, current_beat: Beats, time: Seconds,
+    bpm: manifold_core::Bpm, fps: f32, min: f32, max: f32,
+) -> f32 {
     // `period_beats()` is the free period when the driver is in free mode, else
     // the sync division's period (dotted/triplet baked into the variant).
-    let mut normalized = ParameterDriver::evaluate_with_period(
+    let mut normalized = if driver.frame_aligned {
+        driver.evaluate_frame_aligned(time, bpm, fps)
+    } else { ParameterDriver::evaluate_with_period(
         current_beat,
         driver.period_beats(),
         driver.waveform,
         driver.phase,
-    );
+    ) };
     if driver.reversed {
         normalized = 1.0 - normalized;
     }
@@ -280,12 +285,14 @@ pub fn apply_envelope_step_values(project: &mut Project) -> bool {
 
 /// Evaluate all parameter drivers on master effects, layer effects, and generator params.
 /// Returns true if any driver was active (compositor should be marked dirty).
-pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool {
+pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats, time: Seconds) -> bool {
+    let bpm = project.settings.bpm;
+    let fps = project.settings.frame_rate;
     let mut any_driven = false;
 
     // Master effect drivers
     for fx in project.settings.master_effects.iter_mut() {
-        if evaluate_instance_drivers(fx, current_beat) {
+        if evaluate_instance_drivers(fx, current_beat, time, bpm, fps) {
             any_driven = true;
         }
     }
@@ -298,7 +305,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
         // Layer effect drivers
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
-                if evaluate_instance_drivers(fx, current_beat) {
+                if evaluate_instance_drivers(fx, current_beat, time, bpm, fps) {
                     any_driven = true;
                 }
             }
@@ -308,7 +315,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
         // up user-tail driver bindings that the former inline id_to_index walk
         // missed).
         if let Some(gp) = layer.gen_params_mut()
-            && evaluate_instance_drivers(gp, current_beat)
+            && evaluate_instance_drivers(gp, current_beat, time, bpm, fps)
         {
             any_driven = true;
         }
@@ -319,7 +326,9 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
 
 /// Evaluate all drivers on a single PresetInstance. Returns true if any driver was active.
 /// Port of C# ParameterDriverManager.EvaluateEffectDrivers().
-fn evaluate_instance_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bool {
+fn evaluate_instance_drivers(
+    fx: &mut PresetInstance, current_beat: Beats, time: Seconds, bpm: manifold_core::Bpm, fps: f32,
+) -> bool {
     if !fx.enabled {
         return false;
     }
@@ -335,7 +344,7 @@ fn evaluate_instance_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bo
         for driver in ds.iter().filter(|d| d.enabled && !d.is_paused_by_user) {
             if let Some(p) = fx.params.get_mut(driver.param_id.as_ref()) {
                 let (min, max) = (p.spec.min, p.spec.max);
-                let raw = driver_target_value(driver, current_beat, min, max);
+                let raw = driver_target_value(driver, current_beat, time, bpm, fps, min, max);
                 // BUG-039: a saw (or any waveform, via a trim overshoot)
                 // bound to a periodic param wraps back into range instead
                 // of clamping, so a full-range sweep spins continuously
@@ -413,6 +422,7 @@ pub fn evaluate_all_envelopes(
 pub fn evaluate_modulation(
     project: &mut Project,
     current_beat: Beats,
+    current_time: Seconds,
     dt: Seconds,
     audio: &AudioFeatureSnapshot,
     timing_scratch: &mut Vec<(Beats, Beats)>,
@@ -439,7 +449,7 @@ pub fn evaluate_modulation(
     let any_envelope_stepped = apply_envelope_step_values(project);
 
     // Phase 2: Evaluate LFO drivers
-    let any_driven = evaluate_all_drivers(project, current_beat);
+    let any_driven = evaluate_all_drivers(project, current_beat, current_time);
 
     // Phase 2.5: Evaluate audio modulations (live audio → effective). Driver-
     // like (sets the value), so it runs alongside drivers and before the
@@ -2563,7 +2573,7 @@ mod tests {
         // 1.5*0.8 = 1.2, past max 1.0. Wrapped: 0.0 + (1.2-0.0).rem_euclid(1.0) = 0.2.
         evaluate_instance_drivers(
             &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
-            Beats(0.8),
+            Beats(0.8), Seconds(0.4), project.settings.bpm, project.settings.frame_rate,
         );
         let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
             .params
@@ -2597,7 +2607,7 @@ mod tests {
 
         evaluate_instance_drivers(
             &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
-            Beats(0.8),
+            Beats(0.8), Seconds(0.4), project.settings.bpm, project.settings.frame_rate,
         );
         let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
             .params
@@ -2617,6 +2627,24 @@ mod tests {
     /// drops back to ~0 at each period boundary) rather than climbing past
     /// max and sticking there.
     #[test]
+    fn frame_align_pipeline_samples_absolute_time_with_project_rate() {
+        let mut project = project_with(layer_with_one_effect());
+        project.settings.bpm = manifold_core::Bpm(164.0);
+        project.settings.frame_rate = 24.0;
+        let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+        override_stock_param_range(fx, "amount", 0.0, 1.0);
+        let mut driver = ParameterDriver::new("amount", BeatDivision::Sixteenth, DriverWaveform::Square);
+        driver.frame_aligned = true;
+        fx.drivers = Some(vec![driver]);
+        for frame in 0..200 {
+            let time = Seconds(frame as f64 / 24.0);
+            evaluate_all_drivers(&mut project, Beats(time.0 * 164.0 / 60.0), time);
+            let value = project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value;
+            assert_eq!(value, if frame % 2 == 0 { 1.0 } else { 0.0 });
+        }
+    }
+
+    #[test]
     fn driver_saw_sweep_never_plateaus_across_multiple_periods() {
         let layer = layer_with_one_effect();
         let mut project = project_with(layer);
@@ -2634,7 +2662,7 @@ mod tests {
             let beat = Beats(i as f64 * 0.01); // 4 full periods at 100 samples/period
             evaluate_instance_drivers(
                 &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
-                beat,
+                beat, Seconds(beat.0 * 0.5), project.settings.bpm, project.settings.frame_rate,
             );
             let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
                 .params
@@ -2763,6 +2791,7 @@ mod tests {
             trim_max: 1.0,
             reversed: false,
             free_period_beats: None,
+            frame_aligned: false,
             legacy_param_index: None,
             is_paused_by_user: false,
         };
@@ -2772,9 +2801,9 @@ mod tests {
         // phase (peak), beat 0 at its zero-crossing (midpoint) — a beat pair
         // guaranteed apart by symmetry, unlike e.g. 0 vs 0.5 (both land on a
         // zero-crossing of a period-1 sine and alias to the same value).
-        assert!(evaluate_all_drivers(&mut project, Beats(0.0)), "driver must report itself active");
+        assert!(evaluate_all_drivers(&mut project, Beats(0.0), Seconds::ZERO), "driver must report itself active");
         let v0 = project.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
-        evaluate_all_drivers(&mut project, Beats(0.25));
+        evaluate_all_drivers(&mut project, Beats(0.25), Seconds(0.125));
         let v1 = project.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
 
         assert!(
@@ -2863,6 +2892,7 @@ mod tests {
                 trim_max: 1.0,
                 reversed: false,
                 free_period_beats: None,
+            frame_aligned: false,
                 legacy_param_index: None,
                 is_paused_by_user: false,
             },
@@ -2894,15 +2924,37 @@ mod tests {
 
         // ── Still modulates AFTER reload — not assumed. ──
         assert!(
-            evaluate_all_drivers(&mut reloaded, Beats(0.0)),
+            evaluate_all_drivers(&mut reloaded, Beats(0.0), Seconds::ZERO),
             "driver must still report itself active after reload"
         );
         let v0 = reloaded.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
-        evaluate_all_drivers(&mut reloaded, Beats(0.25));
+        evaluate_all_drivers(&mut reloaded, Beats(0.25), Seconds(0.125));
         let v1 = reloaded.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
         assert!(
             (v0 - v1).abs() > 0.05,
             "the reloaded driver must still move the exposed param's value: {v0} at beat 0, {v1} at beat 0.25"
         );
+    }
+}
+
+#[cfg(test)]
+mod frame_alignment_pipeline_tests {
+    use super::*;
+    use manifold_core::{Bpm, types::{BeatDivision, DriverWaveform}};
+
+    #[test]
+    fn frame_align_pipeline_uses_project_clock_and_preserves_legacy_and_invert() {
+        let mut d = ParameterDriver::new("amount", BeatDivision::Sixteenth, DriverWaveform::Square);
+        let beat = Beats(0.24);
+        let time = Seconds(2.0 / 24.0);
+        assert_eq!(driver_target_value(&d, beat, time, Bpm(164.0), 24.0, 0.0, 1.0), 0.0);
+        d.frame_aligned = true;
+        assert_eq!(driver_target_value(&d, beat, time, Bpm(164.0), 24.0, 0.0, 1.0), 1.0);
+        d.reversed = true;
+        assert_eq!(driver_target_value(&d, beat, time, Bpm(164.0), 24.0, 0.0, 1.0), 0.0);
+        d.reversed = false;
+        d.trim_min = 0.2;
+        d.trim_max = 0.8;
+        assert_eq!(driver_target_value(&d, beat, time, Bpm(164.0), 24.0, 0.0, 10.0), 8.0);
     }
 }

@@ -382,3 +382,54 @@ impl Command for ChangeTrimCommand {
         "Change Trim"
     }
 }
+
+
+#[derive(Debug)]
+pub struct ToggleDriverFrameAlignedCommand {
+    target: DriverTarget,
+    driver_index: usize,
+    old_aligned: bool,
+    new_aligned: bool,
+}
+
+impl ToggleDriverFrameAlignedCommand {
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_aligned: bool,
+        new_aligned: bool,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_aligned,
+            new_aligned,
+        }
+    }
+}
+
+impl Command for ToggleDriverFrameAlignedCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let idx = self.driver_index;
+        let val = self.new_aligned;
+        with_drivers_mut(project, &self.target, |drivers| {
+            if let Some(d) = drivers.get_mut(idx) {
+                d.frame_aligned = val;
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let idx = self.driver_index;
+        let val = self.old_aligned;
+        with_drivers_mut(project, &self.target, |drivers| {
+            if let Some(d) = drivers.get_mut(idx) {
+                d.frame_aligned = val;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Toggle Driver Frame Alignment"
+    }
+}

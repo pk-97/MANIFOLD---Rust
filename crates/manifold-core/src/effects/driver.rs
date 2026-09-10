@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use crate::types::{BeatDivision, DriverWaveform};
-use crate::units::Beats;
+use crate::units::{Beats, Bpm, Seconds};
 use super::ParamId;
 use super::{default_one, default_true};
 
@@ -49,6 +49,8 @@ pub struct ParameterDriver {
     /// `freePeriodBeats`, omitted when `None` so pre-free-mode projects round-trip
     /// unchanged.
     pub free_period_beats: Option<f32>,
+    /// Use a whole-output-frame period, releasing exact beat sync. Off in legacy projects.
+    pub frame_aligned: bool,
     /// Parked legacy `paramIndex: i32` from V1.1 deserialization or from
     /// a load against an unregistered effect type.
     ///
@@ -101,6 +103,9 @@ impl Serialize for ParameterDriver {
             field_count += 1;
         }
 
+        if self.frame_aligned {
+            field_count += 1;
+        }
         let mut s = serializer.serialize_struct("ParameterDriver", field_count)?;
         if emit_param_id {
             s.serialize_field("paramId", &self.param_id)?;
@@ -118,6 +123,9 @@ impl Serialize for ParameterDriver {
         s.serialize_field("reversed", &self.reversed)?;
         if let Some(p) = self.free_period_beats {
             s.serialize_field("freePeriodBeats", &p)?;
+        }
+        if self.frame_aligned {
+            s.serialize_field("frameAligned", &true)?;
         }
         s.end()
     }
@@ -140,6 +148,7 @@ impl ParameterDriver {
             trim_max: 1.0,
             reversed: false,
             free_period_beats: None,
+            frame_aligned: false,
             legacy_param_index: None,
             is_paused_by_user: false,
         }
@@ -151,6 +160,43 @@ impl ParameterDriver {
     pub fn period_beats(&self) -> f32 {
         self.free_period_beats
             .unwrap_or_else(|| self.beat_division.beats())
+    }
+
+    /// Nearest representable period; square waves need even counts for equal halves.
+    /// Invalid timing has no representable period. Ties round to the longer period.
+    pub fn effective_period_frames(&self, bpm: Bpm, frame_rate: f32) -> Option<u32> {
+        let period = self.period_beats() as f64;
+        if !period.is_finite() || period <= 0.0 || !bpm.0.is_finite() || bpm.0 <= 0.0
+            || !frame_rate.is_finite() || frame_rate <= 0.0
+        {
+            return None;
+        }
+        let requested = period * 60.0 / bpm.0 as f64 * frame_rate as f64;
+        let frames = match self.waveform {
+            DriverWaveform::Square => ((requested / 2.0).round().max(1.0)
+                .min((u32::MAX / 2) as f64) as u32) * 2,
+            // Two opposite sine samples can both be zero crossings.
+            DriverWaveform::Sine => (requested.round() as u32).max(3),
+            DriverWaveform::Triangle | DriverWaveform::Sawtooth => (requested.round() as u32).max(2),
+            DriverWaveform::Random => (requested.round() as u32).max(1),
+        };
+        Some(frames)
+    }
+
+    /// Sample the nominal output-frame lattice, anchored at timeline time zero.
+    /// Seeks and export starts do not reset phase; rate changes may change phase.
+    /// Invalid timing returns neutral 0.5, like the invalid beat-period evaluator.
+    pub fn evaluate_frame_aligned(&self, time: Seconds, bpm: Bpm, frame_rate: f32) -> f32 {
+        let Some(frames) = self.effective_period_frames(bpm, frame_rate) else { return 0.5 };
+        if !time.0.is_finite() { return 0.5; }
+        // Tolerance is one ten-millionth of a frame, solely for f64 boundary error.
+        let frame = (time.0 * frame_rate as f64 + 1.0e-7).floor() as i64;
+        let frames = i64::from(frames);
+        if self.waveform == DriverWaveform::Random {
+            return hash_to_float(frame.div_euclid(frames) as u32);
+        }
+        let phase = frame.rem_euclid(frames) as f64 / frames as f64;
+        Self::evaluate_with_period(Beats(phase), 1.0, self.waveform, self.phase)
     }
 
     /// Evaluate driver at given beat position -> [0, 1].
@@ -304,6 +350,8 @@ impl<'de> Deserialize<'de> for ParameterDriver {
             reversed: bool,
             #[serde(default)]
             free_period_beats: Option<f32>,
+            #[serde(default)]
+            frame_aligned: bool,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -333,6 +381,7 @@ impl<'de> Deserialize<'de> for ParameterDriver {
             trim_max: raw.trim_max,
             reversed: raw.reversed,
             free_period_beats: raw.free_period_beats,
+            frame_aligned: raw.frame_aligned,
             legacy_param_index,
             is_paused_by_user: false,
         })
@@ -650,4 +699,78 @@ mod tests {
         assert!((v_half - 0.5).abs() < 1e-6, "half phase at beat 1.5 over 3-beat period");
     }
 
+}
+
+#[cfg(test)]
+mod frame_alignment_tests {
+    use super::*;
+
+    fn square() -> ParameterDriver {
+        let mut d = ParameterDriver::new("amount", BeatDivision::Sixteenth, DriverWaveform::Square);
+        d.frame_aligned = true;
+        d
+    }
+
+    #[test]
+    fn frame_align_alternates_at_164_bpm_and_24_fps_after_seek() {
+        let d = square();
+        assert_eq!(d.effective_period_frames(Bpm(164.0), 24.0), Some(2));
+        for start in [0.0, 56.0 * 60.0 / 164.0, 3000.0] {
+            let values: Vec<_> = (0..1000).map(|i|
+                d.evaluate_frame_aligned(Seconds(start + i as f64 / 24.0), Bpm(164.0), 24.0)
+            ).collect();
+            assert!(values.windows(2).all(|v| v[0] != v[1]));
+            for i in [700, 1, 999, 0] {
+                assert_eq!(values[i], d.evaluate_frame_aligned(
+                    Seconds(start + i as f64 / 24.0), Bpm(164.0), 24.0));
+            }
+        }
+    }
+
+    #[test]
+    fn frame_align_rounds_to_even_period_and_honors_waveform_minima() {
+        let mut d = square();
+        d.free_period_beats = Some(3.0);
+        assert_eq!(d.effective_period_frames(Bpm(60.0), 1.0), Some(4));
+        d.free_period_beats = Some(4.9);
+        assert_eq!(d.effective_period_frames(Bpm(60.0), 1.0), Some(4));
+        d.free_period_beats = Some(0.001);
+        for (wave, minimum) in [(DriverWaveform::Square, 2), (DriverWaveform::Sine, 3),
+            (DriverWaveform::Triangle, 2), (DriverWaveform::Sawtooth, 2), (DriverWaveform::Random, 1)] {
+            d.waveform = wave;
+            assert_eq!(d.effective_period_frames(Bpm(164.0), 24.0), Some(minimum));
+        }
+        assert_eq!(d.effective_period_frames(Bpm(0.0), 24.0), None);
+        assert_eq!(d.effective_period_frames(Bpm(164.0), f32::NAN), None);
+    }
+
+    #[test]
+    fn frame_align_holds_until_boundary_and_honors_phase() {
+        let mut d = square();
+        assert_eq!(d.evaluate_frame_aligned(Seconds(0.9 / 24.0), Bpm(164.0), 24.0), 1.0);
+        assert_eq!(d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0), 0.0);
+        d.phase = 0.5;
+        assert_eq!(d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0), 1.0);
+    }
+
+    #[test]
+    fn frame_align_random_changes_by_cycle_and_replays() {
+        let mut d = square();
+        d.waveform = DriverWaveform::Random;
+        assert_eq!(d.evaluate_frame_aligned(Seconds(0.0), Bpm(164.0), 24.0), hash_to_float(0));
+        assert_eq!(d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0), hash_to_float(0));
+        assert_eq!(d.evaluate_frame_aligned(Seconds(2.0 / 24.0), Bpm(164.0), 24.0), hash_to_float(1));
+    }
+
+    #[test]
+    fn frame_align_save_roundtrip_and_legacy_default() {
+        let d = square();
+        let mut value = serde_json::to_value(&d).unwrap();
+        assert_eq!(value["frameAligned"], true);
+        assert!(serde_json::from_value::<ParameterDriver>(value.clone()).unwrap().frame_aligned);
+        value.as_object_mut().unwrap().remove("frameAligned");
+        let legacy: ParameterDriver = serde_json::from_value(value).unwrap();
+        assert!(!legacy.frame_aligned);
+        assert!(serde_json::to_value(legacy).unwrap().get("frameAligned").is_none());
+    }
 }

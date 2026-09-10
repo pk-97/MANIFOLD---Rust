@@ -1,0 +1,66 @@
+[
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Frame align (release beat sync)",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Frame align (release beat sync)",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Frame align: 30 frames/cycle \u00b7 2.00 Hz",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Frame align: 30 frames/cycle \u00b7 2.00 Hz",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Frame align (release beat sync)",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  }
+]

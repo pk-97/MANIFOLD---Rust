@@ -235,6 +235,9 @@ pub struct RowModulation {
     pub driver_dotted: bool,
     pub driver_triplet: bool,
     pub driver_free_period: Option<f32>,
+    pub driver_frame_aligned: bool,
+    /// Effective cycle frames and Hz, projected only when frame alignment is on.
+    pub driver_frame_rate: Option<(u32, f32)>,
     pub envelope_active: bool,
     pub target_norm: f32,
     pub env_decay: f32,

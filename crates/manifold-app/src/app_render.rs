@@ -227,6 +227,19 @@ impl Application {
                         }
                     }
                 }
+                // The content clock can change BPM without a project edit. Keep
+                // the driver readout current without writing UI-side project state.
+                if !drag_active && !suppressed && state.bpm.is_finite() && state.bpm > 0.0 {
+                    let bpm = manifold_core::Bpm(state.bpm as f32);
+                    let changed = self.ws.ui_root.sync_driver_bpm(&self.local_project, bpm);
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.ui_root.sync_driver_bpm(&self.local_project, bpm);
+                    }
+                    if changed {
+                        self.needs_structural_sync = true;
+                        self.needs_rebuild = true;
+                    }
+                }
                 // Apply lightweight modulation snapshot (param_values only)
                 // to local_project — no full Project clone needed.
                 if !drag_active

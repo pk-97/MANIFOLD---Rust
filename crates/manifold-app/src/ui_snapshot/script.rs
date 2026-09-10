@@ -422,6 +422,7 @@ impl Runner {
                     let modulation_dirty = manifold_playback::modulation::evaluate_modulation(
                         &mut data.project,
                         current_beat,
+                        manifold_core::Seconds(self.clock as f64),
                         manifold_core::Seconds(DT as f64),
                         &manifold_core::audio_features::AudioFeatureSnapshot::default(),
                         &mut self.modulation_timing_scratch,

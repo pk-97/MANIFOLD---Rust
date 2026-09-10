@@ -222,6 +222,7 @@ mod scene_card_convergence_tests {
                 trim_max: 0.9,
                 reversed: false,
                 free_period_beats: None,
+            frame_aligned: false,
                 legacy_param_index: None,
                 is_paused_by_user: false,
             }]);
@@ -471,6 +472,7 @@ mod scene_card_convergence_tests {
                     trim_max: 1.0,
                     reversed: false,
                     free_period_beats: None,
+            frame_aligned: false,
                     legacy_param_index: None,
                     is_paused_by_user: false,
                 }]);
@@ -1821,6 +1823,7 @@ mod scene_card_convergence_tests {
                         trim_max: 1.0,
                         reversed: false,
                         free_period_beats: None,
+            frame_aligned: false,
                         legacy_param_index: None,
                         is_paused_by_user: false,
                     }]);
@@ -2144,6 +2147,56 @@ mod scene_card_convergence_tests {
                     },
                     Some(BeatDivision::Quarter),
                     Some(BeatDivision::Half),
+                );
+            }
+
+            #[test]
+            fn driver_config_frame_align_master() {
+                let mut s = two_scopes("Bloom");
+                arm_driver(&mut s.project, &s.master_target, &s.pid);
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                scope_atomic(
+                    "driver_config_frame_align_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::Modulation(ModulationAction::DriverConfig(
+                        manifold_ui::GraphParamTarget::Effect(0),
+                        pid.clone(),
+                        DriverConfigAction::ToggleFrameAligned,
+                    )),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.drivers.as_ref())
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.frame_aligned))
+                    },
+                    Some(false),
+                    Some(true),
+                );
+            }
+
+            #[test]
+            fn driver_config_frame_align_layer() {
+                let mut s = two_scopes("Bloom");
+                arm_driver(&mut s.project, &s.layer_target, &s.pid);
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                scope_atomic(
+                    "driver_config_frame_align_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::Modulation(ModulationAction::DriverConfig(
+                        manifold_ui::GraphParamTarget::Effect(0),
+                        pid.clone(),
+                        DriverConfigAction::ToggleFrameAligned,
+                    )),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.drivers.as_ref())
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.frame_aligned))
+                    },
+                    Some(false),
+                    Some(true),
                 );
             }
 

@@ -140,6 +140,8 @@ pub struct EmbeddedPresetItem {
 pub struct UIRoot {
     // Core
     pub tree: UITree,
+    /// Read-only content-clock BPM for the frame-aligned driver readout.
+    pub driver_bpm: Option<manifold_core::Bpm>,
     pub input: UIInputSystem,
     pub layout: ScreenLayout,
     /// Node-intent dispatch: maps a gesture on a node to a `PanelAction`,
@@ -377,6 +379,18 @@ pub struct UIRoot {
 }
 
 impl UIRoot {
+    /// Refresh only when a frame-aligned period changes, not on every clock sample.
+    pub fn sync_driver_bpm(&mut self, project: &manifold_core::project::Project, bpm: manifold_core::Bpm) -> bool {
+        let previous = self.driver_bpm.replace(bpm).unwrap_or(project.settings.bpm);
+        if previous == bpm { return false; }
+        let fps = project.settings.frame_rate;
+        project.settings.master_effects.iter()
+            .chain(project.timeline.layers.iter().flat_map(|l| l.effects.iter().flatten()))
+            .chain(project.timeline.layers.iter().filter_map(|l| l.gen_params()))
+            .any(|inst| inst.drivers.iter().flatten().any(|d| d.enabled && d.frame_aligned
+                && d.effective_period_frames(previous, fps) != d.effective_period_frames(bpm, fps)))
+    }
+
     pub fn new() -> Self {
         Self {
             // Give the build path real glyph-width measurement (size-to-content)
@@ -389,6 +403,7 @@ impl UIRoot {
                 ));
                 tree
             },
+            driver_bpm: None,
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
             intents: manifold_ui::intent::IntentRegistry::new(),

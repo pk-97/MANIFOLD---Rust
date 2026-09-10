@@ -181,7 +181,7 @@ impl RowHost {
             for &b in c.beat_div_btn_ids.iter() {
                 self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
             }
-            for b in [c.straight_btn_id, c.dotted_btn_id, c.triplet_btn_id, c.free_btn_id, c.invert_btn_id] {
+            for b in [c.straight_btn_id, c.dotted_btn_id, c.triplet_btn_id, c.free_btn_id, c.invert_btn_id, c.frame_align_btn_id] {
                 self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
             }
             for &b in c.wave_btn_ids.iter() {

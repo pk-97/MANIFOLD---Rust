@@ -2964,6 +2964,27 @@ mod tests {
     }
 
     #[test]
+    fn frame_align_drawer_routes_toggle_and_projects_effective_rate() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut config = effect_config();
+        config.rows[0].modulation.driver_active = true;
+        config.rows[0].modulation.driver_frame_aligned = true;
+        config.rows[0].modulation.driver_frame_rate = Some((2, 12.0));
+        panel.configure(&config);
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 360.0, 500.0));
+        let ids = panel.row_host.driver_config_ids[0].as_ref().unwrap();
+        assert!(matches!(ids.resolve(ids.frame_align_btn_id), Some(crate::panels::DriverConfigAction::ToggleFrameAligned)));
+        assert_eq!(panel.state.mod_state.driver_frame_rate[0], Some((2, 12.0)));
+        let button = ids.frame_align_btn_id;
+        let actions = panel.handle_click(button, &tree);
+        assert!(actions.iter().any(|action| matches!(action,
+            PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned))
+        )), "button must route through the row index, not select the card");
+    }
+
+    #[test]
     fn reconfigure_preserves_mod_tab_choice() {
         // The bug fix: a re-sync reconfigures the SAME panel (the inspector now
         // reuses it by effect id), so the user's tab choice must survive
