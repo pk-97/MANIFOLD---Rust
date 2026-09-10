@@ -6,22 +6,6 @@ use super::*;
 
 // ── Shared node ID structs ──────────────────────────────────────
 
-pub(crate) struct DriverConfigIds {
-    pub(crate) _container_id: NodeId,
-    pub(crate) beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT],
-    /// Feel segment (mutually exclusive): straight / dotted / triplet.
-    pub(crate) straight_btn_id: NodeId,
-    pub(crate) dotted_btn_id: NodeId,
-    pub(crate) triplet_btn_id: NodeId,
-    /// Free-period field — clicking opens the beats type-in (free mode).
-    pub(crate) free_btn_id: NodeId,
-    /// Output polarity invert (`reversed` -> `1 - value`).
-    pub(crate) invert_btn_id: NodeId,
-    pub(crate) frame_align_btn_id: NodeId,
-    pub(crate) wave_btn_ids: [NodeId; WAVEFORM_COUNT],
-}
-
-
 /// The orange envelope target handle on a parameter's slider track — sets the
 /// depth (`target_normalized`) the envelope pulls the value toward, shown in the
 /// parameter's own range.
@@ -34,20 +18,16 @@ pub(crate) struct EnvelopeTargetIds {
 /// the Decay slider only in Continuous (Step/Random has no decay to tune),
 /// and while Step the Amount slider + Wrap row.
 pub(crate) struct EnvelopeConfigIds {
-    pub(crate) _container_id: NodeId,
+    pub(crate) drawer: crate::panels::drawer::DrawerIds,
     /// The Decay slider — `Some` only while Action=Continuous (or on
     /// toggle/trigger rows, which are always Continuous).
     pub(crate) decay_slider: Option<SliderNodeIds>,
     /// Right-click reset for the Decay slider (the `EnvDecay*` trio).
     pub(crate) decay_reset: Option<PanelAction>,
-    /// Action-row button ids (`[Continuous, Step, Random]`), if the row is built.
-    pub(crate) action_btn_ids: Option<[NodeId; AUDIO_ACTION_COUNT]>,
     /// Amount slider for the Step action, only while Action=Step.
     pub(crate) step_slider: Option<SliderNodeIds>,
     /// Right-click reset for the Amount slider.
     pub(crate) step_reset: Option<PanelAction>,
-    /// Wrap-row button ids (`[Wrap, Bounce, Clamp]`), if the row is built.
-    pub(crate) wrap_btn_ids: Option<[NodeId; AUDIO_WRAP_COUNT]>,
 }
 
 
@@ -59,10 +39,6 @@ pub(crate) struct TrimHandleIds {
 }
 
 
-pub(crate) struct AbletonConfigIds {
-    pub(crate) _container_id: NodeId,
-    pub(crate) invert_btn_id: NodeId,
-}
 
 
 /// Display data for an Ableton-mapped parameter.
@@ -748,8 +724,8 @@ pub(crate) struct ParamRowIds {
     pub(crate) audio_btn: NodeId,
     /// Envelope drawer (the single "Decay" slider).
     pub(crate) envelope_config: Option<EnvelopeConfigIds>,
-    pub(crate) driver_config: Option<DriverConfigIds>,
-    pub(crate) ableton_config: Option<AbletonConfigIds>,
+    pub(crate) driver_config: Option<crate::panels::drawer::DrawerIds>,
+    pub(crate) ableton_config: Option<crate::panels::drawer::DrawerIds>,
     /// Audio-modulation drawer (send + feature selectors) and its send count,
     /// kept so click resolution can split the flat button index into
     /// send / new-send / feature regions.
@@ -801,7 +777,7 @@ pub(crate) struct ToggleTriggerRowIds {
     /// lane reserved).
     pub(crate) audio_btn: Option<NodeId>,
     /// The audio-mod drawer, when armed. Same shape as a slider row's
-    /// `audio_config` so `resolve_audio_config_click` resolves both identically.
+    /// `audio_config` so retained drawer intents resolve both identically.
     pub(crate) audio_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
     /// Collapsed-row mode indicator (section 9 consequence, carried over from section 8 D6:
     /// "Transient mode silently ignores clip launches... the drawer must
@@ -851,4 +827,3 @@ mod fine_scrub_tests {
         assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, true), 25.0);
     }
 }
-

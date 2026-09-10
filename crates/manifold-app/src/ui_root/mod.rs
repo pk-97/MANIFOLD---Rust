@@ -918,8 +918,8 @@ impl UIRoot {
                 self.drain_overlay_selections(&mut actions);
                 continue;
             }
-            if let Some(action) = self.resolve_intent(event) {
-                actions.push(action);
+            if let Some(resolved) = self.resolve_intent(event) {
+                actions.extend(resolved);
                 continue;
             }
             let mut panel_actions = self.inspector.handle_event(event, &self.tree);

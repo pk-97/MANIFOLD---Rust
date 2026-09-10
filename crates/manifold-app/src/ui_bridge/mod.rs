@@ -279,7 +279,9 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::AudioSendLabelClicked(_)
             | RootAction::SceneSetupRenameObjectClicked(..)
             | RootAction::SceneSetupRenameLightClicked(..)
-            | RootAction::AudioSendClicked(_) => DispatchResult::handled(),
+            | RootAction::AudioSendClicked(_)
+            | RootAction::AudioDrawerClick(..)
+            | RootAction::ClipTriggerDrawerClick(..) => DispatchResult::handled(),
             // Panel already updated its UI-local selection; ride
             // `structural_change: true` back so Properties follows this frame.
             RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),

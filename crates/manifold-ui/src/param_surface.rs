@@ -212,7 +212,7 @@ pub enum RowRole {
     AudioBtn,
     /// Toggle / trigger button row (`is_toggle` / `is_trigger` decide the action).
     ToggleBtn,
-    /// Driver config drawer (all its sub-buttons; `DriverConfigIds::resolve`).
+    /// Driver config drawer (all its sub-buttons; retained drawer actions).
     DriverConfig,
     /// Envelope config drawer (target handle, decay… `EnvelopeConfigIds`).
     EnvelopeConfig,

@@ -18,6 +18,7 @@
 //! [`ParamCardKind`] or ignore the field that doesn't apply to them.
 
 use crate::{ParamsAction, RootAction};
+use crate::panels::AudioDrawerClick;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
 use super::{
@@ -597,6 +598,27 @@ impl ParamCardPanel {
             ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
             ParamCardKind::Generator => GraphParamTarget::Generator,
         }
+    }
+
+    pub fn audio_drawer_intent(
+        &mut self,
+        target: GraphParamTarget,
+        param_id: &manifold_foundation::ParamId,
+        click: AudioDrawerClick,
+    ) -> Vec<PanelAction> {
+        if !self.is_live() || self.param_target() != target {
+            return Vec::new();
+        }
+        let Some(row) = self.rows.iter().position(|r| r.id.as_ref() == param_id.as_ref()) else {
+            return Vec::new();
+        };
+        self.row_host.audio_drawer_action(
+            target,
+            row,
+            click,
+            &self.rows,
+            &mut self.state.mod_state,
+        )
     }
 
     /// The card ROOT's identity key (D4): cards are siblings under the
@@ -2530,7 +2552,12 @@ mod tests {
             "Custom cell must win the hit test at its center"
         );
 
-        let actions = panel.handle_click(custom_id, &tree);
+        let pid = panel.rows[0].id.clone();
+        let actions = panel.audio_drawer_intent(
+            panel.param_target(),
+            &pid,
+            AudioDrawerClick::Custom,
+        );
         assert!(
             panel.state.mod_state.audio_matrix_open[0],
             "Custom click opens the matrix; actions={actions:?}"
@@ -2552,6 +2579,25 @@ mod tests {
             closed_count + 12,
             "open matrix adds the 8 Feature + 4 Band buttons"
         );
+    }
+
+    #[test]
+    fn audio_drawer_intent_preserves_target_and_param_identity() {
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_audio_shape_armed());
+        panel.build(&mut UITree::new(), Rect::new(0.0, 0.0, 280.0, 400.0));
+        let pid = panel.rows[0].id.clone();
+        let actions = panel.audio_drawer_intent(
+            GraphParamTarget::Effect(0),
+            &pid,
+            AudioDrawerClick::Invert,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Modulation(ModulationAction::AudioModSetInvert(
+                GraphParamTarget::Effect(0), id
+            ))] if id == &pid
+        ));
     }
 
     #[test]
@@ -2975,9 +3021,15 @@ mod tests {
         panel.state.mod_state.driver_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 360.0, 500.0));
         let ids = panel.row_host.driver_config_ids[0].as_ref().unwrap();
-        assert!(matches!(ids.resolve(ids.frame_align_btn_id), Some(crate::panels::DriverConfigAction::ToggleFrameAligned)));
+        let frame_button = ids
+            .button_ids()
+            .iter()
+            .copied()
+            .find(|&id| matches!(ids.resolve_action(id), Some(PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned)))))
+            .expect("frame-align button is selected by its bound action");
+        assert!(matches!(ids.resolve_action(frame_button), Some(PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned)))));
         assert_eq!(panel.state.mod_state.driver_frame_rate[0], Some((2, 12.0)));
-        let button = ids.frame_align_btn_id;
+        let button = frame_button;
         let actions = panel.handle_click(button, &tree);
         assert!(actions.iter().any(|action| matches!(action,
             PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned))

@@ -826,6 +826,9 @@ impl ParamCardPanel {
         // badges, the drag bars, and the cog dots below are the imperative
         // decorations layered on top.
         self.drag_icon_id = self.host.node_id_for_key(KEY_DRAG);
+        if let Some(drag) = self.drag_icon_id {
+            tree.set_name(drag, format!("param_card.drag_handle.{}", self.name));
+        }
         self.name_clip_id = self.host.node_id_for_key(KEY_NAME_CLIP);
         self.name_label_id = self.host.node_id_for_key(KEY_NAME);
         self.toggle_btn_id = self.host.node_id_for_key(KEY_TOGGLE);

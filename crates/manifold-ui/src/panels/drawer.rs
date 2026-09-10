@@ -9,17 +9,15 @@
 //!
 //! A drawer is described declaratively as a stack of [`DrawerRow`]s; [`build`]
 //! turns the spec into `UITree` nodes (the coupled part) and returns a
-//! [`DrawerIds`] whose [`DrawerIds::resolve_button`] maps a clicked node id back
-//! to a flat control index. The caller owns the meaning of that index (it maps
-//! it onto a driver / envelope / audio-mod edit), so the layout + hit-test logic
-//! lives here once.
+//! [`DrawerIds`] retaining each control and its bound action. The same
+//! retained intents power central dispatch and direct panel click routing.
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` section 10.2.
 
 use std::cell::Cell;
 
 use super::PanelAction;
-use crate::chrome::Theme;
+use crate::chrome::{ChromeHost, Theme, View};
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderNodeIds};
 use crate::tree::UITree;
@@ -86,11 +84,26 @@ pub struct DrawerButton {
     /// the active state shows the normal selection highlight. Keeps an identity
     /// tint legible without a button-sized block of saturated color.
     pub accent_text_only: bool,
+    click: DrawerClick,
+}
+
+enum DrawerClick {
+    Action(PanelAction),
+    WithBounds(Box<dyn Fn(Rect) -> PanelAction>),
 }
 
 impl DrawerButton {
-    pub fn new(label: impl Into<String>, active: bool) -> Self {
-        Self { label: label.into(), active, accent: None, accent_text_only: false }
+    pub fn new(label: impl Into<String>, active: bool, action: PanelAction) -> Self {
+        Self { label: label.into(), active, accent: None, accent_text_only: false, click: DrawerClick::Action(action) }
+    }
+
+    pub fn new_with_bounds(
+        label: impl Into<String>,
+        active: bool,
+        action: impl Fn(Rect) -> PanelAction + 'static,
+    ) -> Self {
+        Self { label: label.into(), active, accent: None, accent_text_only: false,
+            click: DrawerClick::WithBounds(Box::new(action)) }
     }
 
     /// Give the button an identity tint. See [`DrawerButton::accent`].
@@ -121,6 +134,7 @@ pub struct TrailingButton {
     pub width: f32,
     pub height: f32,
     pub style: UIStyle,
+    pub action: PanelAction,
 }
 
 /// A single-row status strip: an optional leading [`StatusDot`], a left-aligned
@@ -330,10 +344,10 @@ fn dim(c: Color32, factor: f32) -> Color32 {
 
 /// The `UITree` node ids a built drawer produced, plus the mapping needed to
 /// resolve a click. Buttons are enumerated **flat across all rows in order**
-/// (row 0's buttons first, then row 1's, …) — that flat index is what
-/// [`Self::resolve_button`] returns and what the caller maps to an action.
+/// (row 0 first). Actions are stored with their controls, independent of order.
 pub struct DrawerIds {
     pub container: NodeId,
+    pub(crate) button_hosts: Vec<ChromeHost>,
     /// Node id per flat button index.
     button_ids: Vec<NodeId>,
     /// Slider node ids, in row order (one per `Slider` row).
@@ -351,9 +365,14 @@ pub struct DrawerIds {
 }
 
 impl DrawerIds {
-    /// Flat control index of the button with this node id, if any.
-    pub fn resolve_button(&self, id: NodeId) -> Option<usize> {
-        self.button_ids.iter().position(|&b| b == id)
+    pub fn resolve_action(&self, id: NodeId) -> Option<&PanelAction> {
+        self.button_hosts.iter().find_map(|host| host.click_action(id))
+    }
+
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        for host in &self.button_hosts {
+            host.register_intents(intents);
+        }
     }
 
     /// Number of addressable buttons.
@@ -361,9 +380,7 @@ impl DrawerIds {
         self.button_ids.len()
     }
 
-    /// The flat button node ids, row 0 first. Callers that built a fixed-shape
-    /// spec (e.g. the driver drawer) use this to recover their typed ids by
-    /// position.
+    /// Button nodes in display order, for row membership and inspection.
     pub fn button_ids(&self) -> &[NodeId] {
         &self.button_ids
     }
@@ -424,6 +441,7 @@ pub fn build(
     };
 
     let mut button_ids: Vec<NodeId> = Vec::new();
+    let mut button_hosts = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
     let mut slider_resets: Vec<PanelAction> = Vec::new();
     let mut meters: Vec<Option<MeterIds>> = Vec::new();
@@ -472,10 +490,17 @@ pub fn build(
                             style.text_color = accent;
                         }
                     }
-                    let id = tree.add_button(
-                        Some(container), cx, row_y, *bw, ROW_H, style, &b.label,
-                    );
-                    button_ids.push(id);
+                    let rect = Rect::new(cx, row_y, *bw, ROW_H);
+                    let action = match &b.click {
+                        DrawerClick::Action(action) => action.clone(),
+                        DrawerClick::WithBounds(make) => make(rect),
+                    };
+                    let view = View::button(b.label.clone()).style(style).fixed(*bw, ROW_H).on_click(action);
+                    let mut host = ChromeHost::new();
+                    let start = tree.count();
+                    host.build_under(tree, &view, rect, Some(container));
+                    button_ids.push(tree.id_at(start));
+                    button_hosts.push(host);
                     cx += bw + BTN_GAP;
                 }
             }
@@ -580,16 +605,16 @@ pub fn build(
                 if let Some(tb) = &s.trailing {
                     let bx = x + w - STATUS_PAD - tb.width;
                     let by = row_y + (s.height - tb.height) * 0.5;
-                    let id = tree.add_button(
-                        Some(container),
-                        bx,
-                        by,
-                        tb.width,
-                        tb.height,
-                        tb.style,
-                        &tb.label,
-                    );
-                    button_ids.push(id);
+                    let rect = Rect::new(bx, by, tb.width, tb.height);
+                    let view = View::button(tb.label.clone())
+                        .style(tb.style)
+                        .fixed(tb.width, tb.height)
+                        .on_click(tb.action.clone());
+                    let mut host = ChromeHost::new();
+                    let start = tree.count();
+                    host.build_under(tree, &view, rect, Some(container));
+                    button_ids.push(tree.id_at(start));
+                    button_hosts.push(host);
                     trailing_x = bx;
                 }
 
@@ -618,6 +643,7 @@ pub fn build(
 
     DrawerIds {
         container,
+        button_hosts,
         button_ids,
         sliders,
         slider_resets,
@@ -629,11 +655,16 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::{ScrubPhase, ScrubValue, ValueRef};
+    use crate::intent::{Gesture, IntentRegistry};
+    use crate::panels::{ScrubPhase, ScrubValue, TransportAction, ValueRef};
+
+    fn test_action() -> PanelAction {
+        PanelAction::Transport(TransportAction::Stop)
+    }
 
     fn buttons(labels: &[(&str, bool)]) -> DrawerRow {
         DrawerRow::Buttons {
-            buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a)).collect(),
+            buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a, test_action())).collect(),
             width: ButtonWidth::Proportional,
             label: None,
         }
@@ -641,7 +672,7 @@ mod tests {
 
     fn uniform_buttons(labels: &[(&str, bool)]) -> DrawerRow {
         DrawerRow::Buttons {
-            buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a)).collect(),
+            buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a, test_action())).collect(),
             width: ButtonWidth::Uniform,
             label: None,
         }
@@ -676,12 +707,12 @@ mod tests {
 
         // The first button of row 2 (".") is flat index 11.
         let dot_node = ids.button_ids[11];
-        assert_eq!(ids.resolve_button(dot_node), Some(11));
+        assert!(ids.resolve_action(dot_node).is_some());
         // Last button ("Rev") is flat index 18.
         let rev_node = ids.button_ids[18];
-        assert_eq!(ids.resolve_button(rev_node), Some(18));
+        assert!(ids.resolve_action(rev_node).is_some());
         // An unrelated id resolves to nothing.
-        assert_eq!(ids.resolve_button(NodeId::PLACEHOLDER), None);
+        assert!(ids.resolve_action(NodeId::PLACEHOLDER).is_none());
     }
 
     fn placeholder_reset() -> PanelAction {
@@ -819,6 +850,7 @@ mod tests {
                     width: 28.0,
                     height: 16.0,
                     style: UIStyle::default(),
+                    action: test_action(),
                 }),
             })],
             btn_font_size: 10,
@@ -832,6 +864,62 @@ mod tests {
         assert_eq!(ids.button_count(), 1);
         // Container height = TOP_PAD*2 + strip height = 8 + 16 = 24 (matches ABL).
         assert!((ids.height - 24.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn drawer_buttons_register_actions_for_tree_hit_targets() {
+        let spec = DrawerSpec {
+            rows: vec![DrawerRow::Buttons {
+                buttons: vec![DrawerButton::new("Stop", false, test_action())],
+                width: ButtonWidth::Uniform,
+                label: None,
+            }],
+            btn_font_size: 10,
+            slider_font_size: 11,
+            theme: Theme::INSPECTOR,
+        };
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
+        let mut registry = IntentRegistry::new();
+        ids.register_intents(&mut registry);
+
+        let button = ids.button_ids[0];
+        assert!(matches!(ids.resolve_action(button), Some(PanelAction::Transport(TransportAction::Stop))));
+        assert!(matches!(registry.resolve(&tree, Some(button), Gesture::Click), Some(PanelAction::Transport(TransportAction::Stop))));
+        let bounds = tree.get_bounds(button);
+        assert_eq!(bounds.width, 240.0 - PAD_H * 2.0);
+        assert_eq!(tree.hit_test(Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0)), Some(button));
+    }
+
+    #[test]
+    fn trailing_button_keeps_bounds_and_action() {
+        let spec = DrawerSpec {
+            rows: vec![DrawerRow::Status(StatusStrip {
+                height: 20.0,
+                dot: None,
+                label: "status".into(),
+                label_color: Color32::WHITE,
+                label_font: 9,
+                trailing: Some(TrailingButton {
+                    label: "INV".into(),
+                    width: 28.0,
+                    height: 16.0,
+                    style: UIStyle::default(),
+                    action: test_action(),
+                }),
+            })],
+            btn_font_size: 10,
+            slider_font_size: 11,
+            theme: Theme::INSPECTOR,
+        };
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
+        let button = ids.button_ids[0];
+        let rect = tree.get_bounds(button);
+        assert_eq!((rect.width, rect.height), (28.0, 16.0));
+        assert!(matches!(ids.resolve_action(button), Some(PanelAction::Transport(TransportAction::Stop))));
     }
 
     #[test]

@@ -647,8 +647,32 @@ pub enum AudioSetupAction {
     // both lines on Move).
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioDrawerClick {
+    Send(usize),
+    Feature(crate::types::AudioFeature),
+    Custom,
+    Kind(usize),
+    Band(usize),
+    Invert,
+    TriggerMode(usize),
+    Action(usize),
+    Wrap(usize),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipTriggerDrawerClick {
+    Send(usize),
+    Feature(crate::types::AudioFeature),
+    Custom,
+    Kind(usize),
+    Band(usize),
+    Length(usize),
+}
+
 #[derive(Debug, Clone)]
 pub enum RootAction {
+    ClipTriggerDrawerClick(LayerId, usize, ClipTriggerDrawerClick),
     /// Right-click reset of a slider to its default, expressed as the slider's own
     /// value-change trio (same path a drag uses). The app dispatches the three in
     /// order, so undo == a drag to `default`. Replaces the per-panel `*RightClick`
@@ -658,6 +682,7 @@ pub enum RootAction {
         changed: Box<PanelAction>, // carries the default value
         commit: Box<PanelAction>,
     },
+    AudioDrawerClick(GraphParamTarget, manifold_foundation::ParamId, AudioDrawerClick),
     /// Open (toggle) the Audio Setup panel — the central place to route audio
     /// in and define named sends. Header button; also bound to ⌘⇧A.
     OpenAudioSetup,

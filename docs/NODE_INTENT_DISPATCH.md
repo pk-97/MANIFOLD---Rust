@@ -132,6 +132,17 @@ impl UITree { pub fn parent_of(&self, id: u32) -> i32 { self.parent_index[id as 
 
 ### Builder ergonomics
 
+Shared parameter drawers follow the same build-time contract. A
+`DrawerButton::new(label, active, action)` must carry its `PanelAction` when it
+is declared; controls whose action needs the realised rectangle (the driver's
+Free period field) use `new_with_bounds`. Status-strip trailing buttons carry
+their action too. `DrawerIds` retains the `ChromeHost`s created for these
+controls and delegates intent registration and direct compatibility lookup to
+those hosts. Consumers do not maintain a second per-button id/action table. Actions that
+need live UI state resolve at click time through the owning card; Free refreshes
+its anchor after scrolling. Reorder flows select named handles and assert
+relative order with `Above`, rather than fixed screen coordinates.
+
 Panels register intent right where they create the node — the id never needs to
 be stored on the panel:
 
