@@ -104,8 +104,9 @@ fn gtao_round(x: f32) -> f32 {
 }
 
 // Reconstruct a view-space position at integer texel `c` (clamped to the
-// texture bounds) from `depth`'s raw [0,1] value — identical formula to
-// ssao_from_depth_body.wgsl's `ssao_view_pos`.
+// texture bounds) from `depth`'s raw [0,1] value — delegates to
+// depth_common.wgsl's shared view_pos_from_depth (single source; this body
+// and node.normals_from_depth both reconstruct normals from it).
 fn gtao_view_pos(
     depth: texture_2d<f32>,
     c: vec2<i32>,
@@ -115,15 +116,7 @@ fn gtao_view_pos(
     near: f32,
     far: f32,
 ) -> vec3<f32> {
-    let cc = clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
-    let raw = textureLoad(depth, cc, 0).r;
-    let view_z = linearize_depth(raw, near, far);
-    let uv = (vec2<f32>(cc) + vec2<f32>(0.5, 0.5)) / vec2<f32>(dims_i);
-    let ndc_x = uv.x * 2.0 - 1.0;
-    let ndc_y = 1.0 - uv.y * 2.0;
-    let view_x = ndc_x * tan_half_fov * aspect * view_z;
-    let view_y = ndc_y * tan_half_fov * view_z;
-    return vec3<f32>(view_x, view_y, view_z);
+    return view_pos_from_depth(depth, c, dims_i, tan_half_fov, aspect, near, far);
 }
 
 // Committed a(h) integral (D9(a) step 7).

@@ -287,6 +287,12 @@ mod water_collider_motion;
 mod water_collide_box;
 mod water_emit;
 mod water_impulse;
+// Live Water S6 surface reconstruction (docs/WATER_IMPLEMENTATION_PLAN.md
+// section 4, S6 brief): sphere-impostor depth/coverage + thickness rasters
+// and normals-from-depth. Registered by the S6 lane.
+mod particle_surface_depth;
+mod particle_thickness;
+mod normals_from_depth;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 pub(crate) mod wgsl_compute;
@@ -309,6 +315,7 @@ pub use array_replicate_polyline_rings::{
 pub use array_unpack_vec2::ArrayUnpackVec2;
 pub use beat_gate::{BEAT_GATE_RATE_LABELS, BeatGate};
 pub use beat_ramp::BeatRamp;
+pub use bilateral_blur::BilateralBlur;
 pub use blob_detect_ffi::BlobDetectFfi;
 pub use blob_overlay_render::BlobOverlayRender;
 pub use block_displace_field::BlockDisplaceField;
@@ -553,6 +560,14 @@ pub use water_impulse::{
     ImpulseDecision, ImpulseEventLatch, ImpulseUniforms, WaterImpulse, MAX_PENDING_IMPULSES,
 };
 pub use water_validate::{ValidateUniforms, WGSL as VALIDATE_WGSL, WaterValidate};
+pub use particle_surface_depth::{
+    ParticleSurfaceDepth, SurfacePixelUniforms, SurfaceSplatUniforms, SURFACE_DEPTH_CLEAR_WGSL,
+    SURFACE_DEPTH_RESOLVE_WGSL, SURFACE_DEPTH_SPLAT_WGSL,
+};
+pub use particle_thickness::{
+    ParticleThickness, THICKNESS_RESOLVE_WGSL, THICKNESS_SPLAT_WGSL,
+};
+pub use normals_from_depth::NormalsFromDepth;
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 
 #[cfg(test)]

@@ -55,6 +55,14 @@ const PARTIAL_SHADERS: &[&str] = &[
     "mpm_scatter_mass_momentum.wgsl",
     "mpm_scatter_stress.wgsl",
     "water_validate.wgsl",
+    // Live Water S6 sphere-impostor rasters: `particle_splat_common.wgsl`
+    // (SplatView + view/bbox/ray-sphere helpers) is concatenated ahead of the
+    // splat kernels at pipeline creation, same include convention as the S4
+    // water_common stages. Composed forms are validated at pipeline creation
+    // and by the gpu-proofs value tests (tests/gpu_proofs/water_surface.rs).
+    "particle_splat_common.wgsl",
+    "particle_surface_depth_splat.wgsl",
+    "particle_thickness_splat.wgsl",
     // IMPORT_FIDELITY_DESIGN.md D2/F-P1: prepend pbr_brdf.wgsl at
     // pipeline-creation time (Hammersley / GGX importance sample / equirect
     // direction helpers). Composed validators below.

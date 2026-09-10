@@ -451,6 +451,18 @@ pub fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
     (range * near) / (raw + range)
 }
 
+/// CPU twin of `shared/depth_common.wgsl`'s `delinearize_depth` — the exact
+/// forward `perspective_rh` depth mapping (`raw = range * (near/view_z - 1)`),
+/// inverse of [`linearize_depth`]. Clip-depth consumers that average in
+/// linear eye depth (e.g. `node.bilateral_blur` value_space=ClipDepth)
+/// convert back through this; both implementations MUST stay the same
+/// formula (the I3 round-trip test below checks them against the
+/// `project_to_pixel` oracle).
+pub fn delinearize_depth(view_z: f32, near: f32, far: f32) -> f32 {
+    let range = far / (near - far);
+    range * (near / view_z - 1.0)
+}
+
 /// Multiply a column-major 4x4 matrix (`m[col][row]`, matching `mat4_mul`'s
 /// convention) by a column vector.
 fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
@@ -802,6 +814,15 @@ mod tests {
                 cam.near,
                 cam.far,
                 oracle.view_z,
+            );
+            // S6 (ClipDepth bilateral): the round trip through
+            // delinearize_depth must land back on the oracle's raw clip
+            // depth at the same modest depths.
+            let round = delinearize_depth(lin, cam.near, cam.far);
+            assert!(
+                (round - oracle.depth).abs() < 1e-6,
+                "depth {d}: delinearize_depth({lin}) = {round}, oracle.depth = {}",
+                oracle.depth,
             );
         }
     }

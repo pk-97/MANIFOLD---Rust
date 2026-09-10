@@ -85,3 +85,4 @@ mod scene_viewport_navigate;
 mod scene_viewport_session;
 mod smoke;
 mod water_solver;
+mod water_surface;
