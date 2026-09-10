@@ -4,6 +4,8 @@
 **Scope: every APPROVED-not-built design doc. Update when a design ships, a new one
 lands, or Peter re-ranks.**
 
+**Proposed programme for review (2026-09-10):** [Mathematical Scene Modifiers](SCENE_MODIFIER_PROGRAMME.md) owns a staged roadmap: foundation F1–F6 → fields W1/W2 via F7 → foundation F8 → fields W3/W4 → mesh assembly. Analytic echoes follow W3; splat integration follows W4 and the existing Gaussian source/render/depth phases. These proposed contracts do not reorder the approved queue or mark implementation started. Each linked contract's header owns its status.
+
 Two kinds of ordering, kept separate on purpose:
 
 - **Hard edges** — design B literally cannot be built before A. Fixed; violating one
