@@ -189,23 +189,126 @@ def budget_key(command, cwd):
 
 
 def expensive_checks(command):
-    """Recognize direct commands and common build-lock/env wrappers, not scripts."""
-    for tokens in segments(command):
-        names = [Path(t).name for t in tokens]
-        if "cargo" in names:
-            args = tokens[names.index("cargo") + 1:]
-            if any(a in {"test", "nextest", "clippy", "check", "build"} for a in args):
-                scoped = any(a in {"-p", "--package", "--manifest-path"} or
-                             a.startswith(("--package=", "--manifest-path=", "-pmanifold")) for a in args)
-                yield "broad" if "--workspace" in args or not scoped else "focused"
-            if "perf-soak" in args:
+    """Recognize the executed program, rather than words in its arguments."""
+    for tokens in execution_segments(command):
+        for exe, args in _command_targets(tokens):
+            if exe == "cargo":
+                # Cargo's first command is the only meaningful subcommand;
+                # feature names such as ``perf-soak`` are not runtime probes.
+                sub = _cargo_subcommand(args)
+                if sub in {"test", "nextest", "clippy", "check", "build"}:
+                    scoped = any(a in {"-p", "--package", "--manifest-path"} or
+                                 a.startswith(("--package=", "--manifest-path=", "-pmanifold")) for a in args)
+                    yield "broad" if "--workspace" in args or not scoped else "focused"
+                elif sub == "xtask" and "perf-soak" in args[args.index(sub) + 1:]:
+                    yield "broad"
+                elif sub == "run" and "--" in args and any(
+                        a in {"perf-soak", "rt-capture"} for a in args[args.index("--") + 1:]):
+                    yield "broad"
+            elif exe in {"trunk_health.py", "feature_matrix.py", "launch_live_ui.py"}:
                 yield "broad"
-        if set(names) & {"trunk_health.py", "feature_matrix.py", "launch_live_ui.py"}:
-            yield "broad"
-        if "gpu_proofs_gate.py" in names:
-            yield "focused"
-        elif any(re.search(r"(?:render|snapshot|rt_matrix|gpu_proofs|ui_flows).*\.py$", n) for n in names):
-            yield "broad"
+            elif exe == "gpu_proofs_gate.py":
+                yield "focused"
+            elif re.search(r"(?:render|snapshot|rt_matrix|gpu_proofs|ui_flows).*\.py$", exe):
+                yield "broad"
+
+
+def execution_segments(command):
+    """Ignore redirection destinations while retaining real compound commands."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>()\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    current = []
+    redirect = False
+    for token in lexer:
+        if token and all(c in "<>&" for c in token) and ("<" in token or ">" in token):
+            if current and current[-1].isdigit():
+                current.pop()  # optional file descriptor
+            redirect = True
+        elif redirect:
+            redirect = False
+        elif token and all(c in ";&|()\n" for c in token):
+            if current:
+                yield current
+            current = []
+        else:
+            current.append(token)
+    if current:
+        yield current
+
+
+def _cargo_subcommand(args):
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in {"--config", "--color", "--manifest-path", "--target-dir", "-C", "-Z"}:
+            i += 2
+        elif arg.startswith(("-", "+")):
+            i += 1
+        else:
+            return arg
+    return None
+
+
+def _command_targets(tokens):
+    """Resolve supported wrappers; ordinary arguments never become programs."""
+    i = 0
+    while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+        i += 1
+    if i >= len(tokens):
+        return
+    program = Path(tokens[i]).name
+    args = tokens[i + 1:]
+    if program in {"if", "elif", "then", "do", "while", "until", "!", "{"}:
+        yield from _command_targets(args)
+        return
+    if program in {"command", "exec"}:
+        # command -v/-V inspect the command rather than executing it.
+        if program == "command" and any(a in {"-v", "-V"} for a in args[:1]):
+            return
+        if args[:1] == ["--"]:
+            args = args[1:]
+        yield from _command_targets(args)
+        return
+    if program == "env":
+        j = 0
+        while j < len(args):
+            arg = args[j]
+            if arg in {"-u", "--unset", "-C", "--chdir"}:
+                j += 2
+            elif arg in {"-i", "--ignore-environment", "--"} or arg.startswith(("--unset=", "--chdir=")):
+                j += 1
+            else:
+                break
+        yield from _command_targets(args[j:])
+        return
+    if program == "with-build-lock.sh":
+        yield from _command_targets(args)
+        return
+    if program in {"bash", "sh", "zsh"}:
+        j = 0
+        while j < len(args) and args[j].startswith("-"):
+            flag = args[j]
+            j += 1
+            if flag.startswith("-") and "c" in flag[1:] and j < len(args):
+                for part in execution_segments(args[j]):
+                    yield from _command_targets(part)
+                return
+        if j < len(args):
+            yield from _command_targets(args[j:])
+        return
+    if re.fullmatch(r"python(?:[23](?:\.\d+)?)?", program):
+        j = 0
+        while j < len(args) and args[j].startswith("-"):
+            flag = args[j]
+            if flag in {"-c", "-m"}:
+                return  # Python source/module is not a script pathname.
+            j += 2 if flag in {"-W", "-X"} else 1
+        if j < len(args):
+            yield Path(args[j]).name, args[j + 1:]
+        return
+    yield program, args
 
 
 def consume_permit(command, cwd, allow_cwd_fallback=False):
