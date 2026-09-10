@@ -72,7 +72,7 @@ use manifold_gpu::denoiser::denoiser_available;
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::atmosphere::Atmosphere;
-use crate::node_graph::camera::Camera;
+use crate::node_graph::camera::{Camera, CameraMode};
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
@@ -1791,6 +1791,24 @@ impl RenderScene {
             inputs.push(NodePort {
                 name: std::borrow::Cow::Owned(format!("object_{i}")),
                 ty: PortType::Object,
+                kind: PortKind::Input,
+                required: false,
+            });
+        }
+        // WATER_SIMULATION_DESIGN.md section 7 (S7): the optional water set.
+        // All five are required AS A SET when any is wired (partial sets are
+        // a validation error at evaluate, before any allocation). Unwired =
+        // no water: no extra resources, passes or output changes.
+        for (name, ty) in [
+            ("water_depth", PortType::Texture2D),
+            ("water_thickness", PortType::Texture2D),
+            ("water_normals", PortType::Texture2D),
+            ("water_material", PortType::Material),
+            ("water_camera", PortType::Camera),
+        ] {
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Borrowed(name),
+                ty,
                 kind: PortKind::Input,
                 required: false,
             });
@@ -3690,6 +3708,48 @@ fn cached_type_id() -> &'static EffectNodeType {
 /// render_copies agree on what a given `(rot_x, rot_y, rot_z)` means.
 /// Non-uniform scale's normal skew is NOT corrected (no
 /// inverse-transpose) — v1 limitation, documented on the shader side.
+/// WATER_SIMULATION_DESIGN.md section 7: the water camera must match the
+/// scene camera by VALUE — every view and projection matrix element finite
+/// and within abs(a-b) <= 1e-6*max(1,abs(a),abs(b)) at the current aspect.
+/// Compares values, never NodeIds or pointers.
+fn camera_matches(a: &crate::node_graph::camera::Camera, b: &crate::node_graph::camera::Camera, aspect: f32) -> bool {
+    let close = |x: f32, y: f32| x.is_finite() && y.is_finite() && (x - y).abs() <= 1e-6 * 1.0_f32.max(x.abs()).max(y.abs());
+    let pa = a.proj(aspect);
+    let pb = b.proj(aspect);
+    a.view.iter().zip(&b.view).all(|(ra, rb)| ra.iter().zip(rb).all(|(x, y)| close(*x, *y)))
+        && pa.iter().zip(&pb).all(|(ra, rb)| ra.iter().zip(rb).all(|(x, y)| close(*x, *y)))
+}
+
+/// WATER_SIMULATION_DESIGN.md section 7: the V1 water material is a PBR
+/// dielectric — IOR from the field (authored 1.333), transmission 1,
+/// metallic 0; roughness and volume attenuation ride the existing fields.
+/// Every other material feature is unsupported and errors rather than
+/// being silently ignored.
+fn validate_water_material(m: &crate::node_graph::material::Material) -> Result<(), String> {
+    if m.kind != crate::node_graph::material::MaterialKind::Pbr {
+        return Err(format!("V1 water is PBR dielectric, got {:?}", m.kind));
+    }
+    if m.metallic.abs() > 1e-6 {
+        return Err(format!("metallic must be 0, got {}", m.metallic));
+    }
+    if (m.transmission_factor - 1.0).abs() > 1e-6 {
+        return Err(format!("transmission_factor must be 1, got {}", m.transmission_factor));
+    }
+    if !(m.ior.is_finite() && m.ior > 1.0) {
+        return Err(format!("ior must be finite and > 1, got {}", m.ior));
+    }
+    if m.alpha_mode != AlphaMode::Opaque {
+        return Err(format!("alpha_mode must be Opaque, got {:?}", m.alpha_mode));
+    }
+    if m.clearcoat > 0.0 || m.sheen_color_factor.iter().any(|c| *c > 0.0) || m.iridescence_factor > 0.0
+        || m.anisotropy_strength > 0.0 || m.dispersion > 0.0 || m.translucency > 0.0
+        || m.cel_bands > 0 || m.emission.iter().any(|c| *c > 0.0)
+    {
+        return Err("clearcoat/sheen/iridescence/anisotropy/dispersion/translucency/cel/emission are unsupported on V1 water".to_string());
+    }
+    Ok(())
+}
+
 fn model_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> [[f32; 4]; 4] {
     let r = euler_xyz_columns(rot);
     [
@@ -4266,6 +4326,68 @@ impl EffectNode for RenderScene {
             return;
         }
         let aspect = width as f32 / height as f32;
+
+        // ---- WATER_SIMULATION_DESIGN.md section 7 (S7): water input set
+        // validation, before any resource ensure or pass encoding. All five
+        // water inputs are required AS A SET when any is wired; the water
+        // camera must value-match the scene camera at the current aspect;
+        // the material must be the V1 PBR dielectric. Any failure takes the
+        // scene error convention: ctx.error once, magenta colour, depth 1,
+        // aux zero — never stale water output or a silently disabled
+        // setting. ----
+        let water_depth_in = ctx.inputs.texture_2d("water_depth");
+        let water_thickness_in = ctx.inputs.texture_2d("water_thickness");
+        let water_normals_in = ctx.inputs.texture_2d("water_normals");
+        let water_material_in = ctx.inputs.material("water_material");
+        let water_camera_in = ctx.inputs.camera("water_camera");
+        let water_wired = [
+            water_depth_in.is_some(),
+            water_thickness_in.is_some(),
+            water_normals_in.is_some(),
+            water_material_in.is_some(),
+            water_camera_in.is_some(),
+        ];
+        let water_wired_count = water_wired.iter().filter(|w| **w).count();
+        // S7: consumed by the compat-rejection + water pass blocks landing
+        // with the rest of the S7 patch set (see BUG-vglg resume note).
+        let _has_water = water_wired_count > 0;
+        let water_set_error: Option<String> = if water_wired_count == 0 {
+            None
+        } else if water_wired_count < 5 {
+            Some(format!(
+                "node.render_scene: partial water input set ({water_wired_count}/5 wired) — water_depth, water_thickness, water_normals, water_material and water_camera are required as a set"
+            ))
+        } else {
+            let wc = water_camera_in.expect("set checked");
+            let mat = water_material_in.expect("set checked");
+            if !matches!(wc.mode, CameraMode::Perspective { .. }) {
+                Some("node.render_scene: water_camera must be perspective (orthographic water rejected in V1)".to_string())
+            } else if !camera_matches(&cam, &wc, aspect) {
+                Some("node.render_scene: water_camera view/projection does not match the scene camera at the current aspect (section 7: compare values, not wires)".to_string())
+            } else if let Err(why) = validate_water_material(&mat) {
+                Some(format!("node.render_scene: water_material rejected — {why}"))
+            } else {
+                None
+            }
+        };
+        if let Some(msg) = water_set_error {
+            ctx.error(msg);
+            if let Some(target) = ctx.outputs.texture_2d("color") {
+                let gpu = ctx.gpu_encoder();
+                gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+            }
+            if let Some(depth_out) = ctx.outputs.texture_2d("depth") {
+                let gpu = ctx.gpu_encoder();
+                gpu.native_enc.clear_texture(depth_out, 1.0, 0.0, 0.0, 1.0);
+            }
+            for aux in ["velocity", "ao_mask"] {
+                if let Some(t) = ctx.outputs.texture_2d(aux) {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(t, 0.0, 0.0, 0.0, 0.0);
+                }
+            }
+            return;
+        }
         // RAYTRACING_DESIGN.md section 8.2 D22 point 1/3 (T2-B): the per-scene
         // MetalFX Temporal toggle. When on, the WHOLE render (Pass A/B,
         // shafts, the RT half-res ray pass) draws at RENDER res —
