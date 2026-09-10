@@ -81,12 +81,28 @@ fn fs_water(in: VsOut) -> FsOut {
     var out: FsOut;
     let coord = vec2<i32>(in.pos.xy);
     let nrm = textureLoad(water_normals, coord, 0);
+    let raw = textureLoad(water_depth, coord, 0).r;
+    let view_pos = view_pos_of(in.uv, raw);
+    // Keep derivative evaluation finite and uniform even for uncovered pixels:
+    // invalid/degenerate normals use the documented toward-camera fallback.
+    let n_view_len_sq = dot(nrm.xyz, nrm.xyz);
+    var n_view = vec3<f32>(0.0, 0.0, -1.0);
+    if (n_view_len_sq > 1e-12 && n_view_len_sq < 3.0e38) {
+        n_view = nrm.xyz / sqrt(n_view_len_sq);
+    }
+    let n_view_dx = dpdxFine(n_view);
+    let n_view_dy = dpdyFine(n_view);
+    let normal_variation = min(
+        0.5 * (dot(n_view_dx, n_view_dx) + dot(n_view_dy, n_view_dy)),
+        0.04);
+    // Preserve the original roughness exactly for a constant-normal surface.
+    var spec_roughness = u.roughness;
+    if (normal_variation > 0.0) {
+        spec_roughness = sqrt(min(u.roughness * u.roughness + normal_variation, 1.0));
+    }
     if nrm.a < 0.5 {
         discard;
     }
-    let raw = textureLoad(water_depth, coord, 0).r;
-    let view_pos = view_pos_of(in.uv, raw);
-    let n_view = normalize(nrm.xyz);
     // Frame bridge: normals_from_depth emits view normals in the splat
     // frame (+z toward the camera — see splat_view_center's z negation),
     // while inv_view is right-handed (-z forward). Negating z once maps
@@ -147,7 +163,7 @@ fn fs_water(in: VsOut) -> FsOut {
     let r = reflect(-v, n);
     let max_lod = 4.0;
     let env_uv = vec2<f32>(atan2(r.z, r.x) * 0.15915494 + 0.5, acos(clamp(r.y, -1.0, 1.0)) * 0.31830988);
-    let env = textureSampleLevel(prefiltered_specular, env_sampler, env_uv, u.roughness * max_lod).rgb;
+    let env = textureSampleLevel(prefiltered_specular, env_sampler, env_uv, spec_roughness * max_lod).rgb;
 
     let ndotv = clamp(dot(n, v), 0.0, 1.0);
     let f0v = (u.ior - 1.0) / (u.ior + 1.0);
@@ -162,8 +178,16 @@ fn fs_water(in: VsOut) -> FsOut {
         let l = normalize(u.sun_dir.xyz);
         let h = normalize(l + v);
         let ndoth = max(dot(n, h), 0.0);
-        let shininess = 2.0 / max(u.roughness * u.roughness, 1e-3) - 2.0;
-        sun = u.sun_color.rgb * pow(ndoth, clamp(shininess, 2.0, 1024.0)) * max(dot(n, l), 0.0);
+        let base_shininess = clamp(2.0 / max(u.roughness * u.roughness, 1e-3) - 2.0, 2.0, 1024.0);
+        let filtered_shininess = clamp(2.0 / max(spec_roughness * spec_roughness, 1e-3) - 2.0, 2.0, 1024.0);
+        // Normalize the existing fixed-peak Blinn approximation when filtering
+        // broadens it, preserving its hemispherical integral. Flat normals keep
+        // an exact scale of one; this is not a complete physical BRDF.
+        var lobe_scale = 1.0;
+        if (normal_variation > 0.0) {
+            lobe_scale = (filtered_shininess + 1.0) / (base_shininess + 1.0);
+        }
+        sun = u.sun_color.rgb * lobe_scale * pow(ndoth, filtered_shininess) * max(dot(n, l), 0.0);
     }
 
     let col = mix(transmitted, env, fres) + sun;

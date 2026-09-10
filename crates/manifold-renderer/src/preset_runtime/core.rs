@@ -1525,10 +1525,10 @@ impl PresetRuntime {
     /// A runtime fatal raised by a stateful node while evaluating this frame.
     /// Unlike `errors()`, this is sticky runtime state and is intended for
     /// deterministic export failure handling.
-    pub fn runtime_fatal_error(&self) -> Option<&str> {
+    pub fn runtime_fatal_error(&self) -> Option<String> {
         self.graph
             .nodes()
-            .find_map(|instance| instance.node.simulation_error())
+            .find_map(|instance| instance.node.completed_simulation_error())
     }
 
     /// Every def-baked node param this runtime's card bindings overwrote at build

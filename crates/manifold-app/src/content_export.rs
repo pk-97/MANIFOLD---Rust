@@ -778,6 +778,12 @@ impl ContentThread {
             return Some(ExportFrameFailure { message, gpu: true });
         }
 
+        if let Some(message) = self.content_pipeline.runtime_export_error(&mut self.engine) {
+            let message = format!("Generator simulation failed at frame {frame_idx}: {message}");
+            log::error!("[Export] {message}");
+            return Some(ExportFrameFailure { message, gpu: false });
+        }
+
         match tex_ptr {
             Some(ptr) => {
                 if let Err(e) = unsafe { session.encode_frame(ptr) } {

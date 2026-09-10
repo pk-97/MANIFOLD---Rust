@@ -114,6 +114,7 @@ crate::primitive! {
         tick_base: std::cell::Cell<f64> = std::cell::Cell::new(0.0),
         last_step_hz: std::cell::Cell<f64> = std::cell::Cell::new(960.0),
         effective_advancing: std::cell::Cell<bool> = std::cell::Cell::new(false),
+        current_substep_final: std::cell::Cell<bool> = std::cell::Cell::new(false),
         status_ring: Option<StatusReadbackRing> = None,
         fatal_error: Option<String> = None,
     },
@@ -159,6 +160,19 @@ const BOUNDARY_RESULTS: &[SubstepResultPorts] = &[
 ];
 
 impl WaterState {
+    fn completed_ring_error(&self) -> Option<String> {
+        let ring = self.status_ring.as_ref()?;
+        let completed = ring.event.signaled_value();
+        ring.slots.iter().find_map(|slot| {
+            if slot.ticket == 0 || slot.ticket > completed || slot.generation != ring.generation {
+                return None;
+            }
+            let ptr = slot.buffer.mapped_ptr().expect("status readback buffer must be mapped");
+            let status = unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) };
+            (status != 0).then(|| format!("WaterState: solver fault status 0x{status:08x}"))
+        })
+    }
+
     fn reset_status_ring(&mut self) {
         if let Some(ring) = &mut self.status_ring {
             ring.reported = false;
@@ -242,6 +256,9 @@ impl WaterState {
 
 impl Primitive for WaterState {
     fn simulation_error(&self) -> Option<&str> { self.fatal_error.as_deref() }
+    fn completed_simulation_error(&self) -> Option<String> {
+        self.fatal_error.clone().or_else(|| self.completed_ring_error())
+    }
     fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
         crate::node_graph::effect_node::NodeRequires {
             state_store: true,
@@ -448,8 +465,10 @@ impl Primitive for WaterState {
             self.effective_advancing.set(false);
         }
         self.pending_ticks.set(ticks);
-
-        self.schedule_status_readback(ctx, s.last_collider);
+        self.current_substep_final.set(ticks == 0);
+        if ticks == 0 {
+            self.schedule_status_readback(ctx, s.last_collider);
+        }
 
         // Write the clock state back, then the frame's scalar/transform
         // outputs and any deferred error.
@@ -483,6 +502,8 @@ impl Primitive for WaterState {
         if iteration >= self.pending_ticks.get() {
             return None;
         }
+        self.current_substep_final
+            .set(iteration + 1 == self.pending_ticks.get());
         // The schedule mirrors `run`'s: dt = 1/step_hz, time = base +
         // (i+1)*dt — both pinned to cells when `run` resolved the clock.
         let dt = 1.0 / self.last_step_hz.get();
@@ -533,6 +554,16 @@ impl Primitive for WaterState {
                 s.last_collider = collider;
             }
             ctx.outputs.set_transform("collider_out", collider);
+            if self.current_substep_final.get() {
+                self.schedule_status_readback(ctx, collider);
+            }
+        } else if self.current_substep_final.get() {
+            let collider = ctx.state.as_deref_mut()
+                .expect("WaterState::late_capture requires a StateStore")
+                .get::<WaterBoundaryState>(ctx.node_id, ctx.owner_key)
+                .expect("WaterState clock must be initialized before capture")
+                .last_collider;
+            self.schedule_status_readback(ctx, collider);
         }
     }
 }

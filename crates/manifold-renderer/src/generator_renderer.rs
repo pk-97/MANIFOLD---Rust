@@ -228,7 +228,7 @@ impl GeneratorRenderer {
                     .last_simulation_frame()
                     .is_some_and(|frame| frame.frame_id == current.frame_id && frame.epoch == current.epoch)
             })
-            .find_map(|state| state.generator.runtime_fatal_error().map(str::to_owned))
+            .find_map(|state| state.generator.runtime_fatal_error())
     }
 
     pub fn new(

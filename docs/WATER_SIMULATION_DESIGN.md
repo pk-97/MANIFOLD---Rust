@@ -330,7 +330,9 @@ to Astra/Peter before S7, not a lane tuning task. The density fault bound alone
 is not a stability guarantee.
 
 GPU particle rejection remains same-substep. CPU reporting uses a bounded ring and
-completed prior submissions only; when a fault completes, the visible collider
+completed submissions only; final-substep export status is scheduled after the
+candidate/status copy and queried after the export completion wait, while live
+reporting remains nonblocking. When a fault completes, the visible collider
 restores the last verified frame pose with bounded notification latency. There is
 no same-substep CPU pose guarantee: collider and particle publication are not fully
 atomic on the live path, and we never wait for same-frame readback. Include the

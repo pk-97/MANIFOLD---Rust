@@ -640,6 +640,12 @@ pub trait EffectNode: Send {
 
     fn simulation_error(&self) -> Option<&str> { None }
 
+    /// Nonblocking error query over GPU work whose completion is already visible.
+    /// Defaults to the existing sticky simulation error.
+    fn completed_simulation_error(&self) -> Option<String> {
+        self.simulation_error().map(str::to_owned)
+    }
+
     /// Post-frame capture phase for state-capture primitives. Called
     /// AFTER every node's `evaluate` has run for the frame — so by
     /// the time `late_capture` fires, the producer feeding any

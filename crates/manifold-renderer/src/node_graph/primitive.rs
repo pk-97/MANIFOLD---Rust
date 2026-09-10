@@ -277,6 +277,9 @@ pub trait Primitive: PrimitiveSpec {
     fn observe_substep_frame(&mut self, _ctx: &mut SubstepFrameContext<'_>) {}
     fn substep_effective_advancing(&self) -> Option<bool> { None }
     fn simulation_error(&self) -> Option<&str> { None }
+    fn completed_simulation_error(&self) -> Option<String> {
+        self.simulation_error().map(str::to_owned)
+    }
 
     /// Mirror of [`EffectNode::reconfigure`](crate::node_graph::effect_node::EffectNode::reconfigure).
     /// Default no-op. Override to react to a param change that alters
@@ -680,6 +683,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         Primitive::substep_effective_advancing(self)
     }
     fn simulation_error(&self) -> Option<&str> { Primitive::simulation_error(self) }
+    fn completed_simulation_error(&self) -> Option<String> {
+        Primitive::completed_simulation_error(self)
+    }
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         Primitive::late_capture(self, ctx);
     }
