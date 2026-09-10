@@ -15,6 +15,26 @@ not permit main-checkout merge commits or bypass the landing gate.
 
 Run `python3 -B .codex/hooks/test_guard.py` after changes.
 
+## Workflow tools
+
+- `python3 -B scripts/codex_prepare.py --repo "$PWD" --path crates/manifold-ui/src/param_surface.rs --task 'Fix the gesture' --findings 'Describe observed evidence' --acceptance 'Name the required behaviour'` emits a worker brief with relevant source, architectural rules and runnable checks. Repeat `--path` for the owned files; new files are allowed. The lead supplies the diagnosis and passes the brief to the worker.
+- `python3 -B scripts/codex_checks.py --repo "$PWD" --base origin/main` selects worker checks from committed changes plus tracked and untracked work. `--path` overrides discovery; `--json` emits argv arrays. It reuses the landing gate's package/GPU selectors and UI-flow mappings. It never runs checks, caches passes or replaces the landing gate's reverse-dependency expansion.
+- `python3 -B scripts/codex_usage.py --since 2026-09-10 --repo "$PWD" --json` reports local per-model/task/effort token usage and repeated direct shell calls. Counts are not subscription billing or proof of wasted work. Calls embedded in `functions.exec` are not parsed.
+
+The existing PreToolUse hook supplies matching subsystem rules for native patch
+paths and paths mentioned in agent dispatches, once per distinct guidance block
+per session. This is advisory context to the calling agent; dispatchers must
+include it in worker briefs. It does not require scope registration or grant
+permission. Supported mappings live in `scripts/codex_subsystems.json` and
+reference existing source/docs. Unmapped paths do not imply architectural safety.
+Run `python3 -B .codex/hooks/test_context.py` for context delivery tests. The
+check planner selects the individual tool tests; the landing gate enforces
+those same tests when their source or mappings change.
+
+Synthetic hook delivery is tested; desktop delivery still depends on the trusted
+hook definition. Check `/hooks` after updating the harness. No Claude hook or
+provider configuration is changed by these tools.
+
 Limits: this is workflow enforcement on supported tool calls, not a security
 boundary. Arbitrary shell scripts, MCP writes and interactive stdin are not
 file-scope checked. Keep task ownership and review responsibilities in briefs.

@@ -8,6 +8,8 @@ Be concise. Lead with the outcome; explain what a change means for the instrumen
 
 The lead task owns design, diagnosis, review, and landing regardless of model. Use native Luna subagents (`gpt-5.6-luna`, low effort) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Use parallel Luna lanes for independent scopes; handle tiny fixes directly. The lead leaves the lane’s files alone until it returns. Stop repeated failures and return evidence to the lead.
 
+Prepare nontrivial worker briefs with `scripts/codex_prepare.py` and pass its output to the worker. Use `scripts/codex_checks.py` for diff-based worker check selection; unmapped scopes need the lead's judgement. These tools supply context and commands, not permission or a replacement for the landing gate.
+
 CC and `k3m` are separate setups. Do not change `CLAUDE.md`, `.claude/`, Claude settings, shell aliases, or provider configuration unless explicitly requested. Existing shared scripts may be used. Codex guards live in `.codex/hooks.json` and apply equally to all models; no lane registration is required. Read `.codex/README.md` for enforcement limits. Claude hook registration stays separate.
 
 ## Engineering essentials

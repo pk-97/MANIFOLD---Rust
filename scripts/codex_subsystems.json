@@ -1,0 +1,39 @@
+{
+  "subsystems": [
+    {
+      "name": "transport-midi",
+      "prefixes": ["crates/manifold-playback/", "crates/manifold-core/src/midi.rs", "crates/manifold-app/src/ui_bridge/transport.rs"],
+      "entry_points": ["crates/manifold-playback/src/transport_sync.rs", "crates/manifold-playback/src/transport_controller.rs", "crates/manifold-playback/src/midi_input.rs"],
+      "docs": ["docs/CORE_ENGINE_MAP.md"],
+      "invariants": "Beats are primary; use Beats, Seconds, and Bpm, and keep sync_clips_to_time() as playback-state authority. Preserve MIDI phantom ordering and channel guards."
+    },
+    {
+      "name": "parameter-ui",
+      "prefixes": ["crates/manifold-ui/", "crates/manifold-app/src/ui_bridge/"],
+      "entry_points": ["crates/manifold-ui/src/param_surface.rs"],
+      "docs": ["docs/WIDGET_TREE_DESIGN.md"],
+      "invariants": "UI receives snapshots and sends ContentCommand; project edits go through EditingService and undoable commands. Reuse the existing parameter surface and dirty-check updates."
+    },
+    {
+      "name": "metal",
+      "prefixes": ["crates/manifold-gpu/", "crates/manifold-renderer/src/node_graph/", "crates/manifold-renderer/tests/gpu_proofs/"],
+      "entry_points": ["crates/manifold-gpu/src/lib.rs", "crates/manifold-gpu/src/metal/mod.rs"],
+      "docs": ["docs/MANIFOLD_GPU_ARCHITECTURE.md"],
+      "invariants": "GPU access goes through manifold-gpu and native Metal. Avoid per-frame allocations; run GPU proofs through cargo test, never nextest."
+    },
+    {
+      "name": "freeze",
+      "prefixes": ["crates/manifold-renderer/src/node_graph/freeze/"],
+      "entry_points": ["crates/manifold-gpu/src/lib.rs"],
+      "docs": ["docs/FREEZE_COMPILER_MAP.md"],
+      "invariants": "Preserve freeze compiler contracts and required fusion proofs; resolve current implementation from the compiler map."
+    },
+    {
+      "name": "generators-primitives",
+      "prefixes": ["crates/manifold-renderer/src/node_graph/primitives/", "crates/manifold-core/src/generator.rs", "crates/manifold-core/src/generator_registration.rs", "crates/manifold-core/src/generator_metadata_submissions.rs"],
+      "entry_points": ["crates/manifold-core/src/generator.rs"],
+      "docs": ["docs/DECOMPOSING_GENERATORS.md", "docs/ADDING_PRIMITIVES.md"],
+      "invariants": "Read DECOMPOSING_GENERATORS in full, then ADDING_PRIMITIVES. Audit existing primitives before adding one; preserve composability and required fusion proofs."
+    }
+  ]
+}

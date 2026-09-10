@@ -106,14 +106,13 @@ def filters_for_touched(range_spec, manifest):
         print(f"flow gate: `git diff --name-only {range_spec}` failed: "
               f"{r.stderr.strip()}", file=sys.stderr)
         raise SystemExit(2)
+    return filters_for_paths((p.strip() for p in r.stdout.splitlines() if p.strip()), manifest)
+
+def filters_for_paths(paths, manifest):
     triggers = manifest.get("path_triggers", {})
     filters, hits = set(), {}
-    for path in r.stdout.splitlines():
-        path = path.strip()
-        if not path:
-            continue
-        if path.startswith("scripts/ui-flows/") and path.endswith(".json") \
-                and os.path.basename(path) != "manifest.json":
+    for path in paths:
+        if path.startswith("scripts/ui-flows/") and path.endswith(".json") and os.path.basename(path) != "manifest.json":
             name = os.path.splitext(os.path.basename(path))[0]
             filters.add(name)
             hits.setdefault(path, []).append(name)
