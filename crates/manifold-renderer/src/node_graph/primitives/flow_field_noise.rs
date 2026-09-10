@@ -24,15 +24,18 @@ pub const FLOW_RESOLUTIONS: &[&str] = &["full", "half", "quarter"];
 /// Decode the `resolution` enum into a `(num, denom)` canvas scale, or
 /// `None` for full-res (canvas-default).
 fn resolution_scale(params: &crate::node_graph::effect_node::ParamValues) -> Option<(u32, u32)> {
-    let idx = match params.get("resolution") {
+    match resolution_index(params) {
+        1 => Some((1, 2)), // half
+        2 => Some((1, 4)), // quarter
+        _ => None,        // full
+    }
+}
+
+fn resolution_index(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+    match params.get("resolution") {
         Some(ParamValue::Enum(n)) => *n,
         Some(ParamValue::Float(f)) => f.round() as u32,
         _ => 0,
-    };
-    match idx {
-        1 => Some((1, 2)), // half
-        2 => Some((1, 4)), // quarter
-        _ => None,         // full
     }
 }
 
@@ -42,7 +45,7 @@ struct FlowFieldUniforms {
     time: f32,
     z_scale: f32,
     warp_scale: f32,
-    _pad0: f32,
+    resolution: u32,
 }
 
 crate::primitive! {
@@ -134,6 +137,7 @@ impl Primitive for FlowFieldNoise {
         let z_scale = ctx.param_f32("z_scale", 0.01);
 
         let warp_scale = ctx.param_f32("warp_scale", 0.5);
+        let resolution = resolution_index(ctx.params);
 
         let time = ctx.time.seconds.0 as f32;
 
@@ -153,7 +157,7 @@ impl Primitive for FlowFieldNoise {
             time,
             z_scale,
             warp_scale,
-            _pad0: 0.0,
+            resolution,
         };
 
         dispatch_standalone_2d(

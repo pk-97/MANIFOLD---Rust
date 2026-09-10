@@ -154,6 +154,52 @@ class Guards(unittest.TestCase):
         self.assertIsNone(self.shell_call("python3 scripts/landing_gate.py"))
         self.assertIsNone(self.shell_call("rg 'cargo test' docs"))
 
+    def test_budget_uses_executed_program_not_argument_basenames(self):
+        for command in (
+                "cat scripts/trunk_health.py",
+                "rg trunk_health.py logs/permit-command.txt",
+                "sed -n '1p' scripts/feature_matrix.py",
+                "printf 'python3 scripts/gpu_proofs_gate.py' > permit.log"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.shell_call(command))
+        for command in ("python3 scripts/trunk_health.py",
+                        "bash .claude/scripts/with-build-lock.sh cargo test --workspace"):
+            with self.subTest(command=command):
+                self.assertTrue(self.shell_call(command))
+        self.assertIn("Execution budget", self.shell_call("cargo build --features perf-soak"))
+        wrapped = "env FOO=bar python3 -B scripts/gpu_proofs_gate.py"
+        self.assertIsNone(self.shell_call(wrapped))
+        self.assertIsNone(self.shell_call(wrapped))
+        self.assertTrue(self.shell_call(wrapped))
+        self.assertIsNone(self.shell_call("cargo run --features perf-soak"))
+        self.assertTrue(self.shell_call("cargo xtask perf-soak"))
+
+    def test_execution_wrappers_and_redirections_preserve_limits(self):
+        for command in (
+                "env -i FOO=bar python3 -B scripts/trunk_health.py",
+                "env -u FOO cargo +stable test --workspace",
+                "cargo --config config.toml test --workspace",
+                ".claude/scripts/with-build-lock.sh cargo test --workspace",
+                "bash -lc 'cargo test --workspace'",
+                "cat README.md | python3 scripts/trunk_health.py",
+                "cat README.md; cargo test --workspace",
+                "for i in 1 2; do cargo test --workspace; done",
+                "cargo run -p manifold-app --features perf-soak -- perf-soak show.manifold",
+                "cargo run -p manifold-app --features perf-soak -- rt-capture show.manifold"):
+            with self.subTest(command=command):
+                self.assertIn("broad", list(guard.expensive_checks(command)))
+        for command in (
+                "cat README.md > scripts/trunk_health.py",
+                "cat < scripts/trunk_health.py",
+                "python3 -c 'print(\"trunk_health.py\")'",
+                "command -v cargo",
+                "python3 .codex/hooks/guard.py permit-check --command 'cargo test --workspace'",
+                "rg 'scripts/trunk_health.py' README.md"):
+            with self.subTest(command=command):
+                self.assertEqual([], list(guard.expensive_checks(command)))
+        self.assertEqual(["focused"], list(guard.expensive_checks(
+            "cargo build -p manifold-app --features perf-soak")))
+
     def test_required_gpu_proof_gate_has_normal_bounded_attempts(self):
         command = "python3 -B scripts/gpu_proofs_gate.py"
         self.assertIsNone(self.shell_call(command))

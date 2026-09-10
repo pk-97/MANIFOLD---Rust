@@ -25,10 +25,6 @@ struct LinearGradientUniforms {
     cy: f32,
     rotation: f32,
     softness: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
 }
 
 crate::primitive! {
@@ -114,10 +110,6 @@ impl Primitive for LinearGradient {
             cy,
             rotation,
             softness,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
         };
 
         dispatch_standalone_2d(

@@ -78,7 +78,7 @@ USAGE
                                                # or isolating a stability issue)
 
 EXIT CODES
-  0  green, or a loud SKIP (fixture absent, ceilings unvalidated)
+  0  green, or an optional SKIP (fixture absent, unvalidated prerequisites)
   1  the furnace oracle failed, or a channel exceeded its ceiling / read inert
   2  the measurement could not be made (build failed, no consecutive pairs,
      every repeat contaminated) — an unknown answer, never a green one
@@ -87,6 +87,7 @@ EXIT CODES
 import argparse
 import fcntl
 import json
+import math
 import os
 import re
 import shutil
@@ -176,6 +177,56 @@ def resolve_fixture(repo, explicit):
         if cand and Path(cand).exists():
             return Path(cand)
     return None
+
+
+def finite_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def baseline_prerequisite(baseline_path, baseline, project, recording, motion=False):
+    """Validate the requested evidence before spending any build/GPU time."""
+    if recording:
+        return True, ""
+    if baseline is None:
+        return False, f"no ceilings at {baseline_path} — run --record first"
+    if not isinstance(baseline, dict) or not baseline:
+        return False, f"baseline {baseline_path} is not a non-empty JSON object"
+    schema = baseline.get("schema", 1)
+    if type(schema) is not int or schema not in (1, 2):
+        return False, f"unknown baseline schema {schema} in {baseline_path}"
+    entry = baseline
+    if schema == 2:
+        fixtures = baseline.get("fixtures")
+        fixture = Path(project).stem
+        if not isinstance(fixtures, dict) or fixture not in fixtures:
+            return False, f"fixture {fixture} has no baseline entry in {baseline_path}"
+        entry = fixtures[fixture]
+        if not isinstance(entry, dict):
+            return False, f"invalid baseline entry for {fixture}"
+    if motion:
+        evidence = entry.get("motion")
+        if not isinstance(evidence, dict) or evidence.get("validated") is not True:
+            return False, "no validated motion baseline — run --motion --record first"
+        keys = ("sv_hold_median", "moments_center_min", "history_ratio_min")
+        if not all(finite_number(evidence.get(k)) for k in keys):
+            return False, "motion baseline has invalid metrics"
+    else:
+        if entry.get("ceilings_validated") is not True:
+            return False, "baseline is marked unvalidated — run --record first"
+        channels = entry.get("channels")
+        if not isinstance(channels, dict) or not channels:
+            return False, "baseline has no channels"
+        keys = ("mean", "p999", "min_signal_level")
+        if not all(isinstance(metrics, dict) and
+                   all(finite_number(metrics.get(k)) for k in keys)
+                   for metrics in channels.values()):
+            return False, "baseline has invalid channel metrics"
+    return True, ""
 
 
 def build_binary(repo):
@@ -526,8 +577,14 @@ def measure_motion(runs_series):
     early captures are still converging even when healthy (~20), so a
     whole-window min gates the ramp, not the disease. D-64's measurable:
     pre-fix ~10 with salt speckle at convergence, post-fix 68+."""
-    sv = [pt[2] for r in runs_series for pt in r.get("sv_hold", [])]
-    mom_center0 = [pt[3] for r in runs_series for pt in r.get("moments", [])]
+    required = ("sv_hold", "moments", "refl_raw")
+    if not runs_series or any(not all(r.get(ch) for ch in required) for r in runs_series):
+        raise ValueError("motion capture is missing a required channel")
+    sv = [pt[2] for r in runs_series for pt in r["sv_hold"]]
+    mom_center0 = [pt[3] for r in runs_series for pt in r["moments"]]
+    values = sv + mom_center0 + [pt[4] for r in runs_series for pt in r["moments"]] + [pt[1] for r in runs_series for pt in r["refl_raw"]]
+    if not all(math.isfinite(v) for v in values):
+        raise ValueError("motion capture contains non-finite measurements")
     # History RATIO per run (min/median of the moments history component
     # across the window) — self-normalizing, so a scene whose healthy
     # convergence cycles low (the car fixture's 10-25) passes while the
@@ -550,8 +607,13 @@ def measure_motion(runs_series):
     }
 
 
-def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, repeats):
+def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, repeats,
+               required=False):
     """The motion leg. Returns an exit code (0 green/skip, 1 red, 2 unknown)."""
+    ready, reason = baseline_prerequisite(baseline_path, baseline, project, record, motion=True)
+    if not ready:
+        log(f"[FAIL] {reason}" if required else f"[SKIP] {reason}")
+        return 2 if required else 0
     runs_series = []
     attempts = 0
     max_attempts = repeats + 2
@@ -586,7 +648,11 @@ def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, 
             f"in {attempts} attempts")
         return 2
 
-    m = measure_motion(runs_series)
+    try:
+        m = measure_motion(runs_series)
+    except ValueError as exc:
+        log(f"[FAIL] {exc}")
+        return 2
     log(f"\nmotion leg (median of {len(runs_series)} run(s)): "
         f"sv_hold median {m['sv_hold_median']:.4f} max {m['sv_hold_max']:.4f} · "
         f"moments center-R min {m['moments_center_min']:.3f} "
@@ -633,22 +699,9 @@ def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, 
         log(f"[rt-noise] wrote motion ceilings to {baseline_path}")
         return 0
 
-    # Schema 2: motion ceilings per fixture; schema 1: single top-level motion
-    if baseline and baseline.get("schema", 1) == 2:
-        fixture_stem = Path(project).stem
-        fixtures = baseline.get("fixtures", {})
-        if fixture_stem not in fixtures:
-            log(f"[SKIP] fixture {fixture_stem} has no motion baseline entry — run "
-                f"`scripts/rt_noise_gate.py --motion --record --project {project}`")
-            return 0
-        motion_b = fixtures[fixture_stem].get("motion")
-    else:
-        motion_b = (baseline or {}).get("motion")
-    if not motion_b or not motion_b.get("validated"):
-        log("[SKIP] no validated motion ceilings in the baseline — run "
-            "`scripts/rt_noise_gate.py --motion --record` after the red-side "
-            "validation (BUG-sz0u) and commit the JSON.")
-        return 0
+    # Prerequisites were checked before capture; both schema variants are valid here.
+    motion_b = (baseline["fixtures"][Path(project).stem]["motion"]
+                if baseline.get("schema", 1) == 2 else baseline["motion"])
 
     failures = []
     if m["sv_hold_median"] > motion_b["sv_hold_median"]:
@@ -775,34 +828,18 @@ def main():
         # entries under schema 2. --motion --record preserves static ceilings by
         # the same mechanism: write_baseline/motion_leg only touch the current
         # fixture's entry.
-        baseline = json.loads(baseline_path.read_text())
-    if not args.record:
-        if not baseline_path.exists():
-            log(f"[SKIP] no ceilings at {baseline_path} — run --record first")
-            return 0
-        # Schema 2: per-fixture baselines under fixtures["<fixture_stem>"]
-        schema = baseline.get("schema", 1)
-        if schema == 2:
-            fixtures = baseline.get("fixtures", {})
-            fixture_stem = Path(project).stem  # RtNoiseTesting.manifold -> RtNoiseTesting
-            if fixture_stem not in fixtures:
-                log(f"[SKIP] fixture {fixture_stem} has no baseline entry in {baseline_path} — "
-                    f"run `scripts/rt_noise_gate.py --project {project} --record` first")
-                return 0
-            fixture_baseline = fixtures[fixture_stem]
-            if not fixture_baseline.get("ceilings_validated"):
-                log(f"[SKIP] {fixture_stem} baseline is marked unvalidated — "
-                    f"run --record against a working RT path and commit the JSON.")
-                return 0
-        elif schema == 1:
-            if not baseline.get("ceilings_validated"):
-                log(f"[SKIP] {baseline_path} is marked unvalidated: "
-                    f"{baseline.get('note', '')} — run --record against a working "
-                    f"RT path, commit the JSON, and this gate starts guarding.")
-                return 0
-        else:
-            log(f"[SKIP] unknown baseline schema {schema} in {baseline_path}")
-            return 0
+        try:
+            baseline = json.loads(baseline_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            msg = f"could not read baseline {baseline_path}: {exc}"
+            log(f"[FAIL] {msg}" if args.require_fixture else f"[SKIP] {msg}")
+            return 2 if args.require_fixture else 0
+
+    ready, reason = baseline_prerequisite(
+        baseline_path, baseline, project, args.record, args.motion)
+    if not ready:
+        log(f"[FAIL] {reason}" if args.require_fixture else f"[SKIP] {reason}")
+        return 2 if args.require_fixture else 0
 
     # ED7 correctness leg, FIRST: the furnace oracle is a seconds-cost debug
     # test, so a correctness regression is caught before the minutes-cost
@@ -836,7 +873,7 @@ def main():
 
     if args.motion:
         return motion_leg(repo, binary, project, baseline, args.record,
-                          baseline_path, out_dir, args.repeats)
+                          baseline_path, out_dir, args.repeats, args.require_fixture)
 
     LOCK_PATH.touch()
     with open(LOCK_PATH, "w") as lock:

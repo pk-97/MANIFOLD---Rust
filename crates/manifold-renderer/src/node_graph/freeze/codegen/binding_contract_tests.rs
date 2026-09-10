@@ -141,13 +141,14 @@ fn dispatch_tail_census_is_stable() {
         let shape: Vec<String> = sig.iter().map(|(b, r)| format!("{b}:{r:?}")).collect();
         eprintln!("{} [{}] {}", if *q { "QUALIFY" } else { "manual " }, shape.join(" "), id);
     }
-    // Ratchet: the codemod's qualifying set (measured 2026-09-10: 161
+    // Ratchet: the codemod's qualifying set (measured 2026-09-10: 167
     // standalone atoms, 89 canonical texture-path). A new atom landing here is
     // fine — it gets the helper by construction — but a drop means an atom's
     // kernel shape drifted out from under already-rewritten call sites.
     // Update the numbers with the reason named in the commit that changes
     // them.
-    assert_eq!(total, 161, "standalone atom census drifted");
+    // BUG-m3af restores six mixed texture/storage draw nodes to dynamic codegen.
+    assert_eq!(total, 167, "standalone atom census drifted");
     assert_eq!(
         qualifying, 89,
         "canonical texture-path population drifted"

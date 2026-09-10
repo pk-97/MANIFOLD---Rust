@@ -25,8 +25,8 @@ use super::standalone_pipeline::standalone_pipeline;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Gradient3DUniforms {
-    vol_res: u32,
-    vol_depth: u32,
+    vol_res: i32,
+    vol_depth: i32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -95,8 +95,8 @@ impl Primitive for GradientCentralDiff3D {
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = Gradient3DUniforms {
-            vol_res,
-            vol_depth,
+            vol_res: vol_res as i32,
+            vol_depth: vol_depth as i32,
             _pad0: 0,
             _pad1: 0,
         };

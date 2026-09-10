@@ -183,7 +183,9 @@ pub fn standalone_for_node(
     if node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         return generate_standalone_buffer(&spec, node.atomic_outputs());
     }
-    if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_))) {
+    if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_)))
+        && !node.inputs().iter().any(is_texture_input)
+    {
         return generate_standalone_resolve(body, node.inputs(), node.parameters(), node.outputs());
     }
     // Fusion-exempt (Boundary) texture atoms still get their standalone kernel

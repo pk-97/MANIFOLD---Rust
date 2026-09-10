@@ -18,7 +18,7 @@ use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LicUniforms {
-    steps: u32,
+    steps: i32,
     dt: f32,
     _pad0: f32,
     _pad1: f32,
@@ -107,7 +107,7 @@ impl Primitive for LicIntegrate {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
         let uniforms = LicUniforms {
-            steps,
+            steps: steps as i32,
             dt,
             _pad0: 0.0,
             _pad1: 0.0,

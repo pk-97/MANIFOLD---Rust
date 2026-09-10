@@ -29,6 +29,8 @@ const MAX_INPUTS: usize = 8;
 /// Default input count. 5 matches the old `node.texture_sum_5` shape.
 const DEFAULT_INPUTS: u32 = 5;
 
+const UNIFORM_SCHEMA: &str = "struct U { divisor: f32, _p0: f32, _p1: f32, _p2: f32, };\n";
+
 /// Static port-name table — a dynamic-port node can't `format!` a
 /// `&'static str` per instance, so the live port list slices this.
 const IN_PORT_NAMES: [&str; MAX_INPUTS] = [
@@ -106,7 +108,7 @@ impl MultiBlend {
     /// 2+k = the storage output.
     fn shader_for(k: usize) -> String {
         let mut s = String::new();
-        s.push_str("struct U { divisor: f32, _p0: f32, _p1: f32, _p2: f32, };\n");
+        s.push_str(UNIFORM_SCHEMA);
         s.push_str("@group(0) @binding(0) var<uniform> u: U;\n");
         s.push_str("@group(0) @binding(1) var samp: sampler;\n");
         for i in 0..k {

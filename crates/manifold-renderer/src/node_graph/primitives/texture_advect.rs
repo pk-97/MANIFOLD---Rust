@@ -24,7 +24,7 @@ pub const TEXTURE_ADVECT_BOUNDARIES: &[&str] = &["Repeat", "Clamp"];
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AdvectUniforms {
     dt: f32,
-    _pad0: f32,
+    boundary: u32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -126,7 +126,7 @@ impl Primitive for TextureAdvect {
 
         let uniforms = AdvectUniforms {
             dt,
-            _pad0: 0.0,
+            boundary,
             _pad1: 0.0,
             _pad2: 0.0,
         };

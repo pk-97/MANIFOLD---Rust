@@ -71,8 +71,8 @@ crate::primitive! {
 struct EdgeDetectUniforms {
     amount: f32,
     threshold: f32,
-    texel_size_x: f32,
-    texel_size_y: f32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 impl Primitive for EdgeDetect {
@@ -87,12 +87,6 @@ impl Primitive for EdgeDetect {
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
         };
-        let (width, height) = (out_tex.width, out_tex.height);
-        // Texel size matches legacy's `1.0 / ctx.output_width/height`
-        // — intrinsic to the output texture, identical at parity dims.
-        let texel_size_x = 1.0 / width as f32;
-        let texel_size_y = 1.0 / height as f32;
-
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let sampler = self
@@ -102,8 +96,8 @@ impl Primitive for EdgeDetect {
         let uniforms = EdgeDetectUniforms {
             amount,
             threshold,
-            texel_size_x,
-            texel_size_y,
+            _pad0: 0,
+            _pad1: 0,
         };
 
         dispatch_standalone_2d(
