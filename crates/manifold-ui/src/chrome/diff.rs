@@ -138,6 +138,11 @@ impl ChromeHost {
     /// Fresh structural build at the current tree tail. Records ids + signature.
     /// Runs [`validate`] in debug — an unwired control fails here.
     pub fn build(&mut self, tree: &mut UITree, root: &View, rect: Rect) {
+        self.build_under(tree, root, rect, None);
+    }
+
+    /// Materialize beneath an existing parent, preserving inherited widget identity.
+    pub fn build_under(&mut self, tree: &mut UITree, root: &View, rect: Rect, parent: Option<NodeId>) {
         layout::solve_into(root, rect, tree.measurer(), &mut self.scratch);
 
         #[cfg(debug_assertions)]
@@ -154,7 +159,7 @@ impl ChromeHost {
         self.ids.clear();
         self.ids.reserve(self.scratch.len());
         for i in 0..self.scratch.len() {
-            let parent_id = self.scratch[i].parent.map(|p| self.ids[p]);
+            let parent_id = self.scratch[i].parent.map(|p| self.ids[p]).or(parent);
             let id = {
                 let n = &self.scratch[i];
                 let mut extra = UIFlags::empty();
@@ -277,6 +282,14 @@ impl ChromeHost {
                 reg.on(id, Gesture::RightClick, a.clone());
             }
         }
+    }
+
+    /// Return the retained click intent for a materialised node.
+    pub fn click_action(&self, node: NodeId) -> Option<&PanelAction> {
+        let i = node.index().checked_sub(self.first_node)?;
+        (self.ids.get(i) == Some(&node))
+            .then(|| self.laid.get(i)?.intent.click.as_ref())
+            .flatten()
     }
 
     // ── Accessors (Panel trait glue) ────────────────────────────────
@@ -482,6 +495,22 @@ mod tests {
         let button_id = host.node_id(2).unwrap();
         let action = reg.resolve(&t, Some(button_id), Gesture::Click);
         assert!(matches!(action, Some(PanelAction::Transport(TransportAction::Stop))));
+    }
+
+    #[test]
+    fn intents_reject_node_id_after_partial_rebuild() {
+        let mut t = tree();
+        let mut host = ChromeHost::new();
+        host.build(&mut t, &card("1.0"), rect());
+        let old_button = host.node_id(2).unwrap();
+        let start = host.first_node();
+
+        t.truncate_from(start);
+        host.build(&mut t, &card("2.0"), rect());
+
+        let mut reg = IntentRegistry::new();
+        host.register_intents(&mut reg);
+        assert!(reg.resolve(&t, Some(old_button), Gesture::Click).is_none());
     }
 
     #[test]

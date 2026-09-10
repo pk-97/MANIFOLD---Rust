@@ -144,6 +144,9 @@ pub enum AssertCheck {
     TextEquals(String),
     Count(u32),
     RectWithin(Rect),
+    /// Assert that the selected node is entirely above exactly one node
+    /// matching the supplied query.
+    Above(SelectorQuery),
 }
 
 /// section 3 selector — a structural query over the dump. Resolution: filter nodes

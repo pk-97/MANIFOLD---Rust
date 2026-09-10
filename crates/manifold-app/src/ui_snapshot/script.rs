@@ -1245,6 +1245,32 @@ impl Runner {
                 0 => Err(format!("no match for {query} (want rect_within)")),
                 n => Err(format!("{n} matches for {query} — RectWithin needs exactly one")),
             },
+            AssertCheck::Above(other) => {
+                let other_target = AutomationTarget::Query(other.clone());
+                let (other_matches, other_query) = self.resolve_all(ui, data, &other_target);
+                match matches.len() {
+                    0 => Err(format!("no match for {query} (want Above {other_query})")),
+                    1 => match other_matches.len() {
+                        0 => Err(format!("no match for {other_query} (Above needs exactly one)")),
+                        1 => {
+                            let source = matches[0].rect;
+                            let destination = other_matches[0].rect;
+                            if source.y_max() <= destination.y {
+                                Ok(format!("{query} is above {other_query}"))
+                            } else {
+                                Err(format!(
+                                    "incorrect order: {query} is not above {other_query}: bottom {:.1} > top {:.1}",
+                                    source.y_max(), destination.y
+                                ))
+                            }
+                        }
+                        n => Err(format!(
+                            "{n} matches for {other_query} — Above needs exactly one destination"
+                        )),
+                    },
+                    n => Err(format!("{n} matches for {query} — Above needs exactly one source")),
+                }
+            }
         };
 
         match result {

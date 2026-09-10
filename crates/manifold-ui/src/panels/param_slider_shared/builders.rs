@@ -2,6 +2,9 @@
 //! Split out of `param_slider_shared` (P-S1, UI funnel decomposition).
 
 use super::*;
+use crate::{MappingAction, ModulationAction};
+use crate::panels::{AudioDrawerClick, ClipTriggerDrawerClick};
+use manifold_foundation::ParamId;
 
 
 /// Per-row modulation config tabs. The T/∿/A arm buttons stay on the row (one-
@@ -274,9 +277,11 @@ pub(crate) fn build_driver_config(
     w: f32,
     mod_state: &ParamModState,
     param_idx: usize,
+    target: GraphParamTarget,
+    param_id: ParamId,
     btn_font_size: u16,
     key: Option<u64>,
-) -> DriverConfigIds {
+) -> crate::panels::drawer::DrawerIds {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
 
     let active_div = mod_state
@@ -321,16 +326,22 @@ pub(crate) fn build_driver_config(
         None => "Free".to_string(),
     };
     let mut row1_buttons: Vec<DrawerButton> = (0..BEAT_DIV_COUNT)
-        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], is_sync && j as i32 == active_div))
+        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], is_sync && j as i32 == active_div,
+            PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::BeatDiv(j)))))
         .collect();
-    row1_buttons.push(DrawerButton::new(free_label, is_free));
+    let free_target = target.clone();
+    let free_param = param_id.clone();
+    let free_value = mod_state.driver_effective_period(param_idx);
+    row1_buttons.push(DrawerButton::new_with_bounds(free_label, is_free, move |rect| PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
+        target: free_target.clone(), param_id: free_param.clone(), anchor: rect, value: free_value,
+    })));
 
     // Row 2 — Feel: [Straight][Dotted][Triplet], a mutually-exclusive segment
     // (one lit) shown only in sync mode.
     let row2_buttons: Vec<DrawerButton> = vec![
-        DrawerButton::new("Straight", is_sync && !is_dotted && !is_triplet),
-        DrawerButton::new("Dotted", is_sync && is_dotted),
-        DrawerButton::new("Triplet", is_sync && is_triplet),
+        DrawerButton::new("Straight", is_sync && !is_dotted && !is_triplet, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Straight))),
+        DrawerButton::new("Dotted", is_sync && is_dotted, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Dotted))),
+        DrawerButton::new("Triplet", is_sync && is_triplet, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Triplet))),
     ];
 
     // Row 3 — Shape + polarity: 5 waveform icons then Invert. The wave glyphs are
@@ -339,10 +350,10 @@ pub(crate) fn build_driver_config(
     let mut row3_buttons: Vec<DrawerButton> = (0..WAVEFORM_COUNT)
         .map(|j| {
             let icon_char = crate::icons::waveform_icon_char(j as i32);
-            DrawerButton::new(icon_char.to_string(), j as i32 == active_wave)
+            DrawerButton::new(icon_char.to_string(), j as i32 == active_wave, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Wave(j))))
         })
         .collect();
-    row3_buttons.push(DrawerButton::new("Invert", is_reversed));
+    row3_buttons.push(DrawerButton::new("Invert", is_reversed, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Invert))));
 
     let frame_aligned = mod_state.driver_frame_aligned[param_idx];
     let frame_label = if frame_aligned {
@@ -363,7 +374,7 @@ pub(crate) fn build_driver_config(
             DrawerRow::Buttons { buttons: row2_buttons, width: ButtonWidth::Uniform, label: None },
             DrawerRow::Buttons { buttons: row3_buttons, width: ButtonWidth::Uniform, label: None },
             DrawerRow::Buttons {
-                buttons: vec![DrawerButton::new(frame_label, frame_aligned)],
+                buttons: vec![DrawerButton::new(frame_label, frame_aligned, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::ToggleFrameAligned)))],
                 width: ButtonWidth::Uniform,
                 label: None,
             },
@@ -372,33 +383,7 @@ pub(crate) fn build_driver_config(
         slider_font_size: FONT_SIZE,
         theme: Theme::INSPECTOR.with_accent(color::DRIVER_ACTIVE_C32).tinted(),
     };
-    let dids = drawer::build(tree, parent, x, y, w, &spec, key);
-
-    // Reconstruct typed ids from the flat button list (row order):
-    //   0..11  grid · 11 free · 12 straight · 13 dotted · 14 triplet
-    //   15..20 waveforms · 20 invert.
-    let ids = dids.button_ids();
-    let beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT] = std::array::from_fn(|j| ids[j]);
-    let free_btn_id = ids[BEAT_DIV_COUNT];
-    let straight_btn_id = ids[BEAT_DIV_COUNT + 1];
-    let dotted_btn_id = ids[BEAT_DIV_COUNT + 2];
-    let triplet_btn_id = ids[BEAT_DIV_COUNT + 3];
-    let wave_base = BEAT_DIV_COUNT + 4;
-    let wave_btn_ids: [NodeId; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
-    let invert_btn_id = ids[wave_base + WAVEFORM_COUNT];
-    let frame_align_btn_id = ids[wave_base + WAVEFORM_COUNT + 1];
-
-    DriverConfigIds {
-        _container_id: dids.container,
-        beat_div_btn_ids,
-        straight_btn_id,
-        dotted_btn_id,
-        triplet_btn_id,
-        free_btn_id,
-        invert_btn_id,
-        frame_align_btn_id,
-        wave_btn_ids,
-    }
+    drawer::build(tree, parent, x, y, w, &spec, key)
 }
 
 
@@ -503,16 +488,15 @@ pub(crate) fn build_envelope_config(
         });
     }
 
-    let mut action_btn_ids: Option<[NodeId; AUDIO_ACTION_COUNT]> = None;
     let mut step_slider: Option<SliderNodeIds> = None;
     let mut step_reset: Option<PanelAction> = None;
-    let mut wrap_btn_ids: Option<[NodeId; AUDIO_WRAP_COUNT]> = None;
 
     if show_action {
         let action_buttons: Vec<DrawerButton> = audio_action_labels()
             .iter()
             .enumerate()
-            .map(|(k, l)| DrawerButton::new(*l, k as i32 == action_idx))
+            .map(|(k, l)| DrawerButton::new(*l, k as i32 == action_idx,
+                PanelAction::Modulation(ModulationAction::EnvelopeSetActionKind(target.clone(), pid.clone(), k))))
             .collect();
         rows.push(DrawerRow::Buttons {
             buttons: action_buttons,
@@ -553,7 +537,8 @@ pub(crate) fn build_envelope_config(
             let wrap_buttons: Vec<DrawerButton> = audio_wrap_labels()
                 .iter()
                 .enumerate()
-                .map(|(k, l)| DrawerButton::new(*l, k as i32 == wrap_sel))
+                .map(|(k, l)| DrawerButton::new(*l, k as i32 == wrap_sel,
+                    PanelAction::Modulation(ModulationAction::EnvelopeSetWrap(target.clone(), pid.clone(), k))))
                 .collect();
             rows.push(DrawerRow::Buttons {
                 buttons: wrap_buttons,
@@ -582,32 +567,16 @@ pub(crate) fn build_envelope_config(
         None
     };
 
-    if show_action {
-        let btns = dids.button_ids();
-        let mut action_arr = [NodeId::PLACEHOLDER; AUDIO_ACTION_COUNT];
-        for (k, id) in btns.iter().take(AUDIO_ACTION_COUNT).enumerate() {
-            action_arr[k] = *id;
-        }
-        action_btn_ids = Some(action_arr);
-        if action_idx == 1 {
-            step_slider = dids.sliders.get(usize::from(show_decay)).cloned();
-            let wrap_offset = AUDIO_ACTION_COUNT;
-            let mut wrap_arr = [NodeId::PLACEHOLDER; AUDIO_WRAP_COUNT];
-            for (k, id) in btns.iter().skip(wrap_offset).take(AUDIO_WRAP_COUNT).enumerate() {
-                wrap_arr[k] = *id;
-            }
-            wrap_btn_ids = Some(wrap_arr);
-        }
+    if show_action && action_idx == 1 {
+        step_slider = dids.sliders.get(usize::from(show_decay)).cloned();
     }
 
     EnvelopeConfigIds {
-        _container_id: dids.container,
+        drawer: dids,
         decay_slider,
         decay_reset: show_decay.then_some(decay_reset),
-        action_btn_ids,
         step_slider,
         step_reset,
-        wrap_btn_ids,
     }
 }
 
@@ -746,8 +715,9 @@ pub(crate) fn build_ableton_config(
     y: f32,
     w: f32,
     display: &AbletonMappingDisplay,
+    action: PanelAction,
     key: Option<u64>,
-) -> AbletonConfigIds {
+) -> crate::panels::drawer::DrawerIds {
     use crate::panels::drawer::{self, DrawerRow, DrawerSpec, StatusDot, StatusStrip, TrailingButton};
 
     let dot_color = match display.status {
@@ -789,19 +759,14 @@ pub(crate) fn build_ableton_config(
                     color::ABL_BADGE_C32,
                     color::FONT_CAPTION,
                 ),
+                action,
             }),
         })],
         btn_font_size: color::FONT_CAPTION,
         slider_font_size: FONT_SIZE,
         theme: Theme::INSPECTOR.with_accent(color::ABL_BADGE_C32).tinted(),
     };
-    let dids = drawer::build(tree, parent, x, y, w, &spec, key);
-    let invert_btn_id = dids.button_ids()[0];
-
-    AbletonConfigIds {
-        _container_id: dids.container,
-        invert_btn_id,
-    }
+    drawer::build(tree, parent, x, y, w, &spec, key)
 }
 
 
@@ -1077,7 +1042,7 @@ pub(crate) const TRIGGER_GATE_BADGE_W: f32 = 40.0;
 /// instead — a fire-edge config has no use for this drawer's envelope shaping
 /// or the raw feature matrix. Returns the built `DrawerIds` plus the send
 /// count (the caller needs it to split the drawer's flat button index into
-/// send vs. feature/band/mode regions — see `resolve_audio_config_click`).
+/// send vs. feature/band/mode regions.
 ///
 /// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger `info` (a plain slider
 /// row) additionally gets the Action row (Cont/Step/Rand); while armed to
@@ -1101,6 +1066,7 @@ pub(crate) const TRIGGER_GATE_BADGE_W: f32 = 40.0;
 fn audio_send_buttons(
     mod_state: &ParamModState,
     i: usize,
+    action: impl Fn(usize) -> PanelAction,
 ) -> Vec<crate::panels::drawer::DrawerButton> {
     use crate::panels::drawer::DrawerButton;
     let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
@@ -1109,7 +1075,7 @@ fn audio_send_buttons(
         .iter()
         .enumerate()
         .map(|(k, label)| {
-            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
+            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel, action(k));
             match mod_state.audio_send_ids.get(k) {
                 Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
                 None => btn,
@@ -1157,14 +1123,14 @@ fn clip_trigger_shape_reset(
 
 
 /// The Length row (`one_shot_beats`, "1b"-style buttons) — clip triggers only.
-fn length_row(beats: f32) -> crate::panels::drawer::DrawerRow {
+fn length_row(beats: f32, action: impl Fn(usize) -> PanelAction) -> crate::panels::drawer::DrawerRow {
     use crate::panels::drawer::{ButtonWidth, DrawerButton, DrawerRow};
     let length_sel = length_option_index(beats);
     DrawerRow::Buttons {
         buttons: length_labels()
             .into_iter()
             .enumerate()
-            .map(|(k, l)| DrawerButton::new(l, k == length_sel))
+            .map(|(k, l)| DrawerButton::new(l, k == length_sel, action(k)))
             .collect(),
         width: ButtonWidth::Uniform,
         label: Some("Length".into()),
@@ -1207,6 +1173,7 @@ pub(crate) fn build_clip_trigger_drawer(
     length_beats: f32,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+    let action = |click| PanelAction::Root(RootAction::ClipTriggerDrawerClick(layer_id.clone(), row, click));
     let send_count = mod_state.audio_send_labels.len();
     let current = crate::types::AudioFeature::new(
         audio_kind_from_index(mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize),
@@ -1218,13 +1185,13 @@ pub(crate) fn build_clip_trigger_drawer(
     let matrix_open = mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
     let mut chip_buttons: Vec<DrawerButton> = trigger_source_chips(current)
         .into_iter()
-        .map(|c| DrawerButton::new(c.label, c.active))
+        .map(|c| DrawerButton::new(c.label, c.active, action(ClipTriggerDrawerClick::Feature(c.feature))))
         .collect();
-    chip_buttons.push(DrawerButton::new("Custom", matrix_open));
+    chip_buttons.push(DrawerButton::new("Custom", matrix_open, action(ClipTriggerDrawerClick::Custom)));
     let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(AUDIO_SENS_DEFAULT);
     let mut rows = vec![
         DrawerRow::Buttons {
-            buttons: audio_send_buttons(mod_state, i),
+            buttons: audio_send_buttons(mod_state, i, |k| action(ClipTriggerDrawerClick::Send(k))),
             width: ButtonWidth::Proportional,
             label: Some("Source".into()),
         },
@@ -1243,6 +1210,7 @@ pub(crate) fn build_clip_trigger_drawer(
                     DrawerButton::new(
                         *l,
                         k as i32 == mod_state.audio_kind_idx.get(i).copied().unwrap_or(0),
+                        action(ClipTriggerDrawerClick::Kind(k)),
                     )
                 })
                 .collect(),
@@ -1257,6 +1225,7 @@ pub(crate) fn build_clip_trigger_drawer(
                     DrawerButton::new(
                         *l,
                         b as i32 == mod_state.audio_band_idx.get(i).copied().unwrap_or(0),
+                        action(ClipTriggerDrawerClick::Band(b)),
                     )
                 })
                 .collect(),
@@ -1273,7 +1242,7 @@ pub(crate) fn build_clip_trigger_drawer(
         reset: clip_trigger_shape_reset(layer_id, row, AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
         show_meter: true,
     });
-    rows.push(length_row(length_beats));
+    rows.push(length_row(length_beats, |k| action(ClipTriggerDrawerClick::Length(k))));
     let spec = DrawerSpec {
         rows,
         btn_font_size: config_font,
@@ -1303,6 +1272,7 @@ pub(crate) fn build_audio_mod_drawer(
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let pid = info.id.clone();
+    let action = |kind| PanelAction::Root(RootAction::AudioDrawerClick(gpt.clone(), pid.clone(), kind));
     let send_count = mod_state.audio_send_labels.len();
     let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
     let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
@@ -1319,9 +1289,9 @@ pub(crate) fn build_audio_mod_drawer(
     let matrix_open = mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
     let mut chip_buttons: Vec<DrawerButton> = trigger_source_chips(current)
         .into_iter()
-        .map(|c| DrawerButton::new(c.label, c.active))
+        .map(|c| { let feature = c.feature; DrawerButton::new(c.label, c.active, action(AudioDrawerClick::Feature(feature))) })
         .collect();
-    chip_buttons.push(DrawerButton::new("Custom", matrix_open));
+    chip_buttons.push(DrawerButton::new("Custom", matrix_open, action(AudioDrawerClick::Custom)));
     // An `is_trigger_gate` target fires on the raw sensitivity-scaled edge
     // (BUG-242): Invert/Attack/Release never reach the Schmitt trigger, so
     // the drawer doesn't offer them there. Continuous, `is_trigger`, and
@@ -1331,12 +1301,12 @@ pub(crate) fn build_audio_mod_drawer(
     let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
         .iter()
         .enumerate()
-        .map(|(k, l)| DrawerButton::new(*l, k as i32 == kind_sel))
+        .map(|(k, l)| DrawerButton::new(*l, k as i32 == kind_sel, action(AudioDrawerClick::Kind(k))))
         .collect();
     let band_buttons: Vec<DrawerButton> = audio_band_labels()
         .iter()
         .enumerate()
-        .map(|(b, l)| DrawerButton::new(*l, b as i32 == band_sel))
+        .map(|(b, l)| DrawerButton::new(*l, b as i32 == band_sel, action(AudioDrawerClick::Band(b))))
         .collect();
     // Shaping sliders: Amount (sensitivity), Attack, Release. These become
     // `DrawerIds.sliders[0..3]` in row order — what the drag path hit-tests.
@@ -1379,10 +1349,10 @@ pub(crate) fn build_audio_mod_drawer(
     // — the runtime `AudioModShape::rate_of_change` field and its
     // `condition()` arm stay compiled for a possible future re-wire; only
     // this button, and the click routing that read it, are gone.
-    let toggle_buttons = vec![DrawerButton::new("Invert", invert_on)];
+    let toggle_buttons = vec![DrawerButton::new("Invert", invert_on, action(AudioDrawerClick::Invert))];
     let mut rows = vec![
         DrawerRow::Buttons {
-            buttons: audio_send_buttons(mod_state, i),
+            buttons: audio_send_buttons(mod_state, i, |k| action(AudioDrawerClick::Send(k))),
             width: ButtonWidth::Proportional,
             label: Some("Source".into()),
         },
@@ -1442,7 +1412,7 @@ pub(crate) fn build_audio_mod_drawer(
     // forbidden move): those rows count events by design, they don't step
     // them. Appended after the shaping sliders, so its flat button index
     // continues right after Invert (the three Slider rows above contribute
-    // no buttons) — see `resolve_audio_config_click`, which must stay in
+    // no buttons) — retained drawer intents keep this shape in
     // lockstep with this row order.
     let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
     let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
@@ -1450,7 +1420,7 @@ pub(crate) fn build_audio_mod_drawer(
         let action_buttons: Vec<DrawerButton> = audio_action_labels()
             .iter()
             .enumerate()
-            .map(|(k, l)| DrawerButton::new(*l, k as i32 == action_idx))
+            .map(|(k, l)| DrawerButton::new(*l, k as i32 == action_idx, action(AudioDrawerClick::Action(k))))
             .collect();
         rows.push(DrawerRow::Buttons {
             buttons: action_buttons,
@@ -1487,7 +1457,7 @@ pub(crate) fn build_audio_mod_drawer(
             let wrap_buttons: Vec<DrawerButton> = audio_wrap_labels()
                 .iter()
                 .enumerate()
-                .map(|(k, l)| DrawerButton::new(*l, k as i32 == wrap_sel))
+                .map(|(k, l)| DrawerButton::new(*l, k as i32 == wrap_sel, action(AudioDrawerClick::Wrap(k))))
                 .collect();
             rows.push(DrawerRow::Buttons {
                 buttons: wrap_buttons,
@@ -1506,7 +1476,7 @@ pub(crate) fn build_audio_mod_drawer(
         let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
             .iter()
             .enumerate()
-            .map(|(m, l)| DrawerButton::new(*l, m as i32 == mode_sel))
+            .map(|(m, l)| DrawerButton::new(*l, m as i32 == mode_sel, action(AudioDrawerClick::TriggerMode(m))))
             .collect();
         rows.push(DrawerRow::Buttons {
             buttons: mode_buttons,
@@ -2202,6 +2172,8 @@ pub(crate) fn build_param_row(
             drawer_w,
             mod_state,
             i,
+            target.clone(),
+            info.id.clone(),
             config_font,
             row_key_base.map(|b| b | ROW_ROLE_DRIVER_CONFIG),
         ));
@@ -2215,6 +2187,7 @@ pub(crate) fn build_param_row(
     {
         ids.ableton_config = Some(build_ableton_config(
             tree, drawer_parent, drawer_x, cy, drawer_w, display,
+            PanelAction::Mapping(MappingAction::AbletonInvertToggle(target.clone(), info.id.clone())),
             row_key_base.map(|b| b | ROW_ROLE_ABLETON_CONFIG),
         ));
         cy += ABL_CONFIG_HEIGHT;

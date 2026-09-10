@@ -144,6 +144,7 @@ impl<A> IntentRegistry<A> {
     {
         let mut cur = hit;
         while let Some(node) = cur {
+            if !tree.is_live(node) { return None; }
             if let Some(intent) = self.get(node) {
                 if let Some(action) = intent.action_for(g) {
                     return Some(action.clone());

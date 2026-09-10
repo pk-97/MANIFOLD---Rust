@@ -1315,7 +1315,7 @@ fn modulation_drawer_sheet() {
 
     let bf = color::FONT_BODY;
     let sf = color::FONT_BODY;
-    let btn = |l: &str, a: bool| DrawerButton::new(l, a);
+    let btn = |l: &str, a: bool| DrawerButton::new(l, a, PanelAction::Transport(manifold_ui::TransportAction::Stop));
     let buttons = |bs: Vec<DrawerButton>, label: Option<&str>, w: ButtonWidth| DrawerRow::Buttons {
         buttons: bs,
         width: w,

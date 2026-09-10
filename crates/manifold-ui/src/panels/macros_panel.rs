@@ -13,9 +13,8 @@ use crate::{MappingAction, ParamsAction, RootAction};
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::{
-    ABL_CONFIG_HEIGHT, AbletonConfigClick, AbletonConfigIds, AbletonMappingDisplay, TrimHandleIds,
+    ABL_CONFIG_HEIGHT, AbletonMappingDisplay, TrimHandleIds,
     build_ableton_config, build_trim_handles_explicit, reposition_trim_bars,
-    check_ableton_config_click,
 };
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
@@ -75,7 +74,7 @@ pub struct MacrosPanel {
     /// Ableton trim handle node IDs per macro slot.
     ableton_trim_ids: [Option<TrimHandleIds>; MACRO_COUNT],
     /// Ableton config drawer node IDs per macro slot (status dot + name + INV).
-    ableton_config_ids: [Option<AbletonConfigIds>; MACRO_COUNT],
+    ableton_config_ids: [Option<crate::panels::drawer::DrawerIds>; MACRO_COUNT],
     /// Cached Ableton display data per slot (for build).
     ableton_displays: [Option<AbletonMappingDisplay>; MACRO_COUNT],
     /// Cached Ableton range per slot (for drag updates + build).
@@ -337,7 +336,8 @@ impl MacrosPanel {
                     .map(|id| tree.get_bounds(id))
                 {
                     self.ableton_config_ids[i] =
-                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display, None));
+                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display,
+                            PanelAction::Mapping(MappingAction::AbletonMacroInvertToggle(i)), None));
                 } else {
                     self.ableton_config_ids[i] = None;
                 }
@@ -435,10 +435,10 @@ impl MacrosPanel {
             return vec![PanelAction::Params(ParamsAction::MacrosCollapseToggle)];
         }
 
-        if let Some((slot_idx, AbletonConfigClick::Invert)) =
-            check_ableton_config_click(node_id, &self.ableton_config_ids)
-        {
-            return vec![PanelAction::Mapping(MappingAction::AbletonMacroInvertToggle(slot_idx))];
+        for drawer in self.ableton_config_ids.iter().flatten() {
+            if let Some(action) = drawer.resolve_action(node_id) {
+                return vec![action.clone()];
+            }
         }
 
         for (i, s) in self.sliders.iter().enumerate() {
@@ -458,6 +458,9 @@ impl MacrosPanel {
     /// the contract's `register_label_mapping`, not a hand `intents.on`).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         self.host.register_slider_resets(intents);
+        for drawer in self.ableton_config_ids.iter().flatten() {
+            drawer.register_intents(intents);
+        }
         for (i, s) in self.sliders.iter().enumerate() {
             if let Some(ids) = s.ids() {
                 BitmapSlider::register_label_mapping(ids, &PanelAction::Mapping(MappingAction::MacroLabelRightClick(i)), intents);

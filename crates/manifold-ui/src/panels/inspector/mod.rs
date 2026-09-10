@@ -6,7 +6,7 @@ use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
 use super::param_card::{CardContext, ParamCardPanel};
 use crate::param_surface::ParamSurface;
-use super::{InspectorTab, Panel, PanelAction};
+use super::{AudioDrawerClick, GraphParamTarget, InspectorTab, Panel, PanelAction};
 use crate::chrome::{self, Pad, View};
 use crate::color;
 use crate::input::{Modifiers, UIEvent};
@@ -341,6 +341,44 @@ pub struct InspectorCompositePanel {
 }
 
 impl InspectorCompositePanel {
+    /// Refresh the dynamic payload of an intent-dispatched Free-period click.
+    /// The drawer intent owns the action identity, while the anchor and value
+    /// must come from the current tree/state after in-place scrolling or sync.
+    pub fn refresh_driver_period_intent(
+        &self,
+        node_id: NodeId,
+        tree: &UITree,
+        action: PanelAction,
+    ) -> PanelAction {
+        if !matches!(
+            &action,
+            PanelAction::Root(RootAction::BeginDriverPeriodTextInput { .. })
+        ) {
+            return action;
+        }
+        self.route_driver_period_typein(node_id, tree)
+            .into_iter()
+            .next()
+            .unwrap_or(action)
+    }
+    pub fn audio_drawer_intent(
+        &mut self, node: NodeId, target: GraphParamTarget,
+        param_id: &manifold_foundation::ParamId, click: AudioDrawerClick,
+    ) -> Vec<PanelAction> {
+        for card in self.effects.iter_mut().flatten()
+            .chain(self.modifier_cards.iter_mut()).chain(self.gen_params.iter_mut())
+        {
+            if in_range(node.index(), card.first_node(), card.node_count()) {
+                return card.audio_drawer_intent(target, param_id, click);
+            }
+        }
+        Vec::new()
+    }
+
+    pub fn clip_trigger_drawer_intent(&mut self, layer: &LayerId, row: usize, click: &crate::panels::ClipTriggerDrawerClick) -> Vec<PanelAction> {
+        self.audio_trigger_section.drawer_action(layer, row, click)
+    }
+
     // BUG-267 — the two canonical scopes `effects` is indexed by. `Layer`,
     // `Group`, and `Clip` all canonicalize to `SCOPE_LAYER` via `scope_idx`.
     const SCOPE_MASTER: usize = 0;
@@ -1107,12 +1145,6 @@ impl Panel for InspectorCompositePanel {
                 if !self.viewport_rect.contains(*pos) {
                     return Vec::new();
                 }
-                // The driver Free-period field opens a type-in (needs `tree` for
-                // its anchor), so intercept it before the command-routing click.
-                let typein = self.route_driver_period_typein(*node_id, tree);
-                if !typein.is_empty() {
-                    return typein;
-                }
                 self.route_click(*node_id, *modifiers, tree)
             }
             UIEvent::PointerDown {
@@ -1195,6 +1227,7 @@ impl Panel for InspectorCompositePanel {
             card.register_intents(intents);
         }
     }
+
 
     fn first_node(&self) -> usize {
         self.cache_first_node
@@ -1426,6 +1459,69 @@ mod tests {
             audio: Default::default(),
             relight: RelightCardConfig::default(),
         }
+    }
+
+    #[test]
+    fn drawer_audio_click_uses_clicked_card_when_indices_match() {
+        use crate::panels::param_slider_shared::{AudioCardState, AudioRowState};
+        use crate::panels::param_card::ParamCardKind;
+        use crate::intent::{IntentRegistry, Gesture};
+        let mut inspector = InspectorCompositePanel::new();
+        let mut tree = UITree::new();
+        for (scope, name) in [(0, "Master"), (1, "Layer")] {
+            let mut config = mk_config(ParamCardKind::Effect, name, 1);
+            config.audio = AudioCardState { rows: vec![AudioRowState { active: true, ..Default::default() }], ..Default::default() };
+            let mut card = ParamCardPanel::new();
+            card.configure(&config);
+            card.build(&mut tree, Rect::new(scope as f32 * 350.0, 0.0, 340.0, 600.0));
+            inspector.effects[scope].push(card);
+        }
+        let card = &inspector.effects[1][0];
+        let mut registry = IntentRegistry::new();
+        card.register_intents(&mut registry);
+        let (button, target, pid) = (card.first_node()..card.first_node() + card.node_count()).find_map(|i| {
+            let node = tree.id_at(i);
+            match registry.resolve(&tree, Some(node), Gesture::Click) {
+                Some(PanelAction::Root(RootAction::AudioDrawerClick(target, pid, AudioDrawerClick::Custom))) => Some((node, target, pid)),
+                _ => None,
+            }
+        }).unwrap();
+        let master_height = inspector.effects[0][0].compute_height();
+        let layer_height = inspector.effects[1][0].compute_height();
+        let actions = inspector.audio_drawer_intent(button, target, &pid, AudioDrawerClick::Custom);
+        assert!(matches!(actions.as_slice(), [PanelAction::Params(crate::ParamsAction::ModConfigTabChanged)]));
+        // A rebuild projects the opened matrix without changing the other card.
+        inspector.effects[1][0].build(&mut UITree::new(), Rect::new(350.0, 0.0, 340.0, 600.0));
+        assert!(inspector.effects[1][0].compute_height() > layer_height);
+        assert_eq!(inspector.effects[0][0].compute_height(), master_height);
+    }
+
+    #[test]
+    fn drawer_free_intent_reads_scrolled_bounds() {
+        use crate::panels::param_card::ParamCardKind;
+        use crate::intent::{IntentRegistry, Gesture};
+        let mut inspector = InspectorCompositePanel::new();
+        let mut config = mk_config(ParamCardKind::Effect, "Driver", 1);
+        config.rows[0].modulation.driver_active = true;
+        config.rows[0].modulation.driver_free_period = Some(3.5);
+        let mut card = ParamCardPanel::new();
+        card.configure(&config);
+        let mut tree = UITree::new();
+        card.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 600.0));
+        let mut registry = IntentRegistry::new();
+        card.register_intents(&mut registry);
+        let (button, action) = (card.first_node()..card.first_node() + card.node_count()).find_map(|i| {
+            let node = tree.id_at(i);
+            match registry.resolve(&tree, Some(node), Gesture::Click) {
+                Some(action @ PanelAction::Root(RootAction::BeginDriverPeriodTextInput { .. })) => Some((node, action)),
+                _ => None,
+            }
+        }).unwrap();
+        tree.offset_nodes(card.first_node(), card.node_count(), -37.0);
+        inspector.effects[0].push(card);
+        let refreshed = inspector.refresh_driver_period_intent(button, &tree, action);
+        assert!(matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })
+            if anchor == tree.get_bounds(button) && value == 3.5));
     }
 
     /// Range truthfulness: switching scope must reset the inactive section's

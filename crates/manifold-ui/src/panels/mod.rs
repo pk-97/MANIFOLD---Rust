@@ -43,7 +43,7 @@ pub use viewport::HitRegion;
 // D-D1). Re-exported at the `panels::` level so existing `panels::PanelAction`
 // call sites reach the domain enums by the same path.
 pub use actions::{
-    AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
+    AudioDrawerClick, ClipTriggerDrawerClick, AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
     MarkerAction, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
 };
 

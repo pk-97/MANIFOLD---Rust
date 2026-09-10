@@ -20,7 +20,7 @@
 use super::*;
 use crate::panels::copy_to_clipboard_label::CopyToClipboardLabelState;
 use crate::param_surface::{RowIndex, RowRole, RowSpec};
-use crate::{MappingAction, ModulationAction, ParamsAction};
+use crate::{ModulationAction, ParamsAction};
 
 /// Release-mode once-per-id loud signal for the id-join miss invariant (INV-6):
 /// a built row whose id has NO live manifest entry this frame. `debug_assert!`
@@ -58,7 +58,7 @@ pub(crate) struct RowHost {
     pub(crate) row_catcher_ids: Vec<Option<NodeId>>,
     pub(crate) driver_btn_ids: Vec<Option<NodeId>>,
     pub(crate) envelope_btn_ids: Vec<Option<NodeId>>,
-    pub(crate) driver_config_ids: Vec<Option<DriverConfigIds>>,
+    pub(crate) driver_config_ids: Vec<Option<crate::panels::drawer::DrawerIds>>,
     /// Per-param "A" audio-mod button node id.
     pub(crate) audio_btn_ids: Vec<Option<NodeId>>,
     /// Per-param audio drawer ids + send count (for click resolution). An
@@ -75,7 +75,7 @@ pub(crate) struct RowHost {
     pub(crate) ableton_trim_ids: Vec<Option<TrimHandleIds>>,
     /// Per-param green audio-mod trim handles (when an audio mod is armed).
     pub(crate) audio_trim_ids: Vec<Option<TrimHandleIds>>,
-    pub(crate) ableton_config_ids: Vec<Option<AbletonConfigIds>>,
+    pub(crate) ableton_config_ids: Vec<Option<crate::panels::drawer::DrawerIds>>,
     /// Per-param modulation-config tab strip node ids paired with their
     /// `ModTab`, for routing tab clicks. Empty for rows with fewer than two
     /// active configs. Rebuilt each frame.
@@ -178,13 +178,7 @@ impl RowHost {
             }
         }
         if let Some(c) = &self.driver_config_ids[i] {
-            for &b in c.beat_div_btn_ids.iter() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-            for b in [c.straight_btn_id, c.dotted_btn_id, c.triplet_btn_id, c.free_btn_id, c.invert_btn_id, c.frame_align_btn_id] {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-            for &b in c.wave_btn_ids.iter() {
+            for &b in c.button_ids() {
                 self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
             }
         }
@@ -196,10 +190,8 @@ impl RowHost {
                     self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
                 }
             }
-            if let Some(action_btn_ids) = &c.action_btn_ids {
-                for &b in action_btn_ids {
-                    self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
-                }
+            for &b in c.drawer.button_ids() {
+                self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
             }
             if let Some(step_slider) = &c.step_slider {
                 self.row_index.insert(tree.widget_of(step_slider.track), i, RowRole::EnvelopeConfig);
@@ -208,14 +200,11 @@ impl RowHost {
                     self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
                 }
             }
-            if let Some(wrap_btn_ids) = &c.wrap_btn_ids {
-                for &b in wrap_btn_ids {
-                    self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
-                }
-            }
         }
         if let Some(c) = &self.ableton_config_ids[i] {
-            self.row_index.insert(tree.widget_of(c.invert_btn_id), i, RowRole::AbletonConfig);
+            for &b in c.button_ids() {
+                self.row_index.insert(tree.widget_of(b), i, RowRole::AbletonConfig);
+            }
         }
         if let Some((dids, _)) = &self.audio_configs[i] {
             for &b in dids.button_ids() {
@@ -282,6 +271,15 @@ impl RowHost {
                 BitmapSlider::register_track_reset(ids, reset, intents);
             }
         }
+        for cfg in self.driver_config_ids.iter().flatten() {
+            cfg.register_intents(intents);
+        }
+        for cfg in self.envelope_config_ids.iter().flatten() {
+            cfg.drawer.register_intents(intents);
+        }
+        for cfg in self.ableton_config_ids.iter().flatten() {
+            cfg.register_intents(intents);
+        }
         for cfg in self.envelope_config_ids.iter().flatten() {
             if let Some((ds, dr)) = cfg.decay_slider.as_ref().zip(cfg.decay_reset.as_ref()) {
                 BitmapSlider::register_track_reset(ds, dr, intents);
@@ -292,6 +290,7 @@ impl RowHost {
         }
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
+            dids.register_intents(intents);
             for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
                 BitmapSlider::register_track_reset(sl, reset, intents);
             }
@@ -405,35 +404,33 @@ impl RowHost {
         vec![PanelAction::Modulation(ModulationAction::AudioModSetSource(target, rows[pi].id.clone(), send_id, feature))]
     }
 
-    /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
-    /// (kind, band) indices and reuses the same set-source action a matrix
-    /// click would issue, one command carrying both axes.
-    fn audio_select_chip_action(
+    pub(crate) fn audio_drawer_action(
         &self,
         target: GraphParamTarget,
-        pi: usize,
-        chip: usize,
+        row: usize,
+        click: crate::panels::AudioDrawerClick,
         rows: &[ParamRow],
-        mod_state: &ParamModState,
+        mod_state: &mut ParamModState,
     ) -> Vec<PanelAction> {
-        let ms = mod_state;
-        let current = crate::types::AudioFeature::new(
-            audio_kind_from_index(ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize),
-            audio_band_from_index(ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize),
-        );
-        let chips = trigger_source_chips(current);
-        let Some(chip) = chips.get(chip) else {
-            return vec![];
-        };
-        let kind_idx = crate::types::AudioFeatureKind::ALL
-            .iter()
-            .position(|&k| k == chip.feature.kind)
-            .unwrap_or(0);
-        let band_idx = crate::types::AudioBand::ALL
-            .iter()
-            .position(|&b| b == chip.feature.band)
-            .unwrap_or(0);
-        self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx), rows, mod_state)
+        use crate::panels::AudioDrawerClick::*;
+        match click {
+            Send(k) => self.audio_set_source_action(target, row, Some(k), None, None, rows, mod_state),
+            Feature(feature) => {
+                let kind = crate::types::AudioFeatureKind::ALL.iter().position(|&v| v == feature.kind).unwrap_or(0);
+                let band = crate::types::AudioBand::ALL.iter().position(|&v| v == feature.band).unwrap_or(0);
+                self.audio_set_source_action(target, row, None, Some(kind), Some(band), rows, mod_state)
+            }
+            Custom => {
+                if let Some(open) = mod_state.audio_matrix_open.get_mut(row) { *open = !*open; }
+                vec![PanelAction::Params(ParamsAction::ModConfigTabChanged)]
+            }
+            Kind(k) => self.audio_set_source_action(target, row, None, Some(k), None, rows, mod_state),
+            Band(b) => self.audio_set_source_action(target, row, None, None, Some(b), rows, mod_state),
+            Invert => vec![PanelAction::Modulation(ModulationAction::AudioModSetInvert(target, rows[row].id.clone()))],
+            TriggerMode(m) => self.audio_set_trigger_mode_action(target, row, m, rows),
+            Action(k) => vec![PanelAction::Modulation(ModulationAction::AudioModSetActionKind(target, rows[row].id.clone(), k))],
+            Wrap(w) => vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(target, rows[row].id.clone(), w))],
+        }
     }
 
     /// A click on an `is_trigger_gate` row's Mode row (section 9 U3) — converts the
@@ -585,10 +582,7 @@ impl RowHost {
                 let Some(cfg) = &self.driver_config_ids[row] else {
                     return Vec::new();
                 };
-                match cfg.resolve(node) {
-                    Some(action) => vec![PanelAction::Modulation(ModulationAction::DriverConfig(target, rows[row].id.clone(), action))],
-                    None => Vec::new(),
-                }
+                cfg.resolve_action(node).cloned().into_iter().collect()
             }
             // The Decay/Step slider's own click (drag start / value-cell type-in)
             // carries no left-click action — matches the old gauntlet, which
@@ -598,65 +592,23 @@ impl RowHost {
                 let Some(cfg) = &self.envelope_config_ids[row] else {
                     return Vec::new();
                 };
-                let Some(click) = resolve_envelope_config_click(cfg, node) else {
-                    return Vec::new();
-                };
-                match click {
-                    EnvelopeConfigClick::SelectAction(k) => {
-                        vec![PanelAction::Modulation(ModulationAction::EnvelopeSetActionKind(target, rows[row].id.clone(), k))]
-                    }
-                    EnvelopeConfigClick::SelectWrap(w) => {
-                        vec![PanelAction::Modulation(ModulationAction::EnvelopeSetWrap(target, rows[row].id.clone(), w))]
-                    }
-                }
+                cfg.drawer.resolve_action(node).cloned().into_iter().collect()
             }
             RowRole::AudioConfig => {
-                let Some((dids, send_count)) = self.audio_configs[row].as_ref() else {
+                let Some((dids, _send_count)) = self.audio_configs[row].as_ref() else {
                     return Vec::new();
                 };
-                let Some(click) =
-                    resolve_audio_config_click(dids, *send_count, mod_state, &rows[row], row, node)
-                else {
-                    return Vec::new();
-                };
-                match click {
-                    AudioConfigClick::SelectSend(k) => {
-                        self.audio_set_source_action(target, row, Some(k), None, None, rows, mod_state)
-                    }
-                    AudioConfigClick::SelectChip(c) => self.audio_select_chip_action(target, row, c, rows, mod_state),
-                    AudioConfigClick::ToggleMatrix => {
-                        if let Some(open) = mod_state.audio_matrix_open.get_mut(row) {
-                            *open = !*open;
-                        }
-                        Vec::new()
-                    }
-                    AudioConfigClick::SelectKind(k) => {
-                        self.audio_set_source_action(target, row, None, Some(k), None, rows, mod_state)
-                    }
-                    AudioConfigClick::SelectBand(b) => {
-                        self.audio_set_source_action(target, row, None, None, Some(b), rows, mod_state)
-                    }
-                    AudioConfigClick::ToggleInvert => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetInvert(target, rows[row].id.clone()))]
-                    }
-                    AudioConfigClick::SelectTriggerMode(m) => self.audio_set_trigger_mode_action(target, row, m, rows),
-                    AudioConfigClick::SelectAction(k) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetActionKind(target, rows[row].id.clone(), k))]
-                    }
-                    AudioConfigClick::SelectWrap(w) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(target, rows[row].id.clone(), w))]
-                    }
+                if let Some(PanelAction::Root(RootAction::AudioDrawerClick(_, _, click))) = dids.resolve_action(node).cloned() {
+                    self.audio_drawer_action(target, row, click, rows, mod_state)
+                } else {
+                    dids.resolve_action(node).cloned().into_iter().collect()
                 }
             }
             RowRole::AbletonConfig => {
                 let Some(cfg) = &self.ableton_config_ids[row] else {
                     return Vec::new();
                 };
-                if cfg.resolve(node) {
-                    vec![PanelAction::Mapping(MappingAction::AbletonInvertToggle(target, rows[row].id.clone()))]
-                } else {
-                    Vec::new()
-                }
+                cfg.resolve_action(node).cloned().into_iter().collect()
             }
             RowRole::ModTab => {
                 let Some(&(_, tab)) = self.mod_tab_ids[row].iter().find(|(n, _)| *n == node) else {

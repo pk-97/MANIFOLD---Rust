@@ -3,27 +3,21 @@
   {
     "Assert": {
       "selector": { "Query": { "text": "Mirror" } },
-      "check": { "RectWithin": { "x": 992.4, "y": 174.76, "width": 427.2, "height": 16.0 } }
+      "check": { "Above": { "text": "Bloom" } }
     }
   },
   {
     "Assert": {
       "selector": { "Query": { "text": "Bloom" } },
-      "check": { "RectWithin": { "x": 992.4, "y": 403.16, "width": 427.2, "height": 16.0 } }
-    }
-  },
-  {
-    "Assert": {
-      "selector": { "Query": { "text": "Strobe" } },
-      "check": { "RectWithin": { "x": 992.4, "y": 683.52, "width": 427.2, "height": 16.0 } }
+      "check": { "Above": { "text": "Strobe" } }
     }
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 979.0, "y": 183.0 } },
+      "target": { "Query": { "name": "param_card.drag_handle.Mirror" } },
       "gesture": {
         "Drag": {
-          "to": { "Point": { "x": 979.0, "y": 692.0 } },
+          "to": { "Query": { "name": "param_card.drag_handle.Strobe" } },
           "steps": 10
         }
       }
@@ -33,19 +27,13 @@
   {
     "Assert": {
       "selector": { "Query": { "text": "Bloom" } },
-      "check": { "RectWithin": { "x": 975.0, "y": 169.0, "width": 462.0, "height": 16.0 } }
+      "check": { "Above": { "text": "Mirror" } }
     }
   },
   {
     "Assert": {
       "selector": { "Query": { "text": "Mirror" } },
-      "check": { "RectWithin": { "x": 975.0, "y": 449.0, "width": 462.0, "height": 16.0 } }
-    }
-  },
-  {
-    "Assert": {
-      "selector": { "Query": { "text": "Strobe" } },
-      "check": { "RectWithin": { "x": 975.0, "y": 675.0, "width": 462.0, "height": 16.0 } }
+      "check": { "Above": { "text": "Strobe" } }
     }
   }
 ]

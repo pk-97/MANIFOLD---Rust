@@ -150,7 +150,6 @@ pub(crate) const BEAT_DIV_BEATS: [f32; BEAT_DIV_COUNT] =
 
 /// Number of feature kinds / bands exposed in the drawer.
 pub(crate) const AUDIO_KIND_COUNT: usize = crate::types::AudioFeatureKind::ALL.len();
-pub(crate) const AUDIO_BAND_COUNT: usize = 4;
 
 #[cfg(test)]
 mod length_row_tests {
