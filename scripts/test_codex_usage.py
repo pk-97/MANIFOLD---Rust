@@ -45,4 +45,33 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(codex_usage.scan(d)["responses"], 2)
             self.assertEqual(codex_usage.scan(d, repo=d)["responses"], 0)
             self.assertEqual(codex_usage.main(["--sessions-dir", d, "--since", "invalid"]), 2)
+
+    def test_completed_nested_commands_are_authoritative_and_bounded(self):
+        self.assertEqual(codex_usage._command_text(["python3", "-c", "print(1)"]), "python3 -c 'print(1)'")
+        with tempfile.TemporaryDirectory(prefix="codex usage ") as d:
+            cwd = Path(d).resolve()
+            def completed(identifier, command, timestamp):
+                return {"type": "event_msg", "timestamp": timestamp, "payload": {
+                    "type": "item_completed", "thread_id": "s", "item": {
+                        "type": "CommandExecution", "id": identifier, "cwd": cwd.as_uri(),
+                        "command": ["/bin/zsh", "-lc", command], "status": "completed", "exit_code": 0}}}
+            records = [{"type": "session_meta", "payload": {"id": "s", "cwd": str(cwd)}},
+                       {"type": "response_item", "timestamp": "2026-09-10T02:00:00Z", "payload": {
+                           "type": "function_call", "name": "exec_command", "call_id": "different-id", "arguments": {"cmd": "echo secret"}}},
+                       completed("old", "echo secret", "2026-09-09T02:00:00Z"),
+                       completed("one", "echo secret", "2026-09-10T02:00:00Z"),
+                       completed("one", "echo secret", "2026-09-10T02:00:00Z"),
+                       completed("two", "echo secret", "2026-09-10T03:00:00Z"),
+                       completed("other", "echo different", "2026-09-10T03:00:00Z"),
+                       completed("boundary", "echo secret", "2026-09-11T00:00:00Z")]
+            (cwd / "actual.jsonl").write_text("\n".join(map(json.dumps, records)))
+            result = codex_usage.scan(d, codex_usage._time("2026-09-10"), d, until=codex_usage._time("2026-09-11"))
+            self.assertEqual(result["command_coverage"]["completed_records"], 3)
+            self.assertEqual(result["command_coverage"]["fallback_direct_records"], 0)
+            self.assertEqual(len(result["repeated_commands"]), 1)
+            self.assertEqual(result["repeated_commands"][0]["count"], 2)
+            self.assertEqual(result["repeated_commands"][0]["cwd"], str(cwd))
+            self.assertNotIn("echo secret", json.dumps(result))
+            self.assertEqual(codex_usage.scan(d, repo="/elsewhere")["command_coverage"]["completed_records"], 0)
+            self.assertEqual(codex_usage.main(["--sessions-dir", d, "--since", "2026-09-11", "--until", "2026-09-10"]), 2)
 if __name__ == "__main__": unittest.main()

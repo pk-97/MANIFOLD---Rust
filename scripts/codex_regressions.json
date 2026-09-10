@@ -1,0 +1,38 @@
+{
+  "undo-redo": {
+    "triggers": ["crates/manifold-editing/"],
+    "kind": "cpu",
+    "package": "manifold-editing",
+    "target": "undo_roundtrip",
+    "source": "crates/manifold-editing/tests/undo_roundtrip.rs",
+    "tests": ["undo_manager_multi_command_roundtrip"]
+  },
+  "clip-non-overlap": {
+    "triggers": ["crates/manifold-editing/", "crates/manifold-core/src/layer"],
+    "kind": "cpu",
+    "package": "manifold-editing",
+    "target": "service_integration",
+    "source": "crates/manifold-editing/tests/service_integration.rs",
+    "tests": ["overlap_splits_middle", "s5_multi_clip_move_onto_occupied_lane_preserves_all_moved_clips"]
+  },
+  "midi-ordering-channel": {
+    "triggers": ["crates/manifold-playback/src/midi_input.rs", "crates/manifold-playback/src/live_clip_manager.rs", "crates/manifold-playback/src/clip_launcher.rs"],
+    "kind": "cpu",
+    "package": "manifold-playback",
+    "target": "lib",
+    "source": "crates/manifold-playback/src/midi_input.rs",
+    "tests": ["native_clock_events_sort_by_tick_type_then_sequence", "channel_filter_rejects_note_on_and_off_but_omni_accepts_and_stops"]
+  },
+  "parameter-gesture-undo": {
+    "triggers": ["crates/manifold-ui/", "crates/manifold-app/src/ui_bridge/", "scripts/ui-flows/"],
+    "kind": "ui-flow",
+    "source": "scripts/ui-flows/scene-card-convergence-c-p1d-roughness-scrub-drawer-undo.json",
+    "tests": ["scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"]
+  },
+  "generator-fusion": {
+    "triggers": ["crates/manifold-renderer/src/node_graph/", "crates/manifold-gpu/"],
+    "kind": "gpu",
+    "source": "crates/manifold-renderer/src/node_graph/freeze/proof.rs",
+    "tests": ["fused_gain_chain_matches_unfused_within_tolerance", "oracle_catches_wrong_fusion"]
+  }
+}

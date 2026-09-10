@@ -838,3 +838,242 @@ impl Default for MidiInputController {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::types::TempoPointSource;
+    use manifold_core::{Beats, Seconds};
+    use manifold_editing::command::Command;
+
+    fn event(event_type: MidiNoteEventType, tick: i32, sequence: u32) -> MidiNoteEvent {
+        MidiNoteEvent {
+            event_type,
+            note: 60,
+            velocity: 1.0,
+            channel: 0,
+            source_index: 0,
+            absolute_tick: tick,
+            sequence,
+        }
+    }
+
+    #[test]
+    fn native_clock_events_sort_by_tick_type_then_sequence() {
+        let mut events = [
+            event(MidiNoteEventType::NoteOn, 12, 4),
+            event(MidiNoteEventType::NoteOff, 4, 9),
+            event(MidiNoteEventType::NoteOn, 4, 3),
+            event(MidiNoteEventType::NoteOff, 12, 2),
+            event(MidiNoteEventType::NoteOn, 4, 1),
+        ];
+        events.sort_by(compare_native_clock_events);
+
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.absolute_tick, event.event_type, event.sequence))
+                .collect::<Vec<_>>(),
+            vec![
+                (4, MidiNoteEventType::NoteOff, 9),
+                (4, MidiNoteEventType::NoteOn, 1),
+                (4, MidiNoteEventType::NoteOn, 3),
+                (12, MidiNoteEventType::NoteOff, 2),
+                (12, MidiNoteEventType::NoteOn, 4),
+            ]
+        );
+    }
+
+    struct TestHost {
+        stopped: Vec<String>,
+    }
+
+    impl LiveClipHost for TestHost {
+        fn current_beat(&self) -> Beats {
+            Beats::ZERO
+        }
+        fn current_time(&self) -> Seconds {
+            Seconds::ZERO
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+        fn is_playing(&self) -> bool {
+            true
+        }
+        fn show_debug_logs(&self) -> bool {
+            false
+        }
+        fn get_bpm_at_beat(&self, _beat: Beats) -> f32 {
+            120.0
+        }
+        fn get_tempo_source_at_beat(&self, _beat: Beats) -> TempoPointSource {
+            TempoPointSource::Unknown
+        }
+        fn get_beat_snapped_beat(&self) -> Beats {
+            Beats::ZERO
+        }
+        fn get_current_absolute_tick(&self) -> i32 {
+            0
+        }
+        fn stop_clip(&mut self, clip_id: &str) {
+            self.stopped.push(clip_id.to_owned());
+        }
+        fn mark_compositor_dirty(&mut self) {}
+        fn invalidate_lookahead_prewarm(&mut self) {}
+        fn register_clip_lookup(&mut self, _clip_id: &str, _clip: &TimelineClip) {}
+        fn record_command(&mut self, _cmd: Box<dyn Command>) {}
+        fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
+            Seconds(beat.0 * 0.5)
+        }
+    }
+
+    fn mapped_controller(channel: i32) -> MidiInputController {
+        let mut controller = MidiInputController::new();
+        controller.set_midi_channel(channel);
+        let mut config = manifold_core::midi::MidiMappingConfig::default();
+        config.mappings = vec![manifold_core::midi::MidiNoteMapping {
+                midi_note: 60,
+                video_clip_ids: vec!["clip".to_owned()],
+                target_layer_index: 0,
+                target_layer_id: None,
+                duration_mode: None,
+            }];
+        config.rebuild_dictionary();
+        controller.set_midi_config(config);
+        controller
+    }
+
+    fn process_note_on(
+        controller: &mut MidiInputController,
+        channel: i32,
+        project: &mut Project,
+        launcher: &mut ClipLauncher,
+        manager: &mut LiveClipManager,
+        host: &mut TestHost,
+    ) {
+        controller.process_note_on(
+            60,
+            1.0,
+            channel,
+            7,
+            "test",
+            Some(0.0),
+            "test",
+            1,
+            1,
+            project,
+            launcher,
+            manager,
+            host,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn channel_filter_rejects_note_on_and_off_but_omni_accepts_and_stops() {
+        let mut project = Project::default();
+        project.video_library.add_clip(manifold_core::video::VideoClip {
+            id: "clip".into(),
+            file_path: String::new(),
+            relative_file_path: None,
+            file_name: "fixture".into(),
+            duration: 4.0,
+            resolution_width: 1,
+            resolution_height: 1,
+            file_size: 0,
+            last_modified_ticks: 0,
+        });
+        let mut launcher = ClipLauncher::new();
+        let mut manager = LiveClipManager::new();
+        let mut host = TestHost {
+            stopped: Vec::new(),
+        };
+        let mut controller = mapped_controller(2);
+
+        process_note_on(
+            &mut controller,
+            1,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+        );
+        assert!(manager.live_slots().is_empty());
+        controller.process_note_off(
+            60,
+            1,
+            7,
+            "test",
+            Some(1.0),
+            "test",
+            2,
+            2,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+            1.1,
+        );
+        assert!(manager.live_slots().is_empty());
+
+        process_note_on(
+            &mut controller,
+            2,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+        );
+        let clip_id = manager
+            .live_slots()
+            .get(&0)
+            .expect("accepted note-on")
+            .id
+            .clone();
+        controller.process_note_off(
+            60,
+            1,
+            7,
+            "test",
+            Some(1.0),
+            "test",
+            2,
+            2,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+            1.1,
+        );
+        assert!(manager.is_live_slot_clip(&clip_id));
+        controller.process_note_off(
+            60,
+            2,
+            7,
+            "test",
+            Some(1.0),
+            "test",
+            2,
+            2,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+            1.1,
+        );
+        assert!(!manager.is_live_slot_clip(&clip_id));
+
+        let mut omni = mapped_controller(-1);
+        process_note_on(
+            &mut omni,
+            9,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+        );
+        assert!(manager.live_slots().contains_key(&0));
+    }
+}

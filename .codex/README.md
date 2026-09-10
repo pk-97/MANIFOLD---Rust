@@ -19,7 +19,8 @@ Run `python3 -B .codex/hooks/test_guard.py` after changes.
 
 - `python3 -B scripts/codex_prepare.py --repo "$PWD" --path crates/manifold-ui/src/param_surface.rs --task 'Fix the gesture' --findings 'Describe observed evidence' --acceptance 'Name the required behaviour'` emits a worker brief with relevant source, architectural rules and runnable checks. Repeat `--path` for the owned files; new files are allowed. The lead supplies the diagnosis and passes the brief to the worker.
 - `python3 -B scripts/codex_checks.py --repo "$PWD" --base origin/main` selects worker checks from committed changes plus tracked and untracked work. `--path` overrides discovery; `--json` emits argv arrays. It reuses the landing gate's package/GPU selectors and UI-flow mappings. It never runs checks, caches passes or replaces the landing gate's reverse-dependency expansion.
-- `python3 -B scripts/codex_usage.py --since 2026-09-10 --repo "$PWD" --json` reports local per-model/task/effort token usage and repeated direct shell calls. Counts are not subscription billing or proof of wasted work. Calls embedded in `functions.exec` are not parsed.
+- `python3 -B scripts/codex_usage.py --since 2026-09-10 --until 2026-09-11 --repo "$PWD" --json` reports local per-model/task/effort token usage and repeated commands. Completed `CommandExecution` transcript items account for nested `functions.exec` calls without interpreting JavaScript. Older sessions without completion items use direct-call attempts; `command_coverage` distinguishes the sources. Bounds are inclusive start, exclusive end. Counts are not subscription billing, successful-task counts or proof of wasted work.
+- `python3 -B scripts/codex_regressions.py --json` verifies source references and emits focused commands for undo/redo, clip non-overlap, MIDI ordering/channel guards, parameter gesture/undo and generator fusion. Worker briefs include applicable evidence. This reference check is enforced at landing; it does not pretend to execute runtime tests or replace broader required gates.
 
 The existing PreToolUse hook supplies matching subsystem rules for native patch
 paths and paths mentioned in agent dispatches, once per distinct guidance block
@@ -31,9 +32,16 @@ Run `python3 -B .codex/hooks/test_context.py` for context delivery tests. The
 check planner selects the individual tool tests; the landing gate enforces
 those same tests when their source or mappings change.
 
-Synthetic hook delivery is tested; desktop delivery still depends on the trusted
-hook definition. Check `/hooks` after updating the harness. No Claude hook or
-provider configuration is changed by these tools.
+Live native-patch guidance was observed in the Luna MIDI test worker on
+2026-09-10, with a parent-session context receipt also verified. Native
+collaboration dispatch did not deliver automatic guidance in that observation;
+the prepared brief is the verified delivery path at dispatch. Keep passing its
+output to workers. No hook definition, Claude hook or provider configuration
+was changed for this verification.
+
+Mutating `cargo fmt` is blocked: even `cargo fmt -- file.rs` can format the
+workspace. Use `rustfmt --config skip_children=true` on exact owned files when
+formatting is needed. `cargo fmt --check` remains read-only and allowed.
 
 Limits: this is workflow enforcement on supported tool calls, not a security
 boundary. Arbitrary shell scripts, MCP writes and interactive stdin are not

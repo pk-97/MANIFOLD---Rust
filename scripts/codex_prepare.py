@@ -50,6 +50,8 @@ def main(argv=None):
         print(f"Check (cwd {check['cwd']}): {shlex.join(check['argv'])}")
     for warning in result["checks"]["warnings"]:
         print(f"Warning: {warning}")
+    for evidence in result["checks"].get("regressions", []):
+        print(f"Regression evidence: {evidence['name']} — {', '.join(evidence['tests'])} ({evidence['source']})")
     if not result["checks"]["checks"]:
         print("No mapped worker checks; lead must choose validation for this scope.")
     return 0
