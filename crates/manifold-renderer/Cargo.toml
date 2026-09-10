@@ -124,6 +124,10 @@ path = "src/bin/render_generator_preset.rs"
 name = "render-import"
 path = "src/bin/render_import.rs"
 
+[[bin]]
+name = "water-stage-profile"
+path = "src/bin/water_stage_profile.rs"
+
 # GPU-proof integration binary: the alpha-contract sweep + generator smoke.
 # Gated behind `gpu-proofs` (see [features]) so it's excluded from the
 # default `cargo test` / `cargo nextest` sweep — run it deliberately with
