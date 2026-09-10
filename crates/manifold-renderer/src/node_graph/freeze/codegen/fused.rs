@@ -938,11 +938,27 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // cs_main-evaluated node reads it coincidentally — a gather-only external is
     // never load-into-register (the body samples it at a coord it computes). ---
     let mut needs_sampler = false;
+    // BUG-ocni: an unwired OPTIONAL gather/gather-texel input (an unwired
+    // coverage-style port) fuses as `Unwired` — the body's injected use flag
+    // gates every read off, so the fused kernel binds a never-read dummy
+    // texture for it (emitted below, before the sampler block). A
+    // stencil_fetch member's unwired sampler-Gather never reaches here
+    // (region.rs keeps rejecting that shape — the stencil fetch fn has no
+    // src to build on), so the predicate doesn't need a stencil carve-out.
+    let mut needs_dummy = false;
     let mut coincident_ext: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for (i, node) in region.nodes.iter().enumerate() {
         for (idx, src) in node.inputs.iter().enumerate() {
             let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
             if access == InputAccess::Gather && matches!(src, InputSource::External(_)) {
+                needs_sampler = true;
+            }
+            if access.is_gather() && matches!(src, InputSource::Unwired) {
+                needs_dummy = true;
+            }
+            // The body takes `samp` as an arg even when a sampler-Gather read
+            // is gated off by its use flag, so the sampler must exist.
+            if access == InputAccess::Gather && matches!(src, InputSource::Unwired) {
                 needs_sampler = true;
             }
             if virtual_nodes.contains(&i) {
@@ -983,6 +999,20 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         }
     }
     let mut next_binding = region.num_external_inputs + 1;
+    // BUG-ocni: the never-read dummy for unwired optional gather inputs,
+    // bound BEFORE the sampler so the sampler keeps its historic binding
+    // index in no-dummy regions (byte-identical WGSL there). `node.
+    // wgsl_compute` parses the `// @dummy_bind` marker and binds its own
+    // 1x1 zero texture at the same slot.
+    if needs_dummy {
+        let marker = Marker::DummyBind.emit();
+        writeln!(
+            out,
+            "@group(0) @binding({next_binding}) var src_dummy: texture_2d<f32>; {marker}"
+        )
+        .unwrap();
+        next_binding += 1;
+    }
     if needs_sampler {
         // The shared gather sampler. A non-default address mode (a toroidal
         // Repeat gradient) is carried as a marker `node.wgsl_compute` reads to
@@ -1243,12 +1273,27 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     }
                     args.push(format!("src_{e}"));
                 }
-                // A gather reading a region register can't be expressed, and a
-                // gather needs a real texture to sample — unwired can't fuse
-                // (the finder already keeps such a member out of regions).
+                // BUG-ocni: an unwired optional gather/gather-texel input
+                // fuses as `Unwired` — its reads are gated off by the
+                // injected use flag, so the body receives the never-read
+                // dummy texture (plus the shared sampler for the
+                // sampler-Gather flavour, whose body signature takes samp
+                // even when gated). Mirrors run()'s dummy-texture bind.
+                (InputAccess::Gather, InputSource::Unwired) => {
+                    args.push("src_dummy".to_string());
+                    args.push("samp".to_string());
+                }
+                (InputAccess::GatherTexel, InputSource::Unwired) => {
+                    args.push("src_dummy".to_string());
+                }
+                // A gather reading a region register can't be expressed —
+                // a register is one texel, not a whole texture. Wired
+                // gather inputs always resolve to an external (the finder
+                // never unions across a gather-consumed wire), so a
+                // Node-source gather is a codegen-shape bug.
                 (
                     InputAccess::Gather | InputAccess::GatherTexel,
-                    InputSource::Node(_) | InputSource::NodeOutput(..) | InputSource::Unwired,
+                    InputSource::Node(_) | InputSource::NodeOutput(..),
                 ) => {
                     return Err(CodegenError::BadInput);
                 }

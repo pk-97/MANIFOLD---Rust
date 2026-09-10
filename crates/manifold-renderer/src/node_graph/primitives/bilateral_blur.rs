@@ -572,7 +572,7 @@ mod gpu_tests {
     use half::f16;
 
     use manifold_gpu::{
-        GpuBinding, GpuComputePipeline, GpuDevice, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
+        GpuBinding, GpuComputePipeline, GpuDevice, GpuTexture, GpuTextureDesc,
         GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
 

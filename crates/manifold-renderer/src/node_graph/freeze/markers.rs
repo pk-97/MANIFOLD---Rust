@@ -82,6 +82,12 @@ pub enum Marker {
     /// `precision_critical` (D6(a)). Lets the fused kernel keep requesting the
     /// fp32 upstream intermediate its members would have requested unfused.
     PrecisionCritical { port: String },
+    /// `// @dummy_bind` — trailing the never-read dummy texture binding the
+    /// fused texture codegen emits for an unwired optional gather/gather-texel
+    /// input (BUG-ocni). `node.wgsl_compute` parses it and marks that sampled
+    /// texture's port OPTIONAL, so an unwired evaluate synthesizes a 1x1 zero
+    /// texture instead of warning out.
+    DummyBind,
 }
 
 impl Marker {
@@ -115,6 +121,7 @@ impl Marker {
             }
             Marker::InputAccess { port, token } => format!("// @input_access: {port} {token}"),
             Marker::PrecisionCritical { port } => format!("// @precision_critical: {port}"),
+            Marker::DummyBind => "// @dummy_bind".to_string(),
         }
     }
 
@@ -174,6 +181,9 @@ impl Marker {
             let name = rest.trim();
             return (!name.is_empty())
                 .then(|| Marker::PrecisionCritical { port: name.to_string() });
+        }
+        if c == "@dummy_bind" {
+            return Some(Marker::DummyBind);
         }
         if let Some(rest) = c.strip_prefix("@derived_uniform_member:") {
             let mut parts = rest.split_whitespace();

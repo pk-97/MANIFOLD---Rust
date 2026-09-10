@@ -1488,6 +1488,66 @@ fn fused_gather_region_matches_unfused() {
     );
 }
 
+/// BUG-ocni value parity: a chain containing `node.bilateral_blur` with its
+/// OPTIONAL coverage input UNWIRED (the Lantern AO-chain shape) fuses into
+/// one kernel — the fused region binds the never-read `src_dummy` for the
+/// unwired gather-texel coverage — and the fused output matches the unfused
+/// chain within the two-sided tolerance. Before BUG-ocni the region refused
+/// to build and this graph rendered as four unfused dispatches; the parity
+/// proof gates both the dummy bind and the fused kernel's values.
+#[test]
+fn ocni_fused_bilateral_unwired_coverage_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "ocni", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.bilateral_blur", "nodeId": "bilat" },
+            { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ],
+        "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "depth" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the bilateral region fuses (BUG-ocni)");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    assert!(
+        r.passes(0.02),
+        "fused bilateral (unwired coverage) region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Tiers 2 + 3 together — the canonical UV-warp. `remap` reads `source` as a
 /// GATHER (samples it at coords from a field) and `uv_field` as a COINCIDENT
 /// register; `uv_field` is a SOURCE generator producing those coords. So
@@ -1498,7 +1558,6 @@ fn fused_gather_region_matches_unfused() {
 #[test]
 fn fused_warp_region_matches_unfused() {
     use super::install::{FusedDef, fuse_canonical_def};
-
     let device = crate::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);

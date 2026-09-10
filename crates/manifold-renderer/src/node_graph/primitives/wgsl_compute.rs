@@ -198,6 +198,12 @@ pub struct WgslCompute {
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
+    /// BUG-ocni: lazily-created 1x1 zero texture bound for an UNWIRED
+    /// OPTIONAL sampled-texture input — the fused region's never-read
+    /// `@dummy_bind` binding (an unwired optional gather input whose reads
+    /// are gated off by its use flag). `textureLoad`/`textureSample` are
+    /// both legal on rgba8unorm.
+    dummy_texture: Option<manifold_gpu::GpuTexture>,
     compiled_hash: Option<u64>,
     compile_failed: bool,
     uniform_scratch: Vec<u8>,
@@ -357,6 +363,7 @@ impl WgslCompute {
             output_formats: AHashMap::new(),
             dispatch_port: None,
             sampler_address_mode: GpuAddressMode::ClampToEdge,
+            dummy_texture: None,
             reset_gated: false,
             source_pure: false,
             last_reset_trigger: None,
@@ -721,6 +728,11 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // them and the resolution block below for what consumes them.
     let camera_externals = extract_camera_externals(source);
     let raw_derived_markers = extract_derived_uniform_markers(source);
+    // BUG-ocni: `// @dummy_bind` on a sampled-texture global (emitted by the
+    // fused-region codegen for a never-read dummy binding — an unwired
+    // optional gather input). The port is OPTIONAL: evaluate() binds its
+    // own 1x1 zero texture when no wire feeds it.
+    let dummy_bind_port = extract_dummy_bind_port(source);
 
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
@@ -792,11 +804,16 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     }
                     match class {
                         naga::ImageClass::Sampled { .. } => {
+                            // BUG-ocni: the `@dummy_bind` sampled texture is
+                            // the fused region's never-read dummy — its port
+                            // is optional and evaluate() synthesizes the
+                            // binding when unwired.
+                            let required = dummy_bind_port.as_ref() != Some(&name);
                             inputs.push(NodePort {
                                 name: Cow::Borrowed(leak_str(&name)),
                                 ty: if is_3d { PortType::Texture3D } else { PortType::Texture2D },
                                 kind: PortKind::Input,
-                                required: true,
+                                required,
                             });
                             bindings.push(BindingSlot {
                                 binding: binding.binding,
@@ -1600,6 +1617,34 @@ fn source_has_pure_marker(source: &str) -> bool {
     stripped.lines().any(|line| matches!(Marker::parse(line), Some(Marker::Pure)))
 }
 
+/// BUG-ocni: scan for the fused-region codegen's `// @dummy_bind` marker and
+/// return the sampled-texture global it tags (`var <name>: texture_2d<f32>;
+/// // @dummy_bind`). That global is the region's never-read dummy for an
+/// unwired optional gather input — its port parses as OPTIONAL so
+/// `evaluate()` synthesizes a 1x1 zero texture when no wire feeds it. Same
+/// source-scan pattern as `extract_camera_externals` (the marker is a
+/// comment naga doesn't surface).
+fn extract_dummy_bind_port(source: &str) -> Option<String> {
+    let stripped = strip_block_comments(source);
+    for line in stripped.lines() {
+        if !matches!(
+            crate::node_graph::freeze::markers::Marker::parse(line),
+            Some(crate::node_graph::freeze::markers::Marker::DummyBind)
+        ) {
+            continue;
+        }
+        let (code, _comment) = split_line_comment(line.trim_start());
+        let code = code.trim();
+        let var_at = code.find("var ")?;
+        let rest = &code[var_at + 4..];
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn extract_fused_outputs(source: &str) -> std::collections::HashSet<String> {
     let stripped = strip_block_comments(source);
     let mut set = std::collections::HashSet::new();
@@ -2210,6 +2255,33 @@ impl EffectNode for WgslCompute {
         let mut buf_refs: Vec<(u32, &manifold_gpu::GpuBuffer)> = Vec::with_capacity(8);
         let mut sampler_refs: Vec<(u32, &GpuSampler)> = Vec::with_capacity(2);
 
+        // BUG-ocni: an unwired OPTIONAL sampled texture (the fused region's
+        // never-read `@dummy_bind`) binds a lazily-created 1x1 zero texture
+        // instead of warning out — its reads are gated off by the body's use
+        // flag. Required-unwired keeps the warn+return below.
+        let needs_dummy_bind = self.bindings.iter().any(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::SampledTexture { port, .. }
+                    if self.inputs.iter().any(|i| i.name == *port && !i.required)
+            )
+        });
+        if needs_dummy_bind && self.dummy_texture.is_none() {
+            let gpu = ctx.gpu_encoder();
+            self.dummy_texture = Some(gpu.device.create_texture(
+                &manifold_gpu::GpuTextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+                    label: "node.wgsl_compute.dummy_bind",
+                    mip_levels: 1,
+                },
+            ));
+        }
+
         for slot in &self.bindings {
             match &slot.kind {
                 BindingKind::Uniform => { /* handled below as Bytes */ }
@@ -2219,11 +2291,25 @@ impl EffectNode for WgslCompute {
                     } else {
                         ctx.inputs.texture_2d(port)
                     };
-                    let Some(tex) = tex else {
-                        log::warn!(
-                            "[node.wgsl_compute] required input texture '{port}' unwired"
-                        );
-                        return;
+                    let tex = match tex {
+                        Some(tex) => tex,
+                        None => {
+                            // Optional (the `@dummy_bind` dummy or a
+                            // hand-authored optional sampled port): bind the
+                            // never-read 1x1 zero texture. Required-unwired
+                            // still warns out.
+                            let optional = self
+                                .inputs
+                                .iter()
+                                .any(|i| i.name == *port && !i.required);
+                            if !optional {
+                                log::warn!(
+                                    "[node.wgsl_compute] required input texture '{port}' unwired"
+                                );
+                                return;
+                            }
+                            self.dummy_texture.as_ref().expect("dummy created above")
+                        }
                     };
                     tex_refs.push((slot.binding, tex));
                 }
@@ -3060,6 +3146,43 @@ struct X {
         assert!(m.is_empty());
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // BUG-ocni: `// @dummy_bind` sampled textures parse as OPTIONAL ports
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ocni_dummy_bind_marker_parses_port_optional() {
+        // The fused-region codegen tags its never-read dummy binding with
+        // `// @dummy_bind`; the port must introspect as OPTIONAL so an
+        // unwired evaluate synthesizes the 1x1 zero texture instead of
+        // warning out.
+        let src = r#"
+@group(0) @binding(0) var src_dummy: texture_2d<f32>; // @dummy_bind
+@group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(0.5, 0.5, 0.5, 1.0));
+}
+"#;
+        let parsed = introspect(src).expect("dummy-bind kernel introspects");
+        let dummy = parsed
+            .inputs
+            .iter()
+            .find(|i| i.name == "src_dummy")
+            .expect("src_dummy input port exists");
+        assert!(!dummy.required, "@dummy_bind port must parse as optional");
+        // Control: the same global without the marker stays REQUIRED.
+        let plain = src.replace("; // @dummy_bind", ";");
+        let parsed_plain = introspect(&plain).expect("plain kernel introspects");
+        let plain_port = parsed_plain
+            .inputs
+            .iter()
+            .find(|i| i.name == "src_dummy")
+            .expect("src_dummy input port exists");
+        assert!(plain_port.required, "unmarked sampled texture stays required");
+    }
+
     #[test]
     fn no_markers_returns_empty_map() {
         let src = "
@@ -3269,8 +3392,7 @@ mod gpu_tests {
     }
 
     #[test]
-    fn default_kernel_dispatches_and_writes_grey_to_output() {
-        let device = crate::test_device();
+    fn default_kernel_dispatches_and_writes_grey_to_output() {        let device = crate::test_device();
         let (w, h) = (32u32, 32u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -3317,6 +3439,78 @@ mod gpu_tests {
                     && (b - 0.5).abs() < tol
                     && (a - 1.0).abs() < tol,
                 "pixel {i}: expected ~(0.5,0.5,0.5,1.0), got ({r},{g},{b},{a})"
+            );
+        }
+    }
+
+    /// BUG-ocni runtime half: an UNWIRED OPTIONAL sampled texture (the
+    /// `@dummy_bind` port) evaluates by binding the lazily-created 1x1
+    /// zero texture instead of warning out. The kernel READS the dummy
+    /// and stores its value, so the assert proves the synthesized binding
+    /// is a real, readable resource — a missing/garbage bind would leave
+    /// the output unwritten or fault the dispatch.
+    #[test]
+    fn ocni_unwired_optional_binds_dummy_at_evaluate() {
+        use crate::node_graph::EffectNode;
+
+        let device = crate::test_device();
+        let (w, h) = (32u32, 32u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut comp = WgslCompute::new();
+        comp.set_wgsl_source(
+            r#"
+@group(0) @binding(0) var src_dummy: texture_2d<f32>; // @dummy_bind
+@group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let m = textureLoad(src_dummy, vec2<i32>(0, 0), 0);
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(m.rgb, 1.0));
+}
+"#,
+        );
+
+        let mut g = Graph::new();
+        let comp = g.add_node(Box::new(comp));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((comp, "output_tex"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let backend = MetalBackend::new(device.arc(), w, h, format);
+        let out_slot = Slot(backend.slot_count());
+        let mut exec = Executor::new(Box::new(backend));
+        let mut native_enc = device.create_encoder("wgsl-compute-dummy-bind");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let out_tex = exec
+            .backend()
+            .texture_2d(out_slot)
+            .expect("final output texture retained");
+        let bytes_per_row = w * 8;
+        let readback = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let mut readback_enc = device.create_encoder("wgsl-compute-dummy-readback");
+        readback_enc.copy_texture_to_buffer(out_tex, &readback, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+
+        let ptr = readback.mapped_ptr().expect("shared buffer pointer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+        let tol = 0.01;
+        for i in 0..(w * h) as usize {
+            let o = i * 4;
+            let r = f16::from_bits(halves[o]).to_f32();
+            let g = f16::from_bits(halves[o + 1]).to_f32();
+            let b = f16::from_bits(halves[o + 2]).to_f32();
+            let a = f16::from_bits(halves[o + 3]).to_f32();
+            assert!(
+                r.abs() < tol && g.abs() < tol && b.abs() < tol && (a - 1.0).abs() < tol,
+                "pixel {i}: the never-read dummy read back ~(0,0,0,1), got ({r},{g},{b},{a})"
             );
         }
     }

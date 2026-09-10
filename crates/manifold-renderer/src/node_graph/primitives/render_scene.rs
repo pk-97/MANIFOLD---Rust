@@ -8567,8 +8567,10 @@ mod tests {
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): camera + envmap +
         // atmosphere + light_0 + object_0 + object_1 — ONE `Object` port
         // per object now, replacing the 21 legacy per-object port families
-        // (mesh_n/material_n/17 maps/transform_n/instances_n).
-        assert_eq!(s.inputs().len(), 3 + 1 + 2);
+        // (mesh_n/material_n/17 maps/transform_n/instances_n). S7 adds the
+        // five optional water inputs (WATER_SIMULATION_DESIGN.md section 7)
+        // to the same declaration list.
+        assert_eq!(s.inputs().len(), 3 + 1 + 2 + 5);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(

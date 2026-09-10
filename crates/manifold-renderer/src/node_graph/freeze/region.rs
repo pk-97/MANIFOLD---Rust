@@ -1568,20 +1568,30 @@ fn build_region(
                 .iter()
                 .find(|w| w.to_node == doc_id && w.to_port == *port)
             else {
-                // No wire into this port. An OPTIONAL coincident input fuses as
-                // `Unwired` (the body's injected use flag gates the read off, the
-                // same contract run() fulfils with a dummy bind) — this is what
-                // lets pack_channels fuse with only r/g wired. Required-unwired
-                // (the node wouldn't render anyway) and gather-unwired (the body
-                // needs a real texture to sample) drop the region — unfused,
-                // always correct.
+                // No wire into this port. An OPTIONAL non-buffer input fuses
+                // as `Unwired` (the body's injected use flag gates the read
+                // off, the same contract run() fulfils with a dummy bind) —
+                // this is what lets pack_channels fuse with only r/g wired.
+                // BUG-ocni: gather-family accesses join that contract — the
+                // fused kernel binds a never-read dummy texture for them
+                // (generate_fused's `src_dummy`), so an unwired optional
+                // coverage-style input no longer drops the whole region.
+                // Two rejections stay. Required-unwired (the node wouldn't
+                // render anyway) and buffer-unwired (the buffer flavour has
+                // no dummy path). And a stencil_fetch member's UNWIRED
+                // sampler-Gather input still drops the region: the
+                // `n{i}_fetch_<port>` fn the stencil ABI synthesizes needs a
+                // real src texture to build, and there is none — narrow
+                // scope, deliberately not covered by the dummy bind.
                 let spec = constructed
                     .inputs()
                     .iter()
                     .find(|i| i.name == *port)
                     .ok_or("port missing from member spec")?;
-                if spec.required || access.is_gather() || is_buffer {
-                    return Err("required/gather/buffer input unwired");
+                let stencil_unwired_gather =
+                    constructed.stencil_fetch() && access == InputAccess::Gather;
+                if spec.required || is_buffer || stencil_unwired_gather {
+                    return Err("required/buffer/stencil-gather input unwired");
                 }
                 inputs.push(RegionInput::Unwired);
                 input_access.push(access);
@@ -2270,6 +2280,287 @@ mod tests {
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    /// BUG-ocni test fixtures: a two-texture atom with an OPTIONAL gather /
+    /// gather-texel `mask` input, in a stencil and a non-stencil variant.
+    /// No shipped atom combines `stencil_fetch` with an optional texture
+    /// input (the S6 bilateral did, pre-revision), so the stencil carve-out
+    /// in `build_region`'s unwired gate needs a local fixture to exercise
+    /// both sides of the branch.
+    #[cfg(test)]
+    mod ocni_fixture {
+        use crate::node_graph::primitive::Primitive;
+
+        // Non-stencil body: the sampler-Gather mask takes (tex, samp) args.
+        const MASK_BODY: &str = r#"
+fn body(c_src: vec4<f32>, tex_mask: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, use_mask: u32) -> vec4<f32> {
+    var v = c_src;
+    if (use_mask != 0u) {
+        let m = textureSampleLevel(tex_mask, samp, uv, 0.0);
+        v = v * m;
+    }
+    return v;
+}
+"#;
+
+        // Stencil body: a stencil_fetch member's sampler-Gather input is
+        // read through the synthesized `fetch_<port>` fn — no (tex, samp)
+        // body args.
+        const MASK_BODY_STENCIL: &str = r#"
+fn body(c_src: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, use_mask: u32) -> vec4<f32> {
+    var v = c_src;
+    if (use_mask != 0u) {
+        let m = fetch_mask(uv);
+        v = v * m;
+    }
+    return v;
+}
+"#;
+
+        crate::primitive! {
+            name: OcniNonStencilFixture,
+            type_id: "node.__ocni_non_stencil",
+            purpose: "BUG-ocni test fixture: non-stencil atom with an optional sampler-Gather mask input, used to prove an unwired optional gather now fuses as Unwired.",
+            inputs: {
+                src: Texture2D required,
+                mask: Texture2D optional,
+            },
+            outputs: {
+                out: Texture2D,
+            },
+            params: [],
+            depth_rule: Terminal,
+            composition_notes: "Test fixture for BUG-ocni; not a palette atom.",
+            examples: [],
+            picker: { label: "Ocni NonStencil Fixture", category: Atom },
+            summary: "BUG-ocni non-stencil test fixture.",
+            category: Mask,
+            role: Filter,
+            aliases: [],
+            fusion_kind: MultiInputCoincident,
+            wgsl_body: MASK_BODY,
+            input_access: [Coincident, Gather],
+        }
+
+        impl Primitive for OcniNonStencilFixture {
+            fn run(&mut self, _ctx: &mut crate::node_graph::effect_node::EffectNodeContext<'_, '_>) {}
+        }
+
+        crate::primitive! {
+            name: OcniStencilFixture,
+            type_id: "node.__ocni_stencil",
+            purpose: "BUG-ocni test fixture: stencil_fetch atom with an optional sampler-Gather mask input, used to prove the stencil carve-out still drops an unwired gather region.",
+            inputs: {
+                src: Texture2D required,
+                mask: Texture2D optional,
+            },
+            outputs: {
+                out: Texture2D,
+            },
+            params: [],
+            depth_rule: Terminal,
+            composition_notes: "Test fixture for BUG-ocni; not a palette atom.",
+            examples: [],
+            picker: { label: "Ocni Stencil Fixture", category: Atom },
+            summary: "BUG-ocni stencil test fixture.",
+            category: Mask,
+            role: Filter,
+            aliases: [],
+            fusion_kind: MultiInputCoincident,
+            wgsl_body: MASK_BODY_STENCIL,
+            input_access: [Coincident, Gather],
+            stencil_fetch: true,
+        }
+
+        impl Primitive for OcniStencilFixture {
+            fn run(&mut self, _ctx: &mut crate::node_graph::effect_node::EffectNodeContext<'_, '_>) {}
+        }
+    }
+
+    /// BUG-ocni codegen: the fused kernel for a region containing a member
+    /// with an unwired optional gather input binds the never-read dummy —
+    /// `src_dummy` with the `// @dummy_bind` marker, emitted BEFORE the
+    /// sampler so no-dummy regions keep byte-identical binding indices —
+    /// and the coverage use flag folds to the literal `0u`. The source
+    /// must naga-parse (wgsl_validation's bar).
+    #[test]
+    fn ocni_fused_region_emits_dummy_bind() {
+        use crate::node_graph::EffectGraphDefExt;
+        use crate::node_graph::freeze::install::FusedDef;
+
+        let registry = registry();
+        let json = r#"{
+            "version": 1, "name": "ocni", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.bilateral_blur", "nodeId": "bilat" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "depth" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let FusedDef { def: fdef, .. } =
+            crate::node_graph::freeze::install::fuse_canonical_def(&def, &registry)
+                .expect("bilateral region with unwired coverage fuses");
+        let graph = fdef.into_graph(&registry).expect("fused graph builds");
+        let src = graph
+            .nodes()
+            .find(|inst| inst.node.type_id().as_str() == "node.wgsl_compute")
+            .and_then(|inst| inst.node.wgsl_source())
+            .expect("fused region's wgsl_compute carries the kernel source");
+
+        assert!(
+            src.contains("src_dummy"),
+            "fused kernel binds src_dummy:\n{src}"
+        );
+        assert!(
+            src.contains(&crate::node_graph::freeze::markers::Marker::DummyBind.emit()),
+            "dummy binding carries the @dummy_bind marker:\n{src}"
+        );
+        // The coverage use flag folds to literal 0u (unwired); the body's
+        // coverage arg is the dummy texture.
+        assert!(
+            src.contains("0u"),
+            "unwired coverage use flag folds to the 0u literal:\n{src}"
+        );
+        let dummy_binding_pos = src.find("var src_dummy").expect("src_dummy declaration");
+        // The sampler only exists when some input is sampler-Gather — this
+        // all-GatherTexel bilateral region has none. When both are present,
+        // the dummy MUST bind before the sampler (the ordering that keeps
+        // no-dummy regions byte-identical); the sampler-Gather fixture covers
+        // that shape.
+        if let Some(sampler_pos) = src.find("var samp") {
+            assert!(
+                dummy_binding_pos < sampler_pos,
+                "src_dummy binds BEFORE the sampler (no-dummy regions stay byte-identical):\n{src}"
+            );
+        }
+        naga::front::wgsl::parse_str(src).expect("fused kernel with dummy bind parses");
+    }
+
+    /// BUG-ocni: an OPTIONAL gather-family texture input with no wire now
+    /// fuses as `RegionInput::Unwired` (the fused kernel binds a never-read
+    /// dummy gated off by the body's use flag) instead of dropping the whole
+    /// region. `node.bilateral_blur`'s coverage is the real-world case: this
+    /// is the regression that unfused Lantern's AO chain.
+    #[test]
+    fn ocni_optional_unwired_gather_input_fuses_as_unwired() {
+        let registry = registry();
+        let json = r#"{
+            "version": 1, "name": "ocni", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.bilateral_blur", "nodeId": "bilat" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "depth" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry);
+        let bilat_region = regions
+            .iter()
+            .find(|r| r.members.iter().any(|m| m.doc_id == 1))
+            .unwrap_or_else(|| panic!("bilateral must fuse with coverage + camera unwired"));
+        let bilat = bilat_region
+            .members
+            .iter()
+            .find(|m| m.doc_id == 1)
+            .expect("bilateral member");
+        // Port order: in, depth, coverage. Coverage is the unwired optional
+        // gather-texel — it must resolve to Unwired, not drop the region.
+        let cov = bilat
+            .inputs
+            .iter()
+            .zip(&bilat.input_access)
+            .enumerate()
+            .find(|(_, (src, access))| {
+                matches!(src, RegionInput::Unwired) && **access == InputAccess::GatherTexel
+            })
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| {
+                panic!(
+                    "bilateral must carry its unwired coverage as RegionInput::Unwired + GatherTexel; inputs={:?} access={:?}",
+                    bilat.inputs, bilat.input_access
+                )
+            });
+        assert_eq!(cov, 2, "the unwired input must be the coverage port (index 2)");
+    }
+
+    /// BUG-ocni negative gate: a REQUIRED gather-family input with no wire
+    /// still drops the region (the node wouldn't render anyway — nothing
+    /// to dummy-bind).
+    #[test]
+    fn ocni_required_unwired_gather_input_still_rejected() {
+        let registry = registry();
+        // depth unwired (required) — only `in` fed.
+        let json = r#"{
+            "version": 1, "name": "ocni", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.bilateral_blur", "nodeId": "bilat" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry);
+        assert!(
+            regions.iter().all(|r| !r.members.iter().any(|m| m.doc_id == 1)),
+            "bilateral with an unwired REQUIRED depth input must not fuse"
+        );
+    }
+
+    /// BUG-ocni stencil carve-out: a `stencil_fetch` member's UNWIRED
+    /// sampler-Gather input still drops the region — the `n{i}_fetch_<port>`
+    /// fn the stencil ABI synthesizes needs a real src texture to build on,
+    /// and the never-read dummy deliberately does not cover that shape.
+    /// The non-stencil sibling (same inputs, no `stencil_fetch`) DOES fuse,
+    /// which is the control proving the carve-out — not eligibility — is
+    /// what keeps the stencil member out.
+    #[test]
+    fn ocni_stencil_unwired_gather_still_rejected() {
+        let registry = registry();
+        for (type_id, should_fuse) in
+            [("node.__ocni_stencil", false), ("node.__ocni_non_stencil", true)]
+        {
+            let json = format!(
+                r#"{{
+                    "version": 1, "name": "ocni", "nodes": [
+                        {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
+                        {{ "id": 1, "typeId": "{type_id}", "nodeId": "fixture" }},
+                        {{ "id": 2, "typeId": "node.invert", "nodeId": "invert" }},
+                        {{ "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }}
+                    ],
+                    "wires": [
+                        {{ "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "src" }},
+                        {{ "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }},
+                        {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }}
+                    ]
+                }}"#
+            );
+            let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+            let regions = partition_regions(&def, &registry);
+            let fused = regions.iter().any(|r| r.members.iter().any(|m| m.doc_id == 1));
+            assert_eq!(
+                fused, should_fuse,
+                "{type_id}: stencil carve-out membership mismatch (mask unwired)"
+            );
+        }
     }
 
     fn colorgrade_def() -> EffectGraphDef {

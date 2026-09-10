@@ -17362,6 +17362,31 @@
           "name": "object_1",
           "required": false,
           "type": "Object"
+        },
+        {
+          "name": "water_depth",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "water_thickness",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "water_normals",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "water_material",
+          "required": false,
+          "type": "Material"
+        },
+        {
+          "name": "water_camera",
+          "required": false,
+          "type": "Camera"
         }
       ],
       "label": "Render Scene",
