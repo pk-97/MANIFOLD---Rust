@@ -197,28 +197,3 @@ pub fn standalone_for_node(
     }
     generate_standalone(&spec)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{standalone_for_node, standalone_for_spec};
-    use crate::node_graph::primitives::{BlobOverlayRender, DrawConnections, DrawDots, DrawGauge,
-        DrawMarkers, DrawTicks};
-
-    fn same<P: crate::node_graph::primitive::Primitive + Default + 'static>() {
-        let typed = standalone_for_spec::<P>().expect("typed standalone codegen");
-        let dynamic = standalone_for_node(&P::default()).expect("dynamic standalone codegen");
-        assert_eq!(dynamic, typed);
-    }
-
-    #[test]
-    fn dynamic_draw_array_kernels_match_typed_codegen() {
-        same::<DrawDots>();
-        same::<DrawConnections>();
-        same::<DrawMarkers>();
-        same::<DrawTicks>();
-        same::<DrawGauge>();
-        let wgsl = standalone_for_node(&BlobOverlayRender::new()).expect("blob overlay codegen");
-        assert!(wgsl.contains("fn cs_main"));
-        assert_eq!(wgsl, standalone_for_spec::<BlobOverlayRender>().unwrap());
-    }
-}

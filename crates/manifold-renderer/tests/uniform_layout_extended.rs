@@ -189,3 +189,31 @@ mod custom {
         assert!(expected.is_empty(), "stale ABI cases: {expected:?}");
     }
 }
+
+#[cfg(test)]
+mod dispatch_regression {
+    use manifold_renderer::node_graph::freeze::codegen::{
+        standalone_for_node, standalone_for_spec,
+    };
+    use manifold_renderer::node_graph::primitives::{
+        BlobOverlayRender, DrawConnections, DrawDots, DrawGauge, DrawMarkers, DrawTicks,
+    };
+
+    fn same<P: manifold_renderer::node_graph::primitive::Primitive + Default + 'static>() {
+        let typed = standalone_for_spec::<P>().expect("typed standalone codegen");
+        let dynamic = standalone_for_node(&P::default()).expect("dynamic standalone codegen");
+        assert_eq!(dynamic, typed);
+    }
+
+    #[test]
+    fn dynamic_draw_array_kernels_match_typed_codegen() {
+        same::<DrawDots>();
+        same::<DrawConnections>();
+        same::<DrawMarkers>();
+        same::<DrawTicks>();
+        same::<DrawGauge>();
+        let wgsl = standalone_for_node(&BlobOverlayRender::new()).expect("blob overlay codegen");
+        assert!(wgsl.contains("fn cs_main"));
+        assert_eq!(wgsl, standalone_for_spec::<BlobOverlayRender>().unwrap());
+    }
+}
