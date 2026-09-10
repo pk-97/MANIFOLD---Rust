@@ -144,6 +144,11 @@ crate::primitive! {
         // both shader-read and storage-write in a dispatch is a hazard,
         // so the dummy is dedicated, never the output.
         dummy_texture: Option<manifold_gpu::GpuTexture> = None,
+        // Cache of the `value_space` param that drives output_format
+        // (compile-time). 0 = RawColour (the pre-S6 default: backend
+        // Rgba16Float out); 1 = ClipDepth (R32Float out). Written by
+        // reconfigure (param writes) and re-asserted by run.
+        value_space_mode: u32 = 0,
     },
 }
 
@@ -176,15 +181,37 @@ inventory::submit! {
     }
 }
 
+/// Single source of truth for the `value_space` param resolution —
+/// shared by `run()` (per-frame), `reconfigure()` (param writes) and
+/// the `output_format` cache they both feed, so the three can never
+/// drift. 0 = RawColour (default), 1 = ClipDepth.
+fn resolve_value_space(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+    match params.get("value_space") {
+        Some(ParamValue::Enum(v)) => (*v).min(1),
+        Some(ParamValue::Float(f)) => (f.round() as u32).min(1),
+        _ => 0,
+    }
+}
+
 impl Primitive for BilateralBlur {
-    /// S6: `out` carries clip depth in ClipDepth mode — fp32 only, no f16
-    /// depth feedback (docs/WATER_SIMULATION_DESIGN.md section 7).
-    /// RawColour values are stored losslessly in f32 as well.
+    /// S6: `out` carries clip depth in ClipDepth mode — fp32 only, no
+    /// f16 depth feedback (docs/WATER_SIMULATION_DESIGN.md section 7).
+    /// RawColour keeps the backend default (Rgba16Float): an
+    /// unconditional R32Float pin would drop g/b for rgb consumers of a
+    /// materialized output and expose them to the unfilterable-r32float
+    /// sampler read (`node.mix` defaults to Coincident). The mode is
+    /// recorded by `reconfigure` (param writes, before compile queries
+    /// formats) and re-asserted by `run` (covers the
+    /// `set_param_unchecked` hot path, which skips reconfigure).
     fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
         match port {
-            "out" => Some(manifold_gpu::GpuTextureFormat::R32Float),
+            "out" if self.value_space_mode == 1 => Some(manifold_gpu::GpuTextureFormat::R32Float),
             _ => None,
         }
+    }
+
+    fn reconfigure(&mut self, params: &crate::node_graph::effect_node::ParamValues) {
+        self.value_space_mode = resolve_value_space(params);
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -197,11 +224,11 @@ impl Primitive for BilateralBlur {
             Some(ParamValue::Float(f)) => f.max(1e-4),
             _ => 0.1,
         };
-        let value_space = match ctx.params.get("value_space") {
-            Some(ParamValue::Enum(v)) => (*v).min(1),
-            Some(ParamValue::Float(f)) => (f.round() as u32).min(1),
-            _ => 0,
-        };
+        let value_space = resolve_value_space(ctx.params);
+        // Re-assert the cached mode (reconfigure is skipped on the
+        // set_param_unchecked hot path; output_format reads the cache at
+        // plan-compile time).
+        self.value_space_mode = value_space;
 
         let cam = ctx
             .inputs
@@ -349,14 +376,31 @@ mod tests {
     }
 
     #[test]
-    fn out_port_is_fp32_for_clipdepth() {
-        // S6: `out` carries clip depth in ClipDepth mode — fp32 only, no
-        // f16 depth feedback (design section 7).
-        let prim = BilateralBlur::new();
-        assert_eq!(
-            crate::node_graph::primitive::Primitive::output_format(&prim, "out"),
-            Some(manifold_gpu::GpuTextureFormat::R32Float)
-        );
+    fn out_port_format_follows_value_space_mode() {
+        use crate::node_graph::effect_node::EffectNode;
+
+        let fmt = |prim: &BilateralBlur| {
+            crate::node_graph::primitive::Primitive::output_format(prim, "out")
+        };
+        let mut params = crate::node_graph::effect_node::ParamValues::default();
+
+        // Unset / RawColour (the pre-S6 default): backend default
+        // Rgba16Float — an unconditional fp32 pin would drop g/b for
+        // rgb consumers of a materialized output and expose them to the
+        // unfilterable-r32float sampler read.
+        let mut prim = BilateralBlur::new();
+        assert_eq!(fmt(&prim), None);
+
+        // ClipDepth: fp32 only, no f16 depth feedback (design section 7).
+        params.insert(std::borrow::Cow::Borrowed("value_space"), ParamValue::Enum(1));
+        EffectNode::reconfigure(&mut prim, &params);
+        assert_eq!(fmt(&prim), Some(manifold_gpu::GpuTextureFormat::R32Float));
+
+        // Back to RawColour: default again (the cache is re-written, not
+        // sticky).
+        params.insert(std::borrow::Cow::Borrowed("value_space"), ParamValue::Enum(0));
+        EffectNode::reconfigure(&mut prim, &params);
+        assert_eq!(fmt(&prim), None);
     }
 
     #[test]
@@ -993,7 +1037,8 @@ mod gpu_tests {
     }
 
     /// Dispatch into an R32Float output (ClipDepth's real output format —
-    /// `output_format("out")` is R32Float since S6).
+    /// `output_format("out")` is R32Float in ClipDepth mode, Rgba16F in
+    /// RawColour).
     fn dispatch_r32(
         device: &GpuDevice,
         pipeline: &GpuComputePipeline,

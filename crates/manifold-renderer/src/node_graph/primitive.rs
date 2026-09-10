@@ -273,6 +273,17 @@ pub trait Primitive: PrimitiveSpec {
     /// definition.
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
+    /// Mirror of [`EffectNode::reconfigure`](crate::node_graph::effect_node::EffectNode::reconfigure).
+    /// Default no-op. Override to react to a param change that alters
+    /// compile-time-queried surface — port shape (`node.render_scene`'s
+    /// `objects`/`lights`) or [`output_format`](Self::output_format)
+    /// (`node.bilateral_blur`'s `value_space`). The blanket
+    /// `EffectNode` impl below delegates here so macro-authored
+    /// primitives observe the same reconfigure points as hand-written
+    /// ones: `NodeInstance::new` (param defaults) and every real param
+    /// write, both before `compile()` queries outputs.
+    fn reconfigure(&mut self, _params: &crate::node_graph::effect_node::ParamValues) {}
+
     /// Mirror of [`EffectNode::late_capture`](crate::node_graph::effect_node::EffectNode::late_capture).
     /// Default no-op. Override on stateful primitives that declare
     /// [`state_capture_input_ports`](Self::state_capture_input_ports)
@@ -640,6 +651,9 @@ pub trait Primitive: PrimitiveSpec {
 impl<P: Primitive + 'static> EffectNode for P {
     fn type_id(&self) -> &EffectNodeType {
         P::cached_type_id()
+    }
+    fn reconfigure(&mut self, params: &crate::node_graph::effect_node::ParamValues) {
+        Primitive::reconfigure(self, params);
     }
     fn inputs(&self) -> &[NodeInput] {
         P::INPUTS

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 278 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 281 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 278 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (63)
+### 3D Geometry (64)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -196,6 +196,7 @@ _Generated from the node registry. Do not hand-edit. 278 nodes registered, group
 | Morph Targets Blend | `node.morph_targets_blend` | Filter | Blends an imported mesh's morph targets by their live animated weights — the GPU counterpart to a Morph Weights node's sampled weight vector. |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
+| Normals From Depth | `node.normals_from_depth` | Filter | Builds perspective-correct surface normals from a depth map, keeping silhouettes and depth layers sharp by only trusting covered neighbours. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
 | Plane Mesh | `node.plane_mesh` | Source | Builds a flat rectangular sheet of mesh ready to skin with another layer's output. The surface for placing live video in a 3D scene. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
@@ -262,7 +263,7 @@ _Generated from the node registry. Do not hand-edit. 278 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (26)
+### Particles 3D (28)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -277,6 +278,8 @@ _Generated from the node registry. Do not hand-edit. 278 nodes registered, group
 | MPM Grid Velocity | `node.mpm_grid_velocity` | Filter | Turns the grid's accumulated momentum into cell velocities, adds gravity, and stops the wall and floor cells from pushing into the basin. |
 | MPM Scatter (mass+momentum) | `node.mpm_scatter_mass_momentum` | Filter | Splats each water particle's mass and momentum onto the grid of cells around it, in exact fixed-point arithmetic. |
 | MPM Scatter (stress) | `node.mpm_scatter_stress` | Filter | Recomputes each water particle's density from the grid and pushes the pressure-and-viscosity stress back onto the grid. |
+| Particle Surface Depth | `node.particle_surface_depth` | Filter | Renders water particles as depth-tested sphere impostors — the surface depth map the rest of the water shading builds on. |
+| Particle Thickness | `node.particle_thickness` | Filter | Accumulates how much water each view ray passes through — the approximate optical thickness refraction needs. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
