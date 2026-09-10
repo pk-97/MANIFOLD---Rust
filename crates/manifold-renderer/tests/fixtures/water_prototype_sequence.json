@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "comment": "WATER_IMPLEMENTATION_PLAN.md S8 capture schedule for WaterPrototype.json at the fixed 60 Hz / 120 BPM context (1 beat = 30 frames): still 0-59, pour 60-119 (15000 particles/s of simulation time), stop at 120, cube strokes on beats 6/7/8/9 (frames 180/210/240/270) with a half-beat return between dips, settle to 599. Keys are the preset's exposed outer-card params.",
+  "events": [
+    { "frame": 60, "params": { "pourRate": 15000.0 } },
+    { "frame": 120, "params": { "pourRate": 0.0 } },
+    { "frame": 180, "params": { "cubeStrike": 1.0 } },
+    { "frame": 195, "params": { "cubeStrike": 0.0 } },
+    { "frame": 210, "params": { "cubeStrike": 1.0 } },
+    { "frame": 225, "params": { "cubeStrike": 0.0 } },
+    { "frame": 240, "params": { "cubeStrike": 1.0 } },
+    { "frame": 255, "params": { "cubeStrike": 0.0 } },
+    { "frame": 270, "params": { "cubeStrike": 1.0 } },
+    { "frame": 285, "params": { "cubeStrike": 0.0 } }
+  ]
+}
