@@ -15,6 +15,7 @@ use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand,
     SetDriverFreePeriodCommand, ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
+    ToggleDriverFrameAlignedCommand,
 };
 use manifold_editing::commands::audio_mod::{
     AddAudioModCommand, RemoveAudioModCommand, SetAudioModActionCommand, SetAudioModShapeCommand,
@@ -75,6 +76,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         trim_max: 1.0,
                         reversed: false,
                         free_period_beats: None,
+            frame_aligned: false,
                         legacy_param_index: None,
                         is_paused_by_user: false,
                     };
@@ -551,11 +553,11 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
                         .map(|di| {
                             let d = &inst.drivers.as_ref().unwrap()[di];
-                            (di, d.beat_division, d.waveform, d.reversed, d.free_period_beats)
+                            (di, d.beat_division, d.waveform, d.reversed, d.free_period_beats, d.frame_aligned)
                         })
                 })
                 .flatten();
-            if let Some((di, beat_division, waveform, reversed, free)) = info {
+            if let Some((di, beat_division, waveform, reversed, free, frame_aligned)) = info {
                 type BoxedCmd = Box<dyn manifold_editing::command::Command + Send>;
                 // The feel segment sets the division's modifier from its base; a
                 // base without a dotted/triplet variant (e.g. 1/32) keeps the base.
@@ -605,6 +607,9 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         di,
                         reversed,
                         !reversed,
+                    )) as BoxedCmd),
+                    DriverConfigAction::ToggleFrameAligned => Some(Box::new(ToggleDriverFrameAlignedCommand::new(
+                        driver_target, di, frame_aligned, !frame_aligned,
                     )) as BoxedCmd),
                     DriverConfigAction::SetFreePeriod(p) => {
                         Some(Box::new(SetDriverFreePeriodCommand::new(

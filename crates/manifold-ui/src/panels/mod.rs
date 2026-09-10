@@ -92,6 +92,8 @@ pub enum DriverConfigAction {
     Triplet,
     /// Toggle output-polarity invert (`reversed`).
     Invert,
+    /// Quantize the period to output frames, releasing exact beat sync.
+    ToggleFrameAligned,
     /// Set the free-running period in beats (free mode). From the type-in commit.
     SetFreePeriod(f32),
 }

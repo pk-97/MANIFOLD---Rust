@@ -925,6 +925,7 @@ impl PlaybackEngine {
             crate::modulation::evaluate_modulation(
                 project,
                 Beats(self.current_beat),
+                Seconds(self.current_time_double),
                 ctx.dt_seconds,
                 audio,
                 &mut timing,
@@ -1035,6 +1036,7 @@ impl PlaybackEngine {
                 crate::modulation::evaluate_modulation(
                     project,
                     Beats(self.current_beat),
+                    Seconds(self.current_time_double),
                     ctx.dt_seconds,
                     audio,
                     &mut timing,

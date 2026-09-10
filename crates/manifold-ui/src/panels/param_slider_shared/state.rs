@@ -17,6 +17,7 @@ pub(crate) struct DriverConfigIds {
     pub(crate) free_btn_id: NodeId,
     /// Output polarity invert (`reversed` -> `1 - value`).
     pub(crate) invert_btn_id: NodeId,
+    pub(crate) frame_align_btn_id: NodeId,
     pub(crate) wave_btn_ids: [NodeId; WAVEFORM_COUNT],
 }
 
@@ -114,6 +115,8 @@ pub struct ParamModState {
     /// mode** (`Some`), else `None` for sync mode (grid/feel). Drives the Free
     /// field's label + highlight and the type-in prefill.
     pub driver_free_period: Vec<Option<f32>>,
+    pub driver_frame_aligned: Vec<bool>,
+    pub driver_frame_rate: Vec<Option<(u32, f32)>>,
 
     // ── Audio modulation (per-param + card-level send list) ──
     /// Per-param: an audio modulation exists and is enabled (button highlight +
@@ -419,6 +422,8 @@ impl ParamModState {
             driver_dotted: vec![false; param_count],
             driver_triplet: vec![false; param_count],
             driver_free_period: vec![None; param_count],
+            driver_frame_aligned: vec![false; param_count],
+            driver_frame_rate: vec![None; param_count],
             audio_active: vec![false; param_count],
             audio_send_idx: vec![-1; param_count],
             audio_kind_idx: vec![0; param_count],
@@ -498,6 +503,8 @@ impl ParamModState {
             self.driver_dotted[i] = row.driver_dotted;
             self.driver_triplet[i] = row.driver_triplet;
             self.driver_free_period[i] = row.driver_free_period;
+            self.driver_frame_aligned[i] = row.driver_frame_aligned;
+            self.driver_frame_rate[i] = row.driver_frame_rate;
             self.automation_active[i] = row.automation_active;
             self.automation_overridden[i] = row.automation_overridden;
         }

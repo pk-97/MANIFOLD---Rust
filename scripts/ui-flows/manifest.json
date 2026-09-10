@@ -29,6 +29,7 @@
       "calibrated-param"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
+      "frame-align-lfo",
       "inspector",
       "select-and-inspect",
       "set-param",
@@ -59,6 +60,7 @@
       "param-step"
     ],
     "crates/manifold-ui/src/panels/param_slider_shared/": [
+      "frame-align-lfo",
       "inspector",
       "set-param",
       "envelope-modulation",
@@ -87,6 +89,7 @@
     ]
   },
   "flows": {
+    "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
     "automation-placeholder-first-click": "automationplaceholder",
     "bug060-inspector-footer-containment": "bug060",

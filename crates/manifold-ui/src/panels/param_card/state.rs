@@ -179,6 +179,9 @@ pub struct RowMod {
     pub driver_triplet: bool,
     /// Driver free-running period in beats (`Some` => free mode).
     pub driver_free_period: Option<f32>,
+    pub driver_frame_aligned: bool,
+    /// Effective cycle frames and Hz, projected only when frame alignment is on.
+    pub driver_frame_rate: Option<(u32, f32)>,
     /// An enabled automation lane (≥1 point) exists on this instance for
     /// this param — drives the red "automated" dot (P4 section 7).
     pub automation_active: bool,
@@ -205,6 +208,8 @@ impl Default for RowMod {
             driver_dotted: false,
             driver_triplet: false,
             driver_free_period: None,
+            driver_frame_aligned: false,
+            driver_frame_rate: None,
             automation_active: false,
             automation_overridden: false,
         }
