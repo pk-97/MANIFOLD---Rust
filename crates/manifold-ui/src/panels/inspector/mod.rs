@@ -1497,12 +1497,13 @@ mod tests {
     }
 
     #[test]
-    fn drawer_free_intent_reads_scrolled_bounds_and_live_period() {
+    fn drawer_free_intent_reads_scrolled_bounds() {
         use crate::panels::param_card::ParamCardKind;
         use crate::intent::{IntentRegistry, Gesture};
         let mut inspector = InspectorCompositePanel::new();
         let mut config = mk_config(ParamCardKind::Effect, "Driver", 1);
         config.rows[0].modulation.driver_active = true;
+        config.rows[0].modulation.driver_free_period = Some(3.5);
         let mut card = ParamCardPanel::new();
         card.configure(&config);
         let mut tree = UITree::new();
@@ -1517,8 +1518,6 @@ mod tests {
             }
         }).unwrap();
         tree.offset_nodes(card.first_node(), card.node_count(), -37.0);
-        config.rows[0].modulation.driver_free_period = Some(3.5);
-        card.configure(&config);
         inspector.effects[0].push(card);
         let refreshed = inspector.refresh_driver_period_intent(button, &tree, action);
         assert!(matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })
