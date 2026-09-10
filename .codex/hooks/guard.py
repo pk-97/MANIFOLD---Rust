@@ -372,9 +372,36 @@ def permit_check(session_id, command, worktree, reason, attempts):
         path.write_text(json.dumps(data))
 
 
-def main():
+def advisory_context(event):
+    """Deliver each distinct guidance block once per session, without granting permission."""
     try:
-        reason = evaluate(json.load(sys.stdin))
+        context = load("codex_context", ROOT / ".codex/hooks/context.py").context_for_event(event, ROOT)
+        if not context:
+            return ""
+        if not event.get("session_id"):
+            return context
+        path = state_path(event).with_suffix(".context.json")
+        with path.open("a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            handle.seek(0)
+            seen = json.loads(handle.read() or "[]")
+            key = hashlib.sha256(context.encode()).hexdigest()
+            if key in seen:
+                return ""
+            seen.append(key)
+            handle.seek(0)
+            handle.truncate()
+            json.dump(seen, handle)
+        return context
+    except (ValueError, KeyError, OSError, TypeError, ImportError, AttributeError) as exc:
+        return f"MANIFOLD subsystem guidance unavailable ({type(exc).__name__}: {exc}); use scripts/codex_prepare.py to diagnose. Existing guards still apply."
+
+
+def main():
+    event = {}
+    try:
+        event = json.load(sys.stdin)
+        reason = evaluate(event)
     except ValueError as exc:
         reason = str(exc)
     except (KeyError, OSError, TypeError, subprocess.SubprocessError) as exc:
@@ -382,6 +409,11 @@ def main():
     if reason:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
               "permissionDecision": "deny", "permissionDecisionReason": reason}}))
+    else:
+        context = advisory_context(event)
+        if context:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                              "additionalContext": context}}))
 
 
 if __name__ == "__main__":

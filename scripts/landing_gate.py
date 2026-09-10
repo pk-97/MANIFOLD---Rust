@@ -80,27 +80,24 @@ def parse_package_from_cargo(toml_path):
         return m.group(1)
     return None
 
+def packages_for_paths(repo, paths):
+    packages = []
+    for path in paths:
+        parts = path.split("/")
+        if len(parts) >= 2 and parts[0] == "crates":
+            manifest = Path(repo) / "crates" / parts[1] / "Cargo.toml"
+            if manifest.exists():
+                name = parse_package_from_cargo(manifest)
+                if name and name not in packages:
+                    packages.append(name)
+    return packages
+
 
 def get_touched_packages(repo, base_sha):
     """Parse changed crate names from diff --name-only."""
     changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
                       cwd=repo, timeout=300)[1]
-    packages = []
-    seen = set()
-    for line in changed.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("/")
-        if len(parts) >= 2 and parts[0] == "crates":
-            crate_dir = parts[1]
-            manifest = Path(repo) / "crates" / crate_dir / "Cargo.toml"
-            if manifest.exists():
-                name = parse_package_from_cargo(manifest)
-                if name and name not in seen:
-                    packages.append(name)
-                    seen.add(name)
-    return packages
+    return packages_for_paths(repo, [line.strip() for line in changed.splitlines() if line.strip()])
 
 
 def _path_is_gpu(path):
@@ -237,6 +234,21 @@ def main():
     touches_gpu = touches_gpu_path(repo, base_sha)
 
     results = []
+
+    # Harness changes use the same focused tests advertised in worker briefs.
+    from codex_checks import tooling_checks
+    exit_, changed, err, _ = run_cmd(
+        ["git", "diff", "--name-only", "--no-renames", "-z", f"{base_sha}..HEAD"],
+        cwd=repo, timeout=300)
+    if exit_:
+        print(f"[FAIL] harness scope: {err}")
+        return 1
+    for check in tooling_checks(repo, [p for p in changed.split("\0") if p]):
+        exit_, out, err, duration = run_cmd(check["argv"], cwd=repo, timeout=120)
+        tail = (out + err).rstrip().splitlines()[-20:]
+        status = "PASS" if exit_ == 0 else "FAIL"
+        results.append((status, check["name"], duration, tail))
+        print_result(check["name"], status, duration, tail if exit_ else None)
 
     # a. design-status
     exit_, out, err, duration = run_cmd(
