@@ -58,7 +58,14 @@ fn water_presets_keep_stationary_camera_and_solver_geometry() {
         let group_nodes = scene.get("group").and_then(|g| g.get("nodes")).and_then(serde_json::Value::as_array).expect("scene nodes");
         assert!(group_nodes.iter().all(|node| node.get("nodeId") != Some(&serde_json::Value::String("orbitSweep".into()))));
         let camera = group_nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String("camera".into()))).expect("camera node");
-        assert_eq!(camera["params"]["orbit"]["value"].as_f64(), Some(0.698132));
+        let expected_orbit = if source == WATER_JSON { -2.9670597 } else { 0.698132 };
+        assert_eq!(camera["params"]["orbit"]["value"].as_f64(), Some(expected_orbit));
+        if source == WATER_JSON {
+            for (node_id, expected) in [("wallSObj", 0.0), ("wallWObj", 0.0), ("wallNObj", 1.0), ("wallEObj", 1.0)] {
+                let node = group_nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String(node_id.into()))).expect("basin wall object");
+                assert_eq!(node["params"].get("visible").and_then(serde_json::Value::as_object).and_then(|p| p.get("value")).and_then(serde_json::Value::as_f64).unwrap_or(1.0), expected);
+            }
+        }
         for (id, x) in [("strip0Xform", -0.9375), ("strip1Xform", -0.5625), ("strip2Xform", -0.1875), ("strip3Xform", 0.1875), ("strip4Xform", 0.5625), ("strip5Xform", 0.9375)] {
             let node = group_nodes.iter().find(|node| node.get("nodeId") == Some(&serde_json::Value::String(id.into()))).expect("floor transform");
             assert_eq!(node["params"]["pos_x"]["value"].as_f64(), Some(x));

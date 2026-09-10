@@ -301,9 +301,10 @@ a parallel copy of pre-stress particle records.
 
 **Fixed point:** signed i32, initial scale Q=1,048,576 (2^20) for mass and momentum. Round each
 contribution to nearest integer consistently; divide by Q on resolve. Negative
-momentum remains signed. Use checked atomic compare/exchange accumulation, with
-overflow setting a sticky status bit and retaining a representable value. No wrapped
-atomicAdd accepted as data. A direct 27-weight mass check rejected Q=4096
+momentum remains signed. Use checked atomic accumulation, with
+overflow setting a sticky status bit. The paired grid scratch is invalid and
+discarded whenever status is nonzero; no wrapped atomicAdd can reach accepted
+particle state. A direct 27-weight mass check rejected Q=4096
 (2.4–4.8% error on simple lattice positions); Q=2^20 gave 0–0.0125% on those
 fixtures. This is not the S1 transfer proof. Q is a documented proof parameter: compare against an
 f64 reference before approving it. The kernel must also detect float-to-int overflow
@@ -517,6 +518,14 @@ water incremental GPU cost p95 <=6 ms and total scene GPU p95 <=12 ms, memory
 increment <=128 MiB. These are budget targets to measure on Peter's available Mac,
 whose exact chip/OS/build must be recorded. No 4K or larger-particle promise. A miss
 stops expansion; report the slow stage rather than silently reducing quality.
+
+Closeout benchmark evidence (2026-09-10): the corrected 1280×720 WaterPrototype
+cutaway measured 15.911 ms median and 16.867 ms p95 over frames 60..599 with no
+fault. The earlier baseline was 26.683 ms median and 27.721 ms p95 (frames 60..89);
+the accepted atomic-only comparison was 14.569/14.763 ms over the same early window.
+These are headless wall timings before native-app overhead, so the p95 still misses
+the 60 FPS frame budget. The surface A/B retained the original radius and accepted
+bilateral spatial step 2; the rejected radius reduction is not a design baseline.
 
 Numerical acceptance: partition-of-unity <=1e-6; GPU/f64 one-step velocity error
 <=1e-3 m/s and position error <=1e-5 m for the transfer fixture; mass error <=0.5%

@@ -6,8 +6,8 @@
 // candidate particle record (never an in-place cross-thread mutation), and
 // adds the stress momentum -4*dt*V_p/h^2 * w * sigma*d to the momentum cells
 // with V_p = m_p/rho_p and sigma = -p*I + mu*(C + C^T). Mass cells are never
-// modified by this stage. Momentum accumulation uses the same checked
-// compare/exchange fixed-point path as the mass/momentum scatter.
+// modified by this stage. Momentum accumulation uses the same checked atomic
+// add path as the mass/momentum scatter; faulted scratch is discarded.
 //
 // Codegen gap (reported, S4): mixed outputs from one invocation — an atomic
 // grid output (out) plus a coincident particle output (particles_out) —
@@ -132,32 +132,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let sd = -press * d + WATER_MU * (cd + ctd);
                 let stress = factor * w * sd;
 
-                // Checked fixed-point accumulation — same CAS contract as the
-                // mass/momentum scatter (see that kernel; inlined here because
-                // WGSL user-function pointer parameters must be function
-                // address space).
+                // Atomic addition returns the pre-add value, which is enough
+                // to detect signed overflow. Faulted scratch is discarded by
+                // the downstream status-gated commit.
                 var ok = true;
                 var qmom = water_quantise(stress.x, &ok);
                 if (!ok) {
                     atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
                     ok = true;
                 } else if (qmom != 0) {
-                    var cell_old = atomicLoad(&buf_accumulator[cell * 4u]);
-                    var settled = false;
-                    for (var attempt = 0u; attempt < WATER_CAS_RETRIES; attempt = attempt + 1u) {
-                        if (water_add_overflows(cell_old, qmom)) {
-                            atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
-                            settled = true;
-                            break;
-                        }
-                        let r = atomicCompareExchangeWeak(&buf_accumulator[cell * 4u], cell_old, cell_old + qmom);
-                        if (r.exchanged) {
-                            settled = true;
-                            break;
-                        }
-                        cell_old = r.old_value;
-                    }
-                    if (!settled) {
+                    let cell_old = atomicAdd(&buf_accumulator[cell * 4u], qmom);
+                    if (water_add_overflows(cell_old, qmom)) {
                         atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
                     }
                 }
@@ -166,22 +151,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
                     ok = true;
                 } else if (qmom != 0) {
-                    var cell_old = atomicLoad(&buf_accumulator[cell * 4u + 1u]);
-                    var settled = false;
-                    for (var attempt = 0u; attempt < WATER_CAS_RETRIES; attempt = attempt + 1u) {
-                        if (water_add_overflows(cell_old, qmom)) {
-                            atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
-                            settled = true;
-                            break;
-                        }
-                        let r = atomicCompareExchangeWeak(&buf_accumulator[cell * 4u + 1u], cell_old, cell_old + qmom);
-                        if (r.exchanged) {
-                            settled = true;
-                            break;
-                        }
-                        cell_old = r.old_value;
-                    }
-                    if (!settled) {
+                    let cell_old = atomicAdd(&buf_accumulator[cell * 4u + 1u], qmom);
+                    if (water_add_overflows(cell_old, qmom)) {
                         atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
                     }
                 }
@@ -190,22 +161,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
                     ok = true;
                 } else if (qmom != 0) {
-                    var cell_old = atomicLoad(&buf_accumulator[cell * 4u + 2u]);
-                    var settled = false;
-                    for (var attempt = 0u; attempt < WATER_CAS_RETRIES; attempt = attempt + 1u) {
-                        if (water_add_overflows(cell_old, qmom)) {
-                            atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
-                            settled = true;
-                            break;
-                        }
-                        let r = atomicCompareExchangeWeak(&buf_accumulator[cell * 4u + 2u], cell_old, cell_old + qmom);
-                        if (r.exchanged) {
-                            settled = true;
-                            break;
-                        }
-                        cell_old = r.old_value;
-                    }
-                    if (!settled) {
+                    let cell_old = atomicAdd(&buf_accumulator[cell * 4u + 2u], qmom);
+                    if (water_add_overflows(cell_old, qmom)) {
                         atomicOr(&buf_status_out[0], WATER_FAULT_INTEGER_OVERFLOW);
                     }
                 }

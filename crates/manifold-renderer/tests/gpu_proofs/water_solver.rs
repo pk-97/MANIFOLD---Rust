@@ -973,7 +973,9 @@ fn water_signed_scatter_and_overflow() {
     );
 
     // Forced overflow: park one target cell just under i32::MAX, scatter one
-    // more contribution onto it, expect the sticky bit and NO wrap.
+    // more contribution onto it, and require the sticky bit. The accumulator
+    // is invalid scratch after a fault; downstream validate/commit tests prove
+    // the accepted particle state remains byte-identical.
     let single = [make_particle(
         lattice_pos([20.0, 20.0, 20.0]),
         [0.0, 0.0, 0.0],
@@ -1034,16 +1036,155 @@ fn water_signed_scatter_and_overflow() {
         0,
         "forced overflow must stick FAULT_INTEGER_OVERFLOW"
     );
-    let gpu2 = read_accum(&accum2);
+    // Feed the same sticky overflow through validation and commit. Even with
+    // a clean candidate, the latched fault must retain the prior accepted
+    // bytes; this is the end-to-end retention guarantee for wrapped scratch.
+    let accepted_overflow = particle_buffer(1);
+    let candidate_overflow = particle_buffer(1);
+    let committed_overflow = particle_buffer(1);
+    let mut changed_candidate = single;
+    changed_candidate[0].position_mass[0] += 0.01;
+    changed_candidate[0].velocity_density[0] = 0.5;
+    write_particles(&accepted_overflow, &single);
+    write_particles(&candidate_overflow, &changed_candidate);
+    assert_ne!(
+        bytemuck::cast_slice::<WaterParticle, u8>(&single),
+        bytemuck::cast_slice::<WaterParticle, u8>(&changed_candidate),
+        "overflow retention fixture must distinguish accepted and candidate"
+    );
+    let validate_u = ValidateUniforms {
+        validate_count: 1,
+        velocity_bound: VELOCITY_BOUND,
+        affine_bound: AFFINE_BOUND,
+        density_max: 4.0 * REST_DENSITY,
+    };
+    let commit_u = CommitUniforms { dispatch_count: 1, _pad0: 0, _pad1: 0, _pad2: 0 };
+    let mut validate_enc = device().create_encoder("water-overflow-validate");
+    validate_enc.dispatch_compute(
+        &kernels().validate,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&validate_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &candidate_overflow, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &status2, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &status2, offset: 0 },
+        ],
+        ceil256(1),
+        "node.water_validate",
+    );
+    validate_enc.commit_and_wait_completed();
+    let mut commit_enc = device().create_encoder("water-overflow-commit");
+    commit_enc.dispatch_compute(
+        &kernels().commit,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&commit_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &accepted_overflow, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &candidate_overflow, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &status2, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: &committed_overflow, offset: 0 },
+        ],
+        ceil256(1),
+        "node.water_commit",
+    );
+    commit_enc.commit_and_wait_completed();
+    let committed_bytes = bytemuck::cast_slice::<WaterParticle, u8>(&read_particles(&committed_overflow, 1)).to_vec();
+    let accepted_bytes = bytemuck::cast_slice::<WaterParticle, u8>(&read_particles(&accepted_overflow, 1)).to_vec();
+    assert_eq!(committed_bytes, accepted_bytes, "overflowed scratch must not escape into accepted particle state");
+    unsafe { status2.write(0, bytemuck::bytes_of(&0u32)); }
+    let mut clean_commit = device().create_encoder("water-clean-commit-control");
+    clean_commit.dispatch_compute(
+        &kernels().commit,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&commit_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &accepted_overflow, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &candidate_overflow, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &status2, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: &committed_overflow, offset: 0 },
+        ],
+        ceil256(1),
+        "node.water_commit",
+    );
+    clean_commit.commit_and_wait_completed();
     assert_eq!(
-        gpu2[centre * 4 + 3],
-        near_max,
-        "overflowing cell must retain its last representable value, got {}",
-        gpu2[centre * 4 + 3]
+        bytemuck::cast_slice::<WaterParticle, u8>(&read_particles(&committed_overflow, 1)),
+        bytemuck::cast_slice::<WaterParticle, u8>(&changed_candidate),
+        "clean status control must accept the changed candidate"
+    );
+
+    // Negative momentum overflow under deterministic contention: each of 4096
+    // contributors is individually representable, but their same-cell sum
+    // crosses i32::MIN. This exercises the atomicAdd path without relying on
+    // a race-dependent mixed-sign ordering.
+    let mut negative_particles = vec![single[0]; 4096];
+    for p in &mut negative_particles {
+        p.velocity_density[0] = -1.0;
+    }
+    let negative_particles_buf = particle_buffer(negative_particles.len());
+    write_particles(&negative_particles_buf, &negative_particles);
+    let negative_accum = device().create_buffer_shared(ACCUM_BYTES);
+    negative_accum.zero_fill();
+    unsafe {
+        negative_accum.write(
+            (centre * 4) as u64 * 4,
+            bytemuck::bytes_of(&(i32::MIN + 1)),
+        );
+    }
+    let negative_status = device().create_buffer_shared(4);
+    negative_status.zero_fill();
+    let mut negative_enc = device().create_encoder("water-negative-contention");
+    negative_enc.dispatch_compute(
+        &kernels().scatter_mass,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&manifold_renderer::node_graph::primitives::ScatterMassUniforms { active_count: 4096, _pad0: 0, _pad1: 0, _pad2: 0 }) },
+            GpuBinding::Buffer { binding: 1, buffer: &negative_particles_buf, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &negative_accum, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &negative_status, offset: 0 },
+        ],
+        ceil256(4096),
+        "node.mpm_scatter_mass_momentum",
+    );
+    negative_enc.commit_and_wait_completed();
+    assert_ne!(read_status(&negative_status) & FAULT_INTEGER_OVERFLOW, 0, "negative contention overflow must stick");
+    let negative_accepted = particle_buffer(1);
+    let negative_candidate = particle_buffer(1);
+    let negative_committed = particle_buffer(1);
+    write_particles(&negative_accepted, &single);
+    write_particles(&negative_candidate, &changed_candidate);
+    let mut negative_validate = device().create_encoder("water-negative-validate");
+    negative_validate.dispatch_compute(
+        &kernels().validate,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&validate_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &negative_candidate, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &negative_status, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &negative_status, offset: 0 },
+        ],
+        ceil256(1),
+        "node.water_validate",
+    );
+    negative_validate.commit_and_wait_completed();
+    let mut negative_commit = device().create_encoder("water-negative-commit");
+    negative_commit.dispatch_compute(
+        &kernels().commit,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&commit_u) },
+            GpuBinding::Buffer { binding: 1, buffer: &negative_accepted, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &negative_candidate, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &negative_status, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: &negative_committed, offset: 0 },
+        ],
+        ceil256(1),
+        "node.water_commit",
+    );
+    negative_commit.commit_and_wait_completed();
+    assert_eq!(
+        bytemuck::cast_slice::<WaterParticle, u8>(&read_particles(&negative_committed, 1)),
+        bytemuck::cast_slice::<WaterParticle, u8>(&read_particles(&negative_accepted, 1)),
+        "negative overflow scratch must not escape into accepted state"
     );
     // Neighbour cells took their w0*w1*w1 = 0.0703125 contributions normally
     // (frac 1.0 per axis: 0.125 / 0.75 / 0.125).
     let neigh = WATER_DOMAIN.grid_index(19, 20, 20);
+    let gpu2 = read_accum(&accum2);
     assert_eq!(gpu2[neigh * 4 + 3], quantise(0.0703125 * PARTICLE_MASS));
 }
 

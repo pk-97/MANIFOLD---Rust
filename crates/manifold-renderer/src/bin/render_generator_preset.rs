@@ -24,6 +24,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
@@ -40,6 +41,7 @@ const DT: f32 = 1.0 / 60.0;
 
 struct Args {
     preset: String,
+    preset_file: Option<PathBuf>,
     width: u32,
     height: u32,
     frames: u32,
@@ -60,6 +62,11 @@ struct Args {
     sequence_dir: Option<PathBuf>,
     /// Parameter schedule for sequence mode (see module doc).
     schedule: Option<PathBuf>,
+    /// Capture every Nth sequence frame while still stepping every frame.
+    capture_stride: u32,
+    /// Optional PNG contact sheet assembled from captured sequence frames.
+    contact_sheet: Option<PathBuf>,
+    timing_output: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -67,6 +74,7 @@ fn parse_args() -> Result<Args, String> {
     let preset = argv.next().ok_or("usage: render-generator-preset <PresetId> [--size WxH] [--frames N] [--out PATH] [--param id=value ...]")?;
     let mut args = Args {
         preset,
+        preset_file: None,
         width: 1280,
         height: 720,
         frames: 90,
@@ -76,6 +84,9 @@ fn parse_args() -> Result<Args, String> {
         max_frames: 300,
         sequence_dir: None,
         schedule: None,
+        capture_stride: 1,
+        contact_sheet: None,
+        timing_output: None,
     };
     while let Some(flag) = argv.next() {
         let value = argv
@@ -89,6 +100,7 @@ fn parse_args() -> Result<Args, String> {
                 args.width = w.parse().map_err(|e| format!("bad width: {e}"))?;
                 args.height = h.parse().map_err(|e| format!("bad height: {e}"))?;
             }
+            "--preset-file" => args.preset_file = Some(PathBuf::from(value)),
             "--frames" => {
                 args.frames = value.parse().map_err(|e| format!("bad frames: {e}"))?;
             }
@@ -108,6 +120,14 @@ fn parse_args() -> Result<Args, String> {
             }
             "--sequence-dir" => args.sequence_dir = Some(PathBuf::from(value)),
             "--schedule" => args.schedule = Some(PathBuf::from(value)),
+            "--capture-stride" => {
+                args.capture_stride = value.parse().map_err(|e| format!("bad capture-stride: {e}"))?;
+                if args.capture_stride == 0 {
+                    return Err("--capture-stride must be greater than zero".to_string());
+                }
+            }
+            "--contact-sheet" => args.contact_sheet = Some(PathBuf::from(value)),
+            "--timing-output" => args.timing_output = Some(PathBuf::from(value)),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -278,10 +298,26 @@ fn main() {
         eprintln!("error: --schedule requires --sequence-dir");
         std::process::exit(2);
     }
+    if args.frames == 0 {
+        eprintln!("error: --frames must be greater than zero");
+        std::process::exit(2);
+    }
+    if (args.capture_stride != 1 || args.contact_sheet.is_some() || args.timing_output.is_some())
+        && args.sequence_dir.is_none()
+    {
+        eprintln!("error: capture stride, contact sheet, and timing output require --sequence-dir");
+        std::process::exit(2);
+    }
+    if args.timing_output.is_some() && args.frames < 90 {
+        eprintln!("error: --timing-output requires at least 90 frames");
+        std::process::exit(2);
+    }
 
-    let json_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets/generator-presets")
-        .join(format!("{}.json", args.preset));
+    let json_path = args.preset_file.clone().unwrap_or_else(|| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/generator-presets")
+            .join(format!("{}.json", args.preset))
+    });
     let json = std::fs::read_to_string(&json_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", json_path.display()));
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse preset JSON");
@@ -352,6 +388,9 @@ fn main() {
         // readback here is artifact generation, not a timing measurement.
         std::fs::create_dir_all(dir)
             .unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+        let mut captured: Vec<(u32, image::RgbaImage)> = Vec::new();
+        let mut mapping: Vec<serde_json::Value> = Vec::new();
+        let mut timing_samples: Vec<f64> = Vec::with_capacity(args.frames.saturating_sub(60) as usize);
         let mut next_event = 0usize;
         for frame in 0..args.frames {
             if next_event < schedule.len() && schedule[next_event].frame == frame {
@@ -371,6 +410,7 @@ fn main() {
                 );
                 next_event += 1;
             }
+            let render_start = Instant::now();
             render_frame(
                 &device,
                 &mut runtime,
@@ -382,10 +422,73 @@ fn main() {
                 args.height,
                 args.trigger_every,
             );
-            let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height);
-            let path = dir.join(format!("frame_{frame:06}.png"));
-            std::fs::write(&path, &png)
+            if args.timing_output.is_some() && frame >= 60 {
+                timing_samples.push(render_start.elapsed().as_secs_f64() * 1000.0);
+            }
+            if let Some(err) = runtime.runtime_fatal_error() {
+                panic!("render-generator-preset frame {frame}: {err}");
+            }
+            if frame % args.capture_stride == 0 || frame + 1 == args.frames {
+                let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height);
+                let path = dir.join(format!("frame_{frame:06}.png"));
+                std::fs::write(&path, &png)
+                    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+                if args.contact_sheet.is_some() {
+                    let image = image::load_from_memory(&png)
+                        .unwrap_or_else(|e| panic!("decode {}: {e}", path.display()))
+                        .resize(320, 180, image::imageops::FilterType::Triangle)
+                        .to_rgba8();
+                    captured.push((frame, image));
+                    mapping.push(serde_json::json!({
+                        "frame": frame,
+                        "timeSeconds": frame as f64 * DT as f64,
+                        "path": path.display().to_string(),
+                    }));
+                }
+            }
+        }
+        if let Some(path) = &args.contact_sheet {
+            let columns = (captured.len().max(1) as f32).sqrt().ceil() as u32;
+            let rows = (captured.len() as u32).div_ceil(columns);
+            let tile_width = 320;
+            let tile_height = 180;
+            let sheet_width = columns * tile_width;
+            let sheet_height = rows * tile_height;
+            let mut sheet = image::RgbaImage::new(sheet_width, sheet_height);
+            for (index, (frame, image)) in captured.iter().enumerate() {
+                let x = (index as u32 % columns) * tile_width;
+                let y = (index as u32 / columns) * tile_height;
+                image::imageops::overlay(&mut sheet, image, i64::from(x), i64::from(y));
+                println!("contact sheet tile frame={frame} x={x} y={y}");
+            }
+            sheet.save(path).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+            println!("contact sheet: {} ({} frames, {}x{})", path.display(), captured.len(), sheet_width, sheet_height);
+            let sidecar = path.with_extension("json");
+            let sidecar_text = serde_json::to_string_pretty(&mapping)
+                .expect("serialize contact-sheet mapping");
+            std::fs::write(&sidecar, sidecar_text)
+                .unwrap_or_else(|e| panic!("write {}: {e}", sidecar.display()));
+            println!("contact sheet mapping: {}", sidecar.display());
+        }
+        if let Some(path) = &args.timing_output {
+            timing_samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let percentile = |pct: usize| timing_samples[((timing_samples.len() * pct) / 100).min(timing_samples.len() - 1)];
+            let mean = timing_samples.iter().sum::<f64>() / timing_samples.len() as f64;
+            let timing = serde_json::json!({
+                "measurement": "wall frame cost: encode + submit + GPU wait; excludes PNG readback, encoding, and file writes",
+                "nativeAppFpsClaim": false,
+                "width": args.width,
+                "height": args.height,
+                "totalFrames": args.frames,
+                "sampleFrames": format!("60..{}", args.frames - 1),
+                "samples": timing_samples,
+                "medianMs": percentile(50),
+                "p95Ms": percentile(95),
+                "meanMs": mean,
+            });
+            std::fs::write(path, serde_json::to_string_pretty(&timing).unwrap())
                 .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+            println!("timing: {} (wall frame cost, frames 60..{})", path.display(), args.frames - 1);
         }
     } else {
         // BUG-117: async-loading primitives (large glTF, image_folder, DNN

@@ -9,10 +9,10 @@
 // Invariants carried here (design docs/WATER_SIMULATION_DESIGN.md section 5):
 // - Quadratic B-spline weights partition unity; fractions f in [0.5, 1.5).
 // - Grid accumulation is signed fixed-point Q = 2^20, round-to-nearest,
-//   checked compare/exchange adds only — a wrapped atomicAdd is never data.
+//   atomic adds; a nonzero status invalidates the scratch grid.
 // - Quantisation faults (NaN, ±inf, float-to-int overflow) and checked-add
-//   overflow/retries-exhausted all stick FAULT_INTEGER_OVERFLOW and retain the
-//   last representable cell value.
+//   overflow all stick FAULT_INTEGER_OVERFLOW; faulted scratch is discarded
+//   before particle state can be accepted.
 
 const WATER_GRID_N: u32 = 64u;            // nodes per axis, 64^3 grid
 const WATER_H: f32 = 0.0625;              // grid spacing h, metres
@@ -22,14 +22,6 @@ const WATER_FIXED_SCALE: f32 = 1048576.0; // Q = 2^20
 const WATER_RHO0: f32 = 1000.0;           // rest density kg/m^3
 const WATER_C0_SQ_OVER_7: f32 = 100000.0 / 7.0; // rho0 * c0^2 / 7
 const WATER_MU: f32 = 0.001;              // dynamic viscosity Pa*s
-// Bounded CAS attempts per contribution. Sized against worst-case per-cell
-// contention: a cell in a dense pool is written by ~k = 16-32 particles per
-// substep, each CAS attempt wins the cell with probability >= 1/k, so
-// P(2048 consecutive losses) <= e^(-2048/32) = e^-64 — never observed across
-// a show's ~1e11 contributions, while staying a hard bound with sticky-fault
-// evidence rather than an unbounded spin.
-const WATER_CAS_RETRIES: u32 = 2048u;
-
 const WATER_FAULT_NONFINITE: u32 = 1u;
 const WATER_FAULT_INTEGER_OVERFLOW: u32 = 2u;
 const WATER_FAULT_OUTSIDE_DOMAIN: u32 = 4u;

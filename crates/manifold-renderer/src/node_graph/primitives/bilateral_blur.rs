@@ -62,16 +62,17 @@ pub const BILATERAL_BLUR_AXES: &[&str] = &["Horizontal", "Vertical"];
 /// clip depth and averages in linear eye depth.
 pub const BILATERAL_BLUR_VALUE_SPACES: &[&str] = &["RawColour", "ClipDepth"];
 
-/// Generated-codegen uniform layout: the three PARAMS (`axis`,
-/// `depth_sigma`, `value_space`) in declaration order, then the two DERIVED
+/// Generated-codegen uniform layout: the four PARAMS (`axis`,
+/// `depth_sigma`, `spatial_step`, `value_space`) in declaration order, then the two DERIVED
 /// fields (`near`, `far`) in declaration order, then the injected
-/// `use_coverage` flag — one f32/u32 word each. 6 words = 24 bytes, no
+/// `use_coverage` flag — one f32/u32 word each. 7 words = 28 bytes, no
 /// padding needed.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BilateralBlurUniforms {
     axis: u32,
     depth_sigma: f32,
+    spatial_step: f32,
     value_space: u32,
     near: f32,
     far: f32,
@@ -87,6 +88,7 @@ crate::primitive! {
         depth: Texture2D required,
         camera: Camera optional,
         coverage: Texture2D optional,
+        spatial_step: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -106,6 +108,14 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(0.1),
             range: Some((0.001, 5.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("spatial_step"),
+            label: "Spatial Step",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 4.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -224,6 +234,7 @@ impl Primitive for BilateralBlur {
             Some(ParamValue::Float(f)) => f.max(1e-4),
             _ => 0.1,
         };
+        let spatial_step = ctx.scalar_or_param("spatial_step", 1.0).clamp(1.0, 4.0);
         let value_space = resolve_value_space(ctx.params);
         // Re-assert the cached mode (reconfigure is skipped on the
         // set_param_unchecked hot path; output_format reads the cache at
@@ -279,6 +290,7 @@ impl Primitive for BilateralBlur {
         let uniforms = BilateralBlurUniforms {
             axis,
             depth_sigma,
+            spatial_step,
             value_space,
             near,
             far,
@@ -345,7 +357,7 @@ mod tests {
 
         assert_eq!(BilateralBlur::TYPE_ID, "node.bilateral_blur");
         let names: Vec<&str> = BilateralBlur::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["in", "depth", "camera", "coverage"]);
+        assert_eq!(names, vec!["in", "depth", "camera", "coverage", "spatial_step"]);
         assert_eq!(BilateralBlur::INPUTS[0].ty, PortType::Texture2D);
         assert!(BilateralBlur::INPUTS[0].required);
         assert_eq!(BilateralBlur::INPUTS[1].ty, PortType::Texture2D);
@@ -365,9 +377,9 @@ mod tests {
     #[test]
     fn has_axis_depth_sigma_and_value_space_params() {
         let names: Vec<&str> = BilateralBlur::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["axis", "depth_sigma", "value_space"]);
+        assert_eq!(names, vec!["axis", "depth_sigma", "spatial_step", "value_space"]);
         // RawColour default keeps unwired/pre-S6 behaviour byte-identical.
-        assert_eq!(BilateralBlur::PARAMS[2].default, ParamValue::Enum(0));
+        assert_eq!(BilateralBlur::PARAMS[3].default, ParamValue::Enum(0));
     }
 
     #[test]
@@ -404,8 +416,8 @@ mod tests {
     }
 
     #[test]
-    fn uniform_struct_is_24_bytes() {
-        assert_eq!(std::mem::size_of::<BilateralBlurUniforms>(), 24);
+    fn uniform_struct_is_28_bytes() {
+        assert_eq!(std::mem::size_of::<BilateralBlurUniforms>(), 28);
     }
 
     #[test]
@@ -731,6 +743,7 @@ mod gpu_tests {
             let uniforms = BilateralBlurUniforms {
                 axis,
                 depth_sigma: 0.1,
+                spatial_step: 1.0,
                 value_space: 0,
                 near,
                 far,
@@ -756,6 +769,7 @@ mod gpu_tests {
                 }
             }
         }
+
     }
 
     /// **I7b — `bilateral_depth_edge_no_bleed`**: a hard step-edge depth
@@ -843,6 +857,7 @@ mod gpu_tests {
         let uniforms = BilateralBlurUniforms {
             axis: 0,
             depth_sigma,
+            spatial_step: 1.0,
             value_space: 0,
             near,
             far,
@@ -885,6 +900,7 @@ mod gpu_tests {
             let uniforms = BilateralBlurUniforms {
                 axis,
                 depth_sigma,
+                spatial_step: 1.0,
                 value_space: 0,
                 near,
                 far,
@@ -943,6 +959,7 @@ mod gpu_tests {
         let uniforms = BilateralBlurUniforms {
             axis,
             depth_sigma,
+            spatial_step: 1.0,
             value_space,
             near,
             far,
@@ -1109,6 +1126,7 @@ mod gpu_tests {
             let uniforms = BilateralBlurUniforms {
                 axis,
                 depth_sigma,
+                spatial_step: 1.0,
                 value_space: 1,
                 near,
                 far,
@@ -1183,6 +1201,7 @@ mod gpu_tests {
             let uniforms = BilateralBlurUniforms {
                 axis,
                 depth_sigma,
+                spatial_step: 1.0,
                 value_space: 0,
                 near,
                 far,
@@ -1239,6 +1258,29 @@ mod gpu_tests {
         }
     }
 
+    #[test]
+    fn bilateral_wider_spatial_step_stays_finite_and_coverage_safe() {
+        let device = crate::test_device();
+        let (w, h) = (24u32, 8u32);
+        let half = w / 2;
+        let depth = vec![0.2f32; (w * h) as usize];
+        let color: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| if i % w < half { [0.2, 0.25, 0.5, 1.0] } else { [0.8, 0.75, 0.5, 1.0] })
+            .collect();
+        let coverage: Vec<f32> = (0..w * h).map(|i| if i % w < half { 1.0 } else { 0.0 }).collect();
+        let depth_tex = upload_depth(&device, w, h, &depth);
+        let color_tex = upload_color(&device, w, h, &color);
+        let coverage_tex = upload_coverage(&device, w, h, &coverage);
+        let uniforms = BilateralBlurUniforms { axis: 0, depth_sigma: 0.15, spatial_step: 2.0, value_space: 0, near: 0.1, far: 100.0, use_coverage: 1 };
+        let out = dispatch(&device, &generated_pipeline(&device, "bilateral-step2"), &color_tex, &depth_tex, Some(&coverage_tex), w, h, bytemuck::bytes_of(&uniforms));
+        assert!(out.iter().all(|p| p.iter().all(|v| v.is_finite())));
+        let empty = ((h / 2) * w + (w - 1)) as usize;
+        let q = |v: f32| f16::from_f32(v).to_f32();
+        assert_eq!(out[empty], [q(color[empty][0]), q(color[empty][1]), q(color[empty][2]), q(color[empty][3])]);
+        let foreground = ((h / 2) * w + half - 1) as usize;
+        assert!(out[foreground][0] < 0.5);
+    }
+
     /// **S6 fused-region uniform layout**: the standalone kernel the freeze
     /// compiler would inline must declare the fields in the exact order
     /// run() packs bytemuck-side — params (declaration order), then the
@@ -1248,7 +1290,7 @@ mod gpu_tests {
     fn bilateral_s6_uniform_layout_matches_generated_kernel() {
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<BilateralBlur>()
             .expect("node.bilateral_blur standalone codegen");
-        for field in ["axis: u32", "depth_sigma: f32", "value_space: u32", "near: f32", "far: f32", "use_coverage: u32"] {
+        for field in ["axis: u32", "depth_sigma: f32", "spatial_step: f32", "value_space: u32", "near: f32", "far: f32", "use_coverage: u32"] {
             assert!(wgsl.contains(field), "generated kernel missing `{field}`");
         }
         // The body references the S6 conversion from the shared include.

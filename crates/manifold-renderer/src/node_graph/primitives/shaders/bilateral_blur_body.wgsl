@@ -8,7 +8,7 @@
 // Single-axis, depth-guided (bilateral) blur: pair an H pass with a V pass
 // for a 2D edge-aware blur (docs/CINEMATIC_POST_DESIGN.md D8).
 //
-// Fixed 9 taps at 1-texel spacing along `axis`. weight_j = K9_j *
+// Fixed 9 taps at configurable integer texel spacing along `axis`. weight_j = K9_j *
 // exp(-(dz_j / depth_sigma)^2), where K9_j are the SAME sigma~=2 gaussian
 // constants used by every other 9-tap kernel in this codebase (VBW_K9 /
 // SG_K9_* — see gaussian_blur_variable_width_body.wgsl / separable_gaussian_
@@ -94,6 +94,7 @@ fn body(
     dims: vec2<f32>,
     axis: u32,
     depth_sigma: f32,
+    spatial_step: f32,
     value_space: u32,
     near: f32,
     far: f32,
@@ -126,31 +127,32 @@ fn body(
         acc = vec3<f32>(linearize_depth(center.r, near, far)) * BB_K9_0;
     }
 
-    let s1p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel, dims_i).r < 0.5;
-    let s1m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel, dims_i).r < 0.5;
-    let t1p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, 1, BB_K9_1, z_center, inv_sigma, near, far, value_space, s1p);
-    let t1m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -1, BB_K9_1, z_center, inv_sigma, near, far, value_space, s1m);
+    let step = max(round(spatial_step), 1.0);
+    let s1p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * i32(step), dims_i).r < 0.5;
+    let s1m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * i32(step), dims_i).r < 0.5;
+    let t1p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, i32(step), BB_K9_1, z_center, inv_sigma, near, far, value_space, s1p);
+    let t1m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -i32(step), BB_K9_1, z_center, inv_sigma, near, far, value_space, s1m);
     acc += t1p.rgb + t1m.rgb;
     wsum += t1p.a + t1m.a;
 
-    let s2p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * 2, dims_i).r < 0.5;
-    let s2m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * 2, dims_i).r < 0.5;
-    let t2p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, 2, BB_K9_2, z_center, inv_sigma, near, far, value_space, s2p);
-    let t2m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -2, BB_K9_2, z_center, inv_sigma, near, far, value_space, s2m);
+    let s2p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * i32(2.0 * step), dims_i).r < 0.5;
+    let s2m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * i32(2.0 * step), dims_i).r < 0.5;
+    let t2p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, i32(2.0 * step), BB_K9_2, z_center, inv_sigma, near, far, value_space, s2p);
+    let t2m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -i32(2.0 * step), BB_K9_2, z_center, inv_sigma, near, far, value_space, s2m);
     acc += t2p.rgb + t2m.rgb;
     wsum += t2p.a + t2m.a;
 
-    let s3p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * 3, dims_i).r < 0.5;
-    let s3m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * 3, dims_i).r < 0.5;
-    let t3p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, 3, BB_K9_3, z_center, inv_sigma, near, far, value_space, s3p);
-    let t3m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -3, BB_K9_3, z_center, inv_sigma, near, far, value_space, s3m);
+    let s3p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * i32(3.0 * step), dims_i).r < 0.5;
+    let s3m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * i32(3.0 * step), dims_i).r < 0.5;
+    let t3p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, i32(3.0 * step), BB_K9_3, z_center, inv_sigma, near, far, value_space, s3p);
+    let t3m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -i32(3.0 * step), BB_K9_3, z_center, inv_sigma, near, far, value_space, s3m);
     acc += t3p.rgb + t3m.rgb;
     wsum += t3p.a + t3m.a;
 
-    let s4p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * 4, dims_i).r < 0.5;
-    let s4m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * 4, dims_i).r < 0.5;
-    let t4p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, 4, BB_K9_4, z_center, inv_sigma, near, far, value_space, s4p);
-    let t4m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -4, BB_K9_4, z_center, inv_sigma, near, far, value_space, s4m);
+    let s4p = use_coverage != 0u && bb_load_at(coverage_tex, c + axis_dir_texel * i32(4.0 * step), dims_i).r < 0.5;
+    let s4m = use_coverage != 0u && bb_load_at(coverage_tex, c - axis_dir_texel * i32(4.0 * step), dims_i).r < 0.5;
+    let t4p = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, i32(4.0 * step), BB_K9_4, z_center, inv_sigma, near, far, value_space, s4p);
+    let t4m = bb_tap(in_tex, depth_tex, c, dims_i, axis_dir_texel, -i32(4.0 * step), BB_K9_4, z_center, inv_sigma, near, far, value_space, s4m);
     acc += t4p.rgb + t4m.rgb;
     wsum += t4p.a + t4m.a;
 
