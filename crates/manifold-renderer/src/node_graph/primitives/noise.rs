@@ -30,7 +30,7 @@ use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct NoiseUniforms {
-    noise_type: i32,
+    noise_type: u32,
     scale: f32,
     offset_x: f32,
     offset_y: f32,
@@ -161,7 +161,7 @@ impl Primitive for Noise {
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = NoiseUniforms {
-            noise_type,
+            noise_type: noise_type as u32,
             scale,
             offset_x,
             offset_y,

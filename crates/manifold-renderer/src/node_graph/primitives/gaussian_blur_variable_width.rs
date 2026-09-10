@@ -37,8 +37,8 @@ pub const BLUR_VARIABLE_WEIGHTINGS: &[&str] = &["None", "ScatterAsGatherByCoC"];
 struct BlurUniforms {
     direction: u32,
     max_radius: f32,
-    _pad0: u32,
-    _pad1: u32,
+    quality: u32,
+    weighting_mode: u32,
 }
 
 crate::primitive! {
@@ -180,8 +180,8 @@ impl Primitive for GaussianBlurVariableWidth {
         let uniforms = BlurUniforms {
             direction,
             max_radius,
-            _pad0: 0,
-            _pad1: 0,
+            quality,
+            weighting_mode: weighting,
         };
 
         dispatch_standalone_2d(

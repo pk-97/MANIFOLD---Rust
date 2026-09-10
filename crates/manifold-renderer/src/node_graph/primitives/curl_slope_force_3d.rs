@@ -40,8 +40,8 @@ use super::standalone_pipeline::standalone_pipeline;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CurlSlope3DUniforms {
-    vol_res: u32,
-    vol_depth: u32,
+    vol_res: i32,
+    vol_depth: i32,
     curl_strength: f32,
     slope_strength: f32,
     ref_axis_x: f32,
@@ -175,8 +175,8 @@ impl Primitive for CurlSlopeForce3D {
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
 
         let uniforms = CurlSlope3DUniforms {
-            vol_res,
-            vol_depth,
+            vol_res: vol_res as i32,
+            vol_depth: vol_depth as i32,
             curl_strength,
             slope_strength,
             ref_axis_x,
