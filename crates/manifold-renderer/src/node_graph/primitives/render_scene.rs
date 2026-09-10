@@ -2446,13 +2446,20 @@ impl RenderScene {
         {
             return;
         }
+        // SHADER_WRITE (blit copy destination — the E2a/water pass copies
+        // the resolved scene in EVERY frame) + RENDER_TARGET (the mip
+        // regen that copy triggers requires it). SHADER_READ alone left
+        // both as silent no-ops: the snapshot stayed at its zeroed
+        // creation contents and every refraction sample read black.
         self.opaque_scene_color = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
             depth: 1,
             format,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                | manifold_gpu::GpuTextureUsage::RENDER_TARGET,
             label: "node.render_scene opaque scene color (E2b transmission snapshot)",
             mip_levels: manifold_gpu::GpuTextureDesc::max_mip_levels(width, height),
         }));
@@ -3851,9 +3858,16 @@ fn validate_water_material(m: &crate::node_graph::material::Material) -> Result<
     if m.alpha_mode != AlphaMode::Opaque {
         return Err(format!("alpha_mode must be Opaque, got {:?}", m.alpha_mode));
     }
+    // `cel_bands` and the emission ALPHA slot are deliberately NOT
+    // rejected: `Material::pbr` inherits `Material::default()`'s
+    // `cel_bands = 4` (a dead field for Pbr — cel shading only engages
+    // for `MaterialKind::Cel`, rejected above), and `premultiply_emission`
+    // hardwires emission alpha to 1.0 even for black emission — neither is
+    // a user-controllable feature on the pbr node, so rejecting either
+    // would fail every graph-authored PBR material.
     if m.clearcoat > 0.0 || m.sheen_color_factor.iter().any(|c| *c > 0.0) || m.iridescence_factor > 0.0
         || m.anisotropy_strength > 0.0 || m.dispersion > 0.0 || m.translucency > 0.0
-        || m.cel_bands > 0 || m.emission.iter().any(|c| *c > 0.0)
+        || m.emission[..3].iter().any(|c| *c > 0.0)
     {
         return Err("clearcoat/sheen/iridescence/anisotropy/dispersion/translucency/cel/emission are unsupported on V1 water".to_string());
     }

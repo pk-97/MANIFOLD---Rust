@@ -87,7 +87,13 @@ fn fs_water(in: VsOut) -> FsOut {
     let raw = textureLoad(water_depth, coord, 0).r;
     let view_pos = view_pos_of(in.uv, raw);
     let n_view = normalize(nrm.xyz);
-    let n = normalize((u.inv_view * vec4<f32>(n_view, 0.0)).xyz);
+    // Frame bridge: normals_from_depth emits view normals in the splat
+    // frame (+z toward the camera — see splat_view_center's z negation),
+    // while inv_view is right-handed (-z forward). Negating z once maps
+    // between the frames; without it the surface normal points INTO the
+    // scene, ndotv clamps to 0, fresnel saturates to 1 and the shading
+    // collapses to the reflection term alone.
+    let n = normalize((u.inv_view * vec4<f32>(n_view.x, n_view.y, -n_view.z, 0.0)).xyz);
     let v = normalize(-(u.inv_view * vec4<f32>(view_pos, 0.0)).xyz);
 
     // Shorten the optical thickness to the first opaque hit behind the water.
