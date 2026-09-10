@@ -4,6 +4,7 @@ import unittest
 import subprocess
 from pathlib import Path
 import sys
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent))
 
 import codex_checks
@@ -29,7 +30,8 @@ class PlannerTests(unittest.TestCase):
             repo = Path(d)
             (repo / "scripts/ui-flows").mkdir(parents=True)
             (repo / "scripts/ui-flows/manifest.json").write_text('{"path_triggers": {}}')
-            plan = codex_checks.build_plan(repo, ["scripts/run_ui_flows.py"])
+            with patch("codex_regressions.inventory", return_value=[]):
+                plan = codex_checks.build_plan(repo, ["scripts/run_ui_flows.py"])
             self.assertEqual(plan["checks"][0]["argv"], ["python3", "-B", str(repo.resolve() / "scripts/test_codex_checks.py")])
 
     def test_real_package_and_tooling_scopes(self):

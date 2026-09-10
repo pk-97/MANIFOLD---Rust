@@ -38,9 +38,14 @@ def tooling_checks(repo, paths):
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/ui-flows/manifest.json"},
         "scripts/test_codex_prepare.py": {"scripts/codex_prepare.py", "scripts/codex_subsystems.json", "scripts/test_codex_prepare.py", "scripts/codex_checks.py"},
         "scripts/test_codex_usage.py": {"scripts/codex_usage.py", "scripts/test_codex_usage.py"},
+        "scripts/test_codex_regressions.py": {"scripts/codex_regressions.py", "scripts/codex_regressions.json", "scripts/test_codex_regressions.py", "scripts/codex_checks.py", "scripts/ui-flows/manifest.json"},
         ".codex/hooks/test_guard.py": {".codex/hooks/guard.py", ".codex/hooks/test_guard.py", ".codex/hooks.json"},
         ".codex/hooks/test_context.py": {".codex/hooks/guard.py", ".codex/hooks/context.py", ".codex/hooks/test_context.py", "scripts/codex_prepare.py", "scripts/codex_subsystems.json", ".codex/hooks.json"},
     }
+    # Reference checks also run when a covered regression source changes.
+    from codex_regressions import inventory
+    for item in inventory(repo):
+        tooling["scripts/test_codex_regressions.py"].add(str(Path(item["source"]).relative_to(repo)))
     return [{"name": test, "argv": ["python3", "-B", str(repo / test)], "cwd": str(repo)}
             for test, triggers in tooling.items() if set(paths) & triggers]
 
@@ -74,8 +79,10 @@ def build_plan(repo: Path, paths=None):
     warnings = []
     if packages or any(p in ("Cargo.toml", "Cargo.lock") for p in paths):
         warnings.append("direct reverse-dependency expansion and mandatory landing checks remain landing-gate responsibility; review broader impact explicitly")
+    from codex_regressions import inventory
     return {"paths": paths, "packages": packages, "flow_filters": flows,
-            "gpu_scope": scope, "checks": checks, "warnings": warnings}
+            "gpu_scope": scope, "checks": checks, "warnings": warnings,
+            "regressions": inventory(repo, paths)}
 
 
 def main():

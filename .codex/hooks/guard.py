@@ -117,6 +117,10 @@ def prepared_slot_merge(target, args):
 
 def check_shell(event, command, cwd, shell_guard):
     # Reuse established detection; a Codex hook never returns CC's allow/ask.
+    for tokens in execution_segments(command):
+        for program, args in _command_targets(tokens):
+            if program == "cargo" and _cargo_subcommand(args) == "fmt" and "--check" not in args:
+                return "cargo fmt can rewrite the workspace even with a file after --. Use rustfmt on exact owned files with --config skip_children=true; never blanket-format MANIFOLD."
     for check in (shell_guard.worktree_add_guard, shell_guard.destructive_outward_guard):
         if check(command, cwd):
             return "Destructive/outward git action or raw worktree operation blocked. Use the slot ring and normal landing workflow."

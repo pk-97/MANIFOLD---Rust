@@ -69,6 +69,16 @@ class Guards(unittest.TestCase):
                 self.assertIsNone(guard.evaluate(self.event(tool, {}, worker)))
         self.assertFalse((self.root / "scope.json").exists())
 
+    def test_cargo_fmt_file_argument_still_formats_workspace(self):
+        for command in ("cargo fmt", "cargo fmt -- crates/manifold-playback/src/midi_input.rs",
+                        "cargo +nightly fmt --all", "env RUST_LOG=warn cargo fmt --manifest-path Cargo.toml",
+                        "with-build-lock.sh cargo fmt"):
+            with self.subTest(command=command):
+                self.assertIn("cargo fmt", self.shell_call(command))
+        self.assertIsNone(self.shell_call("cargo fmt --check"))
+        self.assertIsNone(self.shell_call("rustfmt --config skip_children=true crates/manifold-playback/src/midi_input.rs"))
+        self.assertIsNone(self.shell_call("printf '%s' 'cargo fmt'"))
+
     def test_luna_without_registration_uses_normal_tools(self):
         for command in ("pwd", "git status", "python3 -c 'print(1)'",
                         "sed -n '1p' AGENTS.md", "cat a > b", "cargo run",
