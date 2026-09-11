@@ -830,15 +830,14 @@ mod tests {
     ) {
         match node {
             serde_json::Value::Object(map) => {
-                if matches!(map.get("id").and_then(|v| v.as_str()), Some("amount" | "mix")) {
-                    if let Some(default) = map.get("defaultValue").and_then(|v| v.as_f64()) {
-                        if default != 1.0 {
-                            violations.push(format!(
-                                "{}: {pointer} defaultValue={default}",
-                                path.display()
-                            ));
-                        }
-                    }
+                if matches!(map.get("id").and_then(|v| v.as_str()), Some("amount" | "mix"))
+                    && let Some(default) = map.get("defaultValue").and_then(|v| v.as_f64())
+                    && default != 1.0
+                {
+                    violations.push(format!(
+                        "{}: {pointer} defaultValue={default}",
+                        path.display()
+                    ));
                 }
                 for (key, value) in map {
                     let child = if pointer.is_empty() {
