@@ -11,7 +11,9 @@ use crate::node_graph::primitive::Primitive;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -71,7 +73,9 @@ impl Primitive for CopyPositions {
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = Uniforms {
             dispatch_count: count,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -163,7 +167,9 @@ mod gpu_tests {
             .create_buffer_shared(std::mem::size_of::<Vec4Vertex>() as u64 * src.len() as u64);
         let uniforms = Uniforms {
             dispatch_count: src.len() as u32,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let mut enc = device.create_encoder("wave-pilot-copy");
         enc.dispatch_compute(
@@ -336,7 +342,9 @@ mod gpu_tests {
         );
         let cu = Uniforms {
             dispatch_count: src.len() as u32,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let wu = crate::node_graph::primitives::wave_field_3d::Uniforms {
             frequency,
@@ -345,7 +353,8 @@ mod gpu_tests {
             direction_y: direction[1],
             direction_z: direction[2],
             dispatch_count: src.len() as u32,
-            _pad: [0; 2],
+            _pad0: 0,
+            _pad1: 0,
         };
         let du = crate::node_graph::primitives::displace_copies::Uniforms {
             amount,
@@ -353,7 +362,9 @@ mod gpu_tests {
             direction_y: 1.0,
             direction_z: 0.0,
             dispatch_count: src.len() as u32,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let groups = (src.len() as u32).div_ceil(256);
         let mut enc = device.create_encoder("wave-pilot-standalone-chain");

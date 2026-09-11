@@ -11,8 +11,8 @@
     "isLineBased": false,
     "params": [
       {
-        "id": "amount",
-        "name": "Amount",
+        "id": "amplitude",
+        "name": "Amplitude",
         "min": 0.0,
         "max": 2.0,
         "defaultValue": 0.7,
@@ -83,8 +83,8 @@
     ],
     "bindings": [
       {
-        "id": "amount",
-        "label": "Amount",
+        "id": "amplitude",
+        "label": "Amplitude",
         "defaultValue": 0.7,
         "target": {
           "kind": "node",

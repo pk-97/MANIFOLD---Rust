@@ -11066,3 +11066,288 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
+=== generator:WaveGrid node:15 ===
+struct Element {
+    pos_scale: vec4<f32>,
+    rot: vec4<f32>,
+}
+
+struct Element2 {
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+}
+
+struct Params {
+    n1_frequency: f32,
+    n1_phase: f32,
+    n1_direction_x: f32,
+    n1_direction_y: f32,
+    n1_direction_z: f32,
+    n2_amount: f32,
+    n2_direction_x: f32,
+    n2_direction_y: f32,
+    n2_direction_z: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<Element>;
+
+const TAU: f32 = 6.283185307179586;
+
+fn n0_body(idx: u32, count: u32, e_instances: Element) -> Element2 {
+    return Element2(
+        e_instances.pos_scale.x,
+        e_instances.pos_scale.y,
+        e_instances.pos_scale.z,
+        1.0,
+    );
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_positions: Element2,
+    frequency: f32,
+    phase: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+) -> f32 {
+    let spatial = e_positions.x * direction_x
+        + e_positions.y * direction_y
+        + e_positions.z * direction_z;
+    let wrapped_phase = phase - floor(phase);
+    return sin(TAU * (spatial * frequency - wrapped_phase));
+}
+
+fn n2_body(
+    idx: u32,
+    count: u32,
+    e_instances: Element,
+    e_weights: f32,
+    amount: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+) -> Element {
+    if amount == 0.0 || e_instances.pos_scale.w == 0.0 {
+        return e_instances;
+    }
+    let offset = amount * e_weights * vec3<f32>(direction_x, direction_y, direction_z);
+    return Element(
+        vec4<f32>(e_instances.pos_scale.xyz + offset, e_instances.pos_scale.w),
+        e_instances.rot,
+    );
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let r0 = n0_body(idx, count, e_0);
+    let r1 = n1_body(idx, count, r0, params.n1_frequency, params.n1_phase, params.n1_direction_x, params.n1_direction_y, params.n1_direction_z);
+    let r2 = n2_body(idx, count, e_0, r1, params.n2_amount, params.n2_direction_x, params.n2_direction_y, params.n2_direction_z);
+    dst[idx] = r2;
+}
+
+=== generator:WaveRing node:15 ===
+struct Element {
+    pos_scale: vec4<f32>,
+    rot: vec4<f32>,
+}
+
+struct Element2 {
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+}
+
+struct Params {
+    n1_frequency: f32,
+    n1_phase: f32,
+    n1_direction_x: f32,
+    n1_direction_y: f32,
+    n1_direction_z: f32,
+    n2_amount: f32,
+    n2_direction_x: f32,
+    n2_direction_y: f32,
+    n2_direction_z: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<Element>;
+
+const TAU: f32 = 6.283185307179586;
+
+fn n0_body(idx: u32, count: u32, e_instances: Element) -> Element2 {
+    return Element2(
+        e_instances.pos_scale.x,
+        e_instances.pos_scale.y,
+        e_instances.pos_scale.z,
+        1.0,
+    );
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_positions: Element2,
+    frequency: f32,
+    phase: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+) -> f32 {
+    let spatial = e_positions.x * direction_x
+        + e_positions.y * direction_y
+        + e_positions.z * direction_z;
+    let wrapped_phase = phase - floor(phase);
+    return sin(TAU * (spatial * frequency - wrapped_phase));
+}
+
+fn n2_body(
+    idx: u32,
+    count: u32,
+    e_instances: Element,
+    e_weights: f32,
+    amount: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+) -> Element {
+    if amount == 0.0 || e_instances.pos_scale.w == 0.0 {
+        return e_instances;
+    }
+    let offset = amount * e_weights * vec3<f32>(direction_x, direction_y, direction_z);
+    return Element(
+        vec4<f32>(e_instances.pos_scale.xyz + offset, e_instances.pos_scale.w),
+        e_instances.rot,
+    );
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let r0 = n0_body(idx, count, e_0);
+    let r1 = n1_body(idx, count, r0, params.n1_frequency, params.n1_phase, params.n1_direction_x, params.n1_direction_y, params.n1_direction_z);
+    let r2 = n2_body(idx, count, e_0, r1, params.n2_amount, params.n2_direction_x, params.n2_direction_y, params.n2_direction_z);
+    dst[idx] = r2;
+}
+
+=== generator:WaveSpiral node:15 ===
+struct Element {
+    pos_scale: vec4<f32>,
+    rot: vec4<f32>,
+}
+
+struct Element2 {
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+}
+
+struct Params {
+    n1_frequency: f32,
+    n1_phase: f32,
+    n1_direction_x: f32,
+    n1_direction_y: f32,
+    n1_direction_z: f32,
+    n2_amount: f32,
+    n2_direction_x: f32,
+    n2_direction_y: f32,
+    n2_direction_z: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<Element>;
+
+const TAU: f32 = 6.283185307179586;
+
+fn n0_body(idx: u32, count: u32, e_instances: Element) -> Element2 {
+    return Element2(
+        e_instances.pos_scale.x,
+        e_instances.pos_scale.y,
+        e_instances.pos_scale.z,
+        1.0,
+    );
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_positions: Element2,
+    frequency: f32,
+    phase: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+) -> f32 {
+    let spatial = e_positions.x * direction_x
+        + e_positions.y * direction_y
+        + e_positions.z * direction_z;
+    let wrapped_phase = phase - floor(phase);
+    return sin(TAU * (spatial * frequency - wrapped_phase));
+}
+
+fn n2_body(
+    idx: u32,
+    count: u32,
+    e_instances: Element,
+    e_weights: f32,
+    amount: f32,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+) -> Element {
+    if amount == 0.0 || e_instances.pos_scale.w == 0.0 {
+        return e_instances;
+    }
+    let offset = amount * e_weights * vec3<f32>(direction_x, direction_y, direction_z);
+    return Element(
+        vec4<f32>(e_instances.pos_scale.xyz + offset, e_instances.pos_scale.w),
+        e_instances.rot,
+    );
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let r0 = n0_body(idx, count, e_0);
+    let r1 = n1_body(idx, count, r0, params.n1_frequency, params.n1_phase, params.n1_direction_x, params.n1_direction_y, params.n1_direction_z);
+    let r2 = n2_body(idx, count, e_0, r1, params.n2_amount, params.n2_direction_x, params.n2_direction_y, params.n2_direction_z);
+    dst[idx] = r2;
+}
+

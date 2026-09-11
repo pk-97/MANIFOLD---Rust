@@ -17,7 +17,9 @@ pub(super) struct Uniforms {
     pub(super) direction_y: f32,
     pub(super) direction_z: f32,
     pub(super) dispatch_count: u32,
-    pub(super) _pad: [u32; 3],
+    pub(super) _pad0: u32,
+    pub(super) _pad1: u32,
+    pub(super) _pad2: u32,
 }
 
 crate::primitive! {
@@ -103,7 +105,9 @@ impl Primitive for DisplaceCopies {
             direction_y,
             direction_z,
             dispatch_count: count,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -223,7 +227,9 @@ mod gpu_tests {
             direction_y: direction[1],
             direction_z: direction[2],
             dispatch_count: src.len() as u32,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let mut enc = device.create_encoder("wave-pilot-displace");
         enc.dispatch_compute(
