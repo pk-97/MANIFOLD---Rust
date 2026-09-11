@@ -49,6 +49,18 @@ pub struct GroupSplice {
     pub replace_existing: bool,
 }
 
+/// A mesh-stage group inserted immediately before a scene object's `vertices`
+/// input.  The stable scope path addresses nested object/material groups; the
+/// stage keeps the unmodified reference mesh separate from the current mesh so
+/// a stack can be removed in any order without losing the original source.
+#[derive(Debug, Clone)]
+pub struct MeshStageSplice {
+    pub scope_path: Vec<NodeId>,
+    pub target_node_id: NodeId,
+    pub stage: EffectGraphNode,
+    pub reference_source: (NodeId, String),
+}
+
 /// Port take-over with declarative restore (generalizes the loop's
 /// lens.camera re-point): apply drops other producers of
 /// (target_node_id, target_port); remove re-wires the first non-mine node
@@ -120,6 +132,8 @@ pub struct SceneModifierPlan {
     pub new_wires: Vec<EffectGraphWire>,
     /// Per-object-group interface splices.
     pub group_splices: Vec<GroupSplice>,
+    /// Nested mesh stages to insert before scene-object vertex pipelines.
+    pub mesh_stages: Vec<MeshStageSplice>,
     /// Port take-overs with declarative restore.
     pub repoints: Vec<PortRepoint>,
     /// Per-node exposure curation (INV-6: each node its own manifest only).
@@ -175,10 +189,23 @@ impl SceneModifierPlan {
     /// camera switch). Never matched by numeric doc id (the flattener
     /// renumbers).
     pub fn minted_node_ids(&self) -> Vec<NodeId> {
-        self.new_nodes
-            .iter()
-            .chain(self.enable.extra_nodes.iter())
-            .map(|n| n.node_id.clone())
-            .collect()
+        fn collect(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>) {
+            for node in nodes {
+                if !node.node_id.is_empty() {
+                    out.push(node.node_id.clone());
+                }
+                if let Some(body) = node.group.as_deref() {
+                    collect(&body.nodes, out);
+                }
+            }
+        }
+
+        let mut ids = Vec::new();
+        collect(&self.new_nodes, &mut ids);
+        collect(&self.enable.extra_nodes, &mut ids);
+        for splice in &self.mesh_stages {
+            collect(std::slice::from_ref(&splice.stage), &mut ids);
+        }
+        ids
     }
 }

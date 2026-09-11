@@ -82,6 +82,8 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
     "node.ripple_mesh",
     "node.fold_mesh",
     "node.melt_mesh",
+    "node.wave_shear_mesh",
+    "node.transform_mesh_patches",
 ];
 /// The curated Transform-chain modifier vocabulary (P3): single-Transform-in/
 /// Transform-out atoms that may sit between `node.transform_3d` and
@@ -568,6 +570,12 @@ impl SceneVm {
                             .and_then(|n| n.params.get("value"))
                             .map(|v| matches!(v, SerializedParamValue::Float { value } if *value > 0.5))
                     }
+                    crate::node_graph::scene_modifier::EnableDecl::Value { node_id } => result
+                        .doc_ids
+                        .get(node_id)
+                        .and_then(|&doc| root.node(doc))
+                        .and_then(|n| n.params.get("value"))
+                        .map(|v| matches!(v, SerializedParamValue::Float { value } if *value > 0.5)),
                 };
                 SceneModifierVm {
                     kind_id: descriptor.kind_id,

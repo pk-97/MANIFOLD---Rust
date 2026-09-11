@@ -1486,6 +1486,9 @@ fn modifier_enable_target(
         manifold_renderer::node_graph::scene_modifier::EnableDecl::Gate { enabled_node, .. } => {
             (enabled_node, "value")
         }
+        manifold_renderer::node_graph::scene_modifier::EnableDecl::Value { node_id } => {
+            (node_id, "value")
+        }
     };
     let doc_id = *trace.doc_ids.get(node_key)?;
     let node = def.nodes.iter().find(|n| n.id == doc_id)?;

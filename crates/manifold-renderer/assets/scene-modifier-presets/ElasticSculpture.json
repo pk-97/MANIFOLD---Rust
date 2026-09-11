@@ -1,0 +1,52 @@
+{
+  "version": 2,
+  "name": "Elastic Sculpture",
+  "presetMetadata": {
+    "id": "ElasticSculpture",
+    "displayName": "Elastic Sculpture",
+    "category": "Geometry",
+    "oscPrefix": "elastic_sculpture",
+    "available": false,
+    "params": [
+      {"id":"bend","name":"Bend","min":-0.7,"max":0.7,"defaultValue":0.18},
+      {"id":"cross_bend","name":"Cross Bend","min":-0.7,"max":0.7,"defaultValue":0.12},
+      {"id":"detail","name":"Detail","min":0.0,"max":6.0,"defaultValue":1.0},
+      {"id":"phase","name":"Phase","min":0.0,"max":1.0,"defaultValue":0.0},
+      {"id":"yaw","name":"Yaw","min":-3.1415927,"max":3.1415927,"defaultValue":0.0,"isAngle":true,"wraps":true},
+      {"id":"pitch","name":"Pitch","min":-3.1415927,"max":3.1415927,"defaultValue":0.0,"isAngle":true,"wraps":true},
+      {"id":"enabled","name":"Enabled","min":0.0,"max":1.0,"defaultValue":1.0,"isToggle":true}
+    ],
+    "bindings": [
+      {"id":"bend","label":"Bend","defaultValue":0.18,"target":{"kind":"node","nodeId":"shear_x","param":"amplitude"}},
+      {"id":"cross_bend","label":"Cross Bend","defaultValue":0.12,"target":{"kind":"node","nodeId":"shear_z","param":"amplitude"}},
+      {"id":"detail","label":"Detail","defaultValue":1.0,"target":{"kind":"node","nodeId":"shear_x","param":"frequency"}},
+      {"id":"detail","label":"Detail","defaultValue":1.0,"target":{"kind":"node","nodeId":"shear_z","param":"frequency"}},
+      {"id":"phase","label":"Phase","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_x","param":"phase"}},
+      {"id":"phase","label":"Phase","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_z","param":"phase"}},
+      {"id":"yaw","label":"Yaw","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_x","param":"yaw"}},
+      {"id":"yaw","label":"Yaw","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_z","param":"yaw"}},
+      {"id":"pitch","label":"Pitch","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_x","param":"pitch"}},
+      {"id":"pitch","label":"Pitch","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_z","param":"pitch"}},
+      {"id":"enabled","label":"Enabled","defaultValue":1.0,"target":{"kind":"node","nodeId":"shear_x","param":"enabled"}},
+      {"id":"enabled","label":"Enabled","defaultValue":1.0,"target":{"kind":"node","nodeId":"shear_z","param":"enabled"}}
+    ]
+  },
+  "nodes": [{
+    "id": 1, "nodeId": "elastic_stage", "typeId": "group", "handle": "ElasticStage",
+    "group": {
+      "interface": {"inputs":[{"name":"current","portType":"Array(MeshVertex)"},{"name":"reference","portType":"Array(MeshVertex)"}],"outputs":[{"name":"vertices","portType":"Array(MeshVertex)"}]},
+      "nodes": [
+        {"id":1,"nodeId":"group_current","typeId":"system.group_input","handle":"current"},
+        {"id":2,"nodeId":"group_reference","typeId":"system.group_input","handle":"reference"},
+        {"id":3,"nodeId":"shear_x","typeId":"node.wave_shear_mesh","handle":"shear_x","params":{"axis":{"type":"Enum","value":0},"phase_offset":{"type":"Float","value":0.0}}},
+        {"id":4,"nodeId":"shear_z","typeId":"node.wave_shear_mesh","handle":"shear_z","params":{"axis":{"type":"Enum","value":1},"phase_offset":{"type":"Float","value":0.25}}},
+        {"id":5,"nodeId":"group_output","typeId":"system.group_output","handle":"output"}
+      ],
+      "wires": [
+        {"fromNode":1,"fromPort":"current","toNode":3,"toPort":"in"},
+        {"fromNode":3,"fromPort":"out","toNode":4,"toPort":"in"},
+        {"fromNode":4,"fromPort":"out","toNode":5,"toPort":"vertices"}
+      ]
+    }
+  }], "wires": []
+}
