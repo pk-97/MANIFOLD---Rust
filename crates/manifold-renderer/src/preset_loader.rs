@@ -109,6 +109,10 @@ struct PresetFile {
 pub struct PresetCatalog {
     /// `(type_id, json)` pairs, sorted by type id for stable iteration.
     entries: Vec<(Arc<str>, Arc<str>)>,
+    /// IDs originating from stock or user disk and therefore eligible for
+    /// the Add browser. Snapshot entries are included only when disk-backed;
+    /// Saved entries are always excluded.
+    browser_ids: std::collections::HashSet<Arc<str>>,
 }
 
 impl PresetCatalog {
@@ -142,6 +146,11 @@ impl PresetCatalog {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Whether this id should appear in the stock/user Add browser.
+    fn is_browser_visible(&self, type_id: &str) -> bool {
+        self.browser_ids.contains(type_id)
     }
 }
 
@@ -377,7 +386,10 @@ fn scan_dir(dir: &Path) -> Vec<PresetFile> {
         }
 
         let Some(type_id) = path.file_stem().and_then(|s| s.to_str()) else {
-            log::error!("[presets] preset file has no valid UTF-8 stem, skipping: {}", path.display());
+            log::error!(
+                "[presets] preset file has no valid UTF-8 stem, skipping: {}",
+                path.display()
+            );
             continue;
         };
         let type_id: Arc<str> = Arc::from(type_id);
@@ -385,7 +397,10 @@ fn scan_dir(dir: &Path) -> Vec<PresetFile> {
         let json = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
-                log::error!("[presets] failed to read preset file {}: {e} — skipping", path.display());
+                log::error!(
+                    "[presets] failed to read preset file {}: {e} — skipping",
+                    path.display()
+                );
                 continue;
             }
         };
@@ -467,6 +482,19 @@ fn build_catalog(
     stock_root: &Path,
     user_root: Option<&Path>,
 ) -> Result<Arc<PresetCatalog>, String> {
+    build_catalog_with_overlays(
+        label, stock_root, user_root,
+        &project_snapshot_overlay_for(label), &project_saved_overlay_for(label),
+    )
+}
+
+fn build_catalog_with_overlays(
+    label: &str,
+    stock_root: &Path,
+    user_root: Option<&Path>,
+    snapshot_overlay: &OverlayEntries,
+    saved_overlay: &OverlayEntries,
+) -> Result<Arc<PresetCatalog>, String> {
     log::info!(
         "[presets] scanning stock {label} presets from {}",
         stock_root.display()
@@ -489,7 +517,6 @@ fn build_catalog(
     // stale cache; Snapshot only serves when disk has nothing for that id.
     // Saved entries are deliberate, explicit project-scoped forks/imports
     // (D4/D9) and keep today's on-top-of-everything behavior unchanged.
-    let snapshot_overlay = project_snapshot_overlay_for(label);
     let snapshot_ids: std::collections::HashSet<Arc<str>> =
         snapshot_overlay.iter().map(|(id, _)| id.clone()).collect();
     let mut merged: Vec<(Arc<str>, Arc<str>)> = snapshot_overlay.iter().cloned().collect();
@@ -551,9 +578,11 @@ fn build_catalog(
     // Saved-tier project overlay (Phase 4 / D4 / D9): explicit project-scoped
     // forks / imports / Save-to-Project entries, on top of stock+user
     // (override on id match) — unchanged from pre-P2 behavior.
-    let saved_overlay = project_saved_overlay_for(label);
     if !saved_overlay.is_empty() {
-        log::info!("[presets] merging {} project {label} preset(s)", saved_overlay.len());
+        log::info!(
+            "[presets] merging {} project {label} preset(s)",
+            saved_overlay.len()
+        );
         for (id, json) in saved_overlay.iter() {
             if let Some(slot) = merged.iter_mut().find(|(i, _)| i == id) {
                 slot.1 = json.clone();
@@ -563,13 +592,25 @@ fn build_catalog(
         }
     }
 
+    // Browser provenance is captured alongside the immutable catalog. Disk
+    // IDs remain eligible even when the project snapshots them;
+    // missing-disk snapshots are absent. Saved IDs are
+    // project-only and must stay out of the stock/user browser.
+    let mut browser_ids = disk_ids;
+    for (id, _) in saved_overlay.iter() {
+        browser_ids.remove(id);
+    }
+
     // Stable sort by type id — same iteration order every launch, which
     // the catalog/drift consumers rely on.
     merged.sort_by(|a, b| a.0.cmp(&b.0));
 
     log::info!("[presets] loaded {} {label} presets", merged.len());
 
-    Ok(Arc::new(PresetCatalog { entries: merged }))
+    Ok(Arc::new(PresetCatalog {
+        entries: merged,
+        browser_ids,
+    }))
 }
 
 // ─── Hot-reload watcher (step 10) ───
@@ -655,7 +696,9 @@ fn apply_reload() -> u64 {
         // last-good snapshots were kept. Don't bump — nothing changed for
         // consumers, and bumping would force a needless rebuild against
         // identical data.
-        log::warn!("[presets] hot-reload: all reload attempts failed; keeping last-good, not bumping generation");
+        log::warn!(
+            "[presets] hot-reload: all reload attempts failed; keeping last-good, not bumping generation"
+        );
         return catalog_generation();
     }
 
@@ -679,37 +722,25 @@ fn apply_reload() -> u64 {
     // never appeared in the browser without a restart. Rebuilt from the same
     // freshly-reloaded metadata, in the same reload pass.
     //
-    // `effect_meta`/`generator_meta` come from the FULL merged catalog
-    // (stock + user + project overlay — `build_catalog`'s merge order), but
-    // the registry must stay STOCK + USER only: project-embedded presets
-    // (Saved and Snapshot) are already surfaced separately as the "Project"
-    // category from `Project.embedded_presets` (`ui_root.rs`'s browser-open
-    // handlers). Feeding them into the registry too would list the same
-    // preset twice in the Add browser, so the current project's overlay ids
-    // are excluded here.
-    let effect_overlay_ids: std::collections::HashSet<Arc<str>> = PROJECT_EFFECT_PRESETS_SAVED
-        .load_full()
-        .iter()
-        .chain(PROJECT_EFFECT_PRESETS_SNAPSHOT.load_full().iter())
-        .map(|(id, _)| id.clone())
-        .collect();
-    let generator_overlay_ids: std::collections::HashSet<Arc<str>> = PROJECT_GENERATOR_PRESETS_SAVED
-        .load_full()
-        .iter()
-        .chain(PROJECT_GENERATOR_PRESETS_SNAPSHOT.load_full().iter())
-        .map(|(id, _)| id.clone())
-        .collect();
+    // Runtime metadata includes project fallbacks and overrides. Browser
+    // visibility follows each catalog's resolved source: disk-backed
+    // snapshots stay visible; missing snapshots and Saved entries do not.
+    let effect_browser_ids = EFFECT_CATALOG.load();
+    let generator_browser_ids = GENERATOR_CATALOG.load();
     let effect_meta_for_registry: Vec<_> = effect_meta
         .iter()
-        .filter(|m| !effect_overlay_ids.contains(m.id.as_str()))
+        .filter(|m| effect_browser_ids.is_browser_visible(m.id.as_str()))
         .cloned()
         .collect();
     let generator_meta_for_registry: Vec<_> = generator_meta
         .iter()
-        .filter(|m| !generator_overlay_ids.contains(m.id.as_str()))
+        .filter(|m| generator_browser_ids.is_browser_visible(m.id.as_str()))
         .cloned()
         .collect();
-    manifold_core::preset_type_registry::rebuild(&effect_meta_for_registry, &generator_meta_for_registry);
+    manifold_core::preset_type_registry::rebuild(
+        &effect_meta_for_registry,
+        &generator_meta_for_registry,
+    );
 
     let generation = bump_catalog_generation();
     log::info!("[presets] hot-reload applied; catalog generation = {generation}");
@@ -830,8 +861,10 @@ mod tests {
     ) {
         match node {
             serde_json::Value::Object(map) => {
-                if matches!(map.get("id").and_then(|v| v.as_str()), Some("amount" | "mix"))
-                    && let Some(default) = map.get("defaultValue").and_then(|v| v.as_f64())
+                if matches!(
+                    map.get("id").and_then(|v| v.as_str()),
+                    Some("amount" | "mix")
+                ) && let Some(default) = map.get("defaultValue").and_then(|v| v.as_f64())
                     && default != 1.0
                 {
                     violations.push(format!(
@@ -850,12 +883,7 @@ mod tests {
             }
             serde_json::Value::Array(items) => {
                 for (i, value) in items.iter().enumerate() {
-                    collect_amount_violations(
-                        value,
-                        &format!("{pointer}/{i}"),
-                        path,
-                        violations,
-                    );
+                    collect_amount_violations(value, &format!("{pointer}/{i}"), path, violations);
                 }
             }
             _ => {}
@@ -878,10 +906,43 @@ mod tests {
     }
 
     fn write_preset(dir: &Path, stem: &str, name: &str) {
-        let json = format!(
-            r#"{{"version":2,"nodes":[],"wires":[],"name":"{name}"}}"#
-        );
+        let json = format!(r#"{{"version":2,"nodes":[],"wires":[],"name":"{name}"}}"#);
         fs::write(dir.join(format!("{stem}.json")), json).expect("write preset");
+    }
+
+    #[test]
+    fn snapshots_preserve_disk_browser_entries_and_saved_entries_stay_project_only() {
+        let stock = scratch("browser-stock");
+        let user = scratch("browser-user");
+        write_preset(&stock, "Stock", "StockDisk");
+        write_preset(&stock, "Shared", "StockShared");
+        write_preset(&stock, "SavedCollision", "StockCollision");
+        write_preset(&user, "Shared", "UserShared");
+        write_preset(&user, "User", "UserDisk");
+        let snapshots: OverlayEntries = ["Stock", "Shared", "User", "Missing"]
+            .into_iter()
+            .map(|id| (Arc::from(id), Arc::from("snapshot fallback")))
+            .collect();
+        let saved: OverlayEntries = ["SavedCollision", "SavedOnly"]
+            .into_iter()
+            .map(|id| (Arc::from(id), Arc::from("saved project")))
+            .collect();
+        for kind in ["effect", "generator"] {
+            let cat = build_catalog_with_overlays(
+                kind, &stock, Some(&user), &snapshots, &saved,
+            ).expect("catalog loads");
+            let mut visible: Vec<_> = cat.browser_ids.iter().map(|id| id.as_ref()).collect();
+            visible.sort_unstable();
+            assert_eq!(visible, ["Shared", "Stock", "User"]);
+            assert!(cat.json("Stock").unwrap().contains("StockDisk"));
+            assert!(cat.json("Shared").unwrap().contains("UserShared"));
+            assert!(cat.json("User").unwrap().contains("UserDisk"));
+            assert_eq!(cat.json("Missing").unwrap().as_ref(), "snapshot fallback");
+            assert_eq!(cat.json("SavedCollision").unwrap().as_ref(), "saved project");
+            assert_eq!(cat.json("SavedOnly").unwrap().as_ref(), "saved project");
+        }
+        fs::remove_dir_all(stock).expect("clean stock fixture");
+        fs::remove_dir_all(user).expect("clean user fixture");
     }
 
     /// FAIL-LOUD: at startup a stock root that exists but scans to zero
@@ -1000,7 +1061,10 @@ mod tests {
         // The reload body (build_catalog) must Err on the empty scan; the
         // `reload_into` contract keeps the prior snapshot.
         let attempt = build_catalog("effect", &stock, None);
-        assert!(attempt.is_err(), "all-malformed scan must Err, not swap empty");
+        assert!(
+            attempt.is_err(),
+            "all-malformed scan must Err, not swap empty"
+        );
         // Caller keeps last-good — emulate `reload_into` not storing on Err.
         assert!(
             slot.load().json("Beta").unwrap().contains("BetaGood"),
