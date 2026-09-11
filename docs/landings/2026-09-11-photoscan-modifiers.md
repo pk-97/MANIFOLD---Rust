@@ -1,4 +1,4 @@
-# Playable photoscan modifiers — 2026-09-11
+# Playable photoscan modifiers — landed 2026-09-11 @ 4e3234707
 
 **Branch:** codex/photoscan-modifiers · **Level reached:** L3 controls, L2 raster visuals / target L3 live performance.
 **Doc status line (quoted verbatim):** **Status:** IN PROGRESS · 2026-09-11 · Codex lead. Wave generator pilot shipped; photoscan modifier slice implemented (L3 controls, L2 raster visuals). Unified F1–F8 architecture remains proposed.
@@ -7,7 +7,23 @@ Elastic Sculpture, Surface Peel and Vortex Fragments attach to an already import
 
 ## Gate results (verbatim)
 
-Focused checks below ran with `env RUSTC_WRAPPER=` in slot-9. The mandatory full landing gate runs through `scripts/land_branch.py`; its transcript is retained in the slot's `target/landing-logs`.
+Focused checks below ran with `env RUSTC_WRAPPER=` in slot-9. The mandatory full landing gate passed through `scripts/land_branch.py`; complete landing and GPU transcripts are retained in the main checkout at `target/photoscan-modifier-proofs/landing-gate.log` and `gpu-proofs.log`.
+
+```text
+env RUSTC_WRAPPER= python3 scripts/land_branch.py codex/photoscan-modifiers --worktree '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-9' --message 'Add playable photoscan mesh scene modifiers' --lead 'Codex lead'
+PASS scripts/test_codex_checks.py (0s)
+PASS scripts/test_codex_regressions.py (0s)
+PASS design-status (0s)
+PASS docs-index (0s)
+PASS flow-gate (21s)
+PASS deny (1s)
+PASS ignored-tests (0s)
+PASS clippy (5s)
+PASS tests (150s)
+PASS gpu-proofs (259s)
+landing gate: 10 passed, 0 failed, 0 skipped
+[land] DONE: codex/photoscan-modifiers landed. Codex lead
+```
 
 ```text
 cargo clippy --manifest-path Cargo.toml -p manifold-core -p manifold-editing -p manifold-renderer -p manifold-app --tests -- -D warnings
