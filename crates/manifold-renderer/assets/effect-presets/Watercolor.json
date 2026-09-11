@@ -363,7 +363,7 @@
       "params": {
         "amount": {
           "type": "Float",
-          "value": 0.5
+          "value": 1.0
         },
         "mode": {
           "type": "Enum",

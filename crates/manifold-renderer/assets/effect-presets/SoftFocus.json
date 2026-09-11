@@ -93,10 +93,6 @@
       "typeId": "node.mix",
       "handle": "mix",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.5
-        },
         "mode": {
           "type": "Enum",
           "value": 0

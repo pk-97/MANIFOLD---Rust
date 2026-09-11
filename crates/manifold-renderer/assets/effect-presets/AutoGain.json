@@ -197,12 +197,6 @@
       "nodeId": "wet_dry",
       "typeId": "node.wet_dry",
       "handle": "wet_dry",
-      "params": {
-        "wet_dry": {
-          "type": "Float",
-          "value": 0.5
-        }
-      },
       "title": "Parallel Mix"
     }
   ],

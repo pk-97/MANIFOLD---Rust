@@ -124,10 +124,6 @@
       "typeId": "node.mix",
       "handle": "bloom",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.5
-        },
         "mode": {
           "type": "Enum",
           "value": 2

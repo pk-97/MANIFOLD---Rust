@@ -225,10 +225,6 @@
       "typeId": "node.scale_offset_value",
       "handle": "amount_value",
       "params": {
-        "a": {
-          "type": "Float",
-          "value": 0.5
-        },
         "offset": {
           "type": "Float",
           "value": 0.0

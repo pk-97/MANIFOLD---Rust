@@ -30,8 +30,11 @@ use manifold_renderer::render_target::RenderTarget;
 
 use crate::harness;
 
-/// Same fixture `preset_thumbnail::build_gradient_input` uses — reproduced
+/// The old thumbnail gradient fixture (R=u, G=v, B=(u+v)/2), reproduced
 /// here (test-only) rather than exporting a production helper just for this.
+/// `preset_thumbnail` now feeds effects the D2 test card; this test keeps
+/// the plain gradient deliberately — a smooth ramp isolates per-pixel grain
+/// decorrelation from card edges.
 fn build_gradient_input(
     device: &manifold_gpu::GpuDevice,
     w: u32,

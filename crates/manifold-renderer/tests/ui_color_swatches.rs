@@ -1570,8 +1570,9 @@ fn browser_popup_audition_live() {
     pool.set_render_list(items.iter().map(|(id, _)| PresetTypeId::new(id)).collect());
 
     // A synthetic "show frame" stand-in (the parity-harness gradient: R=u,
-    // G=v, B=(u+v)/2 — same shape `preset_thumbnail::build_gradient_input`,
-    // inlined because that helper is crate-private), then enough ticks for
+    // G=v, B=(u+v)/2 — the left-third region of the D2 test card
+    // `preset_thumbnail::build_test_card_input`, inlined because that helper
+    // is crate-private), then enough ticks for
     // every cell to have rendered at least once.
     let tap = {
         use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};

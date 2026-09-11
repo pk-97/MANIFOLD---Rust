@@ -154,12 +154,6 @@
       "nodeId": "gain",
       "typeId": "node.exposure",
       "handle": "gain",
-      "params": {
-        "gain": {
-          "type": "Float",
-          "value": 0.5
-        }
-      },
       "title": "Amount"
     },
     {

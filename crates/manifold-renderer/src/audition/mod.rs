@@ -457,7 +457,7 @@ mod tests {
     //! PNG oracle).
 
     use super::*;
-    use crate::preset_thumbnail::build_gradient_input;
+    use crate::preset_thumbnail::build_test_card_input;
 
     const TOL: f32 = 1.0e-2;
 
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn render_list_drives_renders_empty_is_zero() {
         let device = crate::test_device();
-        let tap = build_gradient_input(&device, CELL_W, CELL_H, FORMAT);
+        let tap = build_test_card_input(&device, CELL_W, CELL_H, FORMAT);
         let invert = PresetTypeId::new("Invert");
         let mirror = PresetTypeId::new("Mirror");
         let mut pool = pool_with(
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn budget_skip_freezes_atlas_at_last_good() {
         let device = crate::test_device();
-        let tap = build_gradient_input(&device, CELL_W, CELL_H, FORMAT);
+        let tap = build_test_card_input(&device, CELL_W, CELL_H, FORMAT);
         let invert = PresetTypeId::new("Invert");
         let mirror = PresetTypeId::new("Mirror");
         let mut pool = pool_with(
@@ -570,28 +570,25 @@ mod tests {
     }
 
     /// (c) Gate, value level: an Invert cell (default amount = 1.0) over the
-    /// standard gradient readback-compares to `1.0 - tap` pixelwise, against
-    /// the CPU-computed gradient — no PNG oracle.
+    /// test card readback-compares to `1.0 - card` pixelwise, against the
+    /// CPU-computed card — no PNG oracle.
     #[test]
     fn invert_cell_matches_cpu_computed_expected() {
         let device = crate::test_device();
-        let tap = build_gradient_input(&device, CELL_W, CELL_H, FORMAT);
+        let tap = build_test_card_input(&device, CELL_W, CELL_H, FORMAT);
         let invert = PresetTypeId::new("Invert");
         let mut pool = pool_with(&[(invert.clone(), PresetKind::Effect)], &device.arc());
         pool.set_render_list(vec![invert.clone()]);
         assert!(tick(&mut pool, &device, &tap.texture, true));
 
         let (aw, _, bytes) = read_atlas(&pool, &device);
-        let wm = (CELL_W.max(1) - 1).max(1) as f32;
-        let hm = (CELL_H.max(1) - 1).max(1) as f32;
         // Stride the whole cell (plus a few rows) so a wiring error can't
         // hide in one lucky pixel.
         for y in (0..CELL_H).step_by(17) {
             for x in (0..CELL_W).step_by(23) {
                 let got = px(&bytes, aw, x, y);
-                let u = x as f32 / wm;
-                let v = y as f32 / hm;
-                let expected = [1.0 - u, 1.0 - v, 1.0 - (u + v) * 0.5, 1.0];
+                let card = crate::preset_thumbnail::test_card_pixel(x, y, CELL_W, CELL_H);
+                let expected = [1.0 - card[0], 1.0 - card[1], 1.0 - card[2], 1.0];
                 for c in 0..4 {
                     assert!(
                         (got[c] - expected[c]).abs() < TOL,
@@ -612,7 +609,7 @@ mod tests {
         use manifold_core::params::{Param, ParamManifest};
 
         let device = crate::test_device();
-        let tap = build_gradient_input(&device, CELL_W, CELL_H, FORMAT);
+        let tap = build_test_card_input(&device, CELL_W, CELL_H, FORMAT);
         let invert = PresetTypeId::new("Invert");
         let mut pool = pool_with(&[(invert.clone(), PresetKind::Effect)], &device.arc());
 
@@ -646,12 +643,10 @@ mod tests {
         assert!(tick(&mut pool, &device, &tap.texture, true));
 
         let (aw, _, bytes) = read_atlas(&pool, &device);
-        let wm = (CELL_W.max(1) - 1).max(1) as f32;
-        let hm = (CELL_H.max(1) - 1).max(1) as f32;
         for y in (0..CELL_H).step_by(19) {
             for x in (0..CELL_W).step_by(29) {
                 let got = px(&bytes, aw, x, y);
-                let expected = [x as f32 / wm, y as f32 / hm, (x as f32 / wm + y as f32 / hm) * 0.5, 1.0];
+                let expected = crate::preset_thumbnail::test_card_pixel(x, y, CELL_W, CELL_H);
                 for c in 0..4 {
                     assert!(
                         (got[c] - expected[c]).abs() < TOL,
@@ -671,7 +666,7 @@ mod tests {
     #[test]
     fn generator_cell_renders_non_uniform_content() {
         let device = crate::test_device();
-        let tap = build_gradient_input(&device, CELL_W, CELL_H, FORMAT);
+        let tap = build_test_card_input(&device, CELL_W, CELL_H, FORMAT);
         let starfield = PresetTypeId::new("StarField");
         let mut pool = pool_with(&[(starfield.clone(), PresetKind::Generator)], &device.arc());
         pool.set_render_list(vec![starfield.clone()]);

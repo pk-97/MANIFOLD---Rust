@@ -1802,7 +1802,8 @@ impl Application {
                                                     &gpu.device,
                                                     ctx.kind,
                                                     &ctx.def,
-                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_SIZE,
+                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_WIDTH,
+                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_HEIGHT,
                                                     &png_path,
                                                 )
                                             {

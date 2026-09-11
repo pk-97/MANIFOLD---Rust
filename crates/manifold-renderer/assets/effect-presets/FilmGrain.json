@@ -340,10 +340,6 @@
         "mode": {
           "type": "Enum",
           "value": 6
-        },
-        "amount": {
-          "type": "Float",
-          "value": 0.35
         }
       }
     },
