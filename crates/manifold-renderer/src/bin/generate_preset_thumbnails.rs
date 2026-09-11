@@ -21,7 +21,9 @@
 //! renders.
 //!
 //! Run: `cargo run -p manifold-renderer --bin generate-preset-thumbnails`
+//! Pass exact preset IDs after `--` to update only those thumbnails.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -41,33 +43,45 @@ const CONTACT_SHEET_COLUMNS: usize = 8;
 
 fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let selected: BTreeSet<String> = std::env::args().skip(1).collect();
+    let mut pending = selected.clone();
+    let mut jobs = Vec::new();
+    for (subdir, kind) in ASSET_SUBDIRS {
+        let dir = manifest_dir.join(subdir);
+        let entries = sorted_json_entries(&dir).unwrap_or_else(|e| {
+            eprintln!("error: cannot read {}: {e}", dir.display());
+            std::process::exit(2);
+        });
+        for (path, id) in entries {
+            if selected.is_empty() || selected.contains(&id) {
+                pending.remove(&id);
+                jobs.push((*kind, path, id));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        eprintln!(
+            "error: unknown preset IDs: {}",
+            pending.into_iter().collect::<Vec<_>>().join(", ")
+        );
+        std::process::exit(2);
+    }
     let device = std::sync::Arc::new(GpuDevice::new());
 
-    let mut total = 0usize;
+    let total = jobs.len();
     let mut written = 0usize;
     let mut failures: Vec<(String, String)> = Vec::new();
     // (kind, id, png path) in row-major grid order, for the contact sheet.
     let mut grid: Vec<(PresetKind, String, PathBuf)> = Vec::new();
 
-    for (subdir, kind) in ASSET_SUBDIRS {
-        let dir = manifest_dir.join(subdir);
-        let entries = match sorted_json_entries(&dir) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("error: cannot read {}: {e}", dir.display());
-                std::process::exit(2);
+    for (kind, path, id) in jobs {
+        match render_one(&device, kind, &path, &id) {
+            Ok(out_path) => {
+                written += 1;
+                println!("OK   {id} -> {}", out_path.display());
+                grid.push((kind, id, out_path));
             }
-        };
-        for (path, id) in entries {
-            total += 1;
-            match render_one(&device, *kind, &path, &id) {
-                Ok(out_path) => {
-                    written += 1;
-                    println!("OK   {id} -> {}", out_path.display());
-                    grid.push((*kind, id, out_path));
-                }
-                Err(msg) => failures.push((id, msg)),
-            }
+            Err(msg) => failures.push((id, msg)),
         }
     }
 
@@ -75,7 +89,10 @@ fn main() {
         println!("FAIL {id}: {msg}");
     }
 
-    println!("\n{total} presets: {written} thumbnails written, {} failed", failures.len());
+    println!(
+        "\n{total} presets: {written} thumbnails written, {} failed",
+        failures.len()
+    );
 
     if failures.is_empty() {
         match write_contact_sheet(manifest_dir, &grid) {
@@ -126,7 +143,14 @@ fn render_one(
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
-    render_preset_thumbnail_to_file(device, kind, &def, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, &out_path)?;
+    render_preset_thumbnail_to_file(
+        device,
+        kind,
+        &def,
+        THUMBNAIL_WIDTH,
+        THUMBNAIL_HEIGHT,
+        &out_path,
+    )?;
 
     // D7 freshness sidecar: the SHA-256 of the preset JSON bytes. Editing the
     // preset without re-running this bin fails `factory_thumbnails_fresh`.

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 265 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 268 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (63)
+### 3D Geometry (65)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -167,9 +167,11 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | Camera Lens | `node.camera_lens` | Filter | The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads. |
 | Camera Switch | `node.camera_switch` | Source | Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph. |
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
+| Copy Positions | `node.copy_positions` | Map | Turns copy transforms into homogeneous XYZ positions for downstream fields and geometry math. |
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
+| Displace Copies | `node.displace_copies` | Filter | Moves copies along a chosen direction according to a scalar field while preserving their transform metadata. |
 | Edge Pairs | `node.edge_pairs` | Source | Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start. |
 | Extrude Curve | `node.extrude_curve` | Source | Pushes a flat 2D shape straight through space to build a 3D extrusion — like a cookie cutter dragged through dough. Turns outlines into solid ribbons or bevele… |
 | Facet Normals | `node.facet_normals` | Filter | Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy defo… |
@@ -365,7 +367,7 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | — | `system.generator_input` | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |
 | — | `system.source` | Source | The incoming image at the start of an effect chain. Wired in automatically. |
 
-### Fields & Coordinates (20)
+### Fields & Coordinates (21)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -389,8 +391,9 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
+| Wave Field 3D | `node.wave_field_3d` | Map | Samples a moving sine wave at every 3D point, producing weights for copy displacement or other maps. |
 
-### Effect & generator presets (75)
+### Effect & generator presets (78)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -467,6 +470,9 @@ _Generated from the node registry. Do not hand-edit. 265 nodes registered, group
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
+| `WaveGrid` | Wave Grid | generator | Geometry | 72 |
+| `WaveRing` | Wave Ring | generator | Geometry | 72 |
+| `WaveSpiral` | Wave Spiral | generator | Geometry | 72 |
 | `Wireframe` | Wireframe | generator | Geometry | 12 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
 
