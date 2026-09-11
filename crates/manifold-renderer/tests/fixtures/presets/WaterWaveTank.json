@@ -56,7 +56,7 @@
               "pool_max_x": {"type": "Float", "value": 0.0},
               "pool_max_y": {"type": "Float", "value": 0.90625},
               "pool_max_z": {"type": "Float", "value": 0.875},
-              "grid_spacing": {"type": "Float", "value": 0.0625},
+              "grid_spacing": {"type": "Float", "value": 0.04960628},
               "rest_density": {"type": "Float", "value": 1000.0}
             }
           },
@@ -195,7 +195,7 @@
             "nodeId": "surfaceFit",
             "typeId": "node.water_surface_fit",
             "handle": "fitted surface",
-            "params": {"radius": {"type": "Float", "value": 0.046875}, "center_blend": {"type": "Float", "value": 0.5}}
+            "params": {"radius": {"type": "Float", "value": 0.0234375}, "center_blend": {"type": "Float", "value": 0.35}}
           },
           {"id": 41, "nodeId": "surface_in", "typeId": "system.group_input", "handle": "input"},
           {
@@ -217,8 +217,8 @@
             "handle": "smooth H",
             "params": {
               "axis": {"type": "Enum", "value": 0},
-              "depth_sigma": {"type": "Float", "value": 0.05},
-              "spatial_step": {"type": "Float", "value": 2.0},
+              "depth_sigma": {"type": "Float", "value": 0.035},
+              "spatial_step": {"type": "Float", "value": 1.0},
               "value_space": {"type": "Enum", "value": 1}
             }
           },
@@ -229,8 +229,8 @@
             "handle": "smooth V",
             "params": {
               "axis": {"type": "Enum", "value": 1},
-              "depth_sigma": {"type": "Float", "value": 0.05},
-              "spatial_step": {"type": "Float", "value": 2.0},
+              "depth_sigma": {"type": "Float", "value": 0.035},
+              "spatial_step": {"type": "Float", "value": 1.0},
               "value_space": {"type": "Enum", "value": 1}
             }
           },
@@ -245,7 +245,7 @@
               "ior": {"type": "Float", "value": 1.333},
               "metallic": {"type": "Float", "value": 0.0},
               "roughness": {"type": "Float", "value": 0.04},
-              "volume_attenuation_distance": {"type": "Float", "value": 0.75},
+              "volume_attenuation_distance": {"type": "Float", "value": 0.375},
               "volume_attenuation_color_r": {"type": "Float", "value": 0.25},
               "volume_attenuation_color_g": {"type": "Float", "value": 0.65},
               "volume_attenuation_color_b": {"type": "Float", "value": 0.9}

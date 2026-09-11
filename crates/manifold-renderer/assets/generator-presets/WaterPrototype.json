@@ -328,7 +328,7 @@
             }
           },
           {"id": 51, "nodeId": "surfaceBins", "typeId": "node.water_particle_bins", "handle": "surface neighbours", "params": {}},
-          {"id": 52, "nodeId": "surfaceFit", "typeId": "node.water_surface_fit", "handle": "fitted surface", "params": {"radius": {"type": "Float", "value": 0.046875}, "center_blend": {"type": "Float", "value": 0.5}}},
+          {"id": 52, "nodeId": "surfaceFit", "typeId": "node.water_surface_fit", "handle": "fitted surface", "params": {"radius": {"type": "Float", "value": 0.046875}, "center_blend": {"type": "Float", "value": 0.35}}},
           {
             "id": 41,
             "nodeId": "surface_in",
@@ -356,8 +356,8 @@
             "handle": "smooth H",
             "params": {
               "axis": { "type": "Enum", "value": 0 },
-              "depth_sigma": { "type": "Float", "value": 0.05 },
-              "spatial_step": { "type": "Float", "value": 2.0 },
+              "depth_sigma": { "type": "Float", "value": 0.035 },
+              "spatial_step": { "type": "Float", "value": 1.0 },
               "value_space": { "type": "Enum", "value": 1 }
             }
           },
@@ -368,8 +368,8 @@
             "handle": "smooth V",
             "params": {
               "axis": { "type": "Enum", "value": 1 },
-              "depth_sigma": { "type": "Float", "value": 0.05 },
-              "spatial_step": { "type": "Float", "value": 2.0 },
+              "depth_sigma": { "type": "Float", "value": 0.035 },
+              "spatial_step": { "type": "Float", "value": 1.0 },
               "value_space": { "type": "Enum", "value": 1 }
             }
           },
