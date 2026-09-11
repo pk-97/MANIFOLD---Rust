@@ -312,8 +312,9 @@ before conversion. If quantisation fails the transfer tests, Sol reports the num
 evidence to Astra; it does not guess another encoding in a Luna lane.
 
 Fault bits: 1 nonfinite, 2 integer overflow, 4 outside supported domain/stencil,
-8 unsupported velocity/affine bound, 16 invalid density. Bounds for proof:
-`|v|<=4 m/s`, Frobenius `|C|<=64/s`, `0<rho<=4*rho0`. Exceeding bounds faults;
+8 reserved unsupported kinematics, 16 invalid density. Bounds for proof:
+`|v|<=4 m/s`, Frobenius `|C|<=64/s`, `0<rho<=4*rho0`. Finite velocity or
+affine excess warns; exceeding the density bound faults;
 these are not clamping controls. The rest-density CFL check at installation is
 `dt*(c0+v_max)/h<=0.25`; at the defaults it is about 0.233. This is a guard,
 not a mathematical guarantee of stability of the whole discretisation. The EOS

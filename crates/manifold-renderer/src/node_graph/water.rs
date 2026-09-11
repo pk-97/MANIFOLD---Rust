@@ -131,7 +131,7 @@ pub const PARTICLE_CAPACITY: usize = 131_072;
 pub const DEFAULT_STEP_DT: f32 = 1.0 / 960.0;
 /// Rest-density CFL guard: dt*(c0+v_max)/h must be <= this at install.
 pub const CFL_GUARD: f32 = 0.25;
-/// Proof kinematic bounds: exceeding these faults, it is not clamped.
+/// Scene-quality kinematic warning thresholds. Neither is clamped.
 pub const VELOCITY_BOUND: f32 = 4.0; // m/s
 pub const AFFINE_BOUND: f32 = 64.0; // Frobenius |C|, 1/s
 pub const DENSITY_MAX_MULTIPLE: f32 = 4.0; // rho <= 4*rho0

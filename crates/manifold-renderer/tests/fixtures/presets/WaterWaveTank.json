@@ -53,8 +53,8 @@
               "pool_min_x": {"type": "Float", "value": -1.5},
               "pool_min_y": {"type": "Float", "value": 0.28125},
               "pool_min_z": {"type": "Float", "value": -0.875},
-              "pool_max_x": {"type": "Float", "value": -0.5},
-              "pool_max_y": {"type": "Float", "value": 0.59375},
+              "pool_max_x": {"type": "Float", "value": 0.0},
+              "pool_max_y": {"type": "Float", "value": 0.90625},
               "pool_max_z": {"type": "Float", "value": 0.875},
               "grid_spacing": {"type": "Float", "value": 0.0625},
               "rest_density": {"type": "Float", "value": 1000.0}

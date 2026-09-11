@@ -27,7 +27,7 @@ use manifold_renderer::node_graph::primitives::{
 use manifold_renderer::node_graph::water::{
     acoustic_cfl, classify_position, WaterGridCell, WaterParticle, AFFINE_BOUND, DEFAULT_STEP_DT,
     DOMAIN_ORIGIN, DYNAMIC_VISCOSITY, FAULT_INTEGER_OVERFLOW, FAULT_NONFINITE,
-    FAULT_UNSUPPORTED_KINEMATICS, GRID_FIXED_SCALE,
+    GRID_FIXED_SCALE,
     GRID_SPACING, PARTICLE_CAPACITY, PARTICLE_MASS, REST_DENSITY, SEED_ACTIVE_PARTICLES,
     SOUND_SPEED_C0, STATUS_WORDS, VELOCITY_BOUND, WATER_DOMAIN,
 };
@@ -1753,8 +1753,8 @@ fn water_fault_retains_last_valid_state() {
 }
 
 /// The optional status sideband reports one internally consistent kinematic
-/// violation of each kind without changing the sticky word or touching legacy
-/// one-word status buffers.
+/// violation of each kind without touching legacy one-word status buffers.
+/// Finite velocity and affine excess are warning-only.
 #[test]
 fn water_validate_kinematic_diagnostics() {
     fn run(particles: &[WaterParticle]) -> Vec<u32> {
@@ -1800,7 +1800,7 @@ fn water_validate_kinematic_diagnostics() {
     velocity[2].position_mass[3] = PARTICLE_MASS;
     velocity[2].velocity_density[0] = 5.0;
     let payload = run(&velocity);
-    assert_eq!(payload[0] & FAULT_UNSUPPORTED_KINEMATICS, FAULT_UNSUPPORTED_KINEMATICS);
+    assert_eq!(payload[0], 0, "finite velocity excess is warning-only");
     assert_eq!(payload[1], 1, "velocity diagnostic kind");
     assert_eq!(f32::from_bits(payload[2]), 5.0);
     assert_eq!(payload[3], 3, "particle index is encoded as index + 1");
@@ -1813,7 +1813,7 @@ fn water_validate_kinematic_diagnostics() {
     affine[1].position_mass[3] = PARTICLE_MASS;
     affine[1].affine_x[0] = 65.0;
     let payload = run(&affine);
-    assert_eq!(payload[0] & FAULT_UNSUPPORTED_KINEMATICS, FAULT_UNSUPPORTED_KINEMATICS);
+    assert_eq!(payload[0], 0, "finite affine excess is warning-only");
     assert_eq!(payload[1], 2, "affine diagnostic kind");
     assert_eq!(f32::from_bits(payload[7]), 65.0);
     assert_eq!(payload[8], 2, "particle index is encoded as index + 1");
@@ -1822,6 +1822,7 @@ fn water_validate_kinematic_diagnostics() {
     both[1].position_mass[3] = PARTICLE_MASS;
     both[1].affine_x[0] = 65.0;
     let payload = run(&both);
+    assert_eq!(payload[0], 0, "finite kinematic excess is warning-only");
     assert_eq!(payload[1], 3, "both diagnostic kinds remain visible");
     assert_eq!(f32::from_bits(payload[2]), 5.0);
     assert_eq!(payload[3], 3);

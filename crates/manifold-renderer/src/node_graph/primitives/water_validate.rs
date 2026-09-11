@@ -2,10 +2,9 @@
 //!
 //! Every live candidate slot is checked for finiteness, stencil containment
 //! and the proof kinematic bounds (`|v| <= 4 m/s`, Frobenius `|C| <= 64/s`,
-//! `0 < rho <= 4*rho0`); findings OR into the sticky status word. A fixed
-//! status sideband records one violating particle's observed magnitude, index
-//! and position for each kinematic kind when available. Bounds fault — they
-//! are never clamped (design step 7). The output aliases the input status wire,
+//! `0 < rho <= 4*rho0`). Finite velocity and affine excess are warnings
+//! recorded in the status sideband; invalid density still ORs into the sticky
+//! fault word. Bounds are never clamped (design step 7). The output aliases the input status wire,
 //! and the incoming bits are OR'd through so a pre-existing sticky fault
 //! survives validation.
 //!
@@ -55,7 +54,7 @@ pub struct ValidateUniforms {
 crate::primitive! {
     name: WaterValidate,
     type_id: "node.water_validate",
-    purpose: "Validate the Live Water candidate state (design step 7): every live slot (mass != 0) is checked for finiteness, full 27-node stencil containment inside the guard shell, and the proof kinematic bounds |v| <= 4 m/s, Frobenius |C| <= 64/s, 0 < rho <= 4*rho0 — bounds fault, they are never clamped. Findings OR into the single sticky status word (bit 1 nonfinite, 2 integer overflow, 4 outside domain, 8 unsupported kinematics, 16 invalid density); the incoming status is OR'd through so a pre-existing sticky fault survives. Inactive slots (mass exactly zero) carry no checks. water_commit copies candidate to accepted only while the status word is clean.",
+    purpose: "Validate the Live Water candidate state (design step 7): every live slot (mass != 0) is checked for finiteness, full 27-node stencil containment inside the guard shell, and the proof kinematic bounds |v| <= 4 m/s, Frobenius |C| <= 64/s, 0 < rho <= 4*rho0. Finite velocity and affine excess are diagnostic-only; the other invalid states OR into the single sticky status word (bit 1 nonfinite, 2 integer overflow, 4 outside domain, 8 reserved unsupported kinematics, 16 invalid density). Bounds are never clamped. The incoming status is OR'd through so a pre-existing sticky fault survives. Inactive slots (mass exactly zero) carry no checks. water_commit copies candidate to accepted only while the status word is clean.",
     inputs: {
         particles: Array(WaterParticle) required,
         status: Array(u32) required,
@@ -101,7 +100,7 @@ crate::primitive! {
     composition_notes: "Sixth stage of the repeated water region body, wired to mpm_gather_advect's candidate output. Dispatches over the full wire capacity (a corrupt tail slot with nonzero mass must be caught, not skipped). The status wire is the same sticky word the scatter stages fault into — one word for the whole region, aliased end to end.",
     examples: [],
     picker: { label: "Water Validate", category: Atom },
-    summary: "Checks every live water particle for NaNs, runaway speeds and bad densities, and latches any fault into the sticky status word.",
+    summary: "Checks every live water particle for invalid numerical state and records finite kinematic excess as a warning.",
     category: Particles3D,
     role: Filter,
     aliases: ["water validate", "validate water", "water fault check"],

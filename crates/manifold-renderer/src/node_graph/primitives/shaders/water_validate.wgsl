@@ -3,8 +3,9 @@
 // Global fault OR into the sticky status word (design step 7): every live
 // candidate slot is checked for finiteness, positive mass, full stencil
 // containment and the proof kinematic bounds (|v| <= 4 m/s, Frobenius |C|
-// <= 64/s, 0 < rho <= 4*rho0). These are bounds, not clamps — exceeding them
-// faults. Inactive slots (mass exactly zero) carry no checks.
+// <= 64/s, 0 < rho <= 4*rho0). Finite velocity and affine excess are
+// diagnostic-only; the density bound still faults. Inactive slots (mass
+// exactly zero) carry no checks.
 //
 // The output aliases the input status wire; the kernel ORs the incoming bits
 // through (thread 0) so a pre-existing sticky fault survives validation, and
@@ -128,9 +129,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         let speed_sq = dot(vel, vel);
-        if (!(speed_sq <= params.velocity_bound * params.velocity_bound)) {
-            // NaN speed fails the comparison; finite excess too.
-            bits = bits | WATER_FAULT_UNSUPPORTED_KINEMATICS;
+        if (!water_finite1(speed_sq)) {
+            // Finite components can still overflow during the dot product.
+            bits = bits | WATER_FAULT_NONFINITE;
+        } else if (speed_sq > params.velocity_bound * params.velocity_bound) {
+            // A finite speed above the scene-quality threshold is warning-only
+            // so it cannot freeze an otherwise numerically valid simulation.
             record_kinematics_diagnostic(
                 idx,
                 WATER_DIAGNOSTIC_KIND_VELOCITY,
@@ -141,8 +145,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Frobenius |C|^2 over the nine affine components — compare squared
         // against the squared bound to avoid a sqrt.
         let c_sq = dot(cx, cx) + dot(cy, cy) + dot(cz, cz);
-        if (!(c_sq <= params.affine_bound * params.affine_bound)) {
-            bits = bits | WATER_FAULT_UNSUPPORTED_KINEMATICS;
+        if (!water_finite1(c_sq)) {
+            bits = bits | WATER_FAULT_NONFINITE;
+        } else if (c_sq > params.affine_bound * params.affine_bound) {
             record_kinematics_diagnostic(
                 idx,
                 WATER_DIAGNOSTIC_KIND_AFFINE,

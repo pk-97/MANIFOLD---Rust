@@ -50,6 +50,8 @@ pub struct StatusReadbackRing {
     event: manifold_gpu::GpuEvent,
     slots: Vec<StatusReadbackSlot>,
     reported: bool,
+    velocity_warning_reported: bool,
+    affine_warning_reported: bool,
     faulted: bool,
     next_ticket: u64,
     generation: u64,
@@ -167,6 +169,46 @@ const BOUNDARY_RESULTS: &[SubstepResultPorts] = &[
 ];
 
 impl WaterState {
+    fn status_velocity_warning_text(words: &[u32]) -> Option<String> {
+        if words.len() < STATUS_WORDS
+            || words[STATUS_DIAGNOSTIC_KINDS_WORD] & DIAGNOSTIC_KIND_VELOCITY == 0
+        {
+            return None;
+        }
+        let encoded_index = words[STATUS_VELOCITY_INDEX_WORD];
+        if encoded_index == 0 {
+            return None;
+        }
+        Some(format!(
+            "WaterState: velocity warning: magnitude={:.3}, particle={}, pos=({:.3},{:.3},{:.3})",
+            f32::from_bits(words[STATUS_VELOCITY_MAGNITUDE_WORD]),
+            encoded_index - 1,
+            f32::from_bits(words[STATUS_VELOCITY_POSITION_X_WORD]),
+            f32::from_bits(words[STATUS_VELOCITY_POSITION_Y_WORD]),
+            f32::from_bits(words[STATUS_VELOCITY_POSITION_Z_WORD]),
+        ))
+    }
+
+    fn status_affine_warning_text(words: &[u32]) -> Option<String> {
+        if words.len() < STATUS_WORDS
+            || words[STATUS_DIAGNOSTIC_KINDS_WORD] & DIAGNOSTIC_KIND_AFFINE == 0
+        {
+            return None;
+        }
+        let encoded_index = words[STATUS_AFFINE_INDEX_WORD];
+        if encoded_index == 0 {
+            return None;
+        }
+        Some(format!(
+            "WaterState: affine warning: magnitude={:.3}, particle={}, pos=({:.3},{:.3},{:.3})",
+            f32::from_bits(words[STATUS_AFFINE_MAGNITUDE_WORD]),
+            encoded_index - 1,
+            f32::from_bits(words[STATUS_AFFINE_POSITION_X_WORD]),
+            f32::from_bits(words[STATUS_AFFINE_POSITION_Y_WORD]),
+            f32::from_bits(words[STATUS_AFFINE_POSITION_Z_WORD]),
+        ))
+    }
+
     fn status_fault_text(words: &[u32]) -> Option<String> {
         let status = *words.first()?;
         if status == 0 {
@@ -241,6 +283,8 @@ impl WaterState {
     fn reset_status_ring(&mut self) {
         if let Some(ring) = &mut self.status_ring {
             ring.reported = false;
+            ring.velocity_warning_reported = false;
+            ring.affine_warning_reported = false;
             ring.faulted = false;
             ring.generation = ring.generation.wrapping_add(1);
             ring.last_frame_id = None;
@@ -263,6 +307,18 @@ impl WaterState {
             let collider = slot.collider;
             slot.ticket = 0;
             if slot.generation != ring.generation { continue; }
+            if !ring.velocity_warning_reported
+                && let Some(message) = Self::status_velocity_warning_text(words)
+            {
+                ring.velocity_warning_reported = true;
+                log::warn!("{message}");
+            }
+            if !ring.affine_warning_reported
+                && let Some(message) = Self::status_affine_warning_text(words)
+            {
+                ring.affine_warning_reported = true;
+                log::warn!("{message}");
+            }
             if status != 0 && !ring.reported {
                 ring.reported = true;
                 ring.faulted = true;
@@ -292,7 +348,7 @@ impl WaterState {
                 let buffer = gpu.device.create_buffer_shared(STATUS_BYTES);
                 slots.push(StatusReadbackSlot { buffer, ticket: 0, generation: 0, collider: Transform::default(), status_words: 0 });
             }
-            self.status_ring = Some(StatusReadbackRing { event, slots, reported: false, faulted: false, next_ticket: 0, generation: 0, last_frame_id: None });
+            self.status_ring = Some(StatusReadbackRing { event, slots, reported: false, velocity_warning_reported: false, affine_warning_reported: false, faulted: false, next_ticket: 0, generation: 0, last_frame_id: None });
         }
         let ring = self.status_ring.as_mut().expect("status ring initialized");
         let frame_id = ctx.simulation_frame.map(|f| f.frame_id);
@@ -735,6 +791,38 @@ mod tests {
             WaterState::status_fault_text(&[crate::node_graph::water::FAULT_NONFINITE]),
             Some("WaterState: solver fault status 0x00000001".to_string())
         );
+    }
+
+    #[test]
+    fn velocity_warning_text_does_not_require_a_fault_bit() {
+        let mut words = [0u32; STATUS_WORDS];
+        words[STATUS_DIAGNOSTIC_KINDS_WORD] = DIAGNOSTIC_KIND_VELOCITY;
+        words[STATUS_VELOCITY_MAGNITUDE_WORD] = 4.25f32.to_bits();
+        words[STATUS_VELOCITY_INDEX_WORD] = 8;
+        words[STATUS_VELOCITY_POSITION_X_WORD] = 1.0f32.to_bits();
+        words[STATUS_VELOCITY_POSITION_Y_WORD] = 2.0f32.to_bits();
+        words[STATUS_VELOCITY_POSITION_Z_WORD] = 3.0f32.to_bits();
+        assert_eq!(
+            WaterState::status_velocity_warning_text(&words),
+            Some("WaterState: velocity warning: magnitude=4.250, particle=7, pos=(1.000,2.000,3.000)".to_string())
+        );
+        assert_eq!(WaterState::status_fault_text(&words), None);
+    }
+
+    #[test]
+    fn affine_warning_text_does_not_require_a_fault_bit() {
+        let mut words = [0u32; STATUS_WORDS];
+        words[STATUS_DIAGNOSTIC_KINDS_WORD] = DIAGNOSTIC_KIND_AFFINE;
+        words[STATUS_AFFINE_MAGNITUDE_WORD] = 65.0f32.to_bits();
+        words[STATUS_AFFINE_INDEX_WORD] = 5;
+        words[STATUS_AFFINE_POSITION_X_WORD] = 4.0f32.to_bits();
+        words[STATUS_AFFINE_POSITION_Y_WORD] = 5.0f32.to_bits();
+        words[STATUS_AFFINE_POSITION_Z_WORD] = 6.0f32.to_bits();
+        assert_eq!(
+            WaterState::status_affine_warning_text(&words),
+            Some("WaterState: affine warning: magnitude=65.000, particle=4, pos=(4.000,5.000,6.000)".to_string())
+        );
+        assert_eq!(WaterState::status_fault_text(&words), None);
     }
 
     #[test]
