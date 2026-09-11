@@ -25,10 +25,6 @@ pub struct PickerItem {
     pub category: Option<String>,
     /// Extra haystack (aliases etc.); filter matches label + this.
     pub search_text: Option<String>,
-    /// Origin badge for library surfaces (PRESET_LIBRARY_DESIGN P5, D6):
-    /// display text only ("Factory" / "My Library" / "Project") —
-    /// filtering uses [`Self::source`], not this string.
-    pub badge: Option<String>,
     /// Source-filter dimension (PRESET_LIBRARY_DESIGN P5, D6): `None` for
     /// pickers with no source concept (the graph-editor node picker).
     pub source: Option<Source>,
@@ -315,7 +311,6 @@ mod tests {
             type_id: label.to_lowercase().replace(' ', "_"),
             category: category.map(str::to_string),
             search_text: search.map(str::to_string),
-            badge: None,
             source,
             thumbnail: None,
         }

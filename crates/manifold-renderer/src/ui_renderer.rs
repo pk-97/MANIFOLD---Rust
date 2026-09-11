@@ -375,7 +375,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return color;
     }
     // Mask space MUST be quad-local 0..1, never atlas uv: image nodes sample
-    // a sub-rect uv (audition cells), and raw uv spanning only that sub-range
+    // a sub-rect uv (clip-atlas / node-preview cells), and raw uv spanning only that sub-range
     // would round the corner matching the cell's ATLAS slot (col 0 →
     // top-left, col 15 → top-right, interior → no clipping at all).
     let local = (in.uv - in.uv_rect.xy) / (in.uv_rect.zw - in.uv_rect.xy);

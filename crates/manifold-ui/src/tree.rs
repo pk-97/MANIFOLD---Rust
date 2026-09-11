@@ -489,7 +489,8 @@ impl UITree {
 
     /// Add a non-interactive image node that samples a `uv` sub-rect
     /// (`[u0, v0, u1, v1]`) of `texture` instead of the whole texture — one
-    /// cell of a shared atlas (the browser's live audition grid). Identical
+    /// cell of a shared atlas (the graph canvas's node-preview atlas).
+    /// Identical
     /// to [`Self::add_image`] in every other respect; the default `uv` on
     /// `add_image` is the full `[0, 0, 1, 1]` rect.
     #[allow(clippy::too_many_arguments)]

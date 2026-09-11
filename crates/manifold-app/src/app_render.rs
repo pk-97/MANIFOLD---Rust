@@ -1815,7 +1815,6 @@ impl Application {
                                 type_id: a.type_id.clone(),
                                 category: Some(a.category.clone()),
                                 search_text,
-                                badge: None,
                                 // Node mode has no source concept
                                 // (PRESET_LIBRARY_DESIGN P5, D6) — the
                                 // graph-editor's node picker never renders

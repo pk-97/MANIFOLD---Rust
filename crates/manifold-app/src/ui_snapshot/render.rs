@@ -512,7 +512,6 @@ pub fn render_graph_editor_to_png(
                 type_id: a.type_id,
                 category: None,
                 search_text: None,
-                badge: None,
                 source: None,
                 thumbnail: None,
             })
