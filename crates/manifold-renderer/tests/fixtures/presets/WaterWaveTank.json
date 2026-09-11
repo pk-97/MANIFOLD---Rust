@@ -79,7 +79,10 @@
               "basin_min_y": {"type": "Float", "value": 0.25},
               "basin_min_z": {"type": "Float", "value": -1.125},
               "basin_max_y": {"type": "Float", "value": 4.0},
-              "basin_max_z": {"type": "Float", "value": 1.125}
+              "basin_max_z": {"type": "Float", "value": 1.125},
+              "cube_half_x": {"type": "Float", "value": 0.12},
+              "cube_half_y": {"type": "Float", "value": 0.35},
+              "cube_half_z": {"type": "Float", "value": 0.3}
             }
           },
           {"id": 24, "nodeId": "gather", "typeId": "node.mpm_gather_advect", "handle": "gather advect", "params": {}},
@@ -129,6 +132,8 @@
           {"fromNode": 13, "fromPort": "step_dt", "toNode": 22, "toPort": "step_dt"},
           {"fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "accumulator"},
           {"fromNode": 13, "fromPort": "step_dt", "toNode": 23, "toPort": "step_dt"},
+          {"fromNode":25,"fromPort":"transform","toNode":23,"toPort":"collider"},
+          {"fromNode":25,"fromPort":"velocity","toNode":23,"toPort":"collider_velocity"},
           {"fromNode": 22, "fromPort": "particles_out", "toNode": 24, "toPort": "particles"},
           {"fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "grid"},
           {"fromNode": 13, "fromPort": "step_dt", "toNode": 24, "toPort": "step_dt"},

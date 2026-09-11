@@ -22,7 +22,7 @@ use manifold_renderer::node_graph::primitives::{
     ClearGrid, ClearGridUniforms, CommitUniforms, GatherAdvectUniforms, GridVelocityUniforms,
     MpmGatherAdvect, MpmGridVelocity, MpmScatterMassMomentum, MpmScatterStress, SeedWater,
     SeedWaterUniforms, ValidateUniforms, WaterCommit, WaterValidate, ACCUM_ITEMS, BASIN_MAX,
-    BASIN_MIN, CELL_COUNT, SCATTER_MASS_WGSL, SCATTER_STRESS_WGSL, VALIDATE_WGSL,
+    BASIN_MIN, CELL_COUNT, CUBE_HALF, SCATTER_MASS_WGSL, SCATTER_STRESS_WGSL, VALIDATE_WGSL,
 };
 use manifold_renderer::node_graph::water::{
     acoustic_cfl, classify_position, WaterGridCell, WaterParticle, AFFINE_BOUND, DEFAULT_STEP_DT,
@@ -537,6 +537,9 @@ fn substep_inner(
 
     let grid_u = GridVelocityUniforms {
         step_dt: dt,
+        cube_half_x: CUBE_HALF[0],
+        cube_half_y: CUBE_HALF[1],
+        cube_half_z: CUBE_HALF[2],
         basin_min_x: basin_min[0],
         basin_min_y: basin_min[1],
         basin_min_z: basin_min[2],
@@ -544,6 +547,13 @@ fn substep_inner(
         basin_max_y: basin_max[1],
         basin_max_z: basin_max[2],
         cell_count: CELL_COUNT as i32,
+        collider_enabled: 0,
+        collider_x: 0.0,
+        collider_y: 0.0,
+        collider_z: 0.0,
+        collider_velocity_x: 0.0,
+        collider_velocity_y: 0.0,
+        collider_velocity_z: 0.0,
         gravity_x: gravity[0],
         gravity_y: gravity[1],
         gravity_z: gravity[2],
@@ -685,6 +695,141 @@ fn substep_inner(
 // ---------------------------------------------------------------------------
 // Proofs
 // ---------------------------------------------------------------------------
+
+#[test]
+fn water_grid_velocity_collider_boundary_native() {
+    // Six nodes sit exactly on the faces of the default cube; one node is
+    // outside it. The nonzero collider velocity makes the proof
+    // exercise relative, rather than world-space, normal velocity.
+    let collider = [0.0, 1.0, 0.0];
+    let collider_velocity = [0.5, -0.25, 1.0];
+    let faces: [([u32; 3], [f32; 3], [f32; 3]); 6] = [
+        ([28, 16, 32], [-1.0, 0.0, 0.0], [0.0, 0.4, 0.5]),
+        ([36, 16, 32], [1.0, 0.0, 0.0], [0.0, 0.4, 0.5]),
+        ([32, 12, 32], [0.0, -1.0, 0.0], [0.3, 0.0, 0.5]),
+        ([32, 20, 32], [0.0, 1.0, 0.0], [0.3, 0.0, 0.5]),
+        ([32, 16, 28], [0.0, 0.0, -1.0], [0.3, 0.4, 0.0]),
+        ([32, 16, 36], [0.0, 0.0, 1.0], [0.3, 0.4, 0.0]),
+    ];
+    let outward = ([28, 17, 32], [-0.5, 0.15, 1.25]);
+    let outside = ([32, 16, 40], [0.3, -0.4, 0.7]);
+    let cell_index = |[x, y, z]: [u32; 3]| (x + 64 * (y + 64 * z)) as usize;
+
+    let mut velocities = Vec::with_capacity(faces.len() + 1);
+    let mut accum = vec![0i32; CELLS_4];
+    for (cell, normal, tangent) in faces {
+        let v = [
+            collider_velocity[0] - 2.0 * normal[0] + tangent[0],
+            collider_velocity[1] - 2.0 * normal[1] + tangent[1],
+            collider_velocity[2] - 2.0 * normal[2] + tangent[2],
+        ];
+        let base = 4 * cell_index(cell);
+        accum[base] = quantise(v[0]);
+        accum[base + 1] = quantise(v[1]);
+        accum[base + 2] = quantise(v[2]);
+        accum[base + 3] = GRID_FIXED_SCALE;
+        velocities.push((cell, normal, tangent, v));
+    }
+    let outside_base = 4 * cell_index(outside.0);
+    accum[outside_base] = quantise(outside.1[0]);
+    accum[outside_base + 1] = quantise(outside.1[1]);
+    accum[outside_base + 2] = quantise(outside.1[2]);
+    accum[outside_base + 3] = GRID_FIXED_SCALE;
+    let outward_base = 4 * cell_index(outward.0);
+    accum[outward_base] = quantise(outward.1[0]);
+    accum[outward_base + 1] = quantise(outward.1[1]);
+    accum[outward_base + 2] = quantise(outward.1[2]);
+    accum[outward_base + 3] = GRID_FIXED_SCALE;
+
+    let accum_buf = device().create_buffer_shared(ACCUM_BYTES);
+    let output_buf = device().create_buffer_shared(GRID_BYTES * GRID_CELLS as u64);
+    unsafe { accum_buf.write(0, bytemuck::cast_slice(&accum)); }
+
+    let dispatch = |enabled: u32| {
+        let uniforms = GridVelocityUniforms {
+            step_dt: 0.0,
+            cube_half_x: CUBE_HALF[0],
+            cube_half_y: CUBE_HALF[1],
+            cube_half_z: CUBE_HALF[2],
+            basin_min_x: -10.0,
+            basin_min_y: -10.0,
+            basin_min_z: -10.0,
+            basin_max_x: 10.0,
+            basin_max_y: 10.0,
+            basin_max_z: 10.0,
+            cell_count: CELL_COUNT as i32,
+            collider_enabled: enabled,
+            collider_x: collider[0],
+            collider_y: collider[1],
+            collider_z: collider[2],
+            collider_velocity_x: collider_velocity[0],
+            collider_velocity_y: collider_velocity[1],
+            collider_velocity_z: collider_velocity[2],
+            gravity_x: 0.0,
+            gravity_y: 0.0,
+            gravity_z: 0.0,
+            dispatch_count: CELL_COUNT,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let mut enc = device().create_encoder("water-grid-collider-proof");
+        enc.dispatch_compute(
+            &kernels().grid_velocity,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &accum_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &output_buf, offset: 0 },
+            ],
+            ceil256(CELL_COUNT),
+            "node.mpm_grid_velocity",
+        );
+        enc.commit_and_wait_completed();
+        read_grid(&output_buf)
+    };
+
+    let disabled = dispatch(0);
+    for (cell, _normal, _tangent, expected) in &velocities {
+        let actual = disabled[cell_index(*cell)].velocity_mass;
+        for axis in 0..3 {
+            assert!((actual[axis] - expected[axis]).abs() < 2.0e-4, "disabled collider changed node {cell:?}: {actual:?} vs {expected:?}");
+        }
+    }
+    let outside_disabled = disabled[cell_index(outside.0)].velocity_mass;
+    for (actual, expected) in outside_disabled.iter().zip(outside.1.iter()).take(3) {
+        assert!((*actual - *expected).abs() < 2.0e-4);
+    }
+    let outward_disabled = disabled[cell_index(outward.0)].velocity_mass;
+    for (actual, expected) in outward_disabled.iter().zip(outward.1.iter()).take(3) {
+        assert!((*actual - *expected).abs() < 2.0e-4);
+    }
+
+    let enabled = dispatch(1);
+    for (cell, normal, tangent, expected) in &velocities {
+        let actual = enabled[cell_index(*cell)].velocity_mass;
+        let expected_normal = collider_velocity[0] * normal[0]
+            + collider_velocity[1] * normal[1]
+            + collider_velocity[2] * normal[2];
+        let actual_normal = actual[0] * normal[0] + actual[1] * normal[1] + actual[2] * normal[2];
+        assert!((actual_normal - expected_normal).abs() < 2.0e-4, "face {cell:?} normal changed incorrectly: {actual:?}");
+        for axis in 0..3 {
+            if normal[axis] == 0.0 {
+                assert!((actual[axis] - expected[axis]).abs() < 2.0e-4, "face {cell:?} tangent changed: {actual:?} vs {expected:?}");
+            }
+        }
+        let tangent_dot = actual[0] * tangent[0] + actual[1] * tangent[1] + actual[2] * tangent[2];
+        let expected_tangent_dot = expected[0] * tangent[0] + expected[1] * tangent[1] + expected[2] * tangent[2];
+        assert!((tangent_dot - expected_tangent_dot).abs() < 2.0e-4);
+    }
+    let outside_enabled = enabled[cell_index(outside.0)].velocity_mass;
+    for (actual, expected) in outside_enabled.iter().zip(outside.1.iter()).take(3) {
+        assert!((*actual - *expected).abs() < 2.0e-4, "outside node changed: {outside_enabled:?}");
+    }
+    let outward_enabled = enabled[cell_index(outward.0)].velocity_mass;
+    for (actual, expected) in outward_enabled.iter().zip(outward.1.iter()).take(3) {
+        assert!((*actual - *expected).abs() < 2.0e-4, "outward node changed: {outward_enabled:?}");
+    }
+}
 
 #[test]
 fn water_scatter_kernels_reach_high_index_particle() {

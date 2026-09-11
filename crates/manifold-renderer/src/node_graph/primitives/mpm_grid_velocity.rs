@@ -2,11 +2,11 @@
 //!
 //! Resolves the fixed-point accumulation wire into grid velocities
 //! (`v_i = dequantise(momentum) / dequantise(mass) + gravity*step_dt` for
-//! nonempty cells, zero for empty cells), then applies the static-basin
-//! no-penetration boundary: at solid boundary nodes only the normal
-//! component is removed (free-slip tangential, design step 5). The moving
-//! collider boundary (design step 5, relative velocity) is S5 — this stage
-//! is the static proof basin.
+//! nonempty cells, zero for empty cells), then applies the static-basin and
+//! translating-collider no-penetration boundaries: at solid boundary nodes
+//! only the inward normal component is removed (free-slip tangential, design
+//! step 5). The collider is optional so saved basin-only graphs retain their
+//! previous output exactly.
 //!
 //! Contract: docs/WATER_SIMULATION_DESIGN.md sections 3 and 5;
 //! docs/WATER_IMPLEMENTATION_PLAN.md section 2.2 (stage port table).
@@ -35,17 +35,17 @@ pub const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
 /// Cells of the default 64^3 proof domain.
 pub const CELL_COUNT: u32 = 64 * 64 * 64;
 
-/// Generated-codegen uniform layout: scalar params in PARAMS order
-/// (`step_dt`, the six basin bounds, the allocation-only `cell_count`
-/// Int -> i32), then the derived `gravity` vec3 as three consecutive f32
-/// fields (buffer-path vec3 packing), then the codegen-injected
-/// `dispatch_count`. 13 words + 3 pad = 64 bytes. Field order must match
-/// the generated WGSL `Params` exactly — the macro PARAMS list is the
-/// single source.
+/// Generated-codegen uniform layout: scalar params in PARAMS order, then the
+/// derived collider enable flag, collider centre/velocity and gravity vec3s
+/// as consecutive f32 fields (buffer-path vec3 packing), then the codegen-
+/// injected `dispatch_count`. Field order must match generated WGSL `Params`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GridVelocityUniforms {
     pub step_dt: f32,
+    pub cube_half_x: f32,
+    pub cube_half_y: f32,
+    pub cube_half_z: f32,
     pub basin_min_x: f32,
     pub basin_min_y: f32,
     pub basin_min_z: f32,
@@ -53,6 +53,13 @@ pub struct GridVelocityUniforms {
     pub basin_max_y: f32,
     pub basin_max_z: f32,
     pub cell_count: i32,
+    pub collider_enabled: u32,
+    pub collider_x: f32,
+    pub collider_y: f32,
+    pub collider_z: f32,
+    pub collider_velocity_x: f32,
+    pub collider_velocity_y: f32,
+    pub collider_velocity_z: f32,
     pub gravity_x: f32,
     pub gravity_y: f32,
     pub gravity_z: f32,
@@ -65,10 +72,12 @@ pub struct GridVelocityUniforms {
 crate::primitive! {
     name: MpmGridVelocity,
     type_id: "node.mpm_grid_velocity",
-    purpose: "Resolve the Live Water accumulation wire into grid velocities (design step 5): v_i = dequantised momentum / dequantised mass + gravity*step_dt for nonempty cells, zero for empty cells, written as WaterGridCell (velocity xyz, mass w). Then the static-basin no-penetration boundary: nodes at or outside a basin face may not move into the wall — only the normal component is removed, tangential flow is free-slip. Bounds arrive as params (defaults enclose the design section 8 pool); gravity arrives on three optional scalar wires (default -9.81 m/s^2 Y). The translating-collider boundary is node.water_collide_box / S5, not this stage.",
+    purpose: "Resolve the Live Water accumulation wire into grid velocities (design step 5): v_i = dequantised momentum / dequantised mass + gravity*step_dt for nonempty cells, zero for empty cells, written as WaterGridCell (velocity xyz, mass w). Apply static-basin and optional translating-collider no-penetration boundaries: only the inward normal component is removed and tangential flow is free-slip. The optional collider Transform and ScalarVec3 velocity use the same fixed AABB as node.water_collide_box; an unwired collider preserves basin-only behaviour. Bounds arrive as params (defaults enclose the design section 8 pool); gravity arrives on three optional scalar wires (default -9.81 m/s^2 Y).",
     inputs: {
         accumulator: Channels["water_grid_accum": I32] required,
         step_dt: ScalarF32 optional,
+        collider: Transform optional,
+        collider_velocity: ScalarVec3 optional,
         gravity_x: ScalarF32 optional,
         gravity_y: ScalarF32 optional,
         gravity_z: ScalarF32 optional,
@@ -83,6 +92,30 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(DEFAULT_STEP_DT),
             range: Some((1.0e-5, 1.0e-2)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("cube_half_x"),
+            label: "Cube Half X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[0]),
+            range: Some((0.01, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("cube_half_y"),
+            label: "Cube Half Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[1]),
+            range: Some((0.01, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("cube_half_z"),
+            label: "Cube Half Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[2]),
+            range: Some((0.01, 2.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -143,17 +176,17 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Fourth stage of the repeated water region body, after the two mpm_scatter stages. The accumulator is consumed BufferGather-style (the body reads the four i32 slots of its own cell); output cell_count must be exactly nx*ny*nz for the configured domain. Basin defaults match node.seed_water's default pool: floor at the pool bottom, walls 0.125 m outside the pool edge.",
+    composition_notes: "Fourth stage of the repeated water region body, after the two mpm_scatter stages. The accumulator is consumed BufferGather-style (the body reads the four i32 slots of its own cell); output cell_count must be exactly nx*ny*nz for the configured domain. Wire the accepted collider Transform and collider velocity from node.water_collider_motion to apply the same translating AABB boundary as node.water_collide_box. Leave the optional collider unwired for basin-only compatibility. Basin defaults match node.seed_water's default pool: floor at the pool bottom, walls 0.125 m outside the pool edge.",
     examples: [],
     picker: { label: "MPM Grid Velocity", category: Atom },
-    summary: "Turns the grid's accumulated momentum into cell velocities, adds gravity, and stops the wall and floor cells from pushing into the basin.",
+    summary: "Turns accumulated momentum into cell velocities, adds gravity, and applies basin and translating-cube free-slip boundaries.",
     category: Particles3D,
     role: Filter,
     aliases: ["mpm grid velocity", "grid resolve", "grid force", "water grid"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/mpm_grid_velocity_body.wgsl"),
     input_access: [BufferGather],
-    derived_uniforms: ["gravity:vec3"],
+    derived_uniforms: ["collider_enabled:u32", "collider:vec3", "collider_velocity:vec3", "gravity:vec3"],
     wgsl_includes: [include_str!("shaders/water_common.wgsl")],
 }
 
@@ -185,6 +218,13 @@ impl Primitive for MpmGridVelocity {
             read_axis("gravity_y", GRAVITY[1]),
             read_axis("gravity_z", GRAVITY[2]),
         ];
+        let collider = ctx.inputs.transform("collider");
+        let collider_enabled = u32::from(collider.is_some());
+        let collider_center = collider.map(|t| t.pos).unwrap_or([0.0; 3]);
+        let collider_velocity = match ctx.inputs.scalar("collider_velocity") {
+            Some(ParamValue::Vec3(v)) => v,
+            _ => [0.0; 3],
+        };
         let read_param = |name: &str, default: f32| match ctx.params.get(name) {
             Some(ParamValue::Float(f)) => *f,
             _ => default,
@@ -220,6 +260,9 @@ impl Primitive for MpmGridVelocity {
 
         let uniforms = GridVelocityUniforms {
             step_dt,
+            cube_half_x: read_param("cube_half_x", crate::node_graph::primitives::CUBE_HALF[0]),
+            cube_half_y: read_param("cube_half_y", crate::node_graph::primitives::CUBE_HALF[1]),
+            cube_half_z: read_param("cube_half_z", crate::node_graph::primitives::CUBE_HALF[2]),
             basin_min_x: read_param("basin_min_x", BASIN_MIN[0]),
             basin_min_y: read_param("basin_min_y", BASIN_MIN[1]),
             basin_min_z: read_param("basin_min_z", BASIN_MIN[2]),
@@ -227,6 +270,13 @@ impl Primitive for MpmGridVelocity {
             basin_max_y: read_param("basin_max_y", BASIN_MAX[1]),
             basin_max_z: read_param("basin_max_z", BASIN_MAX[2]),
             cell_count: cell_count as i32,
+            collider_enabled,
+            collider_x: collider_center[0],
+            collider_y: collider_center[1],
+            collider_z: collider_center[2],
+            collider_velocity_x: collider_velocity[0],
+            collider_velocity_y: collider_velocity[1],
+            collider_velocity_z: collider_velocity[2],
             gravity_x: gravity[0],
             gravity_y: gravity[1],
             gravity_z: gravity[2],
@@ -283,6 +333,12 @@ mod tests {
         assert_eq!(MpmGridVelocity::OUTPUTS.len(), 1);
         assert_eq!(MpmGridVelocity::OUTPUTS[0].name, "out");
         assert_eq!(MpmGridVelocity::OUTPUTS[0].ty, PortType::Array(grid_layout));
+        let collider = MpmGridVelocity::INPUTS
+            .iter()
+            .find(|p| p.name == "collider")
+            .expect("optional collider input");
+        assert_eq!(collider.ty, PortType::Transform);
+        assert!(!collider.required);
     }
 
     #[test]
@@ -299,6 +355,36 @@ mod tests {
                 .expect("node.mpm_grid_velocity standalone codegen");
         assert!(wgsl.contains("var<storage, read> buf_accumulator: array<i32>"));
         assert!(wgsl.contains("gravity_x"));
+        assert!(wgsl.contains("collider_enabled: u32"));
+        assert!(wgsl.contains("collider_velocity"));
         assert!(wgsl.contains("vec4<f32>"), "single-channel Vec4F output");
+    }
+
+    #[test]
+    fn grid_velocity_uses_water_collide_box_half_extent_defaults() {
+        assert_eq!(
+            MpmGridVelocity::PARAMS
+                .iter()
+                .find(|p| p.name == "cube_half_x")
+                .expect("cube_half_x")
+                .default,
+            ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[0])
+        );
+        assert_eq!(
+            MpmGridVelocity::PARAMS
+                .iter()
+                .find(|p| p.name == "cube_half_y")
+                .expect("cube_half_y")
+                .default,
+            ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[1])
+        );
+        assert_eq!(
+            MpmGridVelocity::PARAMS
+                .iter()
+                .find(|p| p.name == "cube_half_z")
+                .expect("cube_half_z")
+                .default,
+            ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[2])
+        );
     }
 }

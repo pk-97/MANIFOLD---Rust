@@ -228,6 +228,8 @@
           {"fromNode": 13, "fromPort": "step_dt", "toNode": 22, "toPort": "step_dt"},
           {"fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "accumulator"},
           {"fromNode": 13, "fromPort": "step_dt", "toNode": 23, "toPort": "step_dt"},
+          {"fromNode": 25, "fromPort": "transform", "toNode": 23, "toPort": "collider"},
+          {"fromNode": 25, "fromPort": "velocity", "toNode": 23, "toPort": "collider_velocity"},
           {"fromNode": 22, "fromPort": "particles_out", "toNode": 24, "toPort": "particles"},
           {"fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "grid"},
           {"fromNode": 13, "fromPort": "step_dt", "toNode": 24, "toPort": "step_dt"},
