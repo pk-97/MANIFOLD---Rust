@@ -23,11 +23,11 @@ use crate::node_graph::water::{DEFAULT_STEP_DT, WaterGridCell};
 /// Default static basin interior (design section 8: walls enclose the
 /// default 2x0.5x2 m pool with splash room; the floor sits at the pool
 /// bottom). Nodes at or outside a face are solid and get the no-penetration
-/// projection. The ceiling at the domain top is never reached by any node
-/// (node 63 sits at 3.9375 m < 4.0 m).
+/// projection. The ceiling stays one half-cell below node 63 so a particle
+/// projected onto it retains a complete 27-node transfer stencil.
 pub const BASIN_MIN: [f32; 3] = [-1.125, 0.25, -1.125];
 /// Default static basin interior top — see [`BASIN_MIN`].
-pub const BASIN_MAX: [f32; 3] = [1.125, 4.0, 1.125];
+pub const BASIN_MAX: [f32; 3] = [1.125, 3.875, 1.125];
 
 /// Default gravity, m/s^2 (Y up).
 pub const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
@@ -386,5 +386,14 @@ mod tests {
                 .default,
             ParamValue::Float(crate::node_graph::primitives::CUBE_HALF[2])
         );
+    }
+
+    #[test]
+    fn basin_ceiling_retains_a_complete_particle_stencil() {
+        assert!(crate::node_graph::water::classify_position(
+            [0.0, BASIN_MAX[1], 0.0],
+            &crate::node_graph::water::WATER_DOMAIN,
+        )
+        .is_ok());
     }
 }
