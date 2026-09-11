@@ -15,7 +15,7 @@
         "name": "Amount",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.5,
+        "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -62,7 +62,7 @@
       {
         "id": "amount",
         "label": "Amount",
-        "defaultValue": 0.5,
+        "defaultValue": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "wet_dry",

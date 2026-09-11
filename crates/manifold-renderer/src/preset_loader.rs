@@ -791,6 +791,78 @@ mod tests {
         assert_eq!(ids, sorted, "effect catalog must be sorted by type id");
     }
 
+    /// STATIC_THUMBNAILS D5: every wet/dry-style factory param (id
+    /// `amount`/`mix`) defaults to 1.0. Walks the raw preset JSON (both
+    /// stock dirs) so a hand-edit that skips the loader still fails here.
+    #[test]
+    fn factory_amount_defaults_full() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut violations: Vec<String> = Vec::new();
+        for subdir in ["assets/effect-presets", "assets/generator-presets"] {
+            let dir = manifest_dir.join(subdir);
+            let entries = fs::read_dir(&dir).expect("stock preset dir must read");
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).expect("preset JSON must read");
+                let value: serde_json::Value =
+                    serde_json::from_str(&text).expect("preset JSON must parse");
+                collect_amount_violations(&value, "", &path, &mut violations);
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "amount/mix defaults must be 1.0:\n{}",
+            violations.join("\n"),
+        );
+    }
+
+    /// Recurses `node`, flagging every object whose `id` is a wet/dry
+    /// param whose `defaultValue` isn't 1.0. `pointer` is the JSON path
+    /// for the failure message.
+    fn collect_amount_violations(
+        node: &serde_json::Value,
+        pointer: &str,
+        path: &Path,
+        violations: &mut Vec<String>,
+    ) {
+        match node {
+            serde_json::Value::Object(map) => {
+                if matches!(map.get("id").and_then(|v| v.as_str()), Some("amount" | "mix")) {
+                    if let Some(default) = map.get("defaultValue").and_then(|v| v.as_f64()) {
+                        if default != 1.0 {
+                            violations.push(format!(
+                                "{}: {pointer} defaultValue={default}",
+                                path.display()
+                            ));
+                        }
+                    }
+                }
+                for (key, value) in map {
+                    let child = if pointer.is_empty() {
+                        format!("/{key}")
+                    } else {
+                        format!("{pointer}/{key}")
+                    };
+                    collect_amount_violations(value, &child, path, violations);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, value) in items.iter().enumerate() {
+                    collect_amount_violations(
+                        value,
+                        &format!("{pointer}/{i}"),
+                        path,
+                        violations,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Unique scratch dir per test, cleaned up at the end.
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

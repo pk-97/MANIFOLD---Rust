@@ -15,7 +15,7 @@
         "name": "Amount",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.5,
+        "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -50,7 +50,7 @@
         "name": "Mode",
         "min": 0.0,
         "max": 2.0,
-        "defaultValue": 2.0,
+        "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
@@ -66,7 +66,7 @@
       {
         "id": "amount",
         "label": "Amount",
-        "defaultValue": 0.5,
+        "defaultValue": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "gain",
@@ -105,7 +105,7 @@
       {
         "id": "mode",
         "label": "Mode",
-        "defaultValue": 2.0,
+        "defaultValue": 0.0,
         "target": {
           "kind": "node",
           "nodeId": "mode",
@@ -283,7 +283,7 @@
       "params": {
         "selector": {
           "type": "Float",
-          "value": 2.0
+          "value": 0.0
         },
         "num_inputs": {
           "type": "Int",
