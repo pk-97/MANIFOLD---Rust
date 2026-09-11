@@ -1,11 +1,13 @@
 # Scene Modifier Framework — 3D scene behaviors as first-class cards
 
-**Status:** SHIPPED — P1–P5 complete (descriptor registry + generic command pair; loop + fog kinds; inspector cards + picker; loop movement controls; E/D trigger chrome verified end-to-end by the scene-setup-modifier-trigger flow). Owed: BUG-6dh6 (modifier-coupled-rows-bypassed-by-modulation-writes), BUG-dppd (live-midi-phantom-clips-never-arm-decay-envelopes — engine-wide carry, not this design's scope), Deferred section 7. Loop behavior contract: SCENE_LOOP_DESIGN.md. · k27 (lane), k3 (lead)
-**Prerequisites:** SCENE_LOOP P1–P4 (on main — the loop is this framework's first kind), WIDGET_TREE_DESIGN P1–P5 (the `ParamSurface` card layer), SCENE_PANEL_EXPOSURE_CONVERGENCE (scene rows are card rows). All on main; nothing unbuilt.
+**Status:** SHIPPED — P1–P5: registry, commands, Loop/Fog cards and trigger controls. Photoscan mesh extension implemented under SCENE_MODIFIER_PROGRAMME.md §2b. Owed: BUG-6dh6, BUG-dppd and section 7. · k27 (lane), k3 (lead)
+**Prerequisites:** Shipped SCENE_LOOP P1–P4, WIDGET_TREE_DESIGN P1–P5 and SCENE_PANEL_EXPOSURE_CONVERGENCE.
 Lifecycle: contract — the modifier descriptor, D1–D8 decisions, and INV-M1..M9 invariants are the cited contract for any future modifier kind.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 **Proposed successor (2026-09-10):** [Mathematical Scene Modifier Programme](SCENE_MODIFIER_PROGRAMME.md) and [Preset Architecture](SCENE_MODIFIER_PRESET_ARCHITECTURE.md) propose file-defined, repeated modifier instances and ordered expansion. They do not change shipped behaviour yet. This document's derived-list/Rust-descriptor rules remain current until the foundation migration lands; geometry and compatibility invariants must be preserved.
+
+The photoscan slice extends the existing plan with stable nested mesh-stage splices and a value-based enable declaration. Recipe groups and shared bindings remain ordinary saved graph data. Its attachment, inverse removal, reference-coordinate and raster qualification contracts are in [programme §2b](SCENE_MODIFIER_PROGRAMME.md#2b-photoscan-modifier-slice); this does not implement the successor's canonical stack.
 
 A scene modifier is to a 3D scene what an effect is to a 2D layer: a named,
 carded, triggerable behavior the performer adds, tunes, enables, and removes

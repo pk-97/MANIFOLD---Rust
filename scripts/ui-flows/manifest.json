@@ -92,6 +92,7 @@
     ]
   },
   "flows": {
+    "scene-photoscan-modifiers": "gltfscene",
     "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
     "automation-placeholder-first-click": "automationplaceholder",

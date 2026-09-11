@@ -10,6 +10,11 @@
 //!   cargo run -p manifold-renderer --bin render-import -- \
 //!       tests/fixtures/gltf/DamagedHelmet.glb --out /tmp/helmet.png
 //!
+//! The input may also be a saved `EffectGraphDef` `.json` or
+//! `.manifoldpreset`. This renders an already edited import graph through
+//! the same runtime, including scene modifiers applied by editing commands.
+//! Source file paths in saved graphs must already resolve from the working directory.
+//!
 //! `--param id=value` overrides an outer-card param by id (same mechanism
 //! `render-generator-preset` uses — the import graph's own
 //! `preset_metadata.params`, e.g. `cam_dist`, `7_intensity`, `1_intensity`).
@@ -280,7 +285,7 @@ fn main() {
         std::process::exit(2);
     }
 
-    let (def, report) = match assemble_import_graph(&args.glb) {
+    let (def, report) = match load_render_input(&args.glb) {
         Ok(pair) => pair,
         Err(e) => {
             eprintln!("render-import: import error for {}: {e}", args.glb.display());
@@ -721,6 +726,20 @@ fn render_single_frame(
     let png = encode_rgba8_png(&final_rgba, args.width, args.height);
     std::fs::write(&args.out, &png).unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
     println!("OK {} ({}x{})", args.out.display(), args.width, args.height);
+}
+
+fn load_render_input(
+    path: &std::path::Path,
+) -> Result<(manifold_core::effect_graph_def::EffectGraphDef, String), String> {
+    if matches!(path.extension().and_then(|s| s.to_str()), Some("json" | "manifoldpreset")) {
+        let bytes = std::fs::read(path).map_err(|e| format!("read saved graph: {e}"))?;
+        let def = serde_json::from_slice(&bytes).map_err(|e| format!("parse saved graph: {e}"))?;
+        Ok((def, "saved graph".to_string()))
+    } else {
+        assemble_import_graph(path)
+            .map(|(def, report)| (def, format!("{report:?}")))
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]

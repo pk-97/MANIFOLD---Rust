@@ -153,6 +153,8 @@ pub enum EnableDecl {
         target_node: &'static str,
         target_param: &'static str,
     },
+    /// One value atom drives all mesh stages through shared bindings.
+    Value { node_id: &'static str },
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +383,24 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 pub use scene_modifier_loop::{LOOP_KIND_ID, migrate_fixed_row_scene_loops, migrate_loop_exposure_rows, migrate_pre_switch_scene_loops, SCENE_LOOP_DESCRIPTOR};
 
 pub use scene_modifier_fog::{FOG_KIND_ID, SCENE_FOG_DESCRIPTOR};
+
+#[path = "scene_modifier_mesh.rs"]
+mod scene_modifier_mesh;
+pub use scene_modifier_mesh::{
+    ELASTIC_SCULPTURE_DESCRIPTOR, SURFACE_PEEL_DESCRIPTOR, VORTEX_FRAGMENTS_DESCRIPTOR,
+};
+
+::inventory::submit! {
+    SceneModifierDescriptorEntry { descriptor: || &scene_modifier_mesh::ELASTIC_SCULPTURE_DESCRIPTOR }
+}
+
+::inventory::submit! {
+    SceneModifierDescriptorEntry { descriptor: || &scene_modifier_mesh::SURFACE_PEEL_DESCRIPTOR }
+}
+
+::inventory::submit! {
+    SceneModifierDescriptorEntry { descriptor: || &scene_modifier_mesh::VORTEX_FRAGMENTS_DESCRIPTOR }
+}
 
 pub mod scene_modifier_loop {
     //! Kind `scene_loop` — the Scene Loop as modifier kind #1 (D6/D8).
@@ -796,6 +816,7 @@ pub mod scene_modifier_loop {
             new_nodes,
             new_wires,
             group_splices,
+            mesh_stages: Vec::new(),
             repoints: skeleton.repoints,
             exposures: skeleton.exposures,
             shared_params: shared_loop_params(),
@@ -1316,6 +1337,7 @@ pub mod scene_modifier_fog {
             new_nodes,
             new_wires,
             group_splices: Vec::new(),
+            mesh_stages: Vec::new(),
             repoints: skeleton.repoints,
             exposures: skeleton.exposures,
             shared_params: Vec::new(),

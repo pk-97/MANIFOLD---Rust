@@ -17,8 +17,8 @@
 
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, InterfacePortDef,
-    PresetMetadata,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_TYPE_ID,
+    InterfacePortDef, PresetMetadata,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
@@ -29,16 +29,327 @@ use std::collections::BTreeMap;
 use crate::command::Command;
 
 use super::{
-    descend_level, refresh_target_manifest, with_existing_target_graph_mut,
-    with_target_graph_mut,
+    descend_level, refresh_target_manifest, with_existing_target_graph_mut, with_target_graph_mut,
 };
 
 // The plan travels as plain manifold_core data; the editing crate re-exports
 // it (and its satellite types) so call sites stay on the `commands::graph::`
 // path.
 pub use manifold_core::scene_modifier::{
-    EnablePlan, GroupSplice, NodeExposure, PlanTraceNode, PortRepoint, ToggleDecl,
+    EnablePlan, GroupSplice, MeshStageSplice, NodeExposure, PlanTraceNode, PortRepoint, ToggleDecl,
 };
+
+const MESH_STAGE_CURRENT_PORT: &str = "current";
+const MESH_STAGE_REFERENCE_PORT: &str = "reference";
+const MESH_STAGE_OUTPUT_PORT: &str = "vertices";
+const MESH_STAGE_PORT_TYPE: &str = "Array(MeshVertex)";
+
+fn descend_stable_level<'a>(
+    nodes: &'a mut Vec<EffectGraphNode>,
+    wires: &'a mut Vec<EffectGraphWire>,
+    scope: &[manifold_core::NodeId],
+) -> Option<(&'a mut Vec<EffectGraphNode>, &'a mut Vec<EffectGraphWire>)> {
+    match scope.split_first() {
+        None => Some((nodes, wires)),
+        Some((node_id, rest)) => {
+            if nodes.iter().filter(|node| &node.node_id == node_id).count() != 1 {
+                return None;
+            }
+            let group = nodes.iter_mut().find(|node| &node.node_id == node_id)?;
+            let body = group.group.as_deref_mut()?;
+            descend_stable_level(&mut body.nodes, &mut body.wires, rest)
+        }
+    }
+}
+
+fn collect_stable_ids(
+    nodes: &[EffectGraphNode],
+    out: &mut std::collections::HashSet<manifold_core::NodeId>,
+) -> bool {
+    let mut unique = true;
+    for node in nodes {
+        if !node.node_id.is_empty() && !out.insert(node.node_id.clone()) {
+            unique = false;
+        }
+        if let Some(body) = node.group.as_deref()
+            && !collect_stable_ids(&body.nodes, out)
+        {
+            unique = false;
+        }
+    }
+    unique
+}
+
+fn stage_shape_is_valid(stage: &EffectGraphNode) -> bool {
+    if stage.type_id != GROUP_TYPE_ID || stage.node_id.is_empty() {
+        return false;
+    }
+    let Some(body) = stage.group.as_deref() else {
+        return false;
+    };
+    let mut doc_ids = std::collections::HashSet::new();
+    if body.nodes.iter().any(|node| !doc_ids.insert(node.id))
+        || body
+            .wires
+            .iter()
+            .any(|wire| !doc_ids.contains(&wire.from_node) || !doc_ids.contains(&wire.to_node))
+    {
+        return false;
+    }
+    let current_ports: Vec<_> = body
+        .interface
+        .inputs
+        .iter()
+        .filter(|port| port.name == MESH_STAGE_CURRENT_PORT)
+        .collect();
+    let reference_ports: Vec<_> = body
+        .interface
+        .inputs
+        .iter()
+        .filter(|port| port.name == MESH_STAGE_REFERENCE_PORT)
+        .collect();
+    let output_ports: Vec<_> = body
+        .interface
+        .outputs
+        .iter()
+        .filter(|port| port.name == MESH_STAGE_OUTPUT_PORT)
+        .collect();
+    current_ports.len() == 1
+        && current_ports[0].port_type == MESH_STAGE_PORT_TYPE
+        && reference_ports.len() == 1
+        && reference_ports[0].port_type == MESH_STAGE_PORT_TYPE
+        && output_ports.len() == 1
+        && output_ports[0].port_type == MESH_STAGE_PORT_TYPE
+}
+
+fn preflight_mesh_stage_splices(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    splices: &[MeshStageSplice],
+    additions: &[EffectGraphNode],
+) -> Result<(), &'static str> {
+    if splices.is_empty() {
+        return Ok(());
+    }
+    let mut simulated_nodes = nodes.to_vec();
+    let mut simulated_wires = wires.to_vec();
+    let mut stable_ids = std::collections::HashSet::new();
+    collect_stable_ids(nodes, &mut stable_ids);
+    for addition in additions {
+        collect_stable_ids(std::slice::from_ref(addition), &mut stable_ids);
+    }
+
+    for splice in splices {
+        if splice
+            .scope_path
+            .iter()
+            .any(manifold_core::NodeId::is_empty)
+            || splice.target_node_id.is_empty()
+            || !stage_shape_is_valid(&splice.stage)
+        {
+            return Err("invalid mesh stage identity or shape");
+        }
+        let mut stage_ids = std::collections::HashSet::new();
+        if !collect_stable_ids(std::slice::from_ref(&splice.stage), &mut stage_ids) {
+            return Err("duplicate stable node id inside mesh stage");
+        }
+        if stage_ids.iter().any(|id| stable_ids.contains(id)) {
+            return Err("mesh stage stable node id already exists");
+        }
+        stable_ids.extend(stage_ids);
+
+        let (level_nodes, level_wires) = descend_stable_level(
+            &mut simulated_nodes,
+            &mut simulated_wires,
+            &splice.scope_path,
+        )
+        .ok_or("mesh stage scope does not resolve")?;
+        let targets: Vec<_> = level_nodes
+            .iter()
+            .filter(|node| node.node_id == splice.target_node_id)
+            .collect();
+        if targets.len() != 1 || targets[0].type_id != "node.scene_object" {
+            return Err("mesh stage target scene object is ambiguous or invalid");
+        }
+        let target_doc_id = targets[0].id;
+        let producers: Vec<_> = level_wires
+            .iter()
+            .filter(|wire| wire.to_node == target_doc_id && wire.to_port == MESH_STAGE_OUTPUT_PORT)
+            .collect();
+        if producers.len() != 1 {
+            return Err("scene object must have exactly one vertices producer");
+        }
+        let (current_from_node, current_from_port) =
+            (producers[0].from_node, producers[0].from_port.clone());
+        let (reference_node_id, reference_port) = &splice.reference_source;
+        let reference_nodes: Vec<_> = level_nodes
+            .iter()
+            .filter(|node| &node.node_id == reference_node_id)
+            .collect();
+        if reference_nodes.len() != 1 {
+            return Err("mesh stage reference source is ambiguous");
+        }
+        let reference_doc_id = reference_nodes[0].id;
+        let reference_is_structural = level_wires
+            .iter()
+            .any(|wire| wire.from_node == reference_doc_id && wire.from_port == *reference_port)
+            || (current_from_node == reference_doc_id && current_from_port == *reference_port);
+        if !reference_is_structural {
+            return Err("mesh stage reference source port is not structural");
+        }
+        if level_nodes.iter().any(|node| node.id == splice.stage.id) {
+            return Err("mesh stage document id already exists");
+        }
+
+        let stage_id = splice.stage.id;
+        let target_wire_idx = level_wires
+            .iter()
+            .position(|wire| {
+                wire.to_node == target_doc_id && wire.to_port == MESH_STAGE_OUTPUT_PORT
+            })
+            .expect("mesh stage preflight guarantees target wire");
+        level_nodes.push(splice.stage.clone());
+        level_wires.splice(
+            target_wire_idx..=target_wire_idx,
+            [
+                EffectGraphWire {
+                    from_node: current_from_node,
+                    from_port: current_from_port,
+                    to_node: stage_id,
+                    to_port: MESH_STAGE_CURRENT_PORT.to_string(),
+                },
+                EffectGraphWire {
+                    from_node: reference_doc_id,
+                    from_port: reference_port.clone(),
+                    to_node: stage_id,
+                    to_port: MESH_STAGE_REFERENCE_PORT.to_string(),
+                },
+                EffectGraphWire {
+                    from_node: stage_id,
+                    from_port: MESH_STAGE_OUTPUT_PORT.to_string(),
+                    to_node: target_doc_id,
+                    to_port: MESH_STAGE_OUTPUT_PORT.to_string(),
+                },
+            ],
+        );
+    }
+    Ok(())
+}
+
+fn remove_mesh_stage_from_level(
+    nodes: &mut Vec<EffectGraphNode>,
+    wires: &mut Vec<EffectGraphWire>,
+    splice: &MeshStageSplice,
+) {
+    let Some(stage) = nodes
+        .iter()
+        .find(|node| node.node_id == splice.stage.node_id)
+    else {
+        return;
+    };
+    let stage_doc_id = stage.id;
+    let Some((source_node, source_port)) = wires
+        .iter()
+        .find(|wire| wire.to_node == stage_doc_id && wire.to_port == MESH_STAGE_CURRENT_PORT)
+        .map(|wire| (wire.from_node, wire.from_port.clone()))
+    else {
+        return;
+    };
+    let mut restored = Vec::with_capacity(wires.len());
+    for wire in wires.drain(..) {
+        if wire.to_node == stage_doc_id {
+            continue;
+        }
+        if wire.from_node == stage_doc_id {
+            if wire.from_port == MESH_STAGE_OUTPUT_PORT {
+                let replacement = EffectGraphWire {
+                    from_node: source_node,
+                    from_port: source_port.clone(),
+                    to_node: wire.to_node,
+                    to_port: wire.to_port,
+                };
+                if !restored.iter().any(|existing: &EffectGraphWire| {
+                    existing.from_node == replacement.from_node
+                        && existing.from_port == replacement.from_port
+                        && existing.to_node == replacement.to_node
+                        && existing.to_port == replacement.to_port
+                }) {
+                    restored.push(replacement);
+                }
+            }
+            continue;
+        }
+        restored.push(wire);
+    }
+    *wires = restored;
+    nodes.retain(|node| node.id != stage_doc_id);
+}
+
+fn apply_mesh_stage_splices(
+    nodes: &mut Vec<EffectGraphNode>,
+    wires: &mut Vec<EffectGraphWire>,
+    splices: &[MeshStageSplice],
+) {
+    for splice in splices {
+        let Some((level_nodes, level_wires)) =
+            descend_stable_level(nodes, wires, &splice.scope_path)
+        else {
+            continue;
+        };
+        let Some(target_doc_id) = level_nodes
+            .iter()
+            .find(|node| node.node_id == splice.target_node_id)
+            .map(|node| node.id)
+        else {
+            continue;
+        };
+        let Some(current) = level_wires
+            .iter()
+            .find(|wire| wire.to_node == target_doc_id && wire.to_port == MESH_STAGE_OUTPUT_PORT)
+            .map(|wire| (wire.from_node, wire.from_port.clone()))
+        else {
+            continue;
+        };
+        let Some(reference_doc_id) = level_nodes
+            .iter()
+            .find(|node| node.node_id == splice.reference_source.0)
+            .map(|node| node.id)
+        else {
+            continue;
+        };
+        let stage_doc_id = splice.stage.id;
+        let target_wire_idx = level_wires
+            .iter()
+            .position(|wire| {
+                wire.to_node == target_doc_id && wire.to_port == MESH_STAGE_OUTPUT_PORT
+            })
+            .expect("mesh stage preflight guarantees target wire");
+        level_nodes.push(splice.stage.clone());
+        level_wires.splice(
+            target_wire_idx..=target_wire_idx,
+            [
+                EffectGraphWire {
+                    from_node: current.0,
+                    from_port: current.1,
+                    to_node: stage_doc_id,
+                    to_port: MESH_STAGE_CURRENT_PORT.to_string(),
+                },
+                EffectGraphWire {
+                    from_node: reference_doc_id,
+                    from_port: splice.reference_source.1.clone(),
+                    to_node: stage_doc_id,
+                    to_port: MESH_STAGE_REFERENCE_PORT.to_string(),
+                },
+                EffectGraphWire {
+                    from_node: stage_doc_id,
+                    from_port: MESH_STAGE_OUTPUT_PORT.to_string(),
+                    to_node: target_doc_id,
+                    to_port: MESH_STAGE_OUTPUT_PORT.to_string(),
+                },
+            ],
+        );
+    }
+}
 
 /// The instance layer the three-layer remove prunes: the live param
 /// manifest plus every modulation vec that can target a param id. Captured
@@ -94,7 +405,11 @@ pub struct ApplySceneModifierCommand {
     catalog_default: EffectGraphDef,
     /// Pre-edit `(nodes, wires)` at `scope_path`, plus pre-edit
     /// `preset_metadata`. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl ApplySceneModifierCommand {
@@ -153,7 +468,12 @@ fn apply_group_splice(
     let Some(body) = nodes[group_idx].group.as_deref_mut() else {
         return;
     };
-    if !body.interface.inputs.iter().any(|p| p.name == splice.inner_port) {
+    if !body
+        .interface
+        .inputs
+        .iter()
+        .any(|p| p.name == splice.inner_port)
+    {
         body.interface.inputs.push(InterfacePortDef {
             name: splice.inner_port.to_string(),
             port_type: port_type.to_string(),
@@ -266,9 +586,9 @@ impl Command for ApplySceneModifierCommand {
                 let present = required
                     .clone()
                     .filter(|t| {
-                        nodes.iter().any(|n| {
-                            n.type_id == t.type_id && n.node_id.as_str() == t.node_id
-                        })
+                        nodes
+                            .iter()
+                            .any(|n| n.type_id == t.type_id && n.node_id.as_str() == t.node_id)
                     })
                     .count();
                 let total = required.count();
@@ -297,17 +617,35 @@ impl Command for ApplySceneModifierCommand {
                         .iter()
                         .find(|n| n.id == splice.group_node_id)
                         .and_then(|n| n.group.as_ref())
-                        .map(|b| b.interface.inputs.iter().any(|p| p.name == splice.inner_port))
+                        .map(|b| {
+                            b.interface
+                                .inputs
+                                .iter()
+                                .any(|p| p.name == splice.inner_port)
+                        })
                         .unwrap_or(false);
                     if port_taken {
                         eprintln!(
                             "ApplySceneModifierCommand ({}): group {} port {:?} already has a splice owner — build the plan with replace_existing to take over (INV-MR8)",
-                            plan.kind_id,
-                            splice.group_node_id,
-                            splice.inner_port
+                            plan.kind_id, splice.group_node_id, splice.inner_port
                         );
                         return None;
                     }
+                }
+
+                // Mesh-stage validation runs against a clone and covers the
+                // complete batch before any graph mutation. This keeps a
+                // broken nested splice a true no-op, including metadata.
+                let mut plan_additions = plan.new_nodes.clone();
+                plan_additions.extend(plan.enable.extra_nodes.iter().cloned());
+                if let Err(reason) =
+                    preflight_mesh_stage_splices(nodes, wires, &plan.mesh_stages, &plan_additions)
+                {
+                    eprintln!(
+                        "ApplySceneModifierCommand ({}): invalid mesh stage plan — {reason}",
+                        plan.kind_id
+                    );
+                    return None;
                 }
 
                 // Add the modifier's nodes (atoms + enable wiring extras)
@@ -347,13 +685,15 @@ impl Command for ApplySceneModifierCommand {
                 for splice in &plan.group_splices {
                     apply_group_splice(nodes, wires, splice, &mut next_group_input_id);
                 }
+                apply_mesh_stage_splices(nodes, wires, &plan.mesh_stages);
 
                 Some((prev_nodes_wires, prev_metadata))
             },
         );
-        if let Some((pnw, pmeta)) = result.flatten() {
-            self.prev = Some((pnw.0, pnw.1, pmeta));
-        }
+        let Some((pnw, pmeta)) = result.flatten() else {
+            return;
+        };
+        self.prev = Some((pnw.0, pnw.1, pmeta));
 
         // Stamp exposures for the curated nodes (INV-6: each node gets ONLY
         // its own params — the plan's NodeExposure entries are per-node by
@@ -374,7 +714,8 @@ impl Command for ApplySceneModifierCommand {
                     );
                 }
                 manifold_core::scene_modifier::install_shared_param_bindings(
-                    &mut meta.bindings, &plan_ref.shared_params,
+                    &mut meta.bindings,
+                    &plan_ref.shared_params,
                 );
             }
         });
@@ -454,6 +795,19 @@ impl Command for RemoveSceneModifierCommand {
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let prev = (nodes.clone(), wires.clone());
 
+            // Mesh stages are addressed by stable nested group paths. Remove
+            // each stage by its current stable identity and fan its current
+            // producer back out to every consumer, including a later stage.
+            // This happens before the generic minted-node cleanup so the
+            // reconstructed source wires remain intact.
+            for splice in &plan.mesh_stages {
+                if let Some((level_nodes, level_wires)) =
+                    descend_stable_level(nodes, wires, &splice.scope_path)
+                {
+                    remove_mesh_stage_from_level(level_nodes, level_wires, splice);
+                }
+            }
+
             // The minted modifier nodes — matched by stable `node_id`, never
             // by numeric doc id (which the flattener renumbers).
             let minted: std::collections::HashSet<manifold_core::NodeId> =
@@ -471,9 +825,9 @@ impl Command for RemoveSceneModifierCommand {
                     .bindings
                     .iter()
                     .filter(|b| match &b.target {
-                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
-                            minted.contains(node_id)
-                        }
+                        manifold_core::effect_graph_def::BindingTarget::Node {
+                            node_id, ..
+                        } => minted.contains(node_id),
                         _ => false,
                     })
                     .map(|b| b.id.clone())
@@ -493,9 +847,9 @@ impl Command for RemoveSceneModifierCommand {
                 if !nodes.iter().any(|n| n.id == repoint.target_node_id) {
                     continue;
                 }
-                let still_wired = wires
-                    .iter()
-                    .any(|w| w.to_node == repoint.target_node_id && w.to_port == repoint.target_port);
+                let still_wired = wires.iter().any(|w| {
+                    w.to_node == repoint.target_node_id && w.to_port == repoint.target_port
+                });
                 if still_wired {
                     continue;
                 }
@@ -521,18 +875,24 @@ impl Command for RemoveSceneModifierCommand {
 
             // Remove the per-group interface splices the apply added.
             for splice in &plan.group_splices {
-                let Some(group_idx) = nodes.iter().position(|n| n.id == splice.group_node_id) else {
+                let Some(group_idx) = nodes.iter().position(|n| n.id == splice.group_node_id)
+                else {
                     continue;
                 };
                 let group = &mut nodes[group_idx];
-                let Some(body) = group.group.as_deref_mut() else { continue };
-                body.interface.inputs.retain(|p| p.name != splice.inner_port);
+                let Some(body) = group.group.as_deref_mut() else {
+                    continue;
+                };
+                body.interface
+                    .inputs
+                    .retain(|p| p.name != splice.inner_port);
                 let group_input_id = body
                     .nodes
                     .iter()
                     .find(|n| n.type_id == GROUP_INPUT_TYPE_ID)
                     .map(|n| n.id);
-                body.wires.retain(|w| w.to_port != splice.inner_port && w.from_port != splice.inner_port);
+                body.wires
+                    .retain(|w| w.to_port != splice.inner_port && w.from_port != splice.inner_port);
                 if let Some(gid) = group_input_id {
                     // Drop the group_input boundary node only if it carried
                     // no other interface port (a pre-existing group may use

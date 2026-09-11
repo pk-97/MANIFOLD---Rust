@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 268 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 270 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 268 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (65)
+### 3D Geometry (67)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -222,10 +222,12 @@ _Generated from the node registry. Do not hand-edit. 268 nodes registered, group
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
+| Transform Mesh Patches | `node.transform_mesh_patches` | Filter | Moves textured mesh patches as rigid cells using a reference triangle stream. |
 | Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency. |
 | Tube From Path | `node.tube_from_path` | Source | Sweeps a tube of adjustable thickness along a path — the way you'd build a vine, cable, or ribbon from a center-line curve. Thickness and lift can vary per poi… |
 | Twist Mesh | `node.twist_mesh` | Filter | Twists a mesh around its own length, like wringing out a cloth or spinning a vine. Position and lighting normals both rotate exactly, so continuous saw-LFO spi… |
 | Voxelize | `node.voxelize_mesh` | Filter | Snaps every vertex to a regular voxel grid, pixel-crushing a smooth mesh into chunky blocks. |
+| Wave Shear Mesh | `node.wave_shear_mesh` | Filter | Shears a textured mesh with a travelling wave while transporting normals and tangents analytically. |
 
 ### Materials & Lighting (11)
 

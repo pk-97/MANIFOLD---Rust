@@ -94,6 +94,7 @@ fn minimal_loop_plan(render_scene_doc: u32) -> SceneModifierPlan {
         ],
         new_wires: vec![wire(10, "out", 12, "phase")],
         group_splices: vec![],
+        mesh_stages: vec![],
         repoints: vec![PortRepoint {
             target_node_id: render_scene_doc,
             target_port: "camera".to_string(),
@@ -383,6 +384,7 @@ fn grouped_loop_plan() -> SceneModifierPlan {
                 replace_existing: true,
             },
         ],
+        mesh_stages: vec![],
         repoints: vec![PortRepoint {
             target_node_id: 1,
             target_port: "camera".to_string(),
@@ -431,6 +433,7 @@ fn takeover_plan(source_doc_id: u32, replace_existing: bool) -> SceneModifierPla
             source_port: "out".to_string(),
             replace_existing,
         }],
+        mesh_stages: vec![],
         repoints: vec![],
         exposures: vec![],
         shared_params: vec![],

@@ -177,8 +177,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 63,
-            "buffer-family census changed; update its existing proof too (BUG-e3p6 adds copy_positions, wave_field_3d, and displace_copies)"
+            scalar_count, 65,
+            "buffer-family census changed; update its existing proof too (photoscan slice adds wave_shear_mesh and transform_mesh_patches)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(

@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "name": "Surface Peel",
+  "presetMetadata": {
+    "id": "SurfacePeel", "displayName": "Surface Peel", "category": "Geometry", "oscPrefix": "surface_peel", "available": false,
+    "params": [
+      {"id":"lift","name":"Lift","min":0.0,"max":0.8,"defaultValue":0.18},
+      {"id":"curl","name":"Curl","min":-3.1415927,"max":3.1415927,"defaultValue":1.0,"isAngle":true},
+      {"id":"spread","name":"Spread","min":-0.5,"max":0.5,"defaultValue":0.03},
+      {"id":"phase","name":"Phase","min":0.0,"max":1.0,"defaultValue":0.0},
+      {"id":"detail","name":"Detail","min":0.0,"max":6.0,"defaultValue":1.0},
+      {"id":"yaw","name":"Yaw","min":-3.1415927,"max":3.1415927,"defaultValue":0.0,"isAngle":true,"wraps":true},
+      {"id":"pitch","name":"Pitch","min":-3.1415927,"max":3.1415927,"defaultValue":0.0,"isAngle":true,"wraps":true},
+      {"id":"enabled","name":"Enabled","min":0.0,"max":1.0,"defaultValue":1.0,"isToggle":true}
+    ],
+    "bindings": [
+      {"id":"lift","label":"Lift","defaultValue":0.18,"target":{"kind":"node","nodeId":"patch","param":"separation"}},
+      {"id":"curl","label":"Curl","defaultValue":1.0,"target":{"kind":"node","nodeId":"patch","param":"rotation"}},
+      {"id":"spread","label":"Spread","defaultValue":0.03,"target":{"kind":"node","nodeId":"patch","param":"spread"}},
+      {"id":"phase","label":"Phase","defaultValue":0.0,"target":{"kind":"node","nodeId":"patch","param":"phase"}},
+      {"id":"detail","label":"Detail","defaultValue":1.0,"target":{"kind":"node","nodeId":"patch","param":"frequency"}},
+      {"id":"yaw","label":"Yaw","defaultValue":0.0,"target":{"kind":"node","nodeId":"patch","param":"yaw"}},
+      {"id":"pitch","label":"Pitch","defaultValue":0.0,"target":{"kind":"node","nodeId":"patch","param":"pitch"}},
+      {"id":"enabled","label":"Enabled","defaultValue":1.0,"target":{"kind":"node","nodeId":"patch","param":"enabled"}}
+    ]
+  },
+  "nodes": [{"id":1,"nodeId":"peel_stage","typeId":"group","handle":"SurfacePeelStage","group":{"interface":{"inputs":[{"name":"current","portType":"Array(MeshVertex)"},{"name":"reference","portType":"Array(MeshVertex)"}],"outputs":[{"name":"vertices","portType":"Array(MeshVertex)"}]},"nodes":[{"id":1,"nodeId":"group_current","typeId":"system.group_input","handle":"current"},{"id":2,"nodeId":"group_reference","typeId":"system.group_input","handle":"reference"},{"id":3,"nodeId":"patch","typeId":"node.transform_mesh_patches","handle":"patch","params":{"orbit":{"type":"Float","value":0.0},"separation":{"type":"Float","value":0.18},"rotation":{"type":"Float","value":1.0},"spread":{"type":"Float","value":0.03},"phase":{"type":"Float","value":0.0},"frequency":{"type":"Float","value":1.0},"yaw":{"type":"Float","value":0.0},"pitch":{"type":"Float","value":0.0},"cell_size":{"type":"Float","value":0.15},"scale":{"type":"Float","value":1.0},"enabled":{"type":"Float","value":1.0},"source_offset_x":{"type":"Float","value":0.0},"source_offset_y":{"type":"Float","value":0.0},"source_offset_z":{"type":"Float","value":0.0}}},{"id":4,"nodeId":"group_output","typeId":"system.group_output","handle":"output"}],"wires":[{"fromNode":1,"fromPort":"current","toNode":3,"toPort":"in"},{"fromNode":2,"fromPort":"reference","toNode":3,"toPort":"reference"},{"fromNode":3,"fromPort":"out","toNode":4,"toPort":"vertices"}]}}],"wires":[]
+}
