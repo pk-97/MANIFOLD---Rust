@@ -70,7 +70,7 @@ line numbers. Existing scripts supply landing mechanics; no new orchestration sc
 Use the complete `SubstepBoundaryPorts` and `SubstepResultPorts` definitions in
 design section 4; this section specifies their water bindings.
 `WaterState` declares `collider_in -> collider_out` (Transform) and
-`status_in -> status_out` (Channels<u32>, capacity 1). Its primary `in -> out`
+`status_in -> status_out` (Channels<u32>, word 0 plus a fixed diagnostic sideband). Its primary `in -> out`
 remains the WaterParticle buffer. All captures are state-capture inputs and contribute
 to region derivation; only final primary/result outputs escape. Result storage persists
 when step_count=0; initial collider comes from required `collider_seed: Transform`,
@@ -87,7 +87,8 @@ do not read that status synchronously to decide how many iterations to schedule.
 ### 2.2 Stage port contract
 
 `P=Channels<WaterParticle>`, `A=Channels<i32>`, `G=Channels<WaterGridCell>`,
-`S=Channels<u32>` capacity 1, `T=Transform`, scalar controls are ScalarF32.
+`S=Channels<u32>` with sticky flags in word 0 and optional diagnostic words,
+`T=Transform`, scalar controls are ScalarF32.
 Names below are node type IDs without `node.`. Every solver stage gets a `step_dt`
 dependency; outputs inherit particle capacity except explicit grid/status outputs.
 No shader stage allocates buffers or fetches host data itself.

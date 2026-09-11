@@ -2,10 +2,12 @@
 //!
 //! Every live candidate slot is checked for finiteness, stencil containment
 //! and the proof kinematic bounds (`|v| <= 4 m/s`, Frobenius `|C| <= 64/s`,
-//! `0 < rho <= 4*rho0`); findings OR into the single sticky status word.
-//! Bounds fault — they are never clamped (design step 7). The output
-//! aliases the input status wire, and the incoming bits are OR'd through so
-//! a pre-existing sticky fault survives validation.
+//! `0 < rho <= 4*rho0`); findings OR into the sticky status word. A fixed
+//! status sideband records one violating particle's observed magnitude, index
+//! and position for each kinematic kind when available. Bounds fault — they
+//! are never clamped (design step 7). The output aliases the input status wire,
+//! and the incoming bits are OR'd through so a pre-existing sticky fault
+//! survives validation.
 //!
 //! Codegen gap (reported to the lead, S4): a single-global-word reduction —
 //! all threads contributing to one atomic word — is not a per-element body
@@ -23,8 +25,8 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::water::{
-    AFFINE_BOUND, DENSITY_MAX_MULTIPLE, PARTICLE_CAPACITY, REST_DENSITY, VELOCITY_BOUND,
-    WaterParticle,
+    AFFINE_BOUND, DENSITY_MAX_MULTIPLE, PARTICLE_CAPACITY, REST_DENSITY, STATUS_BYTES,
+    VELOCITY_BOUND, WaterParticle,
 };
 
 /// Hand-authored standalone kernel (see module doc): `water_common.wgsl`
@@ -45,6 +47,9 @@ pub struct ValidateUniforms {
     pub velocity_bound: f32,
     pub affine_bound: f32,
     pub density_max: f32,
+    /// 1 when the status output has the fixed diagnostic sideband; 0 keeps
+    /// direct/legacy one-word status buffers strictly in-bounds.
+    pub diagnostics_enabled: u32,
 }
 
 crate::primitive! {
@@ -173,6 +178,7 @@ impl Primitive for WaterValidate {
             velocity_bound: read_param("velocity_bound", VELOCITY_BOUND),
             affine_bound: read_param("affine_bound", AFFINE_BOUND),
             density_max: read_param("density_max", DENSITY_MAX_MULTIPLE * REST_DENSITY),
+            diagnostics_enabled: u32::from(status_out.size >= STATUS_BYTES),
         };
 
         // uniform(0), particles(1), status in(2), status out atomic(3).

@@ -83,6 +83,25 @@ pub const FAULT_OUTSIDE_DOMAIN: u32 = 4;
 pub const FAULT_UNSUPPORTED_KINEMATICS: u32 = 8;
 pub const FAULT_INVALID_DENSITY: u32 = 16;
 
+/// Fixed status sideband layout. Word 0 remains the sticky fault bitset;
+/// older callers may still provide only that word. The diagnostic index is
+/// stored as `particle_index + 1`, with zero meaning no diagnostic recorded.
+pub const STATUS_WORDS: usize = 12;
+pub const STATUS_BYTES: u64 = (STATUS_WORDS * core::mem::size_of::<u32>()) as u64;
+pub const STATUS_DIAGNOSTIC_KINDS_WORD: usize = 1;
+pub const STATUS_VELOCITY_MAGNITUDE_WORD: usize = 2;
+pub const STATUS_VELOCITY_INDEX_WORD: usize = 3;
+pub const STATUS_VELOCITY_POSITION_X_WORD: usize = 4;
+pub const STATUS_VELOCITY_POSITION_Y_WORD: usize = 5;
+pub const STATUS_VELOCITY_POSITION_Z_WORD: usize = 6;
+pub const STATUS_AFFINE_MAGNITUDE_WORD: usize = 7;
+pub const STATUS_AFFINE_INDEX_WORD: usize = 8;
+pub const STATUS_AFFINE_POSITION_X_WORD: usize = 9;
+pub const STATUS_AFFINE_POSITION_Y_WORD: usize = 10;
+pub const STATUS_AFFINE_POSITION_Z_WORD: usize = 11;
+pub const DIAGNOSTIC_KIND_VELOCITY: u32 = 1;
+pub const DIAGNOSTIC_KIND_AFFINE: u32 = 2;
+
 // --- Domain and material constants (design section 5) ---
 
 /// Nodes per axis: 64^3 grid.

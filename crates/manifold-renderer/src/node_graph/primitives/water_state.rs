@@ -30,13 +30,20 @@ use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 use crate::node_graph::transform::Transform;
-use crate::node_graph::water::WaterParticle;
+use crate::node_graph::water::{
+    WaterParticle, DIAGNOSTIC_KIND_AFFINE, DIAGNOSTIC_KIND_VELOCITY, STATUS_AFFINE_INDEX_WORD,
+    STATUS_AFFINE_MAGNITUDE_WORD, STATUS_AFFINE_POSITION_X_WORD, STATUS_AFFINE_POSITION_Y_WORD,
+    STATUS_AFFINE_POSITION_Z_WORD, STATUS_BYTES, STATUS_DIAGNOSTIC_KINDS_WORD, STATUS_VELOCITY_INDEX_WORD,
+    STATUS_VELOCITY_MAGNITUDE_WORD, STATUS_VELOCITY_POSITION_X_WORD,
+    STATUS_VELOCITY_POSITION_Y_WORD, STATUS_VELOCITY_POSITION_Z_WORD, STATUS_WORDS,
+};
 
 struct StatusReadbackSlot {
     buffer: manifold_gpu::GpuBuffer,
     ticket: u64,
     generation: u64,
     collider: Transform,
+    status_words: usize,
 }
 
 pub struct StatusReadbackRing {
@@ -160,6 +167,65 @@ const BOUNDARY_RESULTS: &[SubstepResultPorts] = &[
 ];
 
 impl WaterState {
+    fn status_fault_text(words: &[u32]) -> Option<String> {
+        let status = *words.first()?;
+        if status == 0 {
+            return None;
+        }
+        let mut message = format!("WaterState: solver fault status 0x{status:08x}");
+        if words.len() >= STATUS_WORDS {
+            let kinds = words[STATUS_DIAGNOSTIC_KINDS_WORD];
+            let mut append = |label: &str, magnitude_word, index_word, x_word, y_word, z_word| {
+                let encoded_index = words[index_word];
+                if encoded_index == 0 {
+                    return;
+                }
+                let magnitude = f32::from_bits(words[magnitude_word]);
+                let position = [
+                    f32::from_bits(words[x_word]),
+                    f32::from_bits(words[y_word]),
+                    f32::from_bits(words[z_word]),
+                ];
+                message.push_str(&format!(
+                    " ({label}: magnitude={magnitude:.3}, particle={}, pos=({:.3},{:.3},{:.3}))",
+                    encoded_index - 1,
+                    position[0], position[1], position[2]
+                ));
+            };
+            if kinds & DIAGNOSTIC_KIND_VELOCITY != 0 {
+                append(
+                    "velocity bound",
+                    STATUS_VELOCITY_MAGNITUDE_WORD,
+                    STATUS_VELOCITY_INDEX_WORD,
+                    STATUS_VELOCITY_POSITION_X_WORD,
+                    STATUS_VELOCITY_POSITION_Y_WORD,
+                    STATUS_VELOCITY_POSITION_Z_WORD,
+                );
+            }
+            if kinds & DIAGNOSTIC_KIND_AFFINE != 0 {
+                append(
+                    "affine bound",
+                    STATUS_AFFINE_MAGNITUDE_WORD,
+                    STATUS_AFFINE_INDEX_WORD,
+                    STATUS_AFFINE_POSITION_X_WORD,
+                    STATUS_AFFINE_POSITION_Y_WORD,
+                    STATUS_AFFINE_POSITION_Z_WORD,
+                );
+            }
+        }
+        Some(message)
+    }
+
+    fn status_words(slot: &StatusReadbackSlot) -> ([u32; STATUS_WORDS], usize) {
+        let ptr = slot.buffer.mapped_ptr().expect("status readback buffer must be mapped");
+        let count = slot.status_words.min(STATUS_WORDS);
+        let mut words = [0; STATUS_WORDS];
+        for (index, word) in words.iter_mut().enumerate().take(count) {
+            *word = unsafe { std::ptr::read_unaligned(ptr.cast::<u32>().add(index)) };
+        }
+        (words, count)
+    }
+
     fn completed_ring_error(&self) -> Option<String> {
         let ring = self.status_ring.as_ref()?;
         let completed = ring.event.signaled_value();
@@ -167,9 +233,8 @@ impl WaterState {
             if slot.ticket == 0 || slot.ticket > completed || slot.generation != ring.generation {
                 return None;
             }
-            let ptr = slot.buffer.mapped_ptr().expect("status readback buffer must be mapped");
-            let status = unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) };
-            (status != 0).then(|| format!("WaterState: solver fault status 0x{status:08x}"))
+            let (words, count) = Self::status_words(slot);
+            Self::status_fault_text(&words[..count])
         })
     }
 
@@ -191,8 +256,9 @@ impl WaterState {
             if slot.ticket == 0 || slot.ticket > completed {
                 continue;
             }
-            let ptr = slot.buffer.mapped_ptr().expect("status readback buffer must be mapped");
-            let status = unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) };
+            let (words, count) = Self::status_words(slot);
+            let words = &words[..count];
+            let status = words.first().copied().unwrap_or(0);
             let ticket = slot.ticket;
             let collider = slot.collider;
             slot.ticket = 0;
@@ -200,7 +266,8 @@ impl WaterState {
             if status != 0 && !ring.reported {
                 ring.reported = true;
                 ring.faulted = true;
-                let message = format!("WaterState: solver fault status 0x{status:08x}");
+                let message = Self::status_fault_text(words)
+                    .expect("nonzero status must produce fault text");
                 self.fatal_error = Some(message.clone());
                 ctx.error(message);
                 self.effective_advancing.set(false);
@@ -222,8 +289,8 @@ impl WaterState {
             let event = gpu.device.create_event();
             let mut slots = Vec::with_capacity(3);
             for _ in 0..3 {
-                let buffer = gpu.device.create_buffer_shared(4);
-                slots.push(StatusReadbackSlot { buffer, ticket: 0, generation: 0, collider: Transform::default() });
+                let buffer = gpu.device.create_buffer_shared(STATUS_BYTES);
+                slots.push(StatusReadbackSlot { buffer, ticket: 0, generation: 0, collider: Transform::default(), status_words: 0 });
             }
             self.status_ring = Some(StatusReadbackRing { event, slots, reported: false, faulted: false, next_ticket: 0, generation: 0, last_frame_id: None });
         }
@@ -234,11 +301,13 @@ impl WaterState {
         let Some(slot) = ring.slots.iter_mut().find(|slot| slot.ticket == 0) else { return };
         ring.next_ticket = ring.next_ticket.saturating_add(1).max(1);
         let ticket = ring.next_ticket;
-        gpu.native_enc.copy_buffer_to_buffer(status_out, &slot.buffer, 4);
+        let copy_size = status_out.size.min(STATUS_BYTES);
+        gpu.native_enc.copy_buffer_to_buffer(status_out, &slot.buffer, copy_size);
         gpu.native_enc.signal_event_value(&ring.event, ticket);
         slot.ticket = ticket;
         slot.generation = ring.generation;
         slot.collider = collider;
+        slot.status_words = (copy_size / 4) as usize;
     }
 
     fn clock_config(&self, ctx: &EffectNodeContext<'_, '_>) -> (f64, u32) {
@@ -271,8 +340,9 @@ impl Primitive for WaterState {
     }
 
     fn persistent_output_ports(&self) -> &[&str] {
-        // `out` is the accepted buffer and `status_out` the sticky fault
-        // word: both must survive frames untouched by pool recycling.
+        // `out` is the accepted buffer and `status_out` the sticky fault word
+        // plus its fixed diagnostic sideband: both must survive frames
+        // untouched by pool recycling.
         &["out", "status_out"]
     }
 
@@ -300,7 +370,7 @@ impl Primitive for WaterState {
                 .iter()
                 .find(|(p, _)| *p == "seed")
                 .map(|(_, n)| *n),
-            "status_out" => Some(1),
+            "status_out" => Some(STATUS_WORDS as u32),
             _ => None,
         }
     }
@@ -539,7 +609,7 @@ impl Primitive for WaterState {
         if let (Some(status_in), Some(status_out)) =
             (ctx.inputs.array("status_in"), ctx.outputs.array("status_out"))
         {
-            let copy_size = status_in.size.min(status_out.size).min(4);
+            let copy_size = status_in.size.min(status_out.size);
             if copy_size > 0 {
                 gpu.native_enc
                     .copy_buffer_to_buffer(status_in, status_out, copy_size);
@@ -635,6 +705,36 @@ mod tests {
             .find(|p| p.name == "status_out")
             .expect("status_out port");
         assert_eq!(status.ty, PortType::Array(ArrayType::of_known::<u32>()));
+        assert_eq!(
+            Primitive::array_output_capacity(&prim, "status_out", &Default::default(), &[]),
+            Some(STATUS_WORDS as u32)
+        );
+    }
+
+    #[test]
+    fn status_fault_text_decodes_kinematic_sideband() {
+        let mut words = [0u32; STATUS_WORDS];
+        words[0] = crate::node_graph::water::FAULT_UNSUPPORTED_KINEMATICS;
+        words[STATUS_DIAGNOSTIC_KINDS_WORD] = DIAGNOSTIC_KIND_VELOCITY;
+        words[STATUS_VELOCITY_MAGNITUDE_WORD] = 5.0f32.to_bits();
+        words[STATUS_VELOCITY_INDEX_WORD] = 3;
+        words[STATUS_VELOCITY_POSITION_X_WORD] = 1.0f32.to_bits();
+        words[STATUS_VELOCITY_POSITION_Y_WORD] = 2.0f32.to_bits();
+        words[STATUS_VELOCITY_POSITION_Z_WORD] = 3.0f32.to_bits();
+        words[STATUS_DIAGNOSTIC_KINDS_WORD] |= DIAGNOSTIC_KIND_AFFINE;
+        words[STATUS_AFFINE_MAGNITUDE_WORD] = 65.0f32.to_bits();
+        words[STATUS_AFFINE_INDEX_WORD] = 5;
+        words[STATUS_AFFINE_POSITION_X_WORD] = 4.0f32.to_bits();
+        words[STATUS_AFFINE_POSITION_Y_WORD] = 5.0f32.to_bits();
+        words[STATUS_AFFINE_POSITION_Z_WORD] = 6.0f32.to_bits();
+        assert_eq!(
+            WaterState::status_fault_text(&words),
+            Some("WaterState: solver fault status 0x00000008 (velocity bound: magnitude=5.000, particle=2, pos=(1.000,2.000,3.000)) (affine bound: magnitude=65.000, particle=4, pos=(4.000,5.000,6.000))".to_string())
+        );
+        assert_eq!(
+            WaterState::status_fault_text(&[crate::node_graph::water::FAULT_NONFINITE]),
+            Some("WaterState: solver fault status 0x00000001".to_string())
+        );
     }
 
     #[test]

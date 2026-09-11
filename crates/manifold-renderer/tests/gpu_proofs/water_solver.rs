@@ -26,9 +26,10 @@ use manifold_renderer::node_graph::primitives::{
 };
 use manifold_renderer::node_graph::water::{
     acoustic_cfl, classify_position, WaterGridCell, WaterParticle, AFFINE_BOUND, DEFAULT_STEP_DT,
-    DOMAIN_ORIGIN, DYNAMIC_VISCOSITY, FAULT_INTEGER_OVERFLOW, FAULT_NONFINITE, GRID_FIXED_SCALE,
+    DOMAIN_ORIGIN, DYNAMIC_VISCOSITY, FAULT_INTEGER_OVERFLOW, FAULT_NONFINITE,
+    FAULT_UNSUPPORTED_KINEMATICS, GRID_FIXED_SCALE,
     GRID_SPACING, PARTICLE_CAPACITY, PARTICLE_MASS, REST_DENSITY, SEED_ACTIVE_PARTICLES,
-    SOUND_SPEED_C0, VELOCITY_BOUND, WATER_DOMAIN,
+    SOUND_SPEED_C0, STATUS_WORDS, VELOCITY_BOUND, WATER_DOMAIN,
 };
 
 /// The S1 f64 oracle as a test path module — the same source file the S1
@@ -96,6 +97,12 @@ fn read_grid(buf: &GpuBuffer) -> Vec<WaterGridCell> {
 fn read_status(buf: &GpuBuffer) -> u32 {
     let ptr = buf.mapped_ptr().expect("shared status buffer");
     unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) }
+}
+
+fn read_status_payload(buf: &GpuBuffer) -> Vec<u32> {
+    let ptr = buf.mapped_ptr().expect("shared status buffer");
+    let raw = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), STATUS_WORDS) };
+    raw.to_vec()
 }
 
 fn write_particle_at(buf: &GpuBuffer, index: usize, particle: &WaterParticle) {
@@ -605,6 +612,7 @@ fn substep_inner(
         velocity_bound: VELOCITY_BOUND,
         affine_bound: AFFINE_BOUND,
         density_max: 4.0 * REST_DENSITY,
+        diagnostics_enabled: 0,
     };
     enc.dispatch_compute(
         &k.validate,
@@ -1057,6 +1065,7 @@ fn water_signed_scatter_and_overflow() {
         velocity_bound: VELOCITY_BOUND,
         affine_bound: AFFINE_BOUND,
         density_max: 4.0 * REST_DENSITY,
+        diagnostics_enabled: 0,
     };
     let commit_u = CommitUniforms { dispatch_count: 1, _pad0: 0, _pad1: 0, _pad2: 0 };
     let mut validate_enc = device().create_encoder("water-overflow-validate");
@@ -1426,6 +1435,7 @@ fn water_fault_retains_last_valid_state() {
         velocity_bound: VELOCITY_BOUND,
         affine_bound: AFFINE_BOUND,
         density_max: 4.0 * REST_DENSITY,
+        diagnostics_enabled: 0,
     };
     let commit_u = CommitUniforms {
         dispatch_count: n as u32,
@@ -1595,6 +1605,83 @@ fn water_fault_retains_last_valid_state() {
         bytemuck::cast_slice::<WaterParticle, u8>(&clean_candidate),
         "clean candidate must commit"
     );
+}
+
+/// The optional status sideband reports one internally consistent kinematic
+/// violation of each kind without changing the sticky word or touching legacy
+/// one-word status buffers.
+#[test]
+fn water_validate_kinematic_diagnostics() {
+    fn run(particles: &[WaterParticle]) -> Vec<u32> {
+        let particle_buf = particle_buffer(particles.len());
+        write_particles(&particle_buf, particles);
+        let status_buf = device().create_buffer_shared((STATUS_WORDS * 4) as u64);
+        status_buf.zero_fill();
+        let uniforms = ValidateUniforms {
+            validate_count: particles.len() as u32,
+            velocity_bound: VELOCITY_BOUND,
+            affine_bound: AFFINE_BOUND,
+            density_max: 4.0 * REST_DENSITY,
+            diagnostics_enabled: 1,
+        };
+        let mut enc = device().create_encoder("water-validate-diagnostics");
+        enc.dispatch_compute(
+            &kernels().validate,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &particle_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &status_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: &status_buf, offset: 0 },
+            ],
+            ceil256(particles.len() as u32),
+            "node.water_validate",
+        );
+        enc.commit_and_wait_completed();
+        read_status_payload(&status_buf)
+    }
+
+    let mut clean = vec![
+        make_particle(lattice_pos([10.0, 10.0, 10.0]), [0.0, 0.0, 0.0], [[0.0; 3]; 3], PARTICLE_MASS);
+        4
+    ];
+    clean[0].position_mass[3] = 0.0;
+    clean[1].position_mass[3] = 0.0;
+    clean[2].position_mass[3] = 0.0;
+    clean[3].position_mass[3] = 0.0;
+    let payload = run(&clean);
+    assert_eq!(payload, vec![0; STATUS_WORDS], "clean validation has no diagnostic");
+
+    let mut velocity = clean.clone();
+    velocity[2].position_mass[3] = PARTICLE_MASS;
+    velocity[2].velocity_density[0] = 5.0;
+    let payload = run(&velocity);
+    assert_eq!(payload[0] & FAULT_UNSUPPORTED_KINEMATICS, FAULT_UNSUPPORTED_KINEMATICS);
+    assert_eq!(payload[1], 1, "velocity diagnostic kind");
+    assert_eq!(f32::from_bits(payload[2]), 5.0);
+    assert_eq!(payload[3], 3, "particle index is encoded as index + 1");
+    assert_eq!(
+        [f32::from_bits(payload[4]), f32::from_bits(payload[5]), f32::from_bits(payload[6])],
+        lattice_pos([10.0, 10.0, 10.0])
+    );
+
+    let mut affine = clean;
+    affine[1].position_mass[3] = PARTICLE_MASS;
+    affine[1].affine_x[0] = 65.0;
+    let payload = run(&affine);
+    assert_eq!(payload[0] & FAULT_UNSUPPORTED_KINEMATICS, FAULT_UNSUPPORTED_KINEMATICS);
+    assert_eq!(payload[1], 2, "affine diagnostic kind");
+    assert_eq!(f32::from_bits(payload[7]), 65.0);
+    assert_eq!(payload[8], 2, "particle index is encoded as index + 1");
+
+    let mut both = velocity;
+    both[1].position_mass[3] = PARTICLE_MASS;
+    both[1].affine_x[0] = 65.0;
+    let payload = run(&both);
+    assert_eq!(payload[1], 3, "both diagnostic kinds remain visible");
+    assert_eq!(f32::from_bits(payload[2]), 5.0);
+    assert_eq!(payload[3], 3);
+    assert_eq!(f32::from_bits(payload[7]), 65.0);
+    assert_eq!(payload[8], 2);
 }
 
 /// Default static pool after 1 s of substeps (960 at dt = 1/960): zero live
