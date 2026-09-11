@@ -93,6 +93,7 @@ crate::primitive! {
     purpose: "Sphere-impostor depth/coverage raster for water surface reconstruction (design section 7): splats each live WaterParticle as a sphere of radius `radius` (default 0.75*h) with per-pixel depth testing (atomicMin on the f32 bit pattern — nearer impostors win), writing raw [0,1] clip depth (R32Float, empty=1) and 0/1 coverage (R8Unorm). Perspective camera only; near-plane-intersecting spheres, a camera inside a sphere (underwater view) and beyond-far spheres are rejected, never garbage depths. Pair with node.bilateral_blur (ClipDepth mode + coverage) and node.normals_from_depth for the smoothed surface.",
     inputs: {
         particles: Array(WaterParticle) required,
+        shapes: Channels["surface_center_radius": Vec4F, "surface_axis_x": Vec4F, "surface_axis_y": Vec4F, "surface_axis_z": Vec4F] optional,
         camera: Camera required,
         radius: ScalarF32 optional,
     },
@@ -122,6 +123,7 @@ crate::primitive! {
     extra_fields: {
         clear_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         resolve_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        anisotropic_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         scratch: Option<SurfaceDepthScratch> = None,
     },
 }
@@ -169,10 +171,17 @@ impl Primitive for ParticleSurfaceDepth {
             None => Some("node.particle_surface_depth: missing required `camera` input"),
             Some(c) => {
                 if !matches!(c.mode, CameraMode::Perspective { .. }) {
-                    Some("node.particle_surface_depth: perspective camera required (orthographic rejected in V1)")
-                } else if !(c.near.is_finite() && c.far.is_finite() && c.near > 0.0 && c.near < c.far)
+                    Some(
+                        "node.particle_surface_depth: perspective camera required (orthographic rejected in V1)",
+                    )
+                } else if !(c.near.is_finite()
+                    && c.far.is_finite()
+                    && c.near > 0.0
+                    && c.near < c.far)
                 {
-                    Some("node.particle_surface_depth: camera near/far must be finite with 0 < near < far")
+                    Some(
+                        "node.particle_surface_depth: camera near/far must be finite with 0 < near < far",
+                    )
                 } else {
                     None
                 }
@@ -212,6 +221,14 @@ impl Primitive for ParticleSurfaceDepth {
             invalid_camera_clear(ctx, depth_tex, coverage_tex);
             return;
         }
+        let shapes = ctx.inputs.array("shapes");
+        if let Some(s) = shapes
+            && s.size < u64::from(capacity) * 64
+        {
+            invalid_camera_clear(ctx, depth_tex, coverage_tex);
+            ctx.error("node.particle_surface_depth: shapes capacity must match particles");
+            return;
+        }
 
         let gpu = ctx.gpu_encoder();
 
@@ -243,6 +260,13 @@ impl Primitive for ParticleSurfaceDepth {
                 SURFACE_DEPTH_SPLAT_WGSL,
                 "cs_main",
                 "node.particle_surface_depth.splat",
+            )
+        });
+        let anisotropic = self.anisotropic_pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                SURFACE_DEPTH_SPLAT_WGSL,
+                "cs_anisotropic",
+                "node.particle_surface_depth.splat.anisotropic",
             )
         });
         let resolve_pipeline = self.resolve_pipeline.get_or_insert_with(|| {
@@ -289,37 +313,72 @@ impl Primitive for ParticleSurfaceDepth {
             [pixel_count.div_ceil(256), 1, 1],
             "node.particle_surface_depth.clear",
         );
-        gpu.native_enc
-            .clear_buffer(&scratch.coverage);
+        gpu.native_enc.clear_buffer(&scratch.coverage);
 
         // 2. Splat: one thread per particle slot; rejected/ inactive slots
         // exit early.
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&splat_uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: particles,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &scratch.depth_bits,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &scratch.coverage,
-                    offset: 0,
-                },
-            ],
-            [capacity.div_ceil(256), 1, 1],
-            "node.particle_surface_depth.splat",
-        );
+        let legacy = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&splat_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: particles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &scratch.depth_bits,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &scratch.coverage,
+                offset: 0,
+            },
+        ];
+        let shaped = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&splat_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: particles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &scratch.depth_bits,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &scratch.coverage,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: shapes.unwrap_or(particles),
+                offset: 0,
+            },
+        ];
+        if shapes.is_some() {
+            gpu.native_enc.dispatch_compute(
+                anisotropic,
+                &shaped,
+                [capacity.div_ceil(256), 1, 1],
+                "node.particle_surface_depth.splat.anisotropic",
+            );
+        } else {
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &legacy,
+                [capacity.div_ceil(256), 1, 1],
+                "node.particle_surface_depth.splat",
+            );
+        }
 
         // 3. Resolve: scratch -> R32Float depth + R8Unorm coverage.
         gpu.native_enc.dispatch_compute(
@@ -363,7 +422,8 @@ fn invalid_camera_clear(
 ) {
     let gpu = ctx.gpu_encoder();
     gpu.native_enc.clear_texture(depth_tex, 1.0, 0.0, 0.0, 1.0);
-    gpu.native_enc.clear_texture(coverage_tex, 0.0, 0.0, 0.0, 0.0);
+    gpu.native_enc
+        .clear_texture(coverage_tex, 0.0, 0.0, 0.0, 0.0);
 }
 
 #[cfg(test)]
@@ -376,13 +436,18 @@ mod tests {
     #[test]
     fn water_surface_depth_declares_explicit_outputs() {
         assert_eq!(ParticleSurfaceDepth::TYPE_ID, "node.particle_surface_depth");
-        let names: Vec<&str> = ParticleSurfaceDepth::INPUTS.iter().map(|p| p.name.as_ref()).collect();
+        let names: Vec<&str> = ParticleSurfaceDepth::INPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["particles", "camera", "radius"]);
         assert!(ParticleSurfaceDepth::INPUTS[0].required);
         assert!(ParticleSurfaceDepth::INPUTS[1].required);
         assert!(!ParticleSurfaceDepth::INPUTS[2].required);
-        let out_names: Vec<&str> =
-            ParticleSurfaceDepth::OUTPUTS.iter().map(|p| p.name.as_ref()).collect();
+        let out_names: Vec<&str> = ParticleSurfaceDepth::OUTPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(out_names, vec!["depth", "coverage"]);
 
         // Output dims are canvas-declared (never sized by a texture map)

@@ -25,6 +25,7 @@ struct WaterParticle {
 @group(0) @binding(1) var<storage, read> buf_particles: array<WaterParticle>;
 @group(0) @binding(2) var<storage, read_write> buf_depth_bits: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> buf_coverage: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read> buf_shapes: array<SurfaceShape>;
 
 @compute @workgroup_size(256)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -64,4 +65,21 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             atomicMax(&buf_coverage[flat_idx], 1u);
         }
     }
+}
+
+@compute @workgroup_size(256)
+fn cs_anisotropic(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x; if (idx >= splat.count) { return; }
+    if (buf_particles[idx].position_mass.w == 0.0) { return; }
+    let s = shape_view(splat, buf_shapes[idx]); if (!shape_valid(s)) { return; }
+    if (s.center.z - s.bound <= splat.near || s.center.z - s.bound > splat.far) { return; }
+    var lo: vec2<i32>; var hi: vec2<i32>;
+    shape_bbox(splat, s, &lo, &hi);
+    let range = splat.far / (splat.near - splat.far);
+    for (var y=lo.y; y<=hi.y; y++) { for (var x=lo.x; x<=hi.x; x++) {
+        let hit = shape_ray_hit(s, splat_ray_dir(splat, vec2<i32>(x,y))); if (hit.x <= 0.0) { continue; }
+        let vz = hit.x * splat_ray_dir(splat, vec2<i32>(x,y)).z; if (vz <= splat.near) { continue; }
+        let raw = clamp(range * (splat.near / vz - 1.0), 0.0, 0.99999994); let i=u32(y)*splat.width+u32(x);
+        atomicMin(&buf_depth_bits[i], bitcast<u32>(raw)); atomicMax(&buf_coverage[i], 1u);
+    }}
 }

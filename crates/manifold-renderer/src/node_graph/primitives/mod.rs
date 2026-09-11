@@ -964,3 +964,8 @@ mod tests {
         assert!(g.set_param(id, "missing", ParamValue::Float(0.0)).is_err());
     }
 }
+
+mod water_particle_bins;
+mod water_surface_fit;
+pub use water_particle_bins::{WaterParticleBins, prewarm_pipeline as prewarm_water_particle_bins};
+pub use water_surface_fit::{WaterSurfaceFit, prewarm_pipeline as prewarm_water_surface_fit, shader_source as water_surface_fit_shader};

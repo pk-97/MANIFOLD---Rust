@@ -276,6 +276,8 @@
         "nodes": [
           {"id": 49, "nodeId": "foamState", "typeId": "node.water_foam", "handle": "foam state", "params": {"gain": {"type": "Float", "value": 12.0}, "half_life": {"type": "Float", "value": 0.75}}},
           {"id": 50, "nodeId": "foamRaster", "typeId": "node.particle_foam", "handle": "foam raster", "params": {"radius": {"type": "Float", "value": 0.046875}}},
+          {"id": 51, "nodeId": "surfaceBins", "typeId": "node.water_particle_bins", "handle": "surface neighbours", "params": {}},
+          {"id": 52, "nodeId": "surfaceFit", "typeId": "node.water_surface_fit", "handle": "fitted surface", "params": {"radius": {"type": "Float", "value": 0.046875}, "center_blend": {"type": "Float", "value": 0.5}}},
           {"id": 41, "nodeId": "surface_in", "typeId": "system.group_input", "handle": "input"},
           {"id": 42, "nodeId": "splat", "typeId": "node.particle_surface_depth", "handle": "surface depth", "params": {}},
           {"id": 43, "nodeId": "thick", "typeId": "node.particle_thickness", "handle": "thickness", "params": {}},
@@ -339,7 +341,14 @@
           {"fromNode": 49, "fromPort": "foam", "toNode": 50, "toPort": "foam"},
           {"fromNode": 41, "fromPort": "camera", "toNode": 50, "toPort": "camera"},
           {"fromNode": 45, "fromPort": "out", "toNode": 50, "toPort": "depth"},
-          {"fromNode": 50, "fromPort": "coverage", "toNode": 48, "toPort": "foam"}
+          {"fromNode": 50, "fromPort": "coverage", "toNode": 48, "toPort": "foam"},
+          {"fromNode": 41, "fromPort": "particles", "toNode": 51, "toPort": "particles"},
+          {"fromNode": 41, "fromPort": "particles", "toNode": 52, "toPort": "particles"},
+          {"fromNode": 51, "fromPort": "heads", "toNode": 52, "toPort": "heads"},
+          {"fromNode": 51, "fromPort": "next", "toNode": 52, "toPort": "next"},
+          {"fromNode": 52, "fromPort": "shapes", "toNode": 42, "toPort": "shapes"},
+          {"fromNode": 52, "fromPort": "shapes", "toNode": 43, "toPort": "shapes"},
+          {"fromNode": 52, "fromPort": "shapes", "toNode": 50, "toPort": "shapes"}
         ]
       }
     },

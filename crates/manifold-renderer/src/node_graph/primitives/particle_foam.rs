@@ -19,6 +19,11 @@ pub const FOAM_RESOLVE_WGSL: &str = include_str!("shaders/particle_thickness_res
 /// Compile both raster stages during renderer installation.
 pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
     let _ = device.create_compute_pipeline(FOAM_SPLAT_WGSL, "cs_main", "node.particle_foam.splat");
+    let _ = device.create_compute_pipeline(
+        FOAM_SPLAT_WGSL,
+        "cs_anisotropic",
+        "node.particle_foam.splat.anisotropic",
+    );
     let _ =
         device.create_compute_pipeline(FOAM_RESOLVE_WGSL, "cs_main", "node.particle_foam.resolve");
 }
@@ -33,13 +38,13 @@ crate::primitive! {
     name: ParticleFoam,
     type_id: "node.particle_foam",
     purpose: "Depth-masked sphere foam coverage raster for water; output R16Float coverage in [0,1].",
-    inputs: { particles: Array(WaterParticle) required, foam: Array(f32) required, depth: Texture2D required, camera: Camera required, radius: ScalarF32 optional },
+    inputs: { particles: Array(WaterParticle) required, shapes: Channels["surface_center_radius": Vec4F, "surface_axis_x": Vec4F, "surface_axis_y": Vec4F, "surface_axis_z": Vec4F] optional, foam: Array(f32) required, depth: Texture2D required, camera: Camera required, radius: ScalarF32 optional },
     outputs: { coverage: Texture2D },
     params: [ParamDef { name: Cow::Borrowed("radius"), label: "Impostor Radius", ty: ParamType::Float, default: ParamValue::Float(FOAM_DEFAULT_RADIUS), range: Some((0.001, 1.0)), enum_values: &[] }],
     depth_rule: Terminal,
     composition_notes: "Depth-masked near-surface foam coverage for water shading.",
     examples: [], picker: { label: "Particle Foam", category: Atom }, summary: "Rasterizes near-surface particle foam.", category: Particles3D, role: Filter, aliases: ["water foam"], boundary_reason: Blocked,
-    extra_fields: { resolve_pipeline: Option<manifold_gpu::GpuComputePipeline> = None, scratch: Option<FoamScratch> = None, },
+    extra_fields: { resolve_pipeline: Option<manifold_gpu::GpuComputePipeline> = None, anisotropic_pipeline: Option<manifold_gpu::GpuComputePipeline> = None, scratch: Option<FoamScratch> = None, },
 }
 
 impl Primitive for ParticleFoam {
@@ -113,6 +118,14 @@ impl Primitive for ParticleFoam {
             gpu_clear(ctx, out);
             return;
         }
+        let shapes = ctx.inputs.array("shapes");
+        if let Some(s) = shapes
+            && s.size < u64::from(count) * 64
+        {
+            gpu_clear(ctx, out);
+            ctx.error("node.particle_foam: shapes capacity must match particles");
+            return;
+        }
         let gpu = ctx.gpu_encoder();
         if self
             .scratch
@@ -134,6 +147,13 @@ impl Primitive for ParticleFoam {
                 "node.particle_foam.splat",
             )
         });
+        let anisotropic = self.anisotropic_pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                FOAM_SPLAT_WGSL,
+                "cs_anisotropic",
+                "node.particle_foam.splat.anisotropic",
+            )
+        });
         let resolve = self.resolve_pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 FOAM_RESOLVE_WGSL,
@@ -152,9 +172,33 @@ impl Primitive for ParticleFoam {
             count,
             _pad: 0,
         };
-        gpu.native_enc.dispatch_compute(
-            pipe,
-            &[
+        let legacy = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&su),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: particles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: foam,
+                offset: 0,
+            },
+            GpuBinding::Texture {
+                binding: 3,
+                texture: depth,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &s.bits,
+                offset: 0,
+            },
+        ];
+        if let Some(shape_buf) = shapes {
+            let shaped = [
                 GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&su),
@@ -178,10 +222,26 @@ impl Primitive for ParticleFoam {
                     buffer: &s.bits,
                     offset: 0,
                 },
-            ],
-            [count.div_ceil(256), 1, 1],
-            "node.particle_foam.splat",
-        );
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: shape_buf,
+                    offset: 0,
+                },
+            ];
+            gpu.native_enc.dispatch_compute(
+                anisotropic,
+                &shaped,
+                [count.div_ceil(256), 1, 1],
+                "node.particle_foam.splat.anisotropic",
+            );
+        } else {
+            gpu.native_enc.dispatch_compute(
+                pipe,
+                &legacy,
+                [count.div_ceil(256), 1, 1],
+                "node.particle_foam.splat",
+            );
+        }
         let pu = SurfacePixelUniforms {
             width: w,
             height: h,

@@ -1,3 +1,24 @@
+## Surface reconstruction continuation — 2026-09-11
+
+Slot-7 `wave/live-water`: added neighbour covariance ellipsoids shared by depth,
+thickness and foam, wired into both water demos. Particle simulation is unchanged.
+Observed 240-frame 720p WaterImpact sequence: substantially less particle lattice;
+water still looks too smooth and lacks convincing localized foam/spray. Keep as
+an incremental reconstruction improvement, not reference-image acceptance.
+Tighter projected bounds reduced median frame cost from 24.942 to 22.607 ms
+(p95 23.460); prior spherical baseline was 18.312 ms. Headless encode/submit/GPU
+wait only, not native app FPS. Final filmstrip `/tmp/water-fitted-final-contact.png`,
+frame 90 `/tmp/water-fitted-final-seq/frame_000090.png`, timing
+`/tmp/water-fitted-final-timing.json`. Fixed camera retained.
+
+Native ellipsoid depth/oriented-plane fitting and legacy sphere depth/thickness/
+foam checks passed. Focused clippy, both preset roundtrip tests and release app build passed:
+`/tmp/water-shape-roundtrip.log`, `/tmp/water-shape-app-build.log`.
+Daily shared weekly meter last read 12%,
+baseline 8%, closeout 12%, finish 13%. BUG-01vr numerical acceptance remains
+open: no production pressure replacement and no main landing. Next work is
+solver validation/integration, followed by motion-localized whitewater and spray.
+
 ## Current day pass — 2026-09-11
 
 Implemented persistent deformation-driven foam, near-surface coverage and optional water shading; WaterPrototype and new WaterImpact expose gain/lifetime. This is a visual proxy, not physical bubbles or spray. Rebuilt release app. Native foam/water compatibility checks (6), CPU roundtrip/MAC reference (7), and focused clippy pass. Kernel recurrence checks do not establish host reset/epoch lifecycle coverage. Final impact movie `/tmp/water-impact-foam.mp4`; 240-frame 720p timing `/tmp/water-impact-accepted-timing.json`: median18.312ms, p9519.248ms (encoding/submit/GPU wait, excluding PNG). Appearance remains short of reference: rounded sheets, visible particle sampling, no thin airborne spray. Camera stays stationary. No main landing: BUG-01vr is open.

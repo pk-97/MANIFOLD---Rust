@@ -1,3 +1,4 @@
+use crate::node_graph::primitives;
 use crate::node_graph::{bundled_preset_def, bundled_preset_json, bundled_preset_type_ids};
 use crate::node_graph::primitives::{
     GltfTextureSource, RenderScene, ScatterOnMesh, SeedParticlesFromTexture,
@@ -84,6 +85,10 @@ impl GeneratorRegistry {
         // blend / velocity+AO+denoise auxiliary outputs.
         RenderScene::prewarm_pipelines(device);
         crate::node_graph::primitives::WaterFoam::prewarm_pipelines(device);
+        primitives::prewarm_water_particle_bins(device);
+        primitives::prewarm_water_surface_fit(device);
+        let _ = device.create_compute_pipeline(primitives::SURFACE_DEPTH_SPLAT_WGSL, "cs_anisotropic", "node.particle_surface_depth.splat.anisotropic");
+        let _ = device.create_compute_pipeline(primitives::THICKNESS_SPLAT_WGSL, "cs_anisotropic", "node.particle_thickness.splat.anisotropic");
         crate::node_graph::primitives::prewarm_particle_foam(device);
         // COMPILE_CONTRACT_DESIGN P1: the RT shadow-ray pipeline set (MSL
         // library + seven PSOs) is device-global code — populate it here so

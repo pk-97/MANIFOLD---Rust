@@ -42,3 +42,22 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 }
+
+@group(0) @binding(5) var<storage, read> shapes: array<SurfaceShape>;
+@compute @workgroup_size(256)
+fn cs_anisotropic(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x; if (i >= splat.count) { return; }
+    let fraction = foam[i]; if (fraction <= 0.001 || !splat_finite1(fraction)) { return; }
+    let s = shape_view(splat, shapes[i]); if (!shape_valid(s)) { return; }
+    var lo: vec2<i32>; var hi: vec2<i32>; var sphere = splat; sphere.radius = s.bound;
+    if (particles[i].position_mass.w == 0.0 || !splat_accept(sphere, s.center)) { return; }
+    shape_bbox(splat, s, &lo, &hi);
+    for (var y=lo.y; y<=hi.y; y++) { for (var x=lo.x; x<=hi.x; x++) {
+        let dir=splat_ray_dir(splat,vec2<i32>(x,y)); let hit=shape_ray_hit(s,dir); if(hit.x<=0.0){continue;}
+        let raw=textureLoad(depth,vec2<i32>(x,y),0).r; if(!splat_finite1(raw)||raw>=1.0){continue;}
+        if(abs(hit.x*dir.z-linear_depth(raw))>2.0*min(length(s.axis_x),min(length(s.axis_y),length(s.axis_z)))){continue;}
+        let q=vec3<f32>(dot(dir,s.axis_x)/dot(s.axis_x,s.axis_x),dot(dir,s.axis_y)/dot(s.axis_y,s.axis_y),dot(dir,s.axis_z)/dot(s.axis_z,s.axis_z));
+        let radial=clamp(0.5*(hit.y-hit.x)*length(q),0.0,1.0);
+        atomicMax(&out_bits[u32(y)*splat.width+u32(x)],bitcast<u32>(clamp(fraction,0.0,1.0)*radial));
+    }}
+}

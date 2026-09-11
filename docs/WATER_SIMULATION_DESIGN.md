@@ -497,6 +497,36 @@ the updated depth; temporal motion feeds are not claimed. These limits are visib
 in the preset description. Supporting intersecting transparent objects and reliable
 liquid motion vectors is later work, not a fake MVP implementation.
 
+### Fitted particle surface
+
+Both water demos now insert `node.water_particle_bins` and
+`node.water_surface_fit` after the accepted simulation state. These affect
+rendering only. Binning uses 32³ linked cells of width 0.125 m in the fixed
+four-metre domain `[-2,0,-2]..[2,4,2]`. The fit gathers 27 cells, forms a
+weighted neighbour covariance, and uses five cyclic Jacobi sweeps to obtain
+orthogonal axes. Fewer than eight neighbours retains a spherical droplet.
+Eigenvalue regularization bounds the axis ratio to four; geometric-mean
+normalization preserves the radius-derived ellipsoid volume. This does not
+establish conservation of the reconstructed fluid volume. The default centre
+blend is 0.5 and radius is 0.046875 m.
+
+The output has four vec4 channels (64 bytes per particle):
+`surface_center_radius` contains world centre and maximum semi-axis length;
+`surface_axis_x/y/z` contain orthogonal world semi-axis vectors with zero w.
+Inactive particles emit zero shapes. Depth, thickness and foam accept this
+optional shape input; omission preserves their sphere path. Their shaped
+paths share view conversion, conservative projected ellipsoid bounds and
+analytic ray intersections. Thickness adds ellipsoid chords, still an
+approximation where particles overlap. Foam uses these same intersections
+and a near-surface tolerance of twice the minimum semi-axis length.
+
+This reduces the visible particle lattice without adding depth-blur passes.
+It is a bounded covariance fit, not an extracted fluid mesh or a replacement
+solver. Native tests compare rotated ellipsoid depth to an independent f64
+oracle and neighbour fitting to an analytic rotated plane and isolated drop.
+The observed impact sequence is smoother but still lacks convincing localized
+whitewater and spray; it is not accepted as matching the visual references.
+
 ### Optional foam
 
 `node.water_foam` consumes accepted particles after the repeated water region

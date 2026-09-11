@@ -75,3 +75,29 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 }
+
+// Shape-aware entry point. The optional shape buffer is deliberately bound
+// only here so the legacy cs_main ABI remains unchanged.
+@group(0) @binding(3) var<storage, read> buf_shapes: array<SurfaceShape>;
+@compute @workgroup_size(256)
+fn cs_anisotropic(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if (idx >= splat.count) { return; }
+    let s = shape_view(splat, buf_shapes[idx]);
+    if (!shape_valid(s)) { return; }
+    var lo: vec2<i32>; var hi: vec2<i32>;
+    var sphere = splat; sphere.radius = s.bound;
+    if (buf_particles[idx].position_mass.w == 0.0 || !splat_accept(sphere, s.center)) { return; }
+    shape_bbox(splat, s, &lo, &hi);
+    for (var y = lo.y; y <= hi.y; y++) { for (var x = lo.x; x <= hi.x; x++) {
+        let hit = shape_ray_hit(s, splat_ray_dir(splat, vec2<i32>(x, y)));
+        if (hit.x <= 0.0 || hit.y <= hit.x) { continue; }
+        let flat = u32(y) * splat.width + u32(x);
+        let chord = hit.y - hit.x;
+        var old = atomicLoad(&buf_thickness[flat]);
+        for (var attempt = 0u; attempt < 2048u; attempt++) {
+            let r = atomicCompareExchangeWeak(&buf_thickness[flat], old, bitcast<u32>(bitcast<f32>(old) + chord));
+            if (r.exchanged) { break; } old = r.old_value;
+        }
+    }}
+}

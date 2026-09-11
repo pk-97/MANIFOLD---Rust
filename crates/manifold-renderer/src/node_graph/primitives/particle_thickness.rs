@@ -24,9 +24,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::water::WaterParticle;
 
-use super::particle_surface_depth::{
-    DEFAULT_RADIUS, SurfacePixelUniforms, SurfaceSplatUniforms,
-};
+use super::particle_surface_depth::{DEFAULT_RADIUS, SurfacePixelUniforms, SurfaceSplatUniforms};
 
 /// Shared splat helpers — see `node.particle_surface_depth` (single source).
 pub const THICKNESS_SPLAT_WGSL: &str = concat!(
@@ -34,8 +32,7 @@ pub const THICKNESS_SPLAT_WGSL: &str = concat!(
     "\n",
     include_str!("shaders/particle_thickness_splat.wgsl"),
 );
-pub const THICKNESS_RESOLVE_WGSL: &str =
-    include_str!("shaders/particle_thickness_resolve.wgsl");
+pub const THICKNESS_RESOLVE_WGSL: &str = include_str!("shaders/particle_thickness_resolve.wgsl");
 
 pub struct ThicknessScratch {
     width: u32,
@@ -49,6 +46,7 @@ crate::primitive! {
     purpose: "Additive sphere-chord thickness raster for water (design section 7): splats each live WaterParticle as a sphere of radius `radius` (default 0.75*h) and accumulates the length of each pixel ray's chord through every impostor (2*sqrt(discriminant), metres). Approximate optical thickness by construction — a sphere-splat chord sum, not an exact volume integral; S7's refraction pass consumes it as Beer-Lambert path length. Output R16Float, empty=0, full canvas resolution. Perspective camera only; same V1 rejects as node.particle_surface_depth (near-plane cross, camera inside a sphere, beyond far are skipped, never garbage).",
     inputs: {
         particles: Array(WaterParticle) required,
+        shapes: Channels["surface_center_radius": Vec4F, "surface_axis_x": Vec4F, "surface_axis_y": Vec4F, "surface_axis_z": Vec4F] optional,
         camera: Camera required,
         radius: ScalarF32 optional,
     },
@@ -76,6 +74,7 @@ crate::primitive! {
     boundary_reason: Blocked,
     extra_fields: {
         resolve_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        anisotropic_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         scratch: Option<ThicknessScratch> = None,
     },
 }
@@ -115,10 +114,17 @@ impl Primitive for ParticleThickness {
             None => Some("node.particle_thickness: missing required `camera` input"),
             Some(c) => {
                 if !matches!(c.mode, CameraMode::Perspective { .. }) {
-                    Some("node.particle_thickness: perspective camera required (orthographic rejected in V1)")
-                } else if !(c.near.is_finite() && c.far.is_finite() && c.near > 0.0 && c.near < c.far)
+                    Some(
+                        "node.particle_thickness: perspective camera required (orthographic rejected in V1)",
+                    )
+                } else if !(c.near.is_finite()
+                    && c.far.is_finite()
+                    && c.near > 0.0
+                    && c.near < c.far)
                 {
-                    Some("node.particle_thickness: camera near/far must be finite with 0 < near < far")
+                    Some(
+                        "node.particle_thickness: camera near/far must be finite with 0 < near < far",
+                    )
                 } else {
                     None
                 }
@@ -126,7 +132,8 @@ impl Primitive for ParticleThickness {
         };
         let clear = |ctx: &mut EffectNodeContext<'_, '_>| {
             let gpu = ctx.gpu_encoder();
-            gpu.native_enc.clear_texture(thickness_tex, 0.0, 0.0, 0.0, 0.0);
+            gpu.native_enc
+                .clear_texture(thickness_tex, 0.0, 0.0, 0.0, 0.0);
         };
         if !radius.is_finite() || radius <= 0.0 {
             clear(ctx);
@@ -161,6 +168,16 @@ impl Primitive for ParticleThickness {
             clear(ctx);
             return;
         }
+        let shapes = ctx.inputs.array("shapes");
+        if let Some(s) = shapes
+            && s.size < u64::from(capacity) * 64
+        {
+            ctx.gpu_encoder()
+                .native_enc
+                .clear_texture(thickness_tex, 0., 0., 0., 0.);
+            ctx.error("node.particle_thickness: shapes capacity must match particles");
+            return;
+        }
 
         let gpu = ctx.gpu_encoder();
 
@@ -183,6 +200,13 @@ impl Primitive for ParticleThickness {
                 THICKNESS_SPLAT_WGSL,
                 "cs_main",
                 "node.particle_thickness.splat",
+            )
+        });
+        let anisotropic = self.anisotropic_pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                THICKNESS_SPLAT_WGSL,
+                "cs_anisotropic",
+                "node.particle_thickness.splat.anisotropic",
             )
         });
         let resolve_pipeline = self.resolve_pipeline.get_or_insert_with(|| {
@@ -216,27 +240,58 @@ impl Primitive for ParticleThickness {
         gpu.native_enc.clear_buffer(&scratch.thickness);
 
         // 2. Splat: bounded CAS chord accumulation.
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&splat_uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: particles,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &scratch.thickness,
-                    offset: 0,
-                },
-            ],
-            [capacity.div_ceil(256), 1, 1],
-            "node.particle_thickness.splat",
-        );
+        let legacy = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&splat_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: particles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &scratch.thickness,
+                offset: 0,
+            },
+        ];
+        let shaped = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&splat_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: particles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &scratch.thickness,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: shapes.unwrap_or(particles),
+                offset: 0,
+            },
+        ];
+        if shapes.is_some() {
+            gpu.native_enc.dispatch_compute(
+                anisotropic,
+                &shaped,
+                [capacity.div_ceil(256), 1, 1],
+                "node.particle_thickness.splat.anisotropic",
+            );
+        } else {
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &legacy,
+                [capacity.div_ceil(256), 1, 1],
+                "node.particle_thickness.splat",
+            );
+        }
 
         // 3. Resolve: scratch -> R16Float thickness.
         gpu.native_enc.dispatch_compute(
@@ -272,8 +327,10 @@ mod tests {
     #[test]
     fn water_thickness_declares_explicit_output() {
         assert_eq!(ParticleThickness::TYPE_ID, "node.particle_thickness");
-        let out_names: Vec<&str> =
-            ParticleThickness::OUTPUTS.iter().map(|p| p.name.as_ref()).collect();
+        let out_names: Vec<&str> = ParticleThickness::OUTPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(out_names, vec!["thickness"]);
 
         let prim = ParticleThickness::new();
