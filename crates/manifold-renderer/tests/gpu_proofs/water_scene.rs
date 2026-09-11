@@ -5,7 +5,7 @@
 //! Static fixture through the REAL graph and `PresetRuntime` (never a
 //! side-channel renderer): an overhead `node.orbit_camera`, a seeded
 //! particle slab (`node.seed_water` → `node.particle_surface_depth` /
-//! `node.particle_thickness` → `node.bilateral_blur` H/V ClipDepth →
+//! known 0.12 m optical thickness → `node.bilateral_blur` H/V ClipDepth →
 //! `node.normals_from_depth` → the five render_scene water inputs), and
 //! three unlit `node.grid_mesh` objects — an opaque foreground plane,
 //! a partly submerged vertical wall, and a floor plane behind the water.
@@ -56,8 +56,8 @@ const CAM_NEAR: f32 = 0.05;
 const CAM_FAR: f32 = 200.0;
 
 /// Water pool box (node.seed_water params, mirrored by the oracle
-/// lattice). 0.5 m deep: caps the splat thickness (~1.3 m → ~0.12 m
-/// calibrated) so the refraction displacement stays under ~8 px.
+/// lattice). Optical thickness is a separate known 0.12 m fixture value,
+/// keeping refraction displacement under ~8 px while depth uses real splats.
 const POOL_MIN: [f32; 3] = [-0.9, -0.55, -0.7];
 const POOL_MAX: [f32; 3] = [0.9, -0.05, 0.7];
 
@@ -252,7 +252,7 @@ fn seed_positions(lo: [f32; 3], hi: [f32; 3], grid_spacing: f32) -> Vec<[f32; 3]
 // Graph construction.
 //
 // Node ids: 0 generator_input, 1 scene/water camera, 2 seed_water,
-// 3 particle_surface_depth, 4 particle_thickness, 5/6 bilateral H/V,
+// 3 particle_surface_depth, 4 known metre thickness, 5/6 bilateral H/V,
 // 7 normals_from_depth, 8 water material, 9..=20 the three scene objects
 // (grid mesh -> make_triangles -> transform_3d -> unlit_material each),
 // 30 render_scene, 31 depth dead-end sink, 99 final_output.
@@ -423,7 +423,7 @@ fn assemble(variant: &GraphVariant, water_camera_node: Option<u32>, render_scene
         nodes.push_str(&seed_water_node());
         nodes.push_str(concat!(
             "{\"id\":3,\"typeId\":\"node.particle_surface_depth\",\"nodeId\":\"splat\",\"params\":{}},",
-            "{\"id\":4,\"typeId\":\"node.particle_thickness\",\"nodeId\":\"thick\",\"params\":{}},",
+            "{\"id\":4,\"typeId\":\"test.water_thickness_surface\",\"nodeId\":\"thick\",\"params\":{\"thickness\":{\"type\":\"Float\",\"value\":0.12}}},",
             "{\"id\":5,\"typeId\":\"node.bilateral_blur\",\"nodeId\":\"blur_h\",\"params\":{",
             "\"axis\":{\"type\":\"Enum\",\"value\":0},",
             "\"depth_sigma\":{\"type\":\"Float\",\"value\":0.05},",
@@ -440,9 +440,7 @@ fn assemble(variant: &GraphVariant, water_camera_node: Option<u32>, render_scene
         ));
         wires.push_str(concat!(
             "{\"fromNode\":2,\"fromPort\":\"out\",\"toNode\":3,\"toPort\":\"particles\"},",
-            "{\"fromNode\":2,\"fromPort\":\"out\",\"toNode\":4,\"toPort\":\"particles\"},",
             "{\"fromNode\":1,\"fromPort\":\"out\",\"toNode\":3,\"toPort\":\"camera\"},",
-            "{\"fromNode\":1,\"fromPort\":\"out\",\"toNode\":4,\"toPort\":\"camera\"},",
             "{\"fromNode\":1,\"fromPort\":\"out\",\"toNode\":5,\"toPort\":\"camera\"},",
             "{\"fromNode\":1,\"fromPort\":\"out\",\"toNode\":6,\"toPort\":\"camera\"},",
             "{\"fromNode\":1,\"fromPort\":\"out\",\"toNode\":7,\"toPort\":\"camera\"},",
@@ -755,7 +753,7 @@ impl EffectNode for TestOrthoCamera {
 }
 
 fn registry_with_ortho() -> PrimitiveRegistry {
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = water_scene_registry();
     registry.register("test.ortho_water_camera", || Box::new(TestOrthoCamera));
     registry
 }
@@ -773,7 +771,7 @@ fn registry_with_ortho() -> PrimitiveRegistry {
 #[test]
 fn water_scene_occlusion_and_depth() {
     let (w, h) = (harness::shared().width, harness::shared().height);
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = water_scene_registry();
     let with_water = render_graph(&assemble(&GraphVariant { surface: true, water: true }, None, ""), &registry, w, h, GpuTextureFormat::Rgba16Float);
     let no_water = render_graph(&assemble(&GraphVariant { surface: false, water: false }, None, ""), &registry, w, h, GpuTextureFormat::Rgba16Float);
 
@@ -953,7 +951,7 @@ const GOLDEN_NO_WATER_HASH: u64 = 0x33ec_5a37_9221_9b71;
 #[test]
 fn water_scene_without_water_matches_existing() {
     let (w, h) = (harness::shared().width, harness::shared().height);
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = water_scene_registry();
 
     // Pure scene: no water nodes at all.
     let baseline = render_graph(&assemble(&GraphVariant { surface: false, water: false }, None, ""), &registry, w, h, GpuTextureFormat::Rgba16Float);
@@ -1019,7 +1017,7 @@ fn assert_scene_error_convention(rendered: &Rendered, label: &str) {
 #[test]
 fn water_scene_rejects_unsupported_combinations() {
     let (w, h) = (harness::shared().width, harness::shared().height);
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = water_scene_registry();
     let full = GraphVariant { surface: true, water: true };
     let render = |json: &str, registry: &PrimitiveRegistry| {
         render_graph(json, registry, w, h, GpuTextureFormat::Rgba16Float)
@@ -1098,24 +1096,11 @@ fn water_scene_rejects_unsupported_combinations() {
         assert_scene_error_convention(&render(&json, &registry), "Blend object in scene");
     }
 
-    // 6. rt_enabled on: valid water scenes use the explicit raster fallback,
-    // preserving the raster output while reporting the unsupported RT mode.
+    // RT requires the actual scalar field used by the primary surface.
+    // Legacy screen-space inputs alone cannot describe a refracted exit.
     {
-        let raster = render(&assemble(&full, None, ""), &registry);
         let rt_json = assemble(&full, None, "\"rt_enabled\":{\"type\":\"Bool\",\"value\":true}");
-        let rt = render(&rt_json, &registry);
-        assert_eq!(rt.color, raster.color, "water RT request must use the raster output");
-        for (i, px) in rt.color.chunks_exact(8).enumerate() {
-            let rgb = [
-                f16::from_le_bytes([px[0], px[1]]).to_f32(),
-                f16::from_le_bytes([px[2], px[3]]).to_f32(),
-                f16::from_le_bytes([px[4], px[5]]).to_f32(),
-            ];
-            assert!(
-                !(rgb[0] == 1.0 && rgb[1] == 0.0 && rgb[2] == 1.0),
-                "water RT fallback pixel {i} must not be magenta"
-            );
-        }
+        assert_scene_error_convention(&render(&rt_json, &registry), "RT water without density");
     }
 
     // 7. temporal_upscale on, with depth+velocity wired so the D22 gate's
@@ -1186,7 +1171,7 @@ fn water_scene_rejects_unsupported_combinations() {
 #[test]
 fn water_scene_artifact() {
     let (w, h) = (256u32, 256u32);
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = water_scene_registry();
     let json = assemble(&GraphVariant { surface: true, water: true }, None, "");
     let rendered = render_graph(&json, &registry, w, h, GpuTextureFormat::Rgba16Float);
 
@@ -1235,6 +1220,188 @@ fn water_scene_artifact() {
         Err(_) => {
             println!(
                 "[water_scene] WATER_ARTIFACT_DIR unset — occlusion scene rendered and composed, but no files written"
+            );
+        }
+    }
+}
+
+// A one-metre analytic water surface injected through ordinary graph ports.
+// This test-only node supplies data; the shipping RenderScene still owns
+// material validation, parameter selection, uniforms, and the shading pass.
+struct TestThicknessSurface;
+
+const THICKNESS_SURFACE_OUTPUTS: &[NodeOutput] = &[
+    NodePort {
+        name: Cow::Borrowed("depth"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: Cow::Borrowed("thickness"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: Cow::Borrowed("normals"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+];
+
+impl EffectNode for TestThicknessSurface {
+    fn type_id(&self) -> &EffectNodeType {
+        static ID: OnceLock<EffectNodeType> = OnceLock::new();
+        ID.get_or_init(|| EffectNodeType::new("test.water_thickness_surface"))
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        &[]
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        THICKNESS_SURFACE_OUTPUTS
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        const PARAMS: &[ParamDef] = &[ParamDef {
+            name: Cow::Borrowed("thickness"),
+            label: "Thickness (m)",
+            ty: manifold_renderer::node_graph::ParamType::Float,
+            default: manifold_renderer::node_graph::ParamValue::Float(1.0),
+            range: None,
+            enum_values: &[],
+        }];
+        PARAMS
+    }
+    fn depth_rule(&self) -> manifold_renderer::node_graph::depth_rule::DepthRule {
+        manifold_renderer::node_graph::depth_rule::DepthRule::Terminal
+    }
+    fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {
+        Some(if port == "normals" {
+            GpuTextureFormat::Rgba16Float
+        } else {
+            GpuTextureFormat::R32Float
+        })
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let raw_depth = f64::from(delinearize_depth(2.0, CAM_NEAR, CAM_FAR));
+        let thickness = ctx
+            .params
+            .get("thickness")
+            .and_then(|value| value.as_scalar())
+            .unwrap_or(1.0);
+        for (port, color) in [
+            ("depth", [raw_depth, 0.0, 0.0, 1.0]),
+            ("thickness", [f64::from(thickness), 0.0, 0.0, 1.0]),
+            // View-space normal toward the camera after the water frame bridge.
+            ("normals", [0.0, 0.0, -1.0, 1.0]),
+        ] {
+            let Some(texture) = ctx.outputs.texture_2d(port) else {
+                continue;
+            };
+            ctx.gpu_encoder()
+                .native_enc
+                .clear_texture(texture, color[0], color[1], color[2], color[3]);
+        }
+    }
+}
+
+fn water_scene_registry() -> PrimitiveRegistry {
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.water_thickness_surface", || {
+        Box::new(TestThicknessSurface)
+    });
+    registry
+}
+
+fn metre_thickness_graph(water: bool) -> String {
+    // A large, unlit floor fills the central measurement region, so
+    // refraction changes neither the sampled colour nor its mip value.
+    let (floor, floor_ids) = grid_object(9, 0, [0.0, -1.6, 0.0], 0.0, [20.0, 20.0], FLOOR_COLOR);
+    let mut nodes = String::from(r#"{"id":0,"typeId":"system.generator_input","nodeId":"input"},"#);
+    nodes.push_str(&camera_node(1, CAM_DISTANCE));
+    nodes.push_str(&floor);
+    let mut wires = wire_object(&floor_ids, 0);
+    wires.push_str(r#"{"fromNode":1,"fromPort":"out","toNode":30,"toPort":"camera"},"#);
+    if water {
+        nodes.push_str(
+            r#"{"id":3,"typeId":"test.water_thickness_surface","nodeId":"surface","params":{}},"#,
+        );
+        nodes.push_str(&format!(
+            r#"{{"id":8,"typeId":"node.pbr_material","nodeId":"water_mat","params":{{{}}}}},"#,
+            water_material_json()
+        ));
+        for (node, from, to) in [
+            (3, "depth", "water_depth"),
+            (3, "thickness", "water_thickness"),
+            (3, "normals", "water_normals"),
+            (8, "out", "water_material"),
+            (1, "out", "water_camera"),
+        ] {
+            wires.push_str(&format!(
+                r#"{{"fromNode":{node},"fromPort":"{from}","toNode":30,"toPort":"{to}"}},"#
+            ));
+        }
+    }
+    nodes.push_str(r#"{"id":30,"typeId":"node.render_scene","nodeId":"scene","params":{"objects":{"type":"Int","value":1},"lights":{"type":"Int","value":0}}},"#);
+    nodes.push_str(r#"{"id":31,"typeId":"node.invert","nodeId":"depth_sink","params":{}},{"id":99,"typeId":"system.final_output","nodeId":"out"}"#);
+    wires.push_str(r#"{"fromNode":30,"fromPort":"color","toNode":99,"toPort":"in"},{"fromNode":30,"fromPort":"depth","toNode":31,"toPort":"in"}"#);
+    format!(r#"{{"version":2,"name":"WaterMetreThickness","nodes":[{nodes}],"wires":[{wires}]}}"#)
+}
+
+#[test]
+fn water_scene_metre_thickness_matches_beer_lambert() {
+    let (w, h) = (64, 64);
+    let registry = water_scene_registry();
+    let render = |water| {
+        render_graph(
+            &metre_thickness_graph(water),
+            &registry,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+        )
+    };
+    let opaque = render(false);
+    let water = render(true);
+
+    // No lights or environment: colour is floor * Beer-Lambert * (1-Fresnel).
+    // The surface is two metres from the camera, several metres before the
+    // floor, so its known 1 m optical thickness is not clipped by opaque depth.
+    // Three fp16 steps bound quantization, well below the error from the old
+    // 1/10.9 additive-splat calibration, which no longer belongs in rendering.
+    let attenuation = [0.70_f64, 0.90, 0.95];
+    let ior = 1.333_f64;
+    let f0 = ((ior - 1.0) / (ior + 1.0)).powi(2);
+    for y in h / 2 - 8..h / 2 + 8 {
+        for x in w / 2 - 8..w / 2 + 8 {
+            let background = rgb16(&opaque.color, w, x, y);
+            let actual = rgb16(&water.color, w, x, y);
+            let ndc_x = 2.0 * (f64::from(x) + 0.5) / f64::from(w) - 1.0;
+            let ndc_y = 1.0 - 2.0 * (f64::from(y) + 0.5) / f64::from(h);
+            let tangent = (f64::from(CAM_FOV_Y) / 2.0).tan();
+            let ndotv = 1.0 / (1.0 + tangent * tangent * (ndc_x * ndc_x + ndc_y * ndc_y)).sqrt();
+            let fresnel = f0 + (1.0 - f0) * (1.0 - ndotv).powi(5);
+            for channel in 0..3 {
+                assert!(
+                    (background[channel] - FLOOR_COLOR[channel]).abs() < 0.001,
+                    "fixture floor must be unlit and uniform"
+                );
+                let expected = f64::from(background[channel])
+                    * attenuation[channel].powf(1.0 / 2.0)
+                    * (1.0 - fresnel);
+                assert!(
+                    (f64::from(actual[channel]) - expected).abs() <= 0.0015,
+                    "pixel ({x},{y}) channel {channel}, 1 m thickness: {} != {expected}",
+                    actual[channel]
+                );
+            }
+            let incorrectly_calibrated_red = f64::from(background[0])
+                * attenuation[0].powf(1.0 / (10.9 * 2.0))
+                * (1.0 - fresnel);
+            assert!(
+                incorrectly_calibrated_red - f64::from(actual[0]) > 0.08,
+                "the measured attenuation must reject the removed splat correction"
             );
         }
     }

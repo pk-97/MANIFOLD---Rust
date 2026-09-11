@@ -112,6 +112,15 @@ pub mod well_known {
         // ─── Vector positions (when not decomposed into x/y/z) ──────
         POSITION = "position";
         VELOCITY = "velocity";
+        SURFACE_CENTER_RADIUS = "surface_center_radius";
+        SURFACE_AXIS_X = "surface_axis_x";
+        SURFACE_AXIS_Y = "surface_axis_y";
+        SURFACE_AXIS_Z = "surface_axis_z";
+        MAC_VELOCITY = "mac_velocity";
+        MAC_VALID = "mac_valid";
+        MAC_OPEN = "mac_open";
+        MAC_LOWER_DIAG = "mac_lower_diag";
+        MAC_UPPER_RHS = "mac_upper_rhs";
         NORMAL   = "normal";
         TANGENT  = "tangent";
         UV       = "uv";

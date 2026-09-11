@@ -32,14 +32,14 @@ impl Grid {
         let lens = std::array::from_fn::<_, 3, _>(|a| {
             let mut d = n;
             d[a] += 1;
-            d.iter().product()
+            d.iter().product::<usize>()
         });
         Self {
             n,
             h,
-            phi: vec![h; n.iter().product()],
+            phi: vec![h; n.iter().product::<usize>()],
             open: std::array::from_fn(|a| vec![1.; lens[a]]),
-            open_center: vec![1.; n.iter().product()],
+            open_center: vec![1.; n.iter().product::<usize>()],
             solid: std::array::from_fn(|a| vec![0.; lens[a]]),
         }
     }
@@ -99,7 +99,7 @@ impl Grid {
         if !self.h.is_finite() || self.h <= 0. || self.n.contains(&0) {
             return Err("invalid grid");
         }
-        if self.phi.len() != self.n.iter().product() || self.phi.iter().any(|x| !x.is_finite()) {
+        if self.phi.len() != self.n.iter().product::<usize>() || self.phi.iter().any(|x| !x.is_finite()) {
             return Err("invalid phi");
         }
         if self.open_center.len() != self.phi.len()
@@ -111,7 +111,7 @@ impl Grid {
             return Err("invalid cell fraction");
         }
         for (a, va) in v.iter().enumerate() {
-            let len = self.dims(a).iter().product();
+            let len = self.dims(a).iter().product::<usize>();
             if va.len() != len || self.open[a].len() != len || self.solid[a].len() != len {
                 return Err("face dimensions");
             }

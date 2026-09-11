@@ -125,6 +125,10 @@ name = "render-import"
 path = "src/bin/render_import.rs"
 
 [[bin]]
+name = "water-offline-render"
+path = "src/bin/water_offline_render.rs"
+
+[[bin]]
 name = "water-stage-profile"
 path = "src/bin/water_stage_profile.rs"
 

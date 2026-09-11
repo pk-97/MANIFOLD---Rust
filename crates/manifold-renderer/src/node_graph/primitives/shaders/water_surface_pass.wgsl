@@ -4,17 +4,13 @@
 // fragments write the reconstructed water clip depth so later depth-aware
 // effects see the water surface.
 //
-// V1 shading scope (the grey-lit integration checkpoint; shadow-receiving
-// direct light is the named follow-up — see BUG-vglg):
-//   Fresnel (Schlick, F0 from the material IOR) blends
-//   - reflection: prefiltered IBL env sample at the material's roughness, plus
-//     a direct-Sun GGX-ish specular lobe (lights arrive via the uniform, no
-//     shadow maps yet), and
-//   - transmission: the opaque-scene colour snapshot refracted by IOR with
-//     Beer-Lambert attenuation exp(-sigma_a * thickness_eff).
-// thickness_eff shortens the reconstructed thickness to the first opaque hit; a
-// displaced sample that would pull a foreground opaque object through the
-// water is rejected (offset clamped to zero). Uncovered pixels discard.
+// Fresnel combines one reflected and one transmitted radiance value. When
+// the current scene TLAS is ready, the native water ray pass supplies both:
+// opaque scene intersections, refraction through the same implicit density
+// surface, Beer absorption along that path, and opaque-object Sun visibility.
+// RT off / acceleration warmup retains screen-space refraction and IBL.
+// Water itself is not a TLAS caster; self-shadowing and caustics are outside
+// this secondary-ray path.
 
 struct WaterUniforms {
     inv_view: mat4x4<f32>,
@@ -30,7 +26,7 @@ struct WaterUniforms {
     ior: f32,
     roughness: f32,
     attenuation_distance: f32,
-    thickness_scale: f32, // optical thickness multiplier (density isosurface uses metres)
+    rt_ready: f32,
     attenuation_color: vec4<f32>,
     screen_dims: vec4<f32>, // w, h, 1/w, 1/h
     foam_controls: vec4<f32>, // x = foam enabled
@@ -45,6 +41,8 @@ struct WaterUniforms {
 @group(0) @binding(6) var prefiltered_specular: texture_2d<f32>;
 @group(0) @binding(7) var env_sampler: sampler;
 @group(0) @binding(8) var water_foam: texture_2d<f32>;
+@group(0) @binding(9) var rt_reflection: texture_2d<f32>;
+@group(0) @binding(10) var rt_transmission: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -121,7 +119,7 @@ fn fs_water(in: VsOut) -> FsOut {
         discard;
     }
     // Frame bridge: normals_from_depth emits view normals in the splat
-    // frame (+z toward the camera — see splat_view_center's z negation),
+    // frame (+z along camera forward),
     // while inv_view is right-handed (-z forward). Negating z once maps
     // between the frames; without it the surface normal points INTO the
     // scene, ndotv clamps to 0, fresnel saturates to 1 and the shading
@@ -130,7 +128,7 @@ fn fs_water(in: VsOut) -> FsOut {
     let v = normalize(-(u.inv_view * vec4<f32>(view_pos, 0.0)).xyz);
 
     // Shorten the optical thickness to the first opaque hit behind the water.
-    let surface_thickness = textureLoad(water_thickness, coord, 0).r * u.thickness_scale;
+    let surface_thickness = textureLoad(water_thickness, coord, 0).r;
     let opaque_raw = textureLoad(opaque_depth, coord, 0);
     let opaque_vz = view_z_of(opaque_raw);
     let water_vz = view_z_of(raw);
@@ -173,7 +171,7 @@ fn fs_water(in: VsOut) -> FsOut {
     // Beer-Lambert: sigma_a derived from attenuation colour/distance.
     let sigma = -log(clamp(u.attenuation_color.rgb, vec3<f32>(1e-4), vec3<f32>(1.0))) / max(u.attenuation_distance, 1e-3);
     let transmit = exp(-sigma * thickness_eff);
-    let transmitted = scene * transmit;
+    var transmitted = scene * transmit;
 
     // Reflection: prefiltered IBL at the material roughness (equirect UV,
     // same convention as the scene env sampling).
@@ -181,7 +179,14 @@ fn fs_water(in: VsOut) -> FsOut {
     let max_lod = 4.0;
     // Match the scene baker: +Y is the top of the environment (v = 1).
     let env_uv = pbr_equirect_uv(r);
-    let env = textureSampleLevel(prefiltered_specular, env_sampler, env_uv, spec_roughness * max_lod).rgb;
+    var env = textureSampleLevel(prefiltered_specular, env_sampler, env_uv, spec_roughness * max_lod).rgb;
+    var sun_visibility = 1.0;
+    if (u.rt_ready > 0.5) {
+        let reflected = textureLoad(rt_reflection, coord, 0);
+        env = reflected.rgb;
+        sun_visibility = reflected.a;
+        transmitted = textureLoad(rt_transmission, coord, 0).rgb;
+    }
 
     let ndotv = clamp(dot(n, v), 0.0, 1.0);
     let f0v = (u.ior - 1.0) / (u.ior + 1.0);
@@ -190,7 +195,7 @@ fn fs_water(in: VsOut) -> FsOut {
 
     // Direct Sun: dielectric GGX specular lobe. Water's base colour is the
     // attenuated scene, not a Lambert term.
-    // No shadow lookup in V1 (named follow-up).
+    // The native ray pass supplies visibility when RT is ready.
     var sun = vec3<f32>(0.0);
     if u.sun_dir.w > 0.5 {
         let l = normalize(u.sun_dir.xyz);
@@ -209,7 +214,7 @@ fn fs_water(in: VsOut) -> FsOut {
         }
     }
 
-    var col = mix(transmitted, env, fres) + sun;
+    var col = mix(transmitted, env, fres) + sun * sun_visibility;
     if (u.foam_controls.x > 0.5) {
         let foam = clamp(textureLoad(water_foam, coord, 0).r, 0.0, 1.0);
         var foam_light = 0.4;

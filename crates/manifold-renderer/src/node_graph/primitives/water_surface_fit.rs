@@ -18,11 +18,12 @@ pub fn prewarm_pipeline(device: &manifold_gpu::GpuDevice) {
 crate::primitive! {
 name:WaterSurfaceFit,
 type_id:"node.water_surface_fit",
-purpose:"Fits bounded neighbour covariance ellipsoids to water particles.",
+purpose:"Fits Yu–Turk reconstruction kernels with optional 2013 component filtering and original-neighborhood SPH density.",
 inputs:{
     particles:Array(WaterParticle) required,
     heads:Array(u32) required,
     next:Array(u32) required,
+    components:Array(u32) optional,
     radius:ScalarF32 optional,
     center_blend:ScalarF32 optional},
 outputs:{
@@ -32,9 +33,9 @@ outputs:{
         "surface_axis_z":Vec4F]},
 params:[ParamDef{
         name:Cow::Borrowed("radius"),
-        label:"Radius",
+        label:"Spline Scale h",
         ty:ParamType::Float,
-        default:ParamValue::Float(0.046875),
+        default:ParamValue::Float(0.0625),
         range:Some((0.001,
         1.0)),
         enum_values:&[]},
@@ -42,12 +43,12 @@ params:[ParamDef{
         name:Cow::Borrowed("center_blend"),
         label:"Center Blend",
         ty:ParamType::Float,
-        default:ParamValue::Float(0.5),
+        default:ParamValue::Float(0.95),
         range:Some((0.0,
         1.0)),
         enum_values:&[]}],
 depth_rule:Terminal,
-composition_notes:"Bounded 27-cell covariance fit; isolated particles remain spheres.",
+composition_notes:"Yu–Turk equations 6 and 9–16: radius is h, neighbourhood 2h, cubic-distance weights, self included, N>25 covariance kernels, kr=4, sparse kn=0.5. ks is calibrated to a uniform interior in scene units. Shapes store full support semiaxes; axis_x.w stores reconstructed SPH density and axis_y.w bounds support about the original particle. Optional canonical components from water_component_roots filter covariance and relocation by Yu–Turk 2013 Eq.17, while SPH density includes every original neighbor. Unwired labels retain the 2010 method. Center relocation never modifies solver particles. Use lambda 0.9–1 to match the paper examples.",
 examples:[],
 picker:{
     label:"Water Surface Fit",
@@ -60,7 +61,12 @@ fusion_kind:Pointwise,
 wgsl_body:include_str!("shaders/water_surface_fit_body.wgsl"),
 input_access:[BufferGather,
     BufferGather,
+    BufferGather,
     BufferGather],
+extra_fields: {
+    source: String = shader_source(),
+    empty_components: Option<manifold_gpu::GpuBuffer> = None,
+},
 }
 impl Primitive for WaterSurfaceFit {
     fn requires(&self) -> NodeRequires {
@@ -98,17 +104,32 @@ impl Primitive for WaterSurfaceFit {
             ctx.error("node.water_surface_fit: invalid bin or shape capacity");
             return;
         }
-        let r = ctx.scalar_or_param("radius", 0.046875);
-        let b = ctx.scalar_or_param("center_blend", 0.5);
+        let components = ctx.inputs.array("components");
+        if components.is_some_and(|labels| labels.size < u64::from(count) * 4) {
+            ctx.gpu_encoder().native_enc.clear_buffer(o);
+            ctx.error("node.water_surface_fit: components must cover every particle slot");
+            return;
+        }
+        let r = ctx.scalar_or_param("radius", 0.0625);
+        let b = ctx.scalar_or_param("center_blend", 0.95);
         if !r.is_finite() || r <= 0.0 || !b.is_finite() {
             ctx.gpu_encoder().native_enc.clear_buffer(o);
             ctx.error("node.water_surface_fit: invalid parameters");
             return;
         }
         let g = ctx.gpu_encoder();
+        let components = components.unwrap_or_else(|| {
+            self.empty_components.get_or_insert_with(|| {
+                let buffer = g.device.create_buffer_shared(4);
+                unsafe {
+                    buffer.write(0, bytemuck::bytes_of(&0_u32));
+                }
+                buffer
+            })
+        });
         let pipe = self.pipeline.get_or_insert_with(|| {
             g.device.create_compute_pipeline(
-                &shader_source(),
+                &self.source,
                 crate::node_graph::freeze::codegen::ENTRY,
                 "node.water_surface_fit",
             )
@@ -151,6 +172,11 @@ impl Primitive for WaterSurfaceFit {
                 },
                 GpuBinding::Buffer {
                     binding: 4,
+                    buffer: components,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
                     buffer: o,
                     offset: 0,
                 },

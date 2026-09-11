@@ -82,6 +82,8 @@ pub const FAULT_INTEGER_OVERFLOW: u32 = 2;
 pub const FAULT_OUTSIDE_DOMAIN: u32 = 4;
 pub const FAULT_UNSUPPORTED_KINEMATICS: u32 = 8;
 pub const FAULT_INVALID_DENSITY: u32 = 16;
+/// Fractional MAC pressure solve did not meet its residual acceptance bound.
+pub const FAULT_PRESSURE_RESIDUAL: u32 = 32;
 
 /// Fixed status sideband layout. Word 0 remains the sticky fault bitset;
 /// older callers may still provide only that word. The diagnostic index is

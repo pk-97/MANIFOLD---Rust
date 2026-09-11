@@ -19,22 +19,24 @@ pub fn prewarm_pipeline(device: &manifold_gpu::GpuDevice) {
 crate::primitive! {
     name: WaterDensityField,
     type_id: "node.water_density_field",
-    purpose: "Reconstruct normalized water density and foam from bounded particle bins into an RGBA16Float Texture3D using the compact poly6 kernel.",
+    purpose: "Reconstruct normalized water density and foam from bounded particle bins into an RGBA16Float Texture3D using the normalized cubic spline and optional Yu–Turk covariance kernels with sampled particle densities.",
     inputs: {
         particles: Array(WaterParticle) required,
         heads: Array(u32) required,
         next: Array(u32) required,
         foam: Array(f32) required,
+        shapes: Channels["surface_center_radius": Vec4F, "surface_axis_x": Vec4F, "surface_axis_y": Vec4F, "surface_axis_z": Vec4F] optional,
+        reach: Array(u32) optional,
         radius: ScalarF32 optional,
     },
     outputs: { density: Texture3D },
     params: [
         ParamDef { name: Cow::Borrowed("vol_res"), label: "Volume Resolution", ty: ParamType::Int, default: ParamValue::Float(128.0), range: Some((16.0, 512.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("vol_depth"), label: "Volume Depth", ty: ParamType::Int, default: ParamValue::Float(128.0), range: Some((16.0, 512.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("radius"), label: "Kernel Radius", ty: ParamType::Float, default: ParamValue::Float(0.10), range: Some((0.0625, 0.125)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("radius"), label: "Kernel Radius", ty: ParamType::Float, default: ParamValue::Float(0.125), range: Some((0.0625, 0.125)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Uses node.water_particle_bins' fixed 32³ linked cells over origin [-2,0,-2] and extent 4m. Output dimensions follow vol_res × vol_res × vol_depth; radius is port-shadowed.",
+    composition_notes: "Uses node.water_particle_bins' fixed 32³ linked cells over origin [-2,0,-2] and extent 4m. Output dimensions follow vol_res × vol_res × vol_depth; radius is the full spherical support radius for unwired shapes. Fitted shapes retain absolute semiaxes and use their sampled SPH densities. When shapes are wired, reach must contain the f32-bitcast maximum original-center support bound from a GPU reduction; no fixed determinant or displacement assumption is made.",
     examples: [],
     picker: { label: "Water Density Field", category: Atom },
     summary: "Builds a normalized volumetric density field and foam channel from binned water particles.",
@@ -43,7 +45,11 @@ crate::primitive! {
     aliases: ["water density", "density field"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/water_density_field_body.wgsl"),
-    input_access: [BufferIndex, BufferIndex, BufferIndex, BufferIndex],
+    input_access: [BufferIndex, BufferIndex, BufferIndex, BufferIndex, BufferIndex, BufferIndex],
+    extra_fields: {
+        empty_shapes: Option<manifold_gpu::GpuBuffer> = None,
+        empty_reach: Option<manifold_gpu::GpuBuffer> = None,
+    },
 }
 
 impl Primitive for WaterDensityField {
@@ -63,7 +69,7 @@ impl Primitive for WaterDensityField {
         let Some(density) = ctx.outputs.texture_3d("density") else {
             return;
         };
-        let radius = ctx.scalar_or_param("radius", 0.10);
+        let radius = ctx.scalar_or_param("radius", 0.125);
         if !radius.is_finite() || !(0.0625..=0.125).contains(&radius) || particles.size < 96 {
             ctx.error("node.water_density_field: invalid radius or particle storage");
             return;
@@ -75,7 +81,40 @@ impl Primitive for WaterDensityField {
             ctx.error("node.water_density_field: insufficient linked-bin or foam capacity");
             return;
         }
+        let shapes_input = ctx.inputs.array("shapes");
+        if shapes_input.is_some_and(|s| s.size < particles.size / 96 * 64) {
+            ctx.error("node.water_density_field: insufficient shape capacity");
+            return;
+        }
+        let reach_input = ctx.inputs.array("reach");
+        if reach_input.is_some_and(|r| r.size < 4)
+            || (shapes_input.is_some() && reach_input.is_none())
+        {
+            ctx.error(
+                "node.water_density_field: fitted shapes require their reduced support bound",
+            );
+            return;
+        }
         let gpu = ctx.gpu_encoder();
+        let reach = reach_input.unwrap_or_else(|| {
+            self.empty_reach.get_or_insert_with(|| {
+                let buffer = gpu.device.create_buffer_shared(4);
+                unsafe {
+                    buffer.write(0, &[0u8; 4]);
+                }
+                buffer
+            })
+        });
+        // Allocate once; the unwired path uses a zero-radius sentinel shape.
+        let shapes = shapes_input.unwrap_or_else(|| {
+            self.empty_shapes.get_or_insert_with(|| {
+                let buffer = gpu.device.create_buffer_shared(64);
+                unsafe {
+                    buffer.write(0, &[0u8; 64]);
+                }
+                buffer
+            })
+        });
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = shader_source();
             gpu.device.create_compute_pipeline(
@@ -112,8 +151,18 @@ impl Primitive for WaterDensityField {
                     buffer: foam,
                     offset: 0,
                 },
-                GpuBinding::Texture {
+                GpuBinding::Buffer {
                     binding: 5,
+                    buffer: shapes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: reach,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
                     texture: density,
                 },
             ],
@@ -225,6 +274,8 @@ mod tests {
             let hbuf = upload(bytemuck::cast_slice(&heads));
             let nbuf = upload(bytemuck::cast_slice(&next));
             let fbuf = upload(bytemuck::cast_slice(&foam));
+            let sbuf = upload(&[0u8; 64]);
+            let rbuf = upload(&[0u8; 4]);
             let uniforms = [n, n, 0.1f32.to_bits(), 0u32];
             let mut enc = device.create_encoder("density-oracle");
             enc.dispatch_compute(
@@ -254,8 +305,18 @@ mod tests {
                         buffer: &fbuf,
                         offset: 0,
                     },
-                    GpuBinding::Texture {
+                    GpuBinding::Buffer {
                         binding: 5,
+                        buffer: &sbuf,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 6,
+                        buffer: &rbuf,
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 7,
                         texture: &out,
                     },
                 ],
@@ -285,9 +346,15 @@ mod tests {
                             let d2: f64 = (0..3)
                                 .map(|a| (pos[a] - p.position_mass[a] as f64).powi(2))
                                 .sum();
-                            let weight = (p.position_mass[3] as f64 / 1000.0) * 315.0
-                                / (64.0 * std::f64::consts::PI * 0.1f64.powi(3))
-                                * (1.0 - d2 / 0.01).max(0.0).powi(3);
+                            let q = d2.sqrt() / 0.1;
+                            let cubic = if q < 0.5 {
+                                1.0 - 6.0 * q * q + 6.0 * q * q * q
+                            } else {
+                                2.0 * (1.0 - q).max(0.0).powi(3)
+                            };
+                            let weight = (p.position_mass[3] as f64 / 1000.0) * 8.0
+                                / (std::f64::consts::PI * 0.1f64.powi(3))
+                                * cubic;
                             rho += weight;
                             fs += weight * (*f as f64);
                         }

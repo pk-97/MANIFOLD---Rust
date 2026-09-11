@@ -1,3 +1,165 @@
+## Paused — user-requested look checkpoints, 2026-09-11
+
+Peter stopped further simulation work because of cost and visual regressions.
+Do not resume fixes, tests or renders without a new request.
+Current complete WIP source is preserved by tag `codex/water-checkpoints/2026-09-11/current-wip`.
+This is an archival commit, not a verified app landing. No merge to main.
+Existing failed visual/physics/optics acceptance remains failed.
+No new build, test or render was run for checkpoint creation.
+
+Preserved videos, projects, graphs, earlier images/configs/logs and HDRI:
+/Users/peterkiemann/.codex/visualizations/2026/09/11/01a08ef4-0edc-7cc2-bc55-8ce1b245710c/water-apic/checkpoints-2026-09-11
+Open index.html for the gallery; README.md explains restore limitations.
+Intermediate APIC looks lacked source commits: preview/settings archives alone
+do not guarantee exact executable restoration. Four earlier committed source
+stages also have named tags under `codex/water-checkpoints/2026-09-11/`.
+Source manifest and Git bundle are stored with the archive.
+
+Prior experiment handoff follows.
+
+## Current connected surface and native water RT preview — 2026-09-11
+
+Peter explicitly chose KEEP THE DAM-BREAK RELEASE. Seed/solver were not changed:
+1.5 × 0.625 × 1.75 m block, zero initial velocity, APIC h=.0625 m, spacing=.03125.
+Opening-frame inspection shows the prior Yu–Turk field reveals isolated particles
+hidden by the old reconstruction. This is an appearance explanation, not an
+energy/trajectory proof of the violent startup. BUG-01vr physics refinement is RED.
+
+Implemented three components operations (seed, atomic union, roots), nominal
+.03125 m connectivity and 2013 Eq17 fit filtering. SPH rho remains unfiltered.
+Fit binding4 is components; shapes moved to5. Main/registry/prewarm/proof modules
+are wired. Inclusive radius, inactive slots, shuffled801-chain, separate sheets
+and bridging cases pass independent CPU BFS/native GPU checks. Fixed Naga's
+required total return paths without imposing a relaxation-pass cap.
+
+Native water_raytrace.metal is appended to the prewarmed RT library. The new
+128B WaterRayParams and fixed76-entry binding array reuse TLAS resource lifetime
+and bounded96-query regions. render_scene now supports RT water with matching
+water_density/isovalue; graph node58 shares the isovalue with primary extraction.
+Reflection, Snell entry/exit, Beer path length, first-Sun visibility and four
+internal dielectric continuations feed the existing depth-tested water pass.
+Code is experimental: entry bracket precision mismatch and later liquid intervals
+remain open as BUG-vglg.1 and BUG-vglg.2. No self-shadowing or caustics.
+
+PASS: focused GPU+renderer clippy --tests --features gpu-proofs -Dwarnings;
+app/renderer/exporter/graph-tool build; two graph validations and project loader;
+14 native proof cases across the initial/fixed focused gates plus two component
+unit tests; git diff --check. Gate logs /tmp/water-components-rt-proofs.log and
+/tmp/water-components-rt-proofs-fixed.log. First gate caught invalid WGSL return
+paths and f64 fixture normals; corrected cases all pass. Build initially failed
+on a worker workgroup type and a lead edit that deleted a renderer block. Higher
+effort review restored the exact HEAD block; clippy/proofs/subsequent build pass.
+Graph-tool needs escalated Metal device access; sandbox attempts found no device.
+
+Bounded visual work is complete for this pass: 180 frames each at128³/256³ with
+identical component fit and raster lighting, then900 frames with256³+RT.
+Observed matched frames30/90 and RT480: finer grid smooths edges but does NOT fix
+round bulk/droplets; RT adds scene reflections/shadows and severe dark stippling.
+Visual acceptance FAILS. Stop further render sweeps; a focused curved/perturbed
+entry value proof is needed before another fix. The reviewed static defects do
+not yet isolate every dark pixel; Phong/point-fill secondary-hit parity is also
+unestablished. Do not present the preview as finished water or SOTA.
+
+Timings encode+submit+GPU wait, excluding PNG, NOTnative-appFPS:128³ raster107.155ms,
+256³ raster196.076ms (frames60..179),256³ RT244.028ms (frames60..899).
+Captures /tmp/water-components-{128,256,rt}; no logged runtime fault.
+Artifact root: /Users/peterkiemann/.codex/visualizations/2026/09/11/01a08ef4-0edc-7cc2-bc55-8ce1b245710c/water-apic
+wave-obstacle-apic-components-rt-30s.mp4 is1920×1080,900frames/30s;
+wave-obstacle-surface-128-vs-256-6s.mp4 is1920×540,180frames/6s (128LEFT/256RIGHT).
+Wave Obstacle - APIC Water RT.manifold loads; native app knobs not exercised.
+Launch from owned slot7: ./target/debug/manifold; Cmd+O project, Space.
+Do not close an unsaved existing app instance blindly.
+
+At the time of that preview, changes were uncommitted in wave/live-water.
+The subsequent user-requested WIP preservation checkpoint is recorded above.
+Main landing remains blocked while visual/optics/physics gates are open. The graph depends on
+the existing uncommitted MAC integration; do not carve it into a falsely standalone
+verified reconstruction landing. Prior Yu–Turk baseline video/project remain in
+the artifact root and /tmp/water-apic-yu-turk*.
+
+Previous stage context follows.
+
+## Current reconstruction comparison — 2026-09-11
+
+Peter authorized improved reconstruction with the current solver and scene fixed.
+Extended water_density_field with optional bounded covariance shapes from the
+existing water_surface_fit. Density radius remains 0.10m equivalent sphere
+support, fitted axes normalized by their determinant; center blend0.5. Search
+covers 2.52*radius+.125m from original bins so stretched/shifted support is not
+clipped. Shape channel names added to the well-known registry. No solver changes.
+Repo APIC wave fixture adds one fitting node/four wires only. Daylight comparison
+graph audited equal to baseline outside those additions; same camera/material.
+
+Checks PASS: generated WGSL validation (one missing-channel-name error fixed),
+focused renderer clippy tests+gpu-proofs, required GPU gate with four actual
+tests (spherical density, rotated-plane fit, new fitted density f64 oracle,
+absent-shape parity), graph validation and app project loader. New proof tests
+check rotated and shifted support beyond old bins, weighted foam and mapped
+GPU input byte immutability. Logs /tmp/water-reconstruction-*.log. No repeated
+old optics/physical acceptance checks. The earlier water_scene occlusion ratio
+failure and BUG-01vr dt-refinement acceptance remain open: no main landing.
+
+One900frame1080p30 verification completed without solver fault. PNGs
+/tmp/water-apic-reconstruction; timing /tmp/water-apic-reconstruction-timing.json:
+mean108.163ms, median102.303, p95146.681, frames60..899,
+encode+submit+GPU wait only (not native appFPS). Baseline mean75.823ms.
+Observed matching frames90 and480: sharper/thinner folds, still broad gel-like
+surface. Modest visual improvement and higher cost; not final water acceptance.
+Do not run more appearance sweeps without new user scope.
+
+Artifacts in /Users/peterkiemann/.codex/visualizations/2026/09/11/01a08ef4-0edc-7cc2-bc55-8ce1b245710c/water-apic:
+wave-obstacle-apic-reconstruction-30s.mp4 (full1080p),
+wave-obstacle-reconstruction-comparison-30s.mp4 (old left/new right),
+WaterWaveTankApicReconstruction.json,
+Wave Obstacle - New APIC Reconstruction.manifold (existing playground controls
+plus Surface Center Smoothing). Project and embedded graph copies agree.
+Native control interaction remains untested; existing running app not closed.
+Latest worktree binary built: cd "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-7" && ./target/debug/manifold.
+Save/quit old instance first, launch normally, Cmd+O project, Space to play.
+
+Earlier context follows; reconstruction-unchanged statements below describe
+the preceding optics-only pass.
+
+## Current APIC appearance result — 2026-09-11
+
+Authoritative worktree slot-7, branch wave/live-water, owner codex-water-research-01a08ef4. The auto checkout is not this workstream. Preserve all uncommitted native MAC APIC and offline work. Native stage proofs passed earlier; whole-scene physical/refinement acceptance remains open under BUG-01vr. No main landing; raw feature push is prohibited by the repo landing-only policy.
+
+Latest user: new physics looks much better but fluid does not read as water; continue material calibration. Peter explicitly says WIP water needs NO legacy compatibility. Removed RenderScene's 1/10.9 additive-splat correction: water thickness is now metres directly, old uniform field is padding, no units enum. APIC physics group and density reconstruction are unchanged (verified exact JSON equality to prior .manifold project). Fixture foam defaults0, studio strips0, absorption exp(-[.340,.0565,.00922]) at1m from corrected NASA Pope/Fry650/550/450nm (documented RGB approximation), IOR1.333 unchanged.
+
+Observations: six-second no-foam/no-absorption control /tmp/water-apic-clear-diagnostic revealed strip-light contours remain; the metre correction+clearwater+stripoff30s capture /tmp/water-apic-clear-final removed coating/contours but was visually flat. One subsequent daylight comparison reuses existing node.hdri_source and existing kloppenheim_07_puresky_4k.exr, same physics/optics/camera, /tmp/water-apic-daylight.json. Early/late observed frames show subtle sky reflections but smooth/sheet-like water persists. Do not claim convincing final water, paper-level full physics acceptance, full RT, or live30FPS. Stop further appearance/test sweeps this pass.
+
+Both900frame1080p30captures complete without runtime solver fault. Daylight timing mean75.823ms, median75.360ms, p9580.213ms, frames60..899, encode/submit/GPU completion only, excludes PNG readback/encoding/writes. NOT native-appFPS. Final artifact path: /Users/peterkiemann/.codex/visualizations/2026/09/11/01a08ef4-0edc-7cc2-bc55-8ce1b245710c/water-apic/wave-obstacle-apic-daylight-30s.mp4. Matching project Wave Obstacle - New APIC Daylight.manifold and graph WaterWaveTankApicDaylight.json live beside it. The repo APIC fixture remains the neutral clearwater control; daylight is project-scoped. Daylight graph/project validate, /tmp/water-daylight-graph-validation.log and /tmp/water-daylight-project-validation.log.
+
+Validation: /tmp/water-optics-clippy.log PASS (--tests --features gpu-proofs), /tmp/water-optics-build.log PASS (app/capture/graph-tool), /tmp/water-optics-graph-validation.log PASS. Native GPU gate /tmp/water-optics-gpu-gate.log remains RED:5pass/1fail. The1m actual-graph Beer-Lambert/Fresnel proof passes, as do GGX, no-watergolden, unsupported combos, artifact. water_scene_occlusion_and_depth fails r/b at(41,78)=.995578 vs<=.995. Existing occlusion fixture uses known.12m thickness; no tolerance relaxed. Do not claim green gate or land. Earlier two failures were private imports and testhelper writing unconnected textureoutputs; both fixed. Current failure preserved in BUG-01vr comment and gate log; stop further speculative fixture changes. All worker ownership returned.
+
+Native app has NOT opened new project: existing MANIFOLD instance rejected the built binary. Do not close unsaved work blindly. CUA app selection previously stalled badly. Build launch executable is '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-7/target/debug/manifold'; active water overlay disables full-sceneRT. Next substantive work is surface/scene-reflection quality and precise diagnosis of the edge-pixel test, not another magic water-parameter preset.
+
+Guard note: active hook script comes from main git-common-dir. Desktop reports auto-checkoutcwd for some calls; necessary exact-command permits must use main .codex/hooks/guard.py and reportedcwd /Users/peterkiemann/.codex/worktrees/5034/MANIFOLD - Rust, while actualexec and explicitmanifest stay slot-7. Wrong-root/slotcwd permits remainedunconsumed; no guards were modified or bypassed.
+
+Earlier checkpoint below is historical and superseded for liveintegration status.
+
+---
+
+## APIC replacement checkpoint — 2026-09-11 (current)
+
+Continue in slot-7 on wave/live-water, owner codex-water-research-01a08ef4. Do not acquire a new slot or use the Codex auto-checkout. Verified CPU transfer/pressure references and the revised contract are committed locally at 080f75ee8 (base bf9e56965). Push was blocked by the repository PreToolUse hook: raw feature-branch push is forbidden and land_branch.py has no checkpoint-only mode. Do not land main while BUG-01vr remains open.
+
+The live app solver and renderer are unchanged. The offline render bridge now includes tests/water_apic_coupled_reference.rs (experimental coupled acceptance, still red), its tests/support/water_offline_export.rs shim, and the water-offline-render binary with density-mesh helper. Untracked GPU drafts to preserve: primitives/mac_{scatter_mass_momentum,resolve,extrapolate}.rs and their three shaders, and tests/gpu_proofs/water_mac_atoms.rs. GPU drafts are deliberately unregistered after native compilation failed. Re-integration requires the three pub mod declarations, MAC_VELOCITY/MAC_VALID channel-name entries, GPU proof module, and explicit startup prewarm for the hand scatter; generated stages use the registry codegen sweep. This branch's primitive! macro does NOT support the install hook shown in stale ADDING_PRIMITIVES instructions. Source strings are prepared in constructor extra_fields; runtime retrieves the prewarmed pipeline cache.
+
+Physics evidence and unresolved acceptance are in docs/WATER_SIMULATION_DESIGN.md and the latest BUG-01vr comment. The final static-box sampling correction is even tangential / odd normal reflection; moving-object sampling and a full GPU pressure/advection pipeline are not implemented. A 30-second small-wave validation video is now rendered; it has no central object/breakwater and is not the original wave-tank scene. Stop further speculative solver changes: monotonic timestep-refinement acceptance failed before and after the boundary correction. Compare the complete pinned upstream engine on the same fixture before proposing another correction. The physical probe keeps its failure assertions intact.
+
+Checks: focused renderer clippy passed; feature-gated GPU-proof clippy passed; eight generated WGSL/ABI unit checks and four transfer-oracle tests passed within the scoped gate. Native execution failed before dispatch in Naga 28 SPIR-V emission, block.rs:3369, 'Expression [97] is not cached'; all three proofs construct scatter first, so isolate that source before attributing the panic to extrapolation. Two native-gate attempts were used (first fixture compile error, then translator panic). Initial cargo also hit sccache EPERM; checks used per-command RUSTC_WRAPPER= with no configuration change.
+
+Logs: /tmp/water-slip-wave.log (final 251-second CPU run), /tmp/water-resolved-wave.log (pre-reflection), /tmp/water-mac-gpu-gate.log, /tmp/water-mac-clippy.log, /tmp/water-gpu-clippy.log. Manual probe: rustc --edition=2024 --test -O crates/manifold-renderer/tests/water_apic_coupled_reference.rs -o /tmp/water-slip-wave; /tmp/water-slip-wave --exact coupled_resolved_wave_acceptance --nocapture. Do not repeat without new evidence/authorization. Native gate used RUSTC_WRAPPER= python3 scripts/gpu_proofs_gate.py --manifest-path '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-7/Cargo.toml' --filter water_mac_atoms --filter node_graph::primitives::mac_. No new live app build exists for this solver. Offline launch command: `'/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-7/target/debug/water-offline-render' /tmp/water-apic-cache /tmp/water-apic-rt-rerender 900 1920 1080`. This requires the completed cache; do not rerender without a new reason.
+
+Rendering continuation evidence: `/Users/peterkiemann/.codex/visualizations/2026/09/11/01a08ef4-0edc-7cc2-bc55-8ce1b245710c/water-apic/apic-small-wave-manifold-rt-30s.mp4` is verified 1920×1080, 30 FPS, 900 frames, 30 seconds. All 900 frames logged eight actual RT capture ticks; first/last images inspected and no ERROR entries. `/tmp/water-apic-cache` contains the uninterrupted CPU reference sequence, 92160 particles per frame. This is MANIFOLD's production Graph/Executor/scene_object/PBR/Metal renderer reached through a custom offline cache-to-mesh bridge. It is not live transport/interaction integration. Blend water uses environment GGX and screen-space transmission and is excluded from RT acceleration; RT lights the opaque scene. Do not call this ray-traced water or a live performance result. The original central-object wave demo remains unported.
+
+Render validation: renderer clippy --tests passed; three bin tests and two exporter tests passed. The focused gpu_proofs_gate filter `rt_bug88m_blend_specular_gate` passed its one native proof. Logs: `/tmp/water-final-clippy.log`, `/tmp/water-offline-tests.log`, `/tmp/water-export-tests.log`, `/tmp/water-offline-rt-gate.log`, `/tmp/water-apic-rt-sequence.log`. Existing solver acceptance failures were not retuned or rerun. BUG-01vr has the render evidence and unfinished integration/RT scope.
+
+Earlier handoff history follows; its implementation/model/usage instructions may be stale.
+
+---
+
 ## Wave tank trial — 2026-09-11
 
 User requested a classic asymmetric wave scene. Added a NON-BUNDLED reproduction

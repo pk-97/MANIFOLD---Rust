@@ -270,6 +270,15 @@ mod vignette;
 mod voronoi_2d;
 mod voxelize_mesh;
 mod water_state;
+pub mod mac_scatter_mass_momentum;
+pub mod mac_resolve;
+pub mod mac_extrapolate;
+pub mod mac_gather_advect;
+pub mod mac_liquid_sdf;
+pub mod mac_box_fractions;
+pub mod mac_box_sample_extension;
+pub mod mac_projection;
+pub mod mac_pressure_iteration;
 // Live Water S4 solver stages (docs/WATER_IMPLEMENTATION_PLAN.md section 2.2
 // stage port table). Registered by the S4 lane.
 mod clear_grid;
@@ -966,6 +975,8 @@ mod tests {
 }
 
 mod water_particle_bins;
+pub mod water_components;
+pub use water_components::{WaterComponentSeed, WaterComponentUnion, WaterComponentRoots};
 mod water_surface_fit;
 pub mod water_density_field;
 pub mod volume_isosurface;

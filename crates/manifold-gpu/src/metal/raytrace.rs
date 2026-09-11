@@ -980,7 +980,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
 /// (`gi_spp`, `Material`/`mat_index` buffers) are P2/P3 scope — dropped,
 /// not ported. `packed_float3` is mandatory (P0 section 5.1 kernel lesson):
 /// bare MSL `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32; 3]`.
-const SHADOW_RAYS_MSL: &str = r#"
+const SHADOW_RAYS_MSL: &str = concat!(r#"
 #include <metal_stdlib>
 #include <metal_raytracing>
 using namespace metal;
@@ -4400,7 +4400,7 @@ kernel void build_instance_descriptors(
     out->intersection_function_table_offset = 0u;
     out->acceleration_structure_index = tid.y;
 }
-"#;
+"#, include_str!("water_raytrace.metal"));
 
 /// One shadow-casting light's ray-tracing params — the per-caster payload
 /// of [`ShadowRayParams::casters`]. Field order/packing mirrors the MSL
@@ -4558,6 +4558,23 @@ pub struct ShadowRayParams {
     /// (float4x4 member): 400 + 4 + 4 + 8 = 416.
     pub _pad_slot: [u32; 2],
 }
+
+/// Per-frame inputs for the native water ray pass (MSL ABI, 128 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct WaterRayParams {
+    /// Right-handed view-to-world transform, matching the primary water camera.
+    pub inv_view: [[f32; 4]; 4],
+    /// Near, far, tan(vertical FOV / 2), aspect ratio.
+    pub projection: [f32; 4],
+    /// IOR, roughness, attenuation distance in metres, density isovalue.
+    pub material: [f32; 4],
+    /// RGB transmission at the attenuation distance; w reserved.
+    pub attenuation: [f32; 4],
+    /// Full-resolution width and height; zw reserved.
+    pub screen: [u32; 4],
+}
+const _: () = assert!(std::mem::size_of::<WaterRayParams>() == 128);
 
 /// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
 /// `MAX_RT_CASTERS` at `raytrace.rs` (metal) `:565` (both are 8; no
@@ -6388,6 +6405,7 @@ pub struct MetalShadowRayTracer {
     /// a compiled kernel references, even one `sample_candidate_alpha`
     /// (MSL) never actually indexes at runtime.
     dummy_alpha_tex: GpuTexture,
+    water_ray_pipeline: GpuComputePipeline,
 }
 
 /// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
@@ -6411,6 +6429,7 @@ pub struct RtPipelines {
     /// dispatched ahead of the TLAS build/refit on the same command buffer
     /// in instanced mode (never on the D7 fast path).
     pub descriptor_build_pipeline: GpuComputePipeline,
+    pub water_ray_pipeline: GpuComputePipeline,
 }
 
 impl RtPipelines {
@@ -6690,6 +6709,20 @@ impl RtPipelines {
                 (1, SlotKind::Buffer),
             ]),
         );
+        let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
+        let has = 0u8;
+        let pass = 2u32;
+        unsafe {
+            cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&has).cast(), MTLDataType::Bool, TRACE_TRANSLUCENCY_CONSTANT_INDEX);
+            cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&pass).cast(), MTLDataType::UInt, TRACE_PASS_CONSTANT_INDEX);
+        }
+        let mut water_slots = vec![(1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer),
+            (4, SlotKind::Buffer), (5, SlotKind::Buffer), (8, SlotKind::Buffer),
+            (0, SlotKind::Texture), (1, SlotKind::Texture), (2, SlotKind::Texture), (3, SlotKind::Texture)];
+        water_slots.extend((4..68).map(|i| (i, SlotKind::Texture)));
+        water_slots.extend([(68, SlotKind::Texture), (69, SlotKind::Texture), (70, SlotKind::Texture)]);
+        let water_ray_pipeline = compile_pipeline_with_constants(
+            device, &library, "trace_water_rays", identity_slot_map(&water_slots), Some(&cv));
 
         Self {
             trace_pipelines,
@@ -6703,6 +6736,7 @@ impl RtPipelines {
             atrous_post_pipeline,
             debug_atrous_post_pipeline,
             descriptor_build_pipeline,
+            water_ray_pipeline,
         }
     }
 }
@@ -6751,7 +6785,50 @@ impl MetalShadowRayTracer {
             atrous_post_pipeline: p.atrous_post_pipeline.clone(),
             debug_atrous_post_pipeline: p.debug_atrous_post_pipeline.clone(),
             dummy_alpha_tex,
+            water_ray_pipeline: p.water_ray_pipeline.clone(),
             rt_diagnostics,
+        }
+    }
+
+    /// Dispatch the bounded native water ray pass over the resident TLAS.
+    pub fn dispatch_water_rays(&self, encoder: &mut GpuEncoder, device: &GpuDevice, accel: &RtAccel,
+        params: &ShadowRayParams, params_buffer: &GpuBuffer, water_params: &WaterRayParams,
+        water_params_buffer: &GpuBuffer, gi_materials: &GpuBuffer, normal_sources: &GpuBuffer,
+        current_objects: &[RtObjectGeometry<'_>], alpha_textures: &[&GpuTexture],
+        water_depth: &GpuTexture, water_normals: &GpuTexture, water_density: &GpuTexture,
+        opaque_depth: &GpuTexture, prefiltered_env: &GpuTexture, out_reflection: &GpuTexture,
+        out_transmission: &GpuTexture) {
+        for object in current_objects {
+            validate_instance_source_address(object.instances_addr, object.instances_buffer.map(GpuBuffer::gpu_address))
+                .unwrap_or_else(|message| panic!("{message}"));
+        }
+        params_buffer.upload(bytemuck_bytes(params));
+        water_params_buffer.upload(unsafe { std::slice::from_raw_parts(
+            (water_params as *const WaterRayParams).cast(), std::mem::size_of::<WaterRayParams>()) });
+        let dummy = &self.dummy_alpha_tex;
+        let bindings: [GpuBinding; 76] = std::array::from_fn(|i| match i {
+            0 => GpuBinding::Buffer { binding: 1, buffer: params_buffer, offset: 0 },
+            1 => GpuBinding::Buffer { binding: 2, buffer: gi_materials, offset: 0 },
+            2 => GpuBinding::Buffer { binding: 3, buffer: normal_sources, offset: 0 },
+            3 => GpuBinding::Buffer { binding: 4, buffer: water_params_buffer, offset: 0 },
+            4 => GpuBinding::Buffer { binding: 5, buffer: &self.rt_diagnostics.disabled, offset: 0 },
+            i if i < 9 => GpuBinding::Texture { binding: (i - 5) as u32,
+                texture: [water_depth, water_normals, water_density, opaque_depth][i - 5] },
+            i if i < 73 => GpuBinding::Texture { binding: (i - 5) as u32,
+                texture: alpha_textures.get(i - 9).copied().unwrap_or(dummy) },
+            73 => GpuBinding::Texture { binding: 68, texture: prefiltered_env },
+            74 => GpuBinding::Texture { binding: 69, texture: out_reflection },
+            _ => GpuBinding::Texture { binding: 70, texture: out_transmission },
+        });
+        // At most 82 queries: primary reflection + four inside/outside pairs,
+        // each hit with up to eight Sun queries, plus primary Sun visibility.
+        let mut regions = plan_trace_regions(water_params.screen[0], water_params.screen[1], 8, 8, 96, DEFAULT_TRACE_WORK_LIMITS)
+            .expect("validated water dimensions must produce a tile plan").peekable();
+        while let Some(region) = regions.next() {
+            encoder.dispatch_compute_with_accel(&self.water_ray_pipeline, 0, accel, &bindings,
+                current_objects.iter().filter(|o| o.instances_addr != 0).map(|o| o.instances_buffer.expect("validated instance source")),
+                Some((8, trace_region_bytes(&region))), dispatch_groups_2d(region.extent, SHADOW_WORKGROUP), "RT water rays");
+            if regions.peek().is_some() { encoder.commit_and_continue(device); }
         }
     }
 

@@ -86,8 +86,11 @@ impl GeneratorRegistry {
         RenderScene::prewarm_pipelines(device);
         crate::node_graph::primitives::WaterFoam::prewarm_pipelines(device);
         primitives::prewarm_water_particle_bins(device);
+        primitives::water_components::prewarm_pipelines(device);
         primitives::prewarm_water_surface_fit(device);
         primitives::water_density_field::prewarm_pipeline(device);
+        let _ = device.create_compute_pipeline(primitives::mac_scatter_mass_momentum::WGSL, "cs_main", "node.mac_scatter_mass_momentum");
+        primitives::mac_pressure_iteration::prewarm_pipeline(device);
         primitives::volume_isosurface::prewarm_pipeline(device);
         let _ = device.create_compute_pipeline(primitives::SURFACE_DEPTH_SPLAT_WGSL, "cs_anisotropic", "node.particle_surface_depth.splat.anisotropic");
         let _ = device.create_compute_pipeline(primitives::THICKNESS_SPLAT_WGSL, "cs_anisotropic", "node.particle_thickness.splat.anisotropic");

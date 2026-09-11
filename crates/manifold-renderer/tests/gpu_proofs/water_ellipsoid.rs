@@ -257,161 +257,400 @@ fn anisotropic_depth_native_matches_f64_oracle() {
     }
 }
 
-#[test]
-fn water_surface_fit_native_plane_and_droplet() {
-    let device = GpuDevice::new();
-    let bins = device.create_compute_pipeline(
-        include_str!("../../src/node_graph/primitives/shaders/water_particle_bins.wgsl"),
-        "cs_main",
-        "fit-bins-proof",
-    );
-    let source = manifold_renderer::node_graph::primitives::water_surface_fit_shader();
-    let fit = device.create_compute_pipeline(&source, "cs_main", "fit-proof");
-    let radius = 0.046875f32;
-    let mut points = vec![WaterParticle {
-        position_mass: [0., 1., 0., 1.],
-        ..bytemuck::Zeroable::zeroed()
-    }];
-    let (sin, cos) = std::f32::consts::FRAC_PI_6.sin_cos();
-    for i in -3..=3 {
-        for j in -3..=3 {
-            if i == 0 && j == 0 {
-                continue;
-            }
-            let x = i as f32 * 0.025;
-            points.push(WaterParticle {
-                position_mass: [x * cos, 1. + x * sin, j as f32 * 0.025, 1.],
-                ..bytemuck::Zeroable::zeroed()
-            });
+// Yu–Turk Eqs. 6, 9–16. The oracle accumulates a centered covariance in
+// two passes and diagonalizes it with largest-pivot, converged f64 rotations.
+// Compare the support tensor AA^T: repeated eigenvalues and eigenvector signs
+// must not make a correct reconstruction fail.
+type Matrix3 = [[f64; 3]; 3];
+
+fn identity3() -> Matrix3 {
+    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+}
+
+fn multiply3(a: Matrix3, b: Matrix3) -> Matrix3 {
+    std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum()))
+}
+
+fn transpose3(a: Matrix3) -> Matrix3 {
+    std::array::from_fn(|i| std::array::from_fn(|j| a[j][i]))
+}
+
+fn eigen_f64(mut a: Matrix3) -> ([f64; 3], Matrix3) {
+    let mut vectors = identity3();
+    for _ in 0..64 {
+        let (p, q) = [(0, 1), (0, 2), (1, 2)]
+            .into_iter()
+            .max_by(|&(p, q), &(r, s)| a[p][q].abs().total_cmp(&a[r][s].abs()))
+            .unwrap();
+        if a[p][q].abs() < 1.0e-18 {
+            return (std::array::from_fn(|i| a[i][i]), vectors);
         }
+        let angle = 0.5 * (2.0 * a[p][q]).atan2(a[q][q] - a[p][p]);
+        let (s, c) = angle.sin_cos();
+        let mut rotation = identity3();
+        rotation[p][p] = c;
+        rotation[q][q] = c;
+        rotation[p][q] = s;
+        rotation[q][p] = -s;
+        a = multiply3(transpose3(rotation), multiply3(a, rotation));
+        vectors = multiply3(vectors, rotation);
     }
-    points.push(WaterParticle {
-        position_mass: [0., 2., 0., 1.],
-        ..bytemuck::Zeroable::zeroed()
-    });
-    points.push(WaterParticle {
-        position_mass: [0., 3., 0., 0.],
-        ..bytemuck::Zeroable::zeroed()
-    });
-    let n = points.len() as u32;
-    let pb = device.create_buffer_shared(u64::from(n) * 96);
-    let heads = device.create_buffer_shared(32768 * 4);
-    let next = device.create_buffer_shared(u64::from(n) * 4);
-    let shapes = device.create_buffer_shared(u64::from(n) * 64);
-    unsafe {
-        pb.write(0, bytemuck::cast_slice(&points));
+    panic!("f64 covariance eigensolver did not converge");
+}
+
+fn cubic_sph(q: f64) -> f64 {
+    if q < 1.0 {
+        1.0 - 1.5 * q * q + 0.75 * q * q * q
+    } else if q < 2.0 {
+        0.25 * (2.0 - q).powi(3)
+    } else {
+        0.0
     }
-    let bu = [n, 0, 0, 0];
-    let fu = [radius, 0.5, f32::from_bits(n), 0.];
-    let mut e = device.create_encoder("fit-proof");
-    e.clear_buffer(&heads);
-    e.clear_buffer(&next);
-    e.dispatch_compute(
-        &bins,
-        &[
-            GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::cast_slice(&bu),
-            },
-            GpuBinding::Buffer {
-                binding: 1,
-                buffer: &pb,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 2,
-                buffer: &heads,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 3,
-                buffer: &next,
-                offset: 0,
-            },
-        ],
-        [n.div_ceil(256), 1, 1],
-        "fit-bins-proof",
-    );
-    e.dispatch_compute(
-        &fit,
-        &[
-            GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::cast_slice(&fu),
-            },
-            GpuBinding::Buffer {
-                binding: 1,
-                buffer: &pb,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 2,
-                buffer: &heads,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 3,
-                buffer: &next,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 4,
-                buffer: &shapes,
-                offset: 0,
-            },
-        ],
-        [n.div_ceil(256), 1, 1],
-        "fit-proof",
-    );
-    e.commit_and_wait_completed();
-    let out = unsafe {
-        std::slice::from_raw_parts(shapes.mapped_ptr().unwrap().cast::<Shape64>(), n as usize)
-    };
-    let norm = |a: [f32; 4]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
-    let p = out[0];
-    let axes = [p.axis_x, p.axis_y, p.axis_z];
-    let sizes = axes.map(norm);
-    assert!(sizes.iter().all(|v| v.is_finite() && *v > 0.));
-    let shortest = (0..3)
-        .min_by(|a, b| sizes[*a].total_cmp(&sizes[*b]))
-        .unwrap();
-    let normal = [-sin, cos, 0.];
-    let a = axes[shortest];
-    let alignment =
-        (a[0] * normal[0] + a[1] * normal[1] + a[2] * normal[2]).abs() / sizes[shortest];
-    assert!(
-        alignment > 0.999,
-        "thin axis must align with rotated plane normal: {alignment}"
-    );
-    assert!(
-        (sizes.iter().product::<f32>() / radius.powi(3) - 1.).abs() < 1e-4,
-        "ellipsoid volume drift"
-    );
-    assert!(
-        (sizes.iter().copied().fold(0., f32::max) / sizes[shortest] - 4.).abs() < 0.01,
-        "fit must flatten the plane"
-    );
-    for i in 0..3 {
-        for j in i + 1..3 {
-            let a = axes[i];
-            let b = axes[j];
-            assert!((a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).abs() / (sizes[i] * sizes[j]) < 1e-4);
-        }
-    }
-    assert!((p.center_radius[1] - 1.).abs() < 1e-5);
-    let drop = out[out.len() - 2];
-    for a in [drop.axis_x, drop.axis_y, drop.axis_z] {
-        assert!((norm(a) - radius).abs() < 1e-6);
-    }
-    assert!(
-        bytemuck::bytes_of(&out[out.len() - 1])
+}
+
+struct FitOracle {
+    center: [f64; 3],
+    support_tensor: Matrix3,
+    max_axis: f64,
+    density: f64,
+    reach: f64,
+    neighbors: usize,
+}
+
+fn fit_oracle(points: &[WaterParticle], index: usize, h: f64) -> FitOracle {
+    let original = std::array::from_fn(|d| f64::from(points[index].position_mass[d]));
+    let r = 2.0 * h;
+    let neighbors: Vec<_> = points
+        .iter()
+        .filter(|p| p.position_mass[3] > 0.0)
+        .filter_map(|p| {
+            let position = std::array::from_fn(|d| f64::from(p.position_mass[d]));
+            let delta = sub(position, original);
+            let distance = dot(delta, delta).sqrt();
+            (distance < r).then_some((position, distance, f64::from(p.position_mass[3])))
+        })
+        .collect();
+    let weights: Vec<_> = neighbors
+        .iter()
+        .map(|(_, d, _)| 1.0 - (d / r).powi(3))
+        .collect();
+    let total: f64 = weights.iter().sum();
+    let mean: [f64; 3] = std::array::from_fn(|d| {
+        neighbors
             .iter()
-            .all(|v| *v == 0)
+            .zip(&weights)
+            .map(|((x, _, _), w)| x[d] * w)
+            .sum::<f64>()
+            / total
+    });
+    let covariance: Matrix3 = std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            neighbors
+                .iter()
+                .zip(&weights)
+                .map(|((x, _, _), w)| w * (x[i] - mean[i]) * (x[j] - mean[j]))
+                .sum::<f64>()
+                / total
+        })
+    });
+    let center = std::array::from_fn(|d| original[d] + 0.95 * (mean[d] - original[d]));
+    let (support_tensor, max_axis) = if neighbors.len() > 25 {
+        let (values, rotation) = eigen_f64(covariance);
+        let largest = values.into_iter().fold(0.0, f64::max);
+        let ks = 20.0 / (3.0 * r * r);
+        let lengths = values.map(|value| 2.0 * h * ks * value.max(largest / 4.0));
+        let diagonal = std::array::from_fn(|i| {
+            std::array::from_fn(|j| if i == j { lengths[i] * lengths[i] } else { 0.0 })
+        });
+        (
+            multiply3(rotation, multiply3(diagonal, transpose3(rotation))),
+            lengths.into_iter().fold(0.0, f64::max),
+        )
+    } else {
+        (identity3().map(|row| row.map(|x| x * h * h)), h)
+    };
+    let density = neighbors
+        .iter()
+        .map(|(_, distance, mass)| {
+            mass * cubic_sph(distance / h) / (std::f64::consts::PI * h.powi(3))
+        })
+        .sum();
+    let displacement = sub(center, original);
+    FitOracle {
+        center,
+        support_tensor,
+        max_axis,
+        density,
+        reach: dot(displacement, displacement).sqrt() + max_axis,
+        neighbors: neighbors.len(),
+    }
+}
+
+fn shape_tensor(shape: &Shape64) -> Matrix3 {
+    let axes = [shape.axis_x, shape.axis_y, shape.axis_z];
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            axes.iter()
+                .map(|axis| f64::from(axis[i]) * f64::from(axis[j]))
+                .sum()
+        })
+    })
+}
+
+fn fit_particle(position: [f32; 3], mass: f32) -> WaterParticle {
+    WaterParticle {
+        position_mass: [position[0], position[1], position[2], mass],
+        velocity_density: [1.0, -2.0, 3.0, 777.0],
+        previous_position: [position[0], position[1], position[2], 0.0],
+        ..bytemuck::Zeroable::zeroed()
+    }
+}
+
+fn fit_fixture() -> Vec<WaterParticle> {
+    let mut points = Vec::new();
+    // Interior covariance is isotropic; boundary records exercise relocation.
+    for z in -3..=3 {
+        for y in -3..=3 {
+            for x in -3..=3 {
+                points.push(fit_particle(
+                    [
+                        -0.55 + x as f32 * 0.03125,
+                        0.55 + y as f32 * 0.03125,
+                        -0.55 + z as f32 * 0.03125,
+                    ],
+                    0.03,
+                ));
+            }
+        }
+    }
+    let (s, c) = std::f32::consts::FRAC_PI_6.sin_cos();
+    for z in -4..=4 {
+        for x in -4..=4 {
+            let u = x as f32 * 0.0234375;
+            points.push(fit_particle(
+                [0.5 + u * c, 0.55 + u * s, 0.5 + z as f32 * 0.0234375],
+                0.025,
+            ));
+        }
+    }
+    // Sparse pair must still relocate; mass changes density, not fit weights.
+    points.push(fit_particle([-0.6, 1.3, 0.5], 0.03));
+    points.push(fit_particle([-0.55, 1.3, 0.5], 0.015));
+    points.push(fit_particle([0.4, 1.4, -0.5], 0.03));
+    points.push(fit_particle([0.4, 1.4, -0.5], 0.0));
+    points
+}
+
+fn native_fit(points: &[WaterParticle], h: f32) -> Vec<Shape64> {
+    let device = crate::harness::shared().device.as_ref();
+    let source = manifold_renderer::node_graph::primitives::water_surface_fit_shader();
+    let pipeline = device.create_compute_pipeline(&source, "cs_main", "yu-turk-fit-proof");
+    let mut heads = vec![0_u32; 32768];
+    let mut next = vec![0_u32; points.len()];
+    for (i, p) in points.iter().enumerate() {
+        // Deliberately link inactive records; the fit must exclude them.
+        let cell: [i32; 3] = std::array::from_fn(|d| {
+            ((p.position_mass[d] - [-2.0, 0.0, -2.0][d]) / 0.125).floor() as i32
+        });
+        assert!(cell.iter().all(|c| (0..32).contains(c)));
+        let bin = (cell[0] + 32 * (cell[1] + 32 * cell[2])) as usize;
+        next[i] = heads[bin];
+        heads[bin] = i as u32 + 1;
+    }
+    let expected: [Vec<u8>; 3] = [
+        bytemuck::cast_slice(points).to_vec(),
+        bytemuck::cast_slice(&heads).to_vec(),
+        bytemuck::cast_slice(&next).to_vec(),
+    ];
+    let inputs = expected
+        .each_ref()
+        .map(|bytes| device.create_buffer_shared(bytes.len() as u64));
+    let shapes = device.create_buffer_shared(points.len() as u64 * 64);
+    let components = device.create_buffer_shared(4);
+    components.zero_fill();
+    let uniform = [h.to_bits(), 0.95_f32.to_bits(), points.len() as u32, 0];
+    crate::harness::retry_on_gpu_commit_error(|| {
+        for (input, bytes) in inputs.iter().zip(&expected) {
+            unsafe {
+                input.write(0, bytes);
+            }
+        }
+        let mut encoder = device.create_encoder("yu-turk-fit-proof");
+        encoder.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniform),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &inputs[0],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &inputs[1],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &inputs[2],
+                    offset: 0,
+                },
+                GpuBinding::Buffer { binding: 4, buffer: &components, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &shapes,
+                    offset: 0,
+                },
+            ],
+            [(points.len() as u32).div_ceil(256), 1, 1],
+            "yu-turk-fit-proof",
+        );
+        encoder.commit_and_wait_completed();
+    });
+    for (i, (input, bytes)) in inputs.iter().zip(&expected).enumerate() {
+        let actual =
+            unsafe { std::slice::from_raw_parts(input.mapped_ptr().unwrap(), bytes.len()) };
+        assert_eq!(actual, bytes, "fit modified GPU input {i}");
+    }
+    unsafe {
+        std::slice::from_raw_parts(shapes.mapped_ptr().unwrap().cast::<Shape64>(), points.len())
+            .to_vec()
+    }
+}
+
+fn verify_fit(points: &[WaterParticle], h: f64, shapes: &[Shape64]) {
+    for (index, (p, actual)) in points.iter().zip(shapes).enumerate() {
+        if p.position_mass[3] == 0.0 {
+            assert!(bytemuck::bytes_of(actual).iter().all(|b| *b == 0));
+            continue;
+        }
+        let expected = fit_oracle(points, index, h);
+        let tensor = shape_tensor(actual);
+        for (i, row) in tensor.iter().enumerate() {
+            assert!(
+                (f64::from(actual.center_radius[i]) - expected.center[i]).abs() < 2.0e-6,
+                "center record {index}, axis {i}: {} != {}",
+                actual.center_radius[i],
+                expected.center[i]
+            );
+            for (j, &value) in row.iter().enumerate() {
+                assert!(
+                    (value - expected.support_tensor[i][j]).abs()
+                        <= 2.0e-7 * h * h + 3.0e-4 * expected.max_axis.powi(2),
+                    "support tensor record {index} ({i},{j}): {} != {}",
+                    value,
+                    expected.support_tensor[i][j]
+                );
+            }
+        }
+        for (label, actual, expected) in [
+            (
+                "max support",
+                f64::from(actual.center_radius[3]),
+                expected.max_axis,
+            ),
+            ("SPH density", f64::from(actual.axis_x[3]), expected.density),
+            ("search reach", f64::from(actual.axis_y[3]), expected.reach),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 1.0e-7 + 3.0e-4 * expected.abs(),
+                "{label}, record {index}: {actual} != {expected}"
+            );
+        }
+        assert_eq!(actual.axis_z[3], 0.0);
+        let axes = [actual.axis_x, actual.axis_y, actual.axis_z];
+        for (i, a) in axes.iter().enumerate() {
+            for b in axes.iter().skip(i + 1) {
+                let a = a.map(f64::from);
+                let b = b.map(f64::from);
+                let ab: f64 = (0..3).map(|d| a[d] * b[d]).sum();
+                assert!(ab.abs() <= expected.max_axis.powi(2) * 1.0e-5);
+            }
+        }
+    }
+}
+
+#[test]
+fn water_surface_fit_yu_turk_lattice_plane_sparse_and_scale_match_f64() {
+    let points = fit_fixture();
+    let h = 0.0625;
+    let output = native_fit(&points, h);
+    verify_fit(&points, f64::from(h), &output);
+    let lattice = fit_oracle(&points, 171, f64::from(h));
+    assert!(lattice.neighbors > 25);
+    let plane = fit_oracle(&points, 343 + 40, f64::from(h));
+    assert!(plane.neighbors > 25);
+    let (eigenvalues, _) = eigen_f64(plane.support_tensor);
+    assert!(
+        (eigenvalues.into_iter().fold(0.0, f64::max)
+            / eigenvalues.into_iter().fold(f64::INFINITY, f64::min)
+            - 16.0)
+            .abs()
+            < 1.0e-8
     );
-    let after = unsafe { std::slice::from_raw_parts(pb.mapped_ptr().unwrap(), points.len() * 96) };
-    assert_eq!(
-        after,
-        bytemuck::cast_slice::<WaterParticle,u8>(&points),
-        "fitting must not modify simulation state"
-    );
+    let sparse = fit_oracle(&points, points.len() - 4, f64::from(h));
+    assert_eq!(sparse.neighbors, 2);
+    assert!(sparse.center[0] - f64::from(points[points.len() - 4].position_mass[0]) > 0.02);
+    let isolated = fit_oracle(&points, points.len() - 2, f64::from(h));
+    assert_eq!(isolated.neighbors, 1);
+    assert!(isolated.density > 0.0, "self contribution is required");
+    // Scale geometry and h together, holding particle masses fixed.
+    let scaled: Vec<_> = points
+        .iter()
+        .map(|p| {
+            let mut p = *p;
+            for coordinate in &mut p.position_mass[..3] {
+                *coordinate *= 2.0;
+            }
+            p
+        })
+        .collect();
+    let scaled_output = native_fit(&scaled, h * 2.0);
+    verify_fit(&scaled, f64::from(h * 2.0), &scaled_output);
+    for (i, (a, b)) in output.iter().zip(&scaled_output).enumerate() {
+        if points[i].position_mass[3] == 0.0 {
+            continue;
+        }
+        for (&original, &scaled) in a.center_radius.iter().zip(&b.center_radius) {
+            assert!((scaled - 2.0 * original).abs() < 4.0e-6);
+        }
+        let ta = shape_tensor(a);
+        let tb = shape_tensor(b);
+        for (original_row, scaled_row) in ta.iter().zip(&tb) {
+            for (&original, &scaled) in original_row.iter().zip(scaled_row) {
+                assert!(
+                    (scaled - 4.0 * original).abs()
+                        < 2.0e-5 * f64::from(b.center_radius[3]).powi(2)
+                );
+            }
+        }
+        assert!((f64::from(b.axis_x[3]) * 8.0 / f64::from(a.axis_x[3]) - 1.0).abs() < 1.0e-4);
+        assert!((b.axis_y[3] - 2.0 * a.axis_y[3]).abs() < 4.0e-6);
+    }
+}
+
+#[test]
+fn water_surface_fit_yu_turk_sparse_threshold_includes_self() {
+    // Every point is within 2h of every other point. Exactly 25 records must
+    // use the sparse branch; adding the 26th must use the covariance branch.
+    let mut points = Vec::new();
+    for y in -2..=2 {
+        for x in -2..=2 {
+            points.push(fit_particle(
+                [0.5 + x as f32 * 0.01, 1.0 + y as f32 * 0.01, 0.5],
+                0.03,
+            ));
+        }
+    }
+    let sparse = native_fit(&points, 0.0625);
+    verify_fit(&points, 0.0625, &sparse);
+    assert_eq!(fit_oracle(&points, 12, 0.0625).neighbors, 25);
+    points.push(fit_particle([0.5, 1.0, 0.51], 0.03));
+    let dense = native_fit(&points, 0.0625);
+    verify_fit(&points, 0.0625, &dense);
+    assert_eq!(fit_oracle(&points, 12, 0.0625).neighbors, 26);
+    assert!((dense[12].center_radius[3] - sparse[12].center_radius[3]).abs() > 0.02);
 }

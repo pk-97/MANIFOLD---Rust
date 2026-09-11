@@ -61,7 +61,7 @@ pub struct StatusReadbackRing {
 crate::primitive! {
     name: WaterState,
     type_id: "node.water_state",
-    purpose: "Substep boundary for MLS-MPM water: owns the fixed-rate simulation clock and the persistent accepted particle state. The executor repeats its substep region under this clock; capture accepts the candidate each iteration. time_scale [0,1] scales the clock (0 = frozen); reset_trigger re-seeds on integer change even while paused. Seek/project-load (epoch change) re-seeds from scratch. step_hz and max_substeps are install-time constants, not performance knobs.",
+    purpose: "Substep boundary for particle water solvers: owns the fixed-rate simulation clock and the persistent accepted particle state. The executor repeats its substep region under this clock; capture accepts the candidate each iteration. time_scale [0,1] scales the clock (0 = frozen); reset_trigger re-seeds on integer change even while paused. Seek/project-load (epoch change) re-seeds from scratch. step_hz and max_substeps are install-time constants, not performance knobs.",
     inputs: {
         seed: Array(WaterParticle) required,
         in: Array(WaterParticle) optional,

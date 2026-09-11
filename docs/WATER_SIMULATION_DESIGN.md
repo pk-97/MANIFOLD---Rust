@@ -89,14 +89,90 @@ bounds. The 60→120 Hz and 120→240 Hz normalized waveform differences are
 but successive timestep refinement does not improve agreement. The additional
 monotonic-refinement gate failed before and after the wall correction; further
 solver changes stopped at the repository attempt limit. No passing coupled
-acceptance, moving-object validation, production GPU solver or video is claimed.
+acceptance or moving-object validation is claimed. The GPU scene integration
+below does not transfer the 96.7% small-wave result to another grid or scene.
 
-The three native transfer/extrapolation drafts passed eight shader/ABI unit
-checks and renderer clippy, but native compilation panicked in Naga 28
-SPIR-V emission (`Expression [97] is not cached`) before dispatch. GPU parity
-is unverified. Their module/startup/proof registrations were removed so these
-unaccepted drafts do not affect app startup. Re-integration must restore the
-`mac_velocity`/`mac_valid` channel names and pass the scoped native gate.
+### Native APIC scene integration — 2026-09-11
+
+`WaterWaveTankApic.json` is a non-bundled scene fixture with the original
+3.3×2.25 m basin, stationary offset breakwater, camera and density-field water
+renderer. It uses the new trilinear APIC solver entirely through the normal
+graph/substep/Metal path, without a CPU simulation cache. The project-scoped
+demonstration embeds this graph rather than changing the shipping preset.
+
+The fixed grid has 64³ cells at h=0.0625 m and 65³ padded component-face
+storage. Each substep composes separate atoms: checked Q20 P2G, resolve,
+five extrapolation layers, gravity, particle-sphere SDF, fractional pressure
+rows, zero pressure, 128 red/black SOR pairs (omega 1.7), residual validation,
+matching pressure gradient, five extrapolation layers, free-slip wall sample
+extension, trilinear APIC gather/RK3, collision, validation and commit. The
+existing WaterState owns the clock at 120 Hz, capped at eight steps per output
+frame; rendering remains outside the repeated region.
+
+Pressure rows and RHS are both scaled by h²; q still means dt*p/rho.
+Each row must satisfy an absolute divergence residual of 0.001 s⁻¹ plus
+1e-4 times its RHS divergence magnitude. Failure sets sticky status bit 32
+before particle acceptance. There is no unchecked fixed-iteration fallback.
+This initial GPU linear solver uses SOR on the same fractional operator that
+the f64 oracle solves with PCG; algorithm equivalence is established by the
+native pressure/gradient comparison, not by iteration-count equivalence.
+
+Geometry is stationary axis-aligned basin-minus-box intersection: exact
+face areas and cell volumes, including exact closure rather than subtraction
+roundoff in fully solid cells. Open pressure faces are preserved by the wall
+sample extension. Only fully blocked sample faces receive even tangential /
+odd normal reflection. Moving-body fractional flux and general moving-wall
+sampling remain unimplemented in this GPU fixture.
+
+The original Naga `Expression [97] is not cached` panic was caused by passing
+a dynamically indexed array element by pointer into a WGSL helper. Using a
+local stencil base and then assigning it to the array fixes native compilation
+without changing transfer equations. Modules, channel names and hand-kernel
+startup prewarm are restored. Native proofs now pass for transfer, extrapolation,
+trilinear gather/RK3, fractional pressure and failed-solve rejection, particle
+SDF, box fractions and wall sampling. Full-scene timing and physical acceptance
+must still be assessed separately. That capture used the raster water overlay.
+The later native water RT integration and its open acceptance gaps are described
+in section 7; this earlier capture does not establish ray-traced water lighting.
+
+The 900-frame, 30-second APIC wave-obstacle capture completed without a
+runtime solver fault at 1920x1080. Mean encode/submit/GPU-completion time was
+85.485 ms (PNG readback/encoding excluded); this misses the 33.33 ms target
+and does not establish native-app FPS. Peter judged the motion improved but
+the material insufficiently water-like. Operator proofs are not whole-scene
+physical acceptance.
+
+The preceding optics-only comparison kept the APIC group and density reconstruction
+unchanged; the current reconstruction is specified below. The old scene pass always multiplied thickness by 1/10.9, the
+additive-splat correction; density isosurface thickness already measures metres.
+The renderer now consumes metres directly; there is no calibration multiplier
+or representation selector. Peter explicitly confirmed that these water scenes
+are WIP and need no legacy compatibility. The APIC fixture's deformation-driven
+foam defaults to zero and environment emitter intensity to zero, retaining the
+broad dome fill and direct sun rather than the three bright strip reflections.
+
+APIC material absorption uses representative red/green/blue wavelengths
+650/550/450 nm with coefficients 0.340/0.0565/0.00922 m^-1 from Pope and Fry
+(1997), as reproduced in the [corrected NASA Table 1.1](https://oceancolor.gsfc.nasa.gov/files/resources/docs/technical/volivch1err1.pdf).
+At attenuation distance 1 m the authored linear attenuation colours are
+exp(-coefficient). This is a three-wavelength RGB approximation, not spectral
+integration, scattering, turbidity, or a complete freshwater optical model.
+IOR remains1.333; the optics-only comparison used reconstruction support radius0.10m. No viscosity,
+surface-tension or particle-motion parameters changed in this appearance pass.
+
+The metre-thickness native graph proof matches independent Beer-Lambert and
+Fresnel values for a known 1 m path. The focused scene gate is still red:
+five proofs pass, while `water_scene_occlusion_and_depth` reports r/b 0.995578
+at pixel (41,78) against its <=0.995 threshold. The occlusion fixture now
+supplies a known 0.12 m optical path; no assertion was relaxed. This failure
+is tracked in BUG-01vr and blocks landing.
+
+The neutral clear-water capture and one project-scoped daylight HDRI comparison
+both complete 900 frames. The daylight graph reuses `node.hdri_source` with the
+existing Kloppenheim pure-sky EXR; it is not a new renderer or solver. Coating
+and studio contour artifacts are removed, but smooth surface reconstruction
+and limited scene reflections remain visually unaccepted. The current pass
+does not claim full-RT water or a finished realistic-water material.
 
 The previously reported 5% amplitude retention sampled at the theoretical
 period despite the phase error; it was not a peak-decay measurement. The
@@ -505,19 +581,44 @@ Surface graph, evaluated once after all substeps (2026-09-11 replacement):
 ```text
 water_state final particles ──► water_particle_bins ──┐
                            └─► water_foam ──────────┤
-particles + bins + foam ──► water_density_field ──► volume_isosurface
-shared Camera + accepted collider ────────────────► volume_isosurface
+particles + bins ──► water_surface_fit ──► support-bound reduction
+particles + bins + foam + shapes + bound ──► water_density_field
+                                         └─► volume_isosurface
+shared Camera + accepted collider ──────────► volume_isosurface
 isosurface depth + thickness + normals + foam ──► render_scene ──► post
 ```
 
-`node.water_density_field` reconstructs a normalized compact poly6 density field
-from particle mass/rest-density, with weighted persistent foam in G. The field
-occupies [-2,0,-2] to [2,4,2], independently of the 64³ physics grid. Initial
-resolution is 128³ and support radius 0.10 m. The mass normalization preserves
-bulk density when particle sampling changes. Its voxel gather uses the existing
-32³ linked bins; storage must cover every particle and each traversal is bounded.
-The generated Source shader writes Rgba16Float once per frame; this field is not
-feedback state. `vol_res` and `vol_depth` are graph-build allocation settings.
+`node.water_density_field` evaluates the normalized cubic-spline field from
+[Yu and Turk (2010), Eq. 8](https://faculty.cc.gatech.edu/~turk/my_papers/sph_surfaces.pdf):
+sum of particle mass divided by sampled particle density, multiplied by the
+anisotropic kernel. Fitted axes retain their absolute sizes and determinant.
+Foam in G is weighted by those same field contributions. The APIC solver is
+unchanged; the reconstruction density is computed only for rendering.
+
+The cubic convention follows [Becker and Teschner (2007)](https://cg.informatik.uni-freiburg.de/publications/2007_SCA_SPH.pdf):
+support radius 2h. The APIC fixture uses h=0.0625m, twice its 0.03125m particle
+spacing, and center blend lambda=0.95. This replaces the earlier poly6 field,
+lambda=0.5 fit, and per-particle constant-determinant normalization. Those
+approximations were not the complete published reconstruction.
+
+The existing 32³ linked bins remain the spatial index. An existing
+`node.wgsl_compute` performs one barriered maximum reduction of the fitted
+support bounds each frame; the density gather uses that measured bound about
+the ORIGINAL particle centers. It cannot assume a fixed maximum axis after
+removing determinant normalization. This indexing differs from the paper's
+ellipsoid-AABB hash but evaluates the same supported contributions. No new
+primitive, CPU readback, per-frame allocation in the changed primitives, or
+solver feedback is introduced. Shapes require their bound input. Unwired
+shapes use a spherical cubic with the explicit radius and rest density1000.
+
+The field occupies [-2,0,-2] to [2,4,2], independently of the 64³ physics grid.
+Resolution remains 128³; `vol_res` and `vol_depth` are graph-build allocation
+settings. The generated Source shader writes Rgba16Float once per frame.
+Raycasting this volume is an engine adaptation of the paper's marching cubes.
+Neither Yu–Turk paper specifies the extraction isovalue; 0.5 remains an explicit
+engineering choice, not a claimed published constant. Agreement with the
+kernel equations does not establish extracted-volume conservation or visual
+acceptance at this voxel resolution.
 
 `node.volume_isosurface` raycasts the 0.5 level set with trilinear sampling and
 refined crossings, deriving outward gradient normals and optical thickness in
@@ -541,6 +642,41 @@ and GPU completion, but exclude PNG work and do not establish native-app FPS.
 Lower reconstruction resolution and higher offline detail are quality settings,
 not permission to silently drop physics time. Surface validation and numerical
 solver acceptance remain separate; a smooth render cannot close BUG-01vr.
+
+### Offline APIC render bridge (2026-09-11)
+
+`tests/support/water_offline_export.rs` exports the experimental CPU APIC
+reference at h=0.03125 m and fixed dt=1/120 s. At 30 FPS, each cache interval
+contains four simulation steps. Frame zero is the initial state; 900 frames
+cover a 30-second movie without looping or resetting the simulation. The
+little-endian records preserve the existing 96-byte WaterParticle layout,
+including mass, velocity, affine rows and previous positions. This is offline
+reference tooling, not a live generator or an accepted GPU solver.
+
+`water-offline-render` reconstructs the same normalized poly6 density kernel,
+with radius 0.0625 m, isovalue 0.5 and fixed 97×97×65 grid at 0.015625 m spacing.
+Compact-support particle scatter accumulates density and analytic gradients;
+marching tetrahedra emits ordinary MeshVertex triangles with outward normals.
+The mesh enters `scene_object` and the production `render_scene` material path.
+No dedicated water-overlay inputs are connected, so the existing overlay's
+scene-wide RT exclusion does not apply.
+
+The water material uses **Blend** alpha mode with transmission 1, IOR 1.333,
+roughness 0.04, and the existing volume attenuation. Opaque mode is invalid for
+this bridge: it lacks the opaque-scene snapshot needed by transmission and
+produces black refraction. The production Blend path keeps GGX environment
+specular and samples the RT-lit opaque scene for screen-space refraction.
+**Blend water is excluded from the RT acceleration structure.** This bridge
+therefore establishes full scene rendering with RT opaque-scene lighting;
+it does not establish ray-traced water reflections, refraction, caustics, or
+water shadow casting.
+
+Each output frame holds the cached geometry fixed during bounded RT settling.
+The tool requires eight ticks with both reflection and shadow/AO trace-channel
+captures before saving; it fails after 48 ticks instead of saving a raster
+fallback. Fresh per-frame bindings keep memory bounded. This deliberately
+blocking capture path does not establish 1080p30 live performance. The existing
+solver acceptance failures remain open under BUG-01vr.
 
 Add OPTIONAL `render_scene` inputs:
 
@@ -570,10 +706,30 @@ snapshots → water fullscreen depth-tested shading pass → refresh public dept
 water surface depth → existing supported post processing. Reuse the current E2a
 snapshot allocation/load path, broadening its condition to `has_transmission ||
 has_water || rt_enabled`, preserving the existing RT branch for ordinary scenes.
-When a valid water scene requests `rt_enabled`, `render_scene` keeps the request
-stored but explicitly disables RT for that scene and logs that Water uses raster
-rendering because ray tracing is unavailable for water scenes. The water raster
-path remains authoritative until a dedicated water RT path exists.
+When water requests `rt_enabled`, the current implementation requires the
+`water_density` volume used by the primary isosurface. `water_isovalue` shares
+the same scalar wire (default 0.5). Native secondary water rays reuse the scene
+TLAS, material tables, alpha-test walk and hit-lighting helpers. They trace
+opaque geometry for reflection and transmission, locate the liquid exit in
+the density field, apply Snell refraction at entry/exit and Beer absorption
+along the refracted path, and return first-Sun opaque-object visibility.
+The primary fullscreen pass still publishes the reconstructed liquid depth.
+The analytical native tests and 900-frame RT capture pass, but visual acceptance
+fails: the full scene retains round blobs and gains dark stippling. The preceding
+2010 video used raster. BUG-vglg.1 tracks the mismatched primary/secondary entry
+bracketing and curved-surface validation; BUG-vglg.2 tracks omitted later liquid
+intervals. Neither defect has been fixed or proved to explain all dark pixels.
+
+Four internal dielectric interfaces bound continuation, including total internal
+reflection; residual energy is truncated at that limit. Exit marching uses
+half-voxel steps and eight bisections, bounded to 4096 steps for volumes no
+larger than 512³ in the fixed four-metre domain. Dispatch regions reuse the
+engine query-work planner with a conservative 96-query budget per pixel.
+Water itself is not TLAS geometry: other water surfaces are not intersected by
+the exterior scene rays, and water self-shadowing/caustics are not implemented.
+RT off uses the existing screen-space/IBL path. An unready or stale scene TLAS
+temporarily uses that same path with a once-per-transition diagnostic; readiness
+and topology gates match the opaque RT path, so stale water radiance is not read.
 After Pass A resolve, retain the existing single-sample `opaque_depth_snapshot` and
 opaque colour snapshot unchanged for refraction. Load a distinct single-sample
 Depth32Float water-pass attachment initialized from opaque depth; water fragments
@@ -587,23 +743,21 @@ No water inputs means no additional resources, dispatches or colour/depth change
 Lighting shares the existing scene-light packing, environment sampling, BRDF and
 shadow lookup helpers; extract helpers if needed rather than copying a second lighting
 engine. Water receives opaque-object shadows on direct light but does not cast shadows
-or caustics. Refract the opaque scene with IOR and thickness; shorten thickness by
-distance to the first opaque hit. Out-of-screen rays use the environment intentionally,
-as a documented screen-space limitation. Clamp/reject displaced samples that would
+or caustics. With RT disabled, refract the opaque scene with IOR and thickness;
+shorten thickness by distance to the first opaque hit. Screen-space displaced
+samples are clamped/rejected when they would
 pull a foreground opaque object through the water. Beer-Lambert attenuation is
 `exp(-sigma_a * thickness)`, with coefficients derived from existing material fields.
 Fresnel blends reflected and transmitted light; do not add two full-energy images.
 
 **Explicit V1 compatibility limits:** reject a water scene with any Blend object,
 temporal upscaling/denoising, volumetric shafts, or multiple water sets. An RT
-request uses the explicit raster fallback documented above and is reported once
-per transition; it does not produce the scene-error magenta output.
+request without the matching density volume is an explicit validation error.
 Reject partial water input sets during graph validation/rebuild before allocation.
 Validate camera, material and dynamic compatibility at evaluation, before capability
 fallbacks or pass encoding. Use `EffectNodeContext::error`, clear colour to magenta
 (the existing scene error convention), clear depth to 1 and auxiliary outputs to
-zero, then return. Never retain stale water output or silently disable a user setting;
-the RT request is the documented raster-policy exception.
+zero, then return. Never retain stale water output or silently disable a user setting.
 Depth-aware spatial post effects can consume
 the updated depth; temporal motion feeds are not claimed. These limits are visible
 in the preset description. Supporting intersecting transparent objects and reliable
@@ -611,33 +765,65 @@ liquid motion vectors is later work, not a fake MVP implementation.
 
 ### Fitted particle surface
 
-Both water demos now insert `node.water_particle_bins` and
-`node.water_surface_fit` after the accepted simulation state. These affect
-rendering only. Binning uses 32³ linked cells of width 0.125 m in the fixed
-four-metre domain `[-2,0,-2]..[2,4,2]`. The fit gathers 27 cells, forms a
-weighted neighbour covariance, and uses five cyclic Jacobi sweeps to obtain
-orthogonal axes. Fewer than eight neighbours retains a spherical droplet.
-Eigenvalue regularization bounds the axis ratio to four; geometric-mean
-normalization preserves the radius-derived ellipsoid volume. This does not
-establish conservation of the reconstructed fluid volume. The default centre
-blend is 0.5 and radius is 0.046875 m.
+`node.water_surface_fit` implements Yu–Turk 2010 Eqs. 6 and 9–16 after the
+accepted simulation state. The covariance neighbourhood has radius R=2h and
+weights 1-(distance/R)^3. Self is included in the sums and neighbour count;
+the paper's sums do not exclude self, but its count convention is not explicit.
+All centers relocate by lambda times the weighted-mean offset for rendering
+only. More than25 samples uses covariance eigenvalues directly, with each
+clamped to at least the largest/4. Otherwise modified covariance is0.5I.
+Exactly zero covariance also uses that finite sphere as an explicit degenerate
+input convention. Five cyclic Jacobi sweeps supply orthogonal eigenvectors.
 
-The output has four vec4 channels (64 bytes per particle):
-`surface_center_radius` contains world centre and maximum semi-axis length;
-`surface_axis_x/y/z` contain orthogonal world semi-axis vectors with zero w.
-Inactive particles emit zero shapes. Depth, thickness and foam accept this
-optional shape input; omission preserves their sphere path. Their shaped
-paths share view conversion, conservative projected ellipsoid bounds and
-analytic ray intersections. Thickness adds ellipsoid chords, still an
-approximation where particles overlap. Foam uses these same intersections
-and a near-surface tolerance of twice the minimum semi-axis length.
+The paper calibrates ks to preserve approximately the kernel size of a full
+interior neighbourhood. Its example1400 has no reported metric reference
+scale and cannot be copied as a universal inverse-square-metre constant.
+Here ks=20/(3R²): integrating the published weights over a uniform 3D ball
+gives covariance eigenvalue3R²/20. This declared dimensional calibration
+preserves uniform-interior size while retaining local kernel-size variation.
+It scales as1/length²; no per-particle determinant normalization remains.
 
-This reduces the visible particle lattice without adding depth-blur passes.
-It is a bounded covariance fit, not an extracted fluid mesh or a replacement
-solver. Native tests compare rotated ellipsoid depth to an independent f64
-oracle and neighbour fitting to an analytic rotated plane and isolated drop.
-The observed impact sequence is smoother but still lacks convincing localized
-whitewater and spray; it is not accepted as matching the visual references.
+The output remains four vec4 channels (64bytes per particle):
+`surface_center_radius` stores the relocated center and maximum FULL support
+semiaxis; axis_x/y/z.xyz store the orthogonal FULL support vectors (columns of
+2G^-1). axis_x.w stores sum_j mass_j W(x_j-x_i,h), evaluated on original
+positions with the isotropic cubic spline. axis_y.w stores maximum support
+semiaxis plus center displacement, the conservative reach about the original
+particle. axis_z.w is zero. Inactive particles emit zero records. The optional
+particle-splat path consumes xyz vectors and continues to interpret them as
+full ellipsoid semiaxes.
+
+Independent native proofs compare centers, covariance-derived support tensors,
+density and reach against f64 sums and a converged eigensolver. Fixtures cover
+bulk lattice, rotated plane, sparse pair, isolated self contribution, the25/26
+threshold, and geometry/h scaling by2 with fixed mass (density scales by1/8).
+Density tests use an independent inverse-matrix cubic oracle with variable
+determinants and non-rest densities; reach tests cover strided tails and reset.
+GPU input bytes must remain unchanged.
+
+The [2013 TOG extension](https://faculty.cc.gatech.edu/~turk/my_papers/particle_surfaces_tog.pdf)
+also labels connected components to prevent separate surfaces from blending.
+The current extension uses three GPU operations: seed identity parents, union
+original-position neighbors within the nominal particle spacing (0.03125 m),
+then resolve canonical roots. Monotone atomic-min union-find connects arbitrary
+chain lengths without CPU convergence readback or a fixed relaxation-pass cap.
+Eq.17 filters covariance and center relocation to the same component; SPH
+density still includes all original neighbors. The optional labels preserve the
+2010 fit when unwired. Independent BFS labels, shuffled chains, separated sheets
+and a connecting bridge are the new native proof cases. The demo reconstruction
+volume is now 256³ (1.5625 cm voxels); the 64³ physics grid and dam-break seed
+remain unchanged. These additions require their own validation; the results
+below refer to the previous 2010 baseline. Neither paper promises
+universal correctness, a prescribed visual result at arbitrary resolution, or
+real-time performance. Whole-scene visual and physical acceptance remain
+separate from equation-level verification.
+
+The paper-baseline verification completed900frames at1920×1080/30fps without
+solver fault. Six focused native proofs, clippy, build and graph/project loading
+passed. Matching frames90 and480 show a smoother broad surface but remain short
+of visual acceptance. Mean headless encode/submit/GPU-wait cost is64.196ms
+versus108.163ms for the prior simplified fit; this excludes PNG work and does
+not establish native-app FPS. Existing optics and refinement gates remain red.
 
 ### Optional foam
 
