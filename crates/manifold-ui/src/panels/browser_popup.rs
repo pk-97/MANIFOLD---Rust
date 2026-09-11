@@ -17,8 +17,9 @@
 //! content and screen — width derives from the item count (clamped to the
 //! screen, capped at [`MAX_COLUMNS`] columns of 16:9 cells), height is
 //! content-sized under the screen as the ONLY cap, and the grid scrolls
-//! internally beyond that. Cell captions live in a real strip: the label
-//! sits bottom-left on a named inset. Chips are
+//! internally beyond that. Image-cell labels are centered on the thumbnail,
+//! larger, white with a faked black stroke (8 offset copies) so they read
+//! over any content. Chips are
 //! measured with the tree's font metrics and wrap instead of overflowing.
 //! Keyboard nav moves in grid geometry with scroll reveal; the wheel only
 //! scrolls the grid when it's over the grid.
@@ -64,14 +65,28 @@ const SECTION_SPACING: f32 = 6.0;
 const PASTE_BUTTON_HEIGHT: f32 = 28.0;
 const CELL_RADIUS: f32 = 6.0;
 const ACCENT_BAR_W: f32 = 3.0;
-/// Caption strip + insets (F7/F8/F10): the strip backs the label, which sits
-/// INSIDE it on a named x-inset — never space-padded prefixes.
-const CAPTION_STRIP_H: f32 = 14.0;
+/// Cell label insets for flat (no-image) cells.
 const CAPTION_PAD_X: f32 = 5.0;
 /// Height of the "No presets match" row when the filter empties the grid (F9).
 const EMPTY_STATE_H: f32 = 44.0;
 const CELL_FONT: u16 = color::FONT_LABEL;
 const SEARCH_FONT: u16 = color::FONT_LABEL;
+/// Image-cell label (Peter, 2026-09-11): centered on the thumbnail, larger,
+/// white with a black stroke so it reads over any thumbnail content. The
+/// stroke is faked — 8 black offset copies under the white draw.
+const CELL_LABEL_FONT: u16 = color::FONT_TITLE;
+const CELL_LABEL_BAND_H: f32 = 22.0;
+const CELL_LABEL_STROKE: Color32 = Color32::BLACK;
+const STROKE_OFFSETS: [(f32, f32); 8] = [
+    (-1.0, -1.0),
+    (0.0, -1.0),
+    (1.0, -1.0),
+    (-1.0, 0.0),
+    (1.0, 0.0),
+    (-1.0, 1.0),
+    (0.0, 1.0),
+    (1.0, 1.0),
+];
 
 // ── Colors ──
 
@@ -86,9 +101,6 @@ const CELL_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
 const CELL_HOVER_OVER_IMAGE: Color32 = color::BROWSER_CELL_HOVER_OVER_IMAGE;
 const CELL_PRESSED_OVER_IMAGE: Color32 = color::BROWSER_CELL_PRESSED_OVER_IMAGE;
 /// Caption-strip fill for an image cell's label legibility band
-/// (PRESET_LIBRARY_DESIGN P6, D7) — dark enough that light label text reads
-/// over any thumbnail content.
-const CAPTION_STRIP_BG: Color32 = color::BROWSER_CELL_CAPTION_BG;
 const CHIP_INACTIVE: Color32 = Color32::new(41, 41, 43, 255);
 const CHIP_HOVER: Color32 = Color32::new(56, 56, 58, 255);
 const PASTE_BG: Color32 = Color32::new(40, 40, 42, 255);
@@ -696,28 +708,35 @@ impl BrowserPopupPanel {
             }
 
             if has_image {
-                let strip_y = cell_y + CELL_H - CAPTION_STRIP_H;
-                tree.add_panel(
-                    clip_parent,
-                    cell_x,
-                    strip_y,
-                    CELL_W,
-                    CAPTION_STRIP_H,
-                    UIStyle {
-                        bg_color: CAPTION_STRIP_BG,
-                        ..UIStyle::default()
-                    },
-                );
+                // Centered stroked label: 8 black offset copies, white on top.
+                let band_y = cell_y + (CELL_H - CELL_LABEL_BAND_H) * 0.5;
+                for &(dx, dy) in &STROKE_OFFSETS {
+                    tree.add_label(
+                        clip_parent,
+                        cell_x + dx,
+                        band_y + dy,
+                        CELL_W,
+                        CELL_LABEL_BAND_H,
+                        &item.label,
+                        UIStyle {
+                            font_size: CELL_LABEL_FONT,
+                            text_color: CELL_LABEL_STROKE,
+                            text_align: TextAlign::Center,
+                            ..UIStyle::default()
+                        },
+                    );
+                }
                 tree.add_label(
                     clip_parent,
-                    cell_x + CAPTION_PAD_X,
-                    strip_y,
-                    CELL_W - CAPTION_PAD_X * 2.0,
-                    CAPTION_STRIP_H,
+                    cell_x,
+                    band_y,
+                    CELL_W,
+                    CELL_LABEL_BAND_H,
                     &item.label,
                     UIStyle {
-                        font_size: CELL_FONT,
-                        text_color: TEXT_PRIMARY,
+                        font_size: CELL_LABEL_FONT,
+                        text_color: Color32::WHITE,
+                        text_align: TextAlign::Center,
                         ..UIStyle::default()
                     },
                 );
