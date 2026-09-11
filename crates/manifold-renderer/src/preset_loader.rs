@@ -519,7 +519,7 @@ fn build_catalog_with_overlays(
     // (D4/D9) and keep today's on-top-of-everything behavior unchanged.
     let snapshot_ids: std::collections::HashSet<Arc<str>> =
         snapshot_overlay.iter().map(|(id, _)| id.clone()).collect();
-    let mut merged: Vec<(Arc<str>, Arc<str>)> = snapshot_overlay.iter().cloned().collect();
+    let mut merged: Vec<(Arc<str>, Arc<str>)> = snapshot_overlay.to_vec();
     if !snapshot_overlay.is_empty() {
         log::info!(
             "[presets] starting from {} project snapshot {label} preset(s) (D5 self-containment fallback)",
