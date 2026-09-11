@@ -279,6 +279,7 @@ mod mpm_scatter_mass_momentum;
 mod mpm_scatter_stress;
 mod seed_water;
 mod water_commit;
+mod water_foam;
 mod water_validate;
 // Live Water S5 collider motion, collision, emission and impulse stages
 // (docs/WATER_IMPLEMENTATION_PLAN.md sections 2.2 and 4, S5 brief).
@@ -292,6 +293,7 @@ mod water_impulse;
 // and normals-from-depth. Registered by the S6 lane.
 mod particle_surface_depth;
 mod particle_thickness;
+mod particle_foam;
 mod normals_from_depth;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
@@ -555,6 +557,8 @@ pub use seed_water::{POOL_MAX, POOL_MIN, SeedWater, SeedWaterUniforms};
 pub use water_collider_motion::{ColliderMotion, ColliderSample, WaterColliderMotion};
 pub use water_collide_box::{CollideBoxUniforms, WaterCollideBox, CUBE_HALF};
 pub use water_commit::{CommitUniforms, WaterCommit};
+pub use water_foam::WaterFoam;
+pub use particle_foam::{ParticleFoam, prewarm_pipelines as prewarm_particle_foam};
 pub use water_emit::{EmitCursor, EmitPlan, EmitUniforms, WaterEmit, EMIT_MAX, EMIT_MIN};
 pub use water_impulse::{
     ImpulseDecision, ImpulseEventLatch, ImpulseUniforms, WaterImpulse, MAX_PENDING_IMPULSES,

@@ -13,6 +13,43 @@ pub(crate) struct Grid {
     mass: [Vec<f64>; 3],
     mom: [Vec<f64>; 3],
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_affine_faces_gather_exact() {
+        let mut g = Grid::new([16; 3], 1. / 16., [3., -2., 7.]);
+        let p = Particle {
+            p: [3.5, -1.5, 7.5],
+            v: [1.2, -0.7, 2.4],
+            c: [[0.2, 0.31, -0.4], [-0.17, 0.5, 0.23], [0.61, -0.29, 0.11]],
+            m: 1.0,
+        };
+        for a in 0..3 {
+            let d = g.dims(a);
+            for z in 0..d[2] {
+                for y in 0..d[1] {
+                    for x in 0..d[0] {
+                        let q = [x, y, z];
+                        let f = g.face(a, q);
+                        let r = [f[0] - p.p[0], f[1] - p.p[1], f[2] - p.p[2]];
+                        let value = p.v[a] + dot(p.c[a], r);
+                        g.set_face_velocity(a, q, value);
+                    }
+                }
+            }
+        }
+        let (v, c) = g.gather(&p);
+        for a in 0..3 {
+            assert!((v[a] - p.v[a]).abs() < 1e-12);
+            for (actual, expected) in c[a].iter().zip(p.c[a]) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+        }
+    }
+}
 impl Grid {
     pub(crate) fn new(n: [usize; 3], h: f64, o: [f64; 3]) -> Self {
         let s = [
@@ -98,6 +135,13 @@ impl Grid {
     }
     pub(crate) fn face_velocity(&self, a: usize, q: [usize; 3]) -> f64 {
         self.mom[a][self.ix(a, q)]
+    }
+    /// Install a resolved face velocity directly for gather-only reference
+    /// tests. This intentionally bypasses scatter and fixed-point storage.
+    pub(crate) fn set_face_velocity(&mut self, a: usize, q: [usize; 3], value: f64) {
+        let i = self.ix(a, q);
+        self.mass[a][i] = 1.0;
+        self.mom[a][i] = value;
     }
     pub(crate) fn gather(&self, p: &Particle) -> ([f64; 3], [[f64; 3]; 3]) {
         let mut v = [0.; 3];

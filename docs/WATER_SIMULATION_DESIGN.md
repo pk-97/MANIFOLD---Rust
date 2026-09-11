@@ -497,6 +497,28 @@ the updated depth; temporal motion feeds are not claimed. These limits are visib
 in the preset description. Supporting intersecting transparent objects and reliable
 liquid motion vectors is later work, not a fake MVP implementation.
 
+### Optional foam
+
+`node.water_foam` consumes accepted particles after the repeated water region
+and updates a persistent foam buffer immediately after dispatch. It is not a
+`late_capture` operation and has no feedback back-edge. `SimulationFrame`
+epoch/reset dominates state; duplicate frame IDs do not advance it, and
+paused `dt=0` frames leave it unchanged.
+
+Foam strain is the Frobenius norm of the symmetric, trace-free part of affine
+`C`. The source is `smoothstep(2, 10, strain) × smoothstep(0.15, 1, speed) ×
+gain` (primitive default `3`). The bounded source/decay recurrence uses
+`rate = source + ln(2) / half_life` and
+`F_next = source/rate + (F_previous - source/rate) × exp(-rate × dt)`.
+The demos use gain `12` and half-life `0.75 s`. `node.particle_foam` uses maximum coverage, radius
+`0.046875` (matching the water surface), and a near-surface mask of `2r` against view-axis depth. Shading
+may blend coverage as white foam. This is a deformation-driven visual
+approximation, not foam fluid, bubbles, or spray.
+
+`WaterPrototype` exposes continuous pour plus cube interaction;
+`WaterImpact` is the impact-only variation. Both use the existing raster water
+path and documented compatibility limits.
+
 ## 8. Prototype and acceptance
 
 Preset `WaterPrototype.json`, display name **Water — Prototype**, category Sim.

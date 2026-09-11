@@ -33,6 +33,7 @@ struct WaterUniforms {
     thickness_scale: f32, // splat-thickness → metres calibration (S6 chord factor)
     attenuation_color: vec4<f32>,
     screen_dims: vec4<f32>, // w, h, 1/w, 1/h
+    foam_controls: vec4<f32>, // x = foam enabled
 }
 
 @group(0) @binding(0) var<uniform> u: WaterUniforms;
@@ -43,6 +44,7 @@ struct WaterUniforms {
 @group(0) @binding(5) var opaque_depth: texture_depth_2d;
 @group(0) @binding(6) var prefiltered_specular: texture_2d<f32>;
 @group(0) @binding(7) var env_sampler: sampler;
+@group(0) @binding(8) var water_foam: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -190,7 +192,13 @@ fn fs_water(in: VsOut) -> FsOut {
         sun = u.sun_color.rgb * lobe_scale * pow(ndoth, filtered_shininess) * max(dot(n, l), 0.0);
     }
 
-    let col = mix(transmitted, env, fres) + sun;
+    var col = mix(transmitted, env, fres) + sun;
+    if (u.foam_controls.x > 0.5) {
+        let foam = clamp(textureLoad(water_foam, coord, 0).r, 0.0, 1.0);
+        var foam_light = 0.4;
+        if (u.sun_dir.w > 0.5) { foam_light = 0.4 + 0.6 * max(dot(n, normalize(u.sun_dir.xyz)), 0.0); }
+        col = mix(col, vec3<f32>(0.92, 0.96, 1.0) * foam_light, foam);
+    }
     out.color = vec4<f32>(col, 1.0);
     out.depth = raw;
     return out;

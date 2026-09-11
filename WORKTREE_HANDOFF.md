@@ -1,3 +1,9 @@
+## Current day pass — 2026-09-11
+
+Implemented persistent deformation-driven foam, near-surface coverage and optional water shading; WaterPrototype and new WaterImpact expose gain/lifetime. This is a visual proxy, not physical bubbles or spray. Rebuilt release app. Native foam/water compatibility checks (6), CPU roundtrip/MAC reference (7), and focused clippy pass. Kernel recurrence checks do not establish host reset/epoch lifecycle coverage. Final impact movie `/tmp/water-impact-foam.mp4`; 240-frame 720p timing `/tmp/water-impact-accepted-timing.json`: median18.312ms, p9519.248ms (encoding/submit/GPU wait, excluding PNG). Appearance remains short of reference: rounded sheets, visible particle sampling, no thin airborne spray. Camera stays stationary. No main landing: BUG-01vr is open.
+
+Test-only MAC scatter/resolve/gather now passes with operator-specific checks: scatter against independent f64, gather against independent f64 supplied the actual quantized grid. Prior full-roundtrip low-mass discrepancy remains a reported diagnostic. No production pressure replacement. Day usage baseline8%, last live10%; shared rounded meter. Historical details below.
+
 # Water review fixes — 2026-09-10
 
 ## Completed performance pass; physics acceptance open

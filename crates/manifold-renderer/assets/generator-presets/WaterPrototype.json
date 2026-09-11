@@ -8,7 +8,7 @@
     "oscPrefix": "waterPrototype",
     "available": true,
     "isLineBased": false,
-    "description": "Cutaway basin; hidden front walls still contain the water. Live water demo with a continuous pour and repeated cube dip. The camera starts stationary and can be modulated by the user. If ray tracing is requested, water uses the raster path; transparent objects, temporal upscaling, and volumetric shafts are unsupported.",
+    "description": "Cutaway basin; hidden front walls still contain the water. Live water demo with a continuous pour and repeated cube dip. The camera starts stationary and can be modulated by the user. If ray tracing is requested, water uses the raster path; transparent objects, temporal upscaling, and volumetric shafts are unsupported. Foam is a deformation-driven visual approximation rendered through the existing raster water path.",
     "params": [
       {
         "id": "pourRate",
@@ -64,6 +64,28 @@
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F0"
+      },
+      {
+        "id": "foamGain",
+        "name": "Foam Gain",
+        "min": 0.0,
+        "max": 30.0,
+        "defaultValue": 12.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "foamHalfLife",
+        "name": "Foam Half-Life",
+        "min": 0.05,
+        "max": 8.0,
+        "defaultValue": 0.75,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
       }
     ],
     "bindings": [
@@ -71,36 +93,92 @@
         "id": "pourRate",
         "label": "Pour Rate",
         "defaultValue": 1000.0,
-        "target": { "kind": "node", "nodeId": "pourRateSrc", "param": "value" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "pourRateSrc",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "impulseStrength",
         "label": "Impulse Strength",
         "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "impulseSrc", "param": "value" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "impulseSrc",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "cubeStrike",
         "label": "Cube Strike",
         "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "strikeSrc", "param": "value" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "strikeSrc",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "simSpeed",
         "label": "Simulation Speed",
         "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "simSpeedSrc", "param": "value" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "simSpeedSrc",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "simReset",
         "label": "Reset",
         "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "resetSrc", "param": "value" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "resetSrc",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "foamGain",
+        "label": "Foam Gain",
+        "defaultValue": 12.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "foamState",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "foamHalfLife",
+        "label": "Foam Half-Life",
+        "defaultValue": 0.75,
+        "target": {
+          "kind": "node",
+          "nodeId": "foamState",
+          "param": "half_life"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ]
   },
@@ -119,7 +197,9 @@
           ],
           "outputs": [
             { "name": "particles", "portType": "Array(WaterParticle)" },
-            { "name": "collider", "portType": "Transform" }
+            { "name": "collider", "portType": "Transform" },
+            { "name": "reset", "portType": "Scalar(F32)" },
+            { "name": "timeScale", "portType": "Scalar(F32)" }
           ]
         },
         "nodes": [
@@ -197,7 +277,9 @@
           { "fromNode": 26, "fromPort": "out", "toNode": 28, "toPort": "candidate" },
           { "fromNode": 27, "fromPort": "status_out", "toNode": 28, "toPort": "status" },
           { "fromNode": 13, "fromPort": "out", "toNode": 29, "toPort": "particles" },
-          { "fromNode": 13, "fromPort": "collider_out", "toNode": 29, "toPort": "collider" }
+          { "fromNode": 13, "fromPort": "collider_out", "toNode": 29, "toPort": "collider" },
+          { "fromNode": 17, "fromPort": "out", "toNode": 29, "toPort": "reset" },
+          { "fromNode": 16, "fromPort": "out", "toNode": 29, "toPort": "timeScale" }
         ]
       }
     },
@@ -210,43 +292,111 @@
         "interface": {
           "inputs": [
             { "name": "particles", "portType": "Array(WaterParticle)" },
-            { "name": "camera", "portType": "Camera" }
+            { "name": "camera", "portType": "Camera" },
+            { "name": "reset", "portType": "Scalar(F32)" },
+            { "name": "timeScale", "portType": "Scalar(F32)" }
           ],
           "outputs": [
             { "name": "depth", "portType": "Texture2D" },
             { "name": "thickness", "portType": "Texture2D" },
             { "name": "normals", "portType": "Texture2D" },
-            { "name": "material", "portType": "Material" }
+            { "name": "material", "portType": "Material" },
+            { "name": "foam", "portType": "Texture2D" }
           ]
         },
         "nodes": [
-          { "id": 41, "nodeId": "surface_in", "typeId": "system.group_input", "handle": "input" },
-          { "id": 42, "nodeId": "splat", "typeId": "node.particle_surface_depth", "handle": "surface depth", "params": {} },
-          { "id": 43, "nodeId": "thick", "typeId": "node.particle_thickness", "handle": "thickness", "params": {} },
-          { "id": 44, "nodeId": "blurH", "typeId": "node.bilateral_blur", "handle": "smooth H", "params": {
-            "axis": { "type": "Enum", "value": 0 },
-            "depth_sigma": { "type": "Float", "value": 0.05 },
-            "spatial_step": { "type": "Float", "value": 2.0 },
-            "value_space": { "type": "Enum", "value": 1 }
-          } },
-          { "id": 45, "nodeId": "blurV", "typeId": "node.bilateral_blur", "handle": "smooth V", "params": {
-            "axis": { "type": "Enum", "value": 1 },
-            "depth_sigma": { "type": "Float", "value": 0.05 },
-            "spatial_step": { "type": "Float", "value": 2.0 },
-            "value_space": { "type": "Enum", "value": 1 }
-          } },
-          { "id": 46, "nodeId": "normals", "typeId": "node.normals_from_depth", "handle": "normals", "params": {} },
-          { "id": 47, "nodeId": "waterMat", "typeId": "node.pbr_material", "handle": "water material", "params": {
-            "transmission": { "type": "Float", "value": 1.0 },
-            "ior": { "type": "Float", "value": 1.333 },
-            "metallic": { "type": "Float", "value": 0.0 },
-            "roughness": { "type": "Float", "value": 0.04 },
-            "volume_attenuation_distance": { "type": "Float", "value": 0.75 },
-            "volume_attenuation_color_r": { "type": "Float", "value": 0.25 },
-            "volume_attenuation_color_g": { "type": "Float", "value": 0.65 },
-            "volume_attenuation_color_b": { "type": "Float", "value": 0.9 }
-          } },
-          { "id": 48, "nodeId": "surface_out", "typeId": "system.group_output", "handle": "output" }
+          {
+            "id": 49,
+            "nodeId": "foamState",
+            "typeId": "node.water_foam",
+            "handle": "foam state",
+            "params": {
+              "gain": { "type": "Float", "value": 12.0 },
+              "half_life": { "type": "Float", "value": 0.75 }
+            }
+          },
+          {
+            "id": 50,
+            "nodeId": "foamRaster",
+            "typeId": "node.particle_foam",
+            "handle": "foam raster",
+            "params": {
+              "radius": { "type": "Float", "value": 0.046875 }
+            }
+          },
+          {
+            "id": 41,
+            "nodeId": "surface_in",
+            "typeId": "system.group_input",
+            "handle": "input"
+          },
+          {
+            "id": 42,
+            "nodeId": "splat",
+            "typeId": "node.particle_surface_depth",
+            "handle": "surface depth",
+            "params": {}
+          },
+          {
+            "id": 43,
+            "nodeId": "thick",
+            "typeId": "node.particle_thickness",
+            "handle": "thickness",
+            "params": {}
+          },
+          {
+            "id": 44,
+            "nodeId": "blurH",
+            "typeId": "node.bilateral_blur",
+            "handle": "smooth H",
+            "params": {
+              "axis": { "type": "Enum", "value": 0 },
+              "depth_sigma": { "type": "Float", "value": 0.05 },
+              "spatial_step": { "type": "Float", "value": 2.0 },
+              "value_space": { "type": "Enum", "value": 1 }
+            }
+          },
+          {
+            "id": 45,
+            "nodeId": "blurV",
+            "typeId": "node.bilateral_blur",
+            "handle": "smooth V",
+            "params": {
+              "axis": { "type": "Enum", "value": 1 },
+              "depth_sigma": { "type": "Float", "value": 0.05 },
+              "spatial_step": { "type": "Float", "value": 2.0 },
+              "value_space": { "type": "Enum", "value": 1 }
+            }
+          },
+          {
+            "id": 46,
+            "nodeId": "normals",
+            "typeId": "node.normals_from_depth",
+            "handle": "normals",
+            "params": {}
+          },
+          {
+            "id": 47,
+            "nodeId": "waterMat",
+            "typeId": "node.pbr_material",
+            "handle": "water material",
+            "params": {
+              "transmission": { "type": "Float", "value": 1.0 },
+              "ior": { "type": "Float", "value": 1.333 },
+              "metallic": { "type": "Float", "value": 0.0 },
+              "roughness": { "type": "Float", "value": 0.04 },
+              "volume_attenuation_distance": { "type": "Float", "value": 0.75 },
+              "volume_attenuation_color_r": { "type": "Float", "value": 0.25 },
+              "volume_attenuation_color_g": { "type": "Float", "value": 0.65 },
+              "volume_attenuation_color_b": { "type": "Float", "value": 0.9 }
+            }
+          },
+          {
+            "id": 48,
+            "nodeId": "surface_out",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
         ],
         "wires": [
           { "fromNode": 41, "fromPort": "particles", "toNode": 42, "toPort": "particles" },
@@ -267,7 +417,15 @@
           { "fromNode": 45, "fromPort": "out", "toNode": 48, "toPort": "depth" },
           { "fromNode": 43, "fromPort": "thickness", "toNode": 48, "toPort": "thickness" },
           { "fromNode": 46, "fromPort": "normals", "toNode": 48, "toPort": "normals" },
-          { "fromNode": 47, "fromPort": "out", "toNode": 48, "toPort": "material" }
+          { "fromNode": 47, "fromPort": "out", "toNode": 48, "toPort": "material" },
+          { "fromNode": 41, "fromPort": "particles", "toNode": 49, "toPort": "particles" },
+          { "fromNode": 41, "fromPort": "reset", "toNode": 49, "toPort": "reset_trigger" },
+          { "fromNode": 41, "fromPort": "timeScale", "toNode": 49, "toPort": "time_scale" },
+          { "fromNode": 41, "fromPort": "particles", "toNode": 50, "toPort": "particles" },
+          { "fromNode": 49, "fromPort": "foam", "toNode": 50, "toPort": "foam" },
+          { "fromNode": 41, "fromPort": "camera", "toNode": 50, "toPort": "camera" },
+          { "fromNode": 45, "fromPort": "out", "toNode": 50, "toPort": "depth" },
+          { "fromNode": 50, "fromPort": "coverage", "toNode": 48, "toPort": "foam" }
         ]
       }
     },
@@ -283,7 +441,8 @@
             { "name": "waterThickness", "portType": "Texture2D" },
             { "name": "waterNormals", "portType": "Texture2D" },
             { "name": "waterMaterial", "portType": "Material" },
-            { "name": "cubeTransform", "portType": "Transform" }
+            { "name": "cubeTransform", "portType": "Transform" },
+            { "name": "waterFoam", "portType": "Texture2D" }
           ],
           "outputs": [
             { "name": "color", "portType": "Texture2D" },
@@ -514,7 +673,8 @@
           { "fromNode": 62, "fromPort": "out", "toNode": 110, "toPort": "water_camera" },
           { "fromNode": 110, "fromPort": "color", "toNode": 111, "toPort": "color" },
           { "fromNode": 62, "fromPort": "out", "toNode": 111, "toPort": "camera" },
-          { "fromNode": 72, "fromPort": "transform", "toNode": 111, "toPort": "colliderTarget" }
+          { "fromNode": 72, "fromPort": "transform", "toNode": 111, "toPort": "colliderTarget" },
+          { "fromNode": 61, "fromPort": "waterFoam", "toNode": 110, "toPort": "water_foam" }
         ]
       }
     },
@@ -530,6 +690,9 @@
     { "fromNode": 40, "fromPort": "normals", "toNode": 60, "toPort": "waterNormals" },
     { "fromNode": 40, "fromPort": "material", "toNode": 60, "toPort": "waterMaterial" },
     { "fromNode": 10, "fromPort": "collider", "toNode": 60, "toPort": "cubeTransform" },
-    { "fromNode": 60, "fromPort": "color", "toNode": 120, "toPort": "in" }
+    { "fromNode": 60, "fromPort": "color", "toNode": 120, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "reset", "toNode": 40, "toPort": "reset" },
+    { "fromNode": 10, "fromPort": "timeScale", "toNode": 40, "toPort": "timeScale" },
+    { "fromNode": 40, "fromPort": "foam", "toNode": 60, "toPort": "waterFoam" }
   ]
 }

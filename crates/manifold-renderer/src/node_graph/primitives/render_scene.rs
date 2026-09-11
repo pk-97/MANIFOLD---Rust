@@ -1834,6 +1834,7 @@ impl RenderScene {
         for (name, ty) in [
             ("water_depth", PortType::Texture2D),
             ("water_thickness", PortType::Texture2D),
+            ("water_foam", PortType::Texture2D),
             ("water_normals", PortType::Texture2D),
             ("water_material", PortType::Material),
             ("water_camera", PortType::Camera),
@@ -3837,9 +3838,10 @@ struct WaterPassUniforms {
     attenuation_color: [f32; 4],
     /// (width, height, 1/width, 1/height).
     screen_dims: [f32; 4],
+    foam_controls: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<WaterPassUniforms>() == 160);
+const _: () = assert!(std::mem::size_of::<WaterPassUniforms>() == 176);
 
 /// WATER_SIMULATION_DESIGN.md section 7: the V1 water material is a PBR
 /// dielectric — IOR from the field (authored 1.333), transmission 1,
@@ -4473,6 +4475,7 @@ impl EffectNode for RenderScene {
         // setting. ----
         let water_depth_in = ctx.inputs.texture_2d("water_depth");
         let water_thickness_in = ctx.inputs.texture_2d("water_thickness");
+        let water_foam_in = ctx.inputs.texture_2d("water_foam");
         let water_normals_in = ctx.inputs.texture_2d("water_normals");
         let water_material_in = ctx.inputs.material("water_material");
         let water_camera_in = ctx.inputs.camera("water_camera");
@@ -4485,7 +4488,11 @@ impl EffectNode for RenderScene {
         ];
         let water_wired_count = water_wired.iter().filter(|w| **w).count();
         let has_water = water_wired_count > 0;
-        let water_set_error: Option<String> = if water_wired_count == 0 {
+        let water_set_error: Option<String> = if water_foam_in.is_some() && water_wired_count == 0 {
+            Some("node.render_scene: water_foam requires the complete water input set".to_string())
+        } else if water_foam_in.is_some_and(|foam| water_depth_in.is_some_and(|depth| foam.width != depth.width || foam.height != depth.height)) {
+            Some("node.render_scene: water_foam dimensions must match water_depth".to_string())
+        } else if water_wired_count == 0 {
             None
         } else if water_wired_count < 5 {
             Some(format!(
@@ -7891,6 +7898,7 @@ impl EffectNode for RenderScene {
                     1.0,
                 ],
                 screen_dims: [width as f32, height as f32, 1.0 / width as f32, 1.0 / height as f32],
+                foam_controls: [if water_foam_in.is_some() { 1.0 } else { 0.0 }, 1.0, 0.0, 0.0],
             };
             let gpu = ctx.gpu_encoder();
             gpu.native_enc
@@ -7902,6 +7910,7 @@ impl EffectNode for RenderScene {
             }
             gpu.native_enc
                 .copy_texture_to_texture(opaque_depth_snapshot, water_pass_depth, width, height, 1);
+            let water_foam_tex = water_foam_in.unwrap_or(water_thickness_tex);
             let water_bindings = [
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Texture { binding: 1, texture: water_depth_tex },
@@ -7911,6 +7920,7 @@ impl EffectNode for RenderScene {
                 GpuBinding::Texture { binding: 5, texture: opaque_depth_snapshot },
                 GpuBinding::Texture { binding: 6, texture: prefiltered_specular },
                 GpuBinding::Sampler { binding: 7, sampler },
+                GpuBinding::Texture { binding: 8, texture: water_foam_tex },
             ];
             gpu.native_enc.draw_fullscreen_depth(
                 &water_pass_pipeline,
