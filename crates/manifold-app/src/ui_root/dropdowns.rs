@@ -198,7 +198,7 @@ impl UIRoot {
     /// - **This Project**: every `origin: Saved` embedded preset, always
     ///   listed; an `origin: Snapshot` embedded preset ONLY when its id
     ///   resolves nowhere in the registry (its library file is gone) —
-    ///   badged "missing from library" rather than "Project" so the browser
+    ///   marked "missing from library" rather than "Project" so the browser
     ///   reads as plumbing, not a real project preset.
     ///
     /// `tag_project_category` sets `category: Some("Project")` on the
@@ -207,12 +207,8 @@ impl UIRoot {
     /// items carry their registry category (e.g. the LED presets' `"LED"`)
     /// and the chip row renders in the generator browser too.
     ///
-    /// Badges (PRESET_BROWSER_AUDITION D10): only exceptional states carry
-    /// one — a legacy stem-override (a user file shadowing a stock preset
-    /// id, "overrides Factory" per PRESET_LIBRARY_DESIGN D4) and a Snapshot
-    /// whose library file is gone ("missing from library"). Ordinary-source
-    /// cells are badge-free; the source row already says where an item
-    /// lives.
+    /// Ordinary-source cells carry no exceptional marker; the source row
+    /// already says where an item lives.
     ///
     /// `invoking_layer_type` gates by the preset's `layer_types` metadata
     /// (D8/§3.4): `Some([Dmx])` presets (the LED-*) are offered only on DMX
@@ -235,14 +231,6 @@ impl UIRoot {
                     preset_allowed_on_layer_type(&reg.layer_types, invoking_layer_type)
                 })
                 .collect();
-        // Factory stems = registered ids with no user file. A user entry
-        // colliding with one is a legacy stem-override: it keeps resolving
-        // but the browser flags it (PRESET_LIBRARY_DESIGN D4).
-        let factory_ids: std::collections::HashSet<String> = preset_type_registry::all_of_kind(kind)
-            .iter()
-            .filter(|r| !lib.is_user_entry(kind, &r.id))
-            .map(|r| r.id.as_str().to_string())
-            .collect();
         let mut items: Vec<PickerItem> = available
             .iter()
             .map(|reg| {
@@ -275,13 +263,6 @@ impl UIRoot {
                         reg.category,
                         reg.id.as_str(),
                     )),
-                    badge: if is_user {
-                        factory_ids
-                            .contains(&id)
-                            .then(|| "overrides Factory".to_string())
-                    } else {
-                        None
-                    },
                     source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
                     thumbnail,
                 }
@@ -308,9 +289,6 @@ impl UIRoot {
                     if tag_project_category { Some("Project") } else { None },
                     &e.type_id,
                 )),
-                // Saved project presets are an ordinary state, not an
-                // exceptional one (D10) — no badge.
-                badge: None,
                 source: Some(Source::Project),
                 // This-Project entries never get a thumbnail (D7 only
                 // covers Save to Library + the factory bin) — text fallback.

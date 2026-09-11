@@ -473,7 +473,6 @@ fn browser_popup_demo() {
             type_id: n.to_lowercase(),
             category: Some("Stylize".to_string()),
             search_text: None,
-            badge: None,
             source: None,
             thumbnail: None,
         })
@@ -566,7 +565,6 @@ fn browser_popup_thumbnails_paint() {
             type_id: n.to_lowercase(),
             category: Some("Stylize".to_string()),
             search_text: None,
-            badge: Some("Factory".to_string()),
             source: None,
             thumbnail: Some(thumb_path.clone()),
         })
@@ -1547,7 +1545,6 @@ fn browser_popup_real_registry_p1_demo() {
                 type_id: reg.id.as_str().to_string(),
                 category: reg.category.map(|c| c.to_string()),
                 search_text: None,
-                badge: None,
                 source: Some(Source::Factory),
                 thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
                     kind,
@@ -1594,7 +1591,6 @@ fn browser_popup_real_registry_p1_demo() {
             type_id: reg.id.as_str().to_string(),
             category: reg.category.map(|c| c.to_string()),
             search_text: None,
-            badge: None,
             source: Some(Source::Factory),
             thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
                 PresetKind::Generator,
@@ -1707,7 +1703,6 @@ fn browser_popup_real_registry_p3_demo() {
                 type_id: reg.id.as_str().to_string(),
                 category: reg.category.map(|c| c.to_string()),
                 search_text: None,
-                badge: None,
                 source: Some(Source::Factory),
                 thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
                     kind,
@@ -1732,7 +1727,6 @@ fn browser_popup_real_registry_p3_demo() {
         type_id: reg.id.as_str().to_string(),
         category: reg.category.map(|c| c.to_string()),
         search_text: None,
-        badge: None,
         source: Some(Source::Factory),
         thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
             PresetKind::Generator,

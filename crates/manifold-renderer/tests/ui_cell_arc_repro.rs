@@ -1,9 +1,10 @@
 //! Cell-arc repro — headless pixel proof for the IMAGE_SHADER rounded-rect
-//! mask on atlas sub-rect uvs (browser audition cells).
+//! mask on atlas sub-rect uvs (clip-atlas / node-preview cells).
 //!
 //! The bug: `ui_renderer.rs` IMAGE_SHADER `fs_main` computes the rounded-rect
 //! SDF in atlas-uv space (`pixel = in.uv * vec2(rect_w, rect_h)`). For image
-//! nodes sampling a sub-rect uv (audition cells), `in.uv` spans only that
+//! nodes sampling a sub-rect uv (one cell of a clip or node-preview atlas),
+//! `in.uv` spans only that
 //! sub-range, so the SDF rounds the corner matching the cell's ATLAS slot
 //! (col 0 → top-left, col 15 → top-right, interior → no corner clips at
 //! all) instead of the drawn quad's corners. This test draws cells from
@@ -32,7 +33,7 @@ use manifold_ui::{Rect, UITree, ZTier};
 const W: u32 = 1024;
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
 
-// Synthetic audition-style atlas: 16 cols × 2 rows of 256×144 cells.
+// Synthetic clip-atlas: 16 cols × 2 rows of 256×144 cells.
 const COLS: u32 = 16;
 const ROWS: u32 = 2;
 const CELL_W: u32 = 256;
@@ -57,7 +58,7 @@ const CELLS: &[(u32, u32, f32, f32)] = &[
 ];
 const CANVAS_H: u32 = 242;
 
-/// Half-texel-inset uv sub-rect, exactly `audition/mod.rs::rebuild_uvs`.
+/// Half-texel-inset uv sub-rect (the inset the clip atlas uses).
 fn cell_uv(col: u32, row: u32) -> [f32; 4] {
     let gx = col as f32 * CELL_W as f32;
     let gy = row as f32 * CELL_H as f32;

@@ -17,8 +17,8 @@
 //! content and screen — width derives from the item count (clamped to the
 //! screen, capped at [`MAX_COLUMNS`] columns of 16:9 cells), height is
 //! content-sized under the screen as the ONLY cap, and the grid scrolls
-//! internally beyond that. Cell captions live in a real strip: label
-//! bottom-left, badge bottom-right, one baseline, named insets. Chips are
+//! internally beyond that. Cell captions live in a real strip: the label
+//! sits bottom-left on a named inset. Chips are
 //! measured with the tree's font metrics and wrap instead of overflowing.
 //! Keyboard nav moves in grid geometry with scroll reveal; the wheel only
 //! scrolls the grid when it's over the grid.
@@ -64,9 +64,8 @@ const SECTION_SPACING: f32 = 6.0;
 const PASTE_BUTTON_HEIGHT: f32 = 28.0;
 const CELL_RADIUS: f32 = 6.0;
 const ACCENT_BAR_W: f32 = 3.0;
-/// Caption strip + insets (F7/F8/F10): the strip backs the label and badge,
-/// both sit INSIDE it on one baseline, and the x-insets are named here —
-/// never space-padded prefixes.
+/// Caption strip + insets (F7/F8/F10): the strip backs the label, which sits
+/// INSIDE it on a named x-inset — never space-padded prefixes.
 const CAPTION_STRIP_H: f32 = 14.0;
 const CAPTION_PAD_X: f32 = 5.0;
 /// Height of the "No presets match" row when the filter empties the grid (F9).
