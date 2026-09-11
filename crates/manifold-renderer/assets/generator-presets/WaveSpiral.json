@@ -1,0 +1,670 @@
+{
+  "version": 2,
+  "name": "WaveSpiral",
+  "description": "A lit rising spiral of cubes whose beat phase displaces copies vertically through one reusable Wave Motion group.",
+  "presetMetadata": {
+    "id": "WaveSpiral",
+    "displayName": "Wave Spiral",
+    "category": "Geometry",
+    "oscPrefix": "wavespiral",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.7,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "rate",
+        "name": "Rate (cycles/beat)",
+        "min": 0.03125,
+        "max": 1.0,
+        "defaultValue": 0.125,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "frequency",
+        "name": "Frequency",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.4,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "phase",
+        "name": "Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "size",
+        "name": "Size",
+        "min": 0.25,
+        "max": 2.0,
+        "defaultValue": 0.7,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "camera_distance",
+        "name": "Camera Distance",
+        "min": 3.0,
+        "max": 24.0,
+        "defaultValue": 11.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "camera_tilt",
+        "name": "Camera Tilt",
+        "min": 0.1,
+        "max": 1.3,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.7,
+        "target": {
+          "kind": "node",
+          "nodeId": "wave_displace",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rate",
+        "label": "Rate (cycles/beat)",
+        "defaultValue": 0.125,
+        "target": {
+          "kind": "node",
+          "nodeId": "beat_phase",
+          "param": "rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "frequency",
+        "label": "Frequency",
+        "defaultValue": 0.4,
+        "target": {
+          "kind": "node",
+          "nodeId": "wave_field",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "phase",
+        "label": "Phase",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "phase_offset",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "size",
+        "label": "Size",
+        "defaultValue": 0.7,
+        "target": {
+          "kind": "node",
+          "nodeId": "arrange",
+          "param": "base_scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camera_distance",
+        "label": "Camera Distance",
+        "defaultValue": 11.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "camera",
+          "param": "distance"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camera_tilt",
+        "label": "Camera Tilt",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "camera",
+          "param": "tilt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": {
+          "type": "Float",
+          "value": 11.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.82
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.7
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "key_light",
+      "typeId": "node.light",
+      "handle": "key_light",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 3.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "cube_mesh",
+      "typeId": "node.cube_mesh",
+      "handle": "cube_mesh",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 36
+        },
+        "size": {
+          "type": "Float",
+          "value": 0.09
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "cube_material",
+      "typeId": "node.phong_material",
+      "handle": "cube_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.48
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.18
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.88
+        },
+        "specular_power": {
+          "type": "Float",
+          "value": 24.0
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "arrange",
+      "typeId": "node.arrange_copies",
+      "handle": "arrange",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 512
+        },
+        "active_count": {
+          "type": "Int",
+          "value": 512
+        },
+        "layout": {
+          "type": "Enum",
+          "value": 2
+        },
+        "seed": {
+          "type": "Int",
+          "value": 23
+        },
+        "extent_x": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "extent_y": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "extent_z": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "base_scale": {
+          "type": "Float",
+          "value": 0.7
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "beat_phase",
+      "typeId": "node.beat_ramp",
+      "handle": "beat_phase",
+      "params": {
+        "rate": {
+          "type": "Float",
+          "value": 0.125
+        },
+        "bars": {
+          "type": "Int",
+          "value": 0
+        },
+        "attack": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "phase_offset",
+      "typeId": "node.math",
+      "handle": "phase_offset",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "op": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "wave_motion",
+      "typeId": "group",
+      "handle": "Wave Motion",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "reference_instances",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "phase",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "nodeId": "wave_input",
+            "typeId": "system.group_input",
+            "handle": "input"
+          },
+          {
+            "id": 1,
+            "nodeId": "copy_positions",
+            "typeId": "node.copy_positions",
+            "handle": "copy_positions"
+          },
+          {
+            "id": 2,
+            "nodeId": "wave_field",
+            "typeId": "node.wave_field_3d",
+            "handle": "wave_field",
+            "params": {
+              "frequency": {
+                "type": "Float",
+                "value": 0.4
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "direction_x": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "direction_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "direction_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "wave_displace",
+            "typeId": "node.displace_copies",
+            "handle": "wave_displace",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.7
+              },
+              "direction_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "direction_y": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "direction_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "wave_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "reference_instances",
+            "toNode": 1,
+            "toPort": "instances"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "instances",
+            "toNode": 3,
+            "toPort": "instances"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "phase",
+            "toNode": 2,
+            "toPort": "phase"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "positions"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "instances",
+            "toNode": 4,
+            "toPort": "instances"
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "object",
+      "typeId": "node.scene_object",
+      "handle": "object"
+    },
+    {
+      "id": 11,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "objects": {
+          "type": "Int",
+          "value": 1
+        },
+        "lights": {
+          "type": "Int",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 12,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "beat",
+      "toNode": 7,
+      "toPort": "beat"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "instances",
+      "toNode": 9,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "instances",
+      "toNode": 9,
+      "toPort": "reference_instances"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "phase"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "vertices",
+      "toNode": 10,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "instances",
+      "toNode": 10,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "object",
+      "toNode": 11,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "envmap",
+      "toNode": 11,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "color",
+      "toNode": 12,
+      "toPort": "in"
+    }
+  ]
+}
