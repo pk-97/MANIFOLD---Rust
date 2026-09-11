@@ -422,7 +422,22 @@ impl Application {
                             }
                             self.input_handler.inspector_has_focus = in_inspector;
 
-                            if self.ws.ui_root.layout.is_near_split_handle(self.cursor_pos)
+                            if self.ws.ui_root.background_input_blocked() {
+                                // A modal is open: its full-screen scrim owns
+                                // every press, including one that lands on a
+                                // seam rect behind it. The per-branch D5 guard
+                                // (`overlay_contains_point`) only covers the
+                                // popup's container rect, not the scrim, so it
+                                // can't see this case — without this gate the
+                                // press starts a background resize drag through
+                                // the open popup. Route through normal dispatch
+                                // (the scrim captures / dismisses) instead.
+                                self.ws.ui_root.pointer_event(
+                                    self.cursor_pos,
+                                    PointerAction::Down,
+                                    self.time_since_start,
+                                );
+                            } else if self.ws.ui_root.layout.is_near_split_handle(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
                                 // D5 (`docs/DRAG_CAPTURE_DESIGN.md`): the seam
