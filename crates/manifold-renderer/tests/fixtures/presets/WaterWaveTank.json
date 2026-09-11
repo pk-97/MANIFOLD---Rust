@@ -159,139 +159,274 @@
       }
     },
     {
-      "id": 40,
-      "nodeId": "surface",
-      "typeId": "group",
-      "handle": "Surface",
-      "group": {
-        "interface": {
-          "inputs": [
-            {"name": "particles", "portType": "Array(WaterParticle)"},
-            {"name": "camera", "portType": "Camera"},
-            {"name": "collider", "portType": "Transform"},
-            {"name": "reset", "portType": "Scalar(F32)"},
-            {"name": "timeScale", "portType": "Scalar(F32)"}
-          ],
-          "outputs": [
-            {"name": "depth", "portType": "Texture2D"},
-            {"name": "thickness", "portType": "Texture2D"},
-            {"name": "normals", "portType": "Texture2D"},
-            {"name": "material", "portType": "Material"},
-            {"name": "foam", "portType": "Texture2D"}
-          ]
+  "id": 40,
+  "nodeId": "surface",
+  "typeId": "group",
+  "handle": "Surface",
+  "group": {
+    "interface": {
+      "inputs": [
+        {
+          "name": "particles",
+          "portType": "Array(WaterParticle)"
         },
-        "nodes": [
-          {
-            "id": 49,
-            "nodeId": "foamState",
-            "typeId": "node.water_foam",
-            "handle": "foam state",
-            "params": {"gain": {"type": "Float", "value": 12.0}, "half_life": {"type": "Float", "value": 0.75}}
-          },
-          {"id": 50, "nodeId": "foamRaster", "typeId": "node.particle_foam", "handle": "foam raster", "params": {"radius": {"type": "Float", "value": 0.046875}}},
-          {"id": 51, "nodeId": "surfaceBins", "typeId": "node.water_particle_bins", "handle": "surface neighbours", "params": {}},
-          {
-            "id": 52,
-            "nodeId": "surfaceFit",
-            "typeId": "node.water_surface_fit",
-            "handle": "fitted surface",
-            "params": {"radius": {"type": "Float", "value": 0.0234375}, "center_blend": {"type": "Float", "value": 0.35}}
-          },
-          {"id": 41, "nodeId": "surface_in", "typeId": "system.group_input", "handle": "input"},
-          {
-            "id": 42,
-            "nodeId": "splat",
-            "typeId": "node.particle_surface_depth",
-            "handle": "surface depth",
-            "params": {
-              "cube_half_x": {"type": "Float", "value": 0.12},
-              "cube_half_y": {"type": "Float", "value": 0.35},
-              "cube_half_z": {"type": "Float", "value": 0.3}
-            }
-          },
-          {"id": 43, "nodeId": "thick", "typeId": "node.particle_thickness", "handle": "thickness", "params": {}},
-          {
-            "id": 44,
-            "nodeId": "blurH",
-            "typeId": "node.bilateral_blur",
-            "handle": "smooth H",
-            "params": {
-              "axis": {"type": "Enum", "value": 0},
-              "depth_sigma": {"type": "Float", "value": 0.035},
-              "spatial_step": {"type": "Float", "value": 1.0},
-              "value_space": {"type": "Enum", "value": 1}
-            }
-          },
-          {
-            "id": 45,
-            "nodeId": "blurV",
-            "typeId": "node.bilateral_blur",
-            "handle": "smooth V",
-            "params": {
-              "axis": {"type": "Enum", "value": 1},
-              "depth_sigma": {"type": "Float", "value": 0.035},
-              "spatial_step": {"type": "Float", "value": 1.0},
-              "value_space": {"type": "Enum", "value": 1}
-            }
-          },
-          {"id": 46, "nodeId": "normals", "typeId": "node.normals_from_depth", "handle": "normals", "params": {}},
-          {
-            "id": 47,
-            "nodeId": "waterMat",
-            "typeId": "node.pbr_material",
-            "handle": "water material",
-            "params": {
-              "transmission": {"type": "Float", "value": 1.0},
-              "ior": {"type": "Float", "value": 1.333},
-              "metallic": {"type": "Float", "value": 0.0},
-              "roughness": {"type": "Float", "value": 0.04},
-              "volume_attenuation_distance": {"type": "Float", "value": 0.375},
-              "volume_attenuation_color_r": {"type": "Float", "value": 0.25},
-              "volume_attenuation_color_g": {"type": "Float", "value": 0.65},
-              "volume_attenuation_color_b": {"type": "Float", "value": 0.9}
-            }
-          },
-          {"id": 48, "nodeId": "surface_out", "typeId": "system.group_output", "handle": "output"}
-        ],
-        "wires": [
-          {"fromNode": 41, "fromPort": "particles", "toNode": 42, "toPort": "particles"},
-          {"fromNode": 41, "fromPort": "camera", "toNode": 42, "toPort": "camera"},
-          {"fromNode": 41, "fromPort": "collider", "toNode": 42, "toPort": "collider"},
-          {"fromNode": 41, "fromPort": "particles", "toNode": 43, "toPort": "particles"},
-          {"fromNode": 41, "fromPort": "camera", "toNode": 43, "toPort": "camera"},
-          {"fromNode": 42, "fromPort": "depth", "toNode": 44, "toPort": "in"},
-          {"fromNode": 42, "fromPort": "depth", "toNode": 44, "toPort": "depth"},
-          {"fromNode": 42, "fromPort": "coverage", "toNode": 44, "toPort": "coverage"},
-          {"fromNode": 41, "fromPort": "camera", "toNode": 44, "toPort": "camera"},
-          {"fromNode": 44, "fromPort": "out", "toNode": 45, "toPort": "in"},
-          {"fromNode": 42, "fromPort": "depth", "toNode": 45, "toPort": "depth"},
-          {"fromNode": 42, "fromPort": "coverage", "toNode": 45, "toPort": "coverage"},
-          {"fromNode": 41, "fromPort": "camera", "toNode": 45, "toPort": "camera"},
-          {"fromNode": 45, "fromPort": "out", "toNode": 46, "toPort": "depth"},
-          {"fromNode": 42, "fromPort": "coverage", "toNode": 46, "toPort": "coverage"},
-          {"fromNode": 41, "fromPort": "camera", "toNode": 46, "toPort": "camera"},
-          {"fromNode": 45, "fromPort": "out", "toNode": 48, "toPort": "depth"},
-          {"fromNode": 43, "fromPort": "thickness", "toNode": 48, "toPort": "thickness"},
-          {"fromNode": 46, "fromPort": "normals", "toNode": 48, "toPort": "normals"},
-          {"fromNode": 47, "fromPort": "out", "toNode": 48, "toPort": "material"},
-          {"fromNode": 41, "fromPort": "particles", "toNode": 49, "toPort": "particles"},
-          {"fromNode": 41, "fromPort": "reset", "toNode": 49, "toPort": "reset_trigger"},
-          {"fromNode": 41, "fromPort": "timeScale", "toNode": 49, "toPort": "time_scale"},
-          {"fromNode": 41, "fromPort": "particles", "toNode": 50, "toPort": "particles"},
-          {"fromNode": 49, "fromPort": "foam", "toNode": 50, "toPort": "foam"},
-          {"fromNode": 41, "fromPort": "camera", "toNode": 50, "toPort": "camera"},
-          {"fromNode": 45, "fromPort": "out", "toNode": 50, "toPort": "depth"},
-          {"fromNode": 50, "fromPort": "coverage", "toNode": 48, "toPort": "foam"},
-          {"fromNode": 41, "fromPort": "particles", "toNode": 51, "toPort": "particles"},
-          {"fromNode": 41, "fromPort": "particles", "toNode": 52, "toPort": "particles"},
-          {"fromNode": 51, "fromPort": "heads", "toNode": 52, "toPort": "heads"},
-          {"fromNode": 51, "fromPort": "next", "toNode": 52, "toPort": "next"},
-          {"fromNode": 52, "fromPort": "shapes", "toNode": 42, "toPort": "shapes"},
-          {"fromNode": 52, "fromPort": "shapes", "toNode": 43, "toPort": "shapes"},
-          {"fromNode": 52, "fromPort": "shapes", "toNode": 50, "toPort": "shapes"}
-        ]
-      }
+        {
+          "name": "camera",
+          "portType": "Camera"
+        },
+        {
+          "name": "collider",
+          "portType": "Transform"
+        },
+        {
+          "name": "reset",
+          "portType": "Scalar(F32)"
+        },
+        {
+          "name": "timeScale",
+          "portType": "Scalar(F32)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "depth",
+          "portType": "Texture2D"
+        },
+        {
+          "name": "thickness",
+          "portType": "Texture2D"
+        },
+        {
+          "name": "normals",
+          "portType": "Texture2D"
+        },
+        {
+          "name": "material",
+          "portType": "Material"
+        },
+        {
+          "name": "foam",
+          "portType": "Texture2D"
+        }
+      ]
     },
+    "nodes": [
+      {
+        "id": 49,
+        "nodeId": "foamState",
+        "typeId": "node.water_foam",
+        "handle": "foam state",
+        "params": {
+          "gain": {
+            "type": "Float",
+            "value": 12.0
+          },
+          "half_life": {
+            "type": "Float",
+            "value": 0.75
+          }
+        }
+      },
+      {
+        "id": 51,
+        "nodeId": "surfaceBins",
+        "typeId": "node.water_particle_bins",
+        "handle": "surface neighbours",
+        "params": {}
+      },
+      {
+        "id": 52,
+        "nodeId": "densityField",
+        "typeId": "node.water_density_field",
+        "handle": "water density",
+        "params": {
+          "vol_res": {
+            "type": "Float",
+            "value": 128.0
+          },
+          "vol_depth": {
+            "type": "Float",
+            "value": 128.0
+          },
+          "radius": {
+            "type": "Float",
+            "value": 0.1
+          }
+        }
+      },
+      {
+        "id": 41,
+        "nodeId": "surface_in",
+        "typeId": "system.group_input",
+        "handle": "input"
+      },
+      {
+        "id": 42,
+        "nodeId": "isosurface",
+        "typeId": "node.volume_isosurface",
+        "handle": "water isosurface",
+        "params": {
+          "cube_half_x": {
+            "type": "Float",
+            "value": 0.12
+          },
+          "cube_half_y": {
+            "type": "Float",
+            "value": 0.35
+          },
+          "cube_half_z": {
+            "type": "Float",
+            "value": 0.3
+          }
+        }
+      },
+      {
+        "id": 47,
+        "nodeId": "waterMat",
+        "typeId": "node.pbr_material",
+        "handle": "water material",
+        "params": {
+          "transmission": {
+            "type": "Float",
+            "value": 1.0
+          },
+          "ior": {
+            "type": "Float",
+            "value": 1.333
+          },
+          "metallic": {
+            "type": "Float",
+            "value": 0.0
+          },
+          "roughness": {
+            "type": "Float",
+            "value": 0.04
+          },
+          "volume_attenuation_distance": {
+            "type": "Float",
+            "value": 0.375
+          },
+          "volume_attenuation_color_r": {
+            "type": "Float",
+            "value": 0.25
+          },
+          "volume_attenuation_color_g": {
+            "type": "Float",
+            "value": 0.65
+          },
+          "volume_attenuation_color_b": {
+            "type": "Float",
+            "value": 0.9
+          }
+        }
+      },
+      {
+        "id": 48,
+        "nodeId": "surface_out",
+        "typeId": "system.group_output",
+        "handle": "output"
+      }
+    ],
+    "wires": [
+      {
+        "fromNode": 47,
+        "fromPort": "out",
+        "toNode": 48,
+        "toPort": "material"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "particles",
+        "toNode": 49,
+        "toPort": "particles"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "reset",
+        "toNode": 49,
+        "toPort": "reset_trigger"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "timeScale",
+        "toNode": 49,
+        "toPort": "time_scale"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "particles",
+        "toNode": 51,
+        "toPort": "particles"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "particles",
+        "toNode": 52,
+        "toPort": "particles"
+      },
+      {
+        "fromNode": 51,
+        "fromPort": "heads",
+        "toNode": 52,
+        "toPort": "heads"
+      },
+      {
+        "fromNode": 51,
+        "fromPort": "next",
+        "toNode": 52,
+        "toPort": "next"
+      },
+      {
+        "fromNode": 49,
+        "fromPort": "foam",
+        "toNode": 52,
+        "toPort": "foam"
+      },
+      {
+        "fromNode": 52,
+        "fromPort": "density",
+        "toNode": 42,
+        "toPort": "density"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "camera",
+        "toNode": 42,
+        "toPort": "camera"
+      },
+      {
+        "fromNode": 41,
+        "fromPort": "collider",
+        "toNode": 42,
+        "toPort": "collider"
+      },
+      {
+        "fromNode": 42,
+        "fromPort": "depth",
+        "toNode": 48,
+        "toPort": "depth"
+      },
+      {
+        "fromNode": 42,
+        "fromPort": "thickness",
+        "toNode": 48,
+        "toPort": "thickness"
+      },
+      {
+        "fromNode": 42,
+        "fromPort": "normals",
+        "toNode": 48,
+        "toPort": "normals"
+      },
+      {
+        "fromNode": 42,
+        "fromPort": "foam",
+        "toNode": 48,
+        "toPort": "foam"
+      }
+    ]
+  }
+},
     {
       "id": 60,
       "nodeId": "scene",

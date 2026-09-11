@@ -37,14 +37,13 @@ use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::render_target::RenderTarget;
 
-const DT: f32 = 1.0 / 60.0;
-
 struct Args {
     preset: String,
     preset_file: Option<PathBuf>,
     width: u32,
     height: u32,
     frames: u32,
+    fps: f32,
     out: PathBuf,
     overrides: Vec<(String, f32)>,
     /// Fire a clip trigger every N frames (0 = never) — trigger_count
@@ -71,13 +70,14 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
-    let preset = argv.next().ok_or("usage: render-generator-preset <PresetId> [--size WxH] [--frames N] [--out PATH] [--param id=value ...]")?;
+    let preset = argv.next().ok_or("usage: render-generator-preset <PresetId> [--size WxH] [--frames N] [--fps N] [--out PATH] [--param id=value ...]")?;
     let mut args = Args {
         preset,
         preset_file: None,
         width: 1280,
         height: 720,
         frames: 90,
+        fps: 60.0,
         out: PathBuf::from("/tmp/preset-render.png"),
         overrides: Vec::new(),
         trigger_every: 0,
@@ -103,6 +103,12 @@ fn parse_args() -> Result<Args, String> {
             "--preset-file" => args.preset_file = Some(PathBuf::from(value)),
             "--frames" => {
                 args.frames = value.parse().map_err(|e| format!("bad frames: {e}"))?;
+            }
+            "--fps" => {
+                args.fps = value.parse().map_err(|e| format!("bad fps: {e}"))?;
+                if !args.fps.is_finite() || !(1.0..=240.0).contains(&args.fps) {
+                    return Err("--fps must be finite and between 1 and 240".into());
+                }
             }
             "--out" => args.out = PathBuf::from(value),
             "--triggers" => {
@@ -231,7 +237,7 @@ fn load_schedule(
 }
 
 /// The S3 clock contract: one frame through the production PresetRuntime
-/// render path with an explicit advancing SimulationFrame (fixed 60 Hz,
+/// render path with an explicit advancing SimulationFrame (requested fixed frame rate,
 /// epoch 0) — shared verbatim by the single-shot convergence loop and
 /// sequence mode, so both exercise the same code the live path runs.
 fn render_frame(
@@ -244,12 +250,13 @@ fn render_frame(
     width: u32,
     height: u32,
     trigger_every: u32,
+    dt: f32,
 ) {
-    let time = frame as f64 * DT as f64;
+    let time = frame as f64 * dt as f64;
     let ctx = PresetContext {
         time,
         beat: time * 2.0, // 120 bpm
-        dt: DT,
+        dt,
         width,
         height,
         output_width: width,
@@ -270,15 +277,15 @@ fn render_frame(
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         // WATER_SIMULATION_DESIGN section 6 warmup parity: this headless
         // context has no host transport, so it installs an explicit
-        // advancing frame (fixed 60 Hz, epoch 0) — a graph with substep
+        // advancing frame (requested fixed frame rate, epoch 0) — a graph with substep
         // regions never runs without a SimulationFrame.
         runtime.set_simulation_frame(
             manifold_renderer::node_graph::substeps::SimulationFrame {
                 frame_id: frame as u64 + 1,
-                delta: Seconds(1.0 / 60.0),
+                delta: Seconds(f64::from(dt)),
                 epoch: 0,
                 advancing: true,
-                exporting: false,
+                exporting: true,
             },
         );
         runtime.render(&mut gpu, &target.texture, &ctx, manifest);
@@ -421,6 +428,7 @@ fn main() {
                 args.width,
                 args.height,
                 args.trigger_every,
+                1.0 / args.fps,
             );
             if args.timing_output.is_some() && frame >= 60 {
                 timing_samples.push(render_start.elapsed().as_secs_f64() * 1000.0);
@@ -441,7 +449,7 @@ fn main() {
                     captured.push((frame, image));
                     mapping.push(serde_json::json!({
                         "frame": frame,
-                        "timeSeconds": frame as f64 * DT as f64,
+                        "timeSeconds": frame as f64 / args.fps as f64,
                         "path": path.display().to_string(),
                     }));
                 }
@@ -480,6 +488,7 @@ fn main() {
                 "width": args.width,
                 "height": args.height,
                 "totalFrames": args.frames,
+                "fps": args.fps,
                 "sampleFrames": format!("60..{}", args.frames - 1),
                 "samples": timing_samples,
                 "medianMs": percentile(50),
@@ -515,6 +524,7 @@ fn main() {
                 args.width,
                 args.height,
                 args.trigger_every,
+                1.0 / args.fps,
             );
 
             // Convergence tracking only kicks in once the requested warm-up has

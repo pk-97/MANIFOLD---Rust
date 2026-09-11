@@ -32,18 +32,12 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     if P::OUTPUTS.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         return generate_standalone_buffer(&spec, P::ATOMIC_OUTPUTS);
     }
-    // BUFFER→TEXTURE resolve: an Array input with NO texture input, feeding a
-    // texture output — the accumulator-to-density bridge
-    // (`generate_standalone_resolve`'s contract: exactly one atomic-integer
-    // accumulator in, no texture reads at all). D3 (BUG-114) adds a SECOND,
-    // distinct Array-input shape — a texture-domain atom that ALSO reads ≥1
-    // texture input and tags its Array input `BufferIndex` (the `draw_*`
-    // family) — which is NOT the resolve bridge and must fall through to
-    // `generate_standalone` below (the codegen path that now handles
-    // `BufferIndex`). Gated on "no texture input" so this branch's scope
-    // stays exactly what it always was for every existing resolve atom.
+    // Atomic accumulator resolves have no texture reads or BufferIndex access.
+    // Explicit BufferIndex sources (including 3D density gathering) use the
+    // general texture-domain emitter even when they have no texture inputs.
     if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_)))
         && !P::INPUTS.iter().any(is_texture_input)
+        && !P::INPUT_ACCESS.contains(&crate::node_graph::freeze::classify::InputAccess::BufferIndex)
     {
         return generate_standalone_resolve(body, P::INPUTS, P::PARAMS, P::OUTPUTS);
     }
@@ -183,7 +177,10 @@ pub fn standalone_for_node(
     if node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         return generate_standalone_buffer(&spec, node.atomic_outputs());
     }
-    if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_))) {
+    if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_)))
+        && !node.inputs().iter().any(is_texture_input)
+        && !node.input_access().contains(&crate::node_graph::freeze::classify::InputAccess::BufferIndex)
+    {
         return generate_standalone_resolve(body, node.inputs(), node.parameters(), node.outputs());
     }
     // Fusion-exempt (Boundary) texture atoms still get their standalone kernel

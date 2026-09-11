@@ -279,6 +279,9 @@ scene rigid-body integration, new audio-event infrastructure.
 
 ### S6 — Surface reconstruction (Luna, independent of S4 after layout)
 
+The original splat deliverables below are superseded by the density-field and
+isosurface contract in WATER_SIMULATION_DESIGN.md section 7.
+
 **Entry/read-back:** S1 layout, design section 7; Camera/depth helpers, BilateralBlur
 and its tests. Synthetic particle slab/sphere fixtures avoid dependence on solver tuning.
 

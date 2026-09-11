@@ -400,40 +400,47 @@ the existing exposed scalar/reset-trigger surface.
 
 ## 7. Surface and scene integration
 
-Surface graph, evaluated once after all substeps:
+Surface graph, evaluated once after all substeps (2026-09-11 replacement):
 
 ```text
-water_state final state ──► particle_surface_depth ──► bilateral H/V ──► surface normals
-                       └─► particle_thickness ─────────────────────────────┐
-shared Camera ─────────────► both raster nodes and render_scene            │
-opaque scene objects + lights + environment + water material ──► render_scene ─► post
+water_state final particles ──► water_particle_bins ──┐
+                           └─► water_foam ──────────┤
+particles + bins + foam ──► water_density_field ──► volume_isosurface
+shared Camera + accepted collider ────────────────► volume_isosurface
+isosurface depth + thickness + normals + foam ──► render_scene ──► post
 ```
 
-`node.particle_surface_depth`: `particles: Channels<WaterParticle>`, `camera: Camera`,
-`radius: ScalarF32`; outputs `depth: Texture2D` R32Float clip depth, empty=1,
-and `coverage: Texture2D` R8Unorm (0 empty, 1 occupied). Sphere-impostor rasterisation
-with depth testing, not additive point energy. Radius default 0.75*h. Perspective
-camera only; reject near-plane intersection/underwater view in V1 with an explicit
-diagnostic rather than constructing invalid depths.
+`node.water_density_field` reconstructs a normalized compact poly6 density field
+from particle mass/rest-density, with weighted persistent foam in G. The field
+occupies [-2,0,-2] to [2,4,2], independently of the 64³ physics grid. Initial
+resolution is 128³ and support radius 0.10 m. The mass normalization preserves
+bulk density when particle sampling changes. Its voxel gather uses the existing
+32³ linked bins; storage must cover every particle and each traversal is bounded.
+The generated Source shader writes Rgba16Float once per frame; this field is not
+feedback state. `vol_res` and `vol_depth` are graph-build allocation settings.
 
-`node.particle_thickness`: same inputs; `thickness: Texture2D` R16Float, additive
-sphere chord lengths in metres, empty=0. This is an approximate optical thickness,
-not an exact volume integral. Render colour is still HDR Rgba16Float. Full canvas
-resolution is the initial correctness setting; a measured quality change can add
-half-resolution depth-aware upsampling later, not silently at first implementation.
+`node.volume_isosurface` raycasts the 0.5 level set with trilinear sampling and
+refined crossings, deriving outward gradient normals and optical thickness in
+metres from the sum of liquid intervals. Air gaps and the exact collider interval
+are excluded. The five outputs are full-canvas Rgba32Float: raw clip depth
+(empty=1), thickness (empty=0), +z-forward view normals, coverage and foam.
+The existing scene water pass consumes them without a depth-blur or particle-splat
+stage. The translating box uses the same half-extents as grid/particle collision.
+Ray marching supports parallel slab axes and a ray beginning inside the volume;
+this does not imply a complete underwater camera shading model.
 
-Extend `BilateralBlur` with optional `coverage: Texture2D`: unwired is byte-identical
-existing behaviour; wired excludes uncovered neighbour taps and preserves empty centre
-pixels. H/V smoothing uses raw depth as guide and linear-eye-depth as the averaged
-quantity (add explicit `value_space` enum RawColour/default vs ClipDepth); convert
-back through the shared projection convention inside BilateralBlur. Add optional
-`camera: Camera`, required in ClipDepth mode; use its projection/inverse projection
-at the current aspect for both conversions. RawColour does not consume it.
-Use fp32 depth outputs. No f16 depth
-feedback. `node.normals_from_depth` reconstructs view-space positions with Camera,
-chooses covered neighbours with smallest depth discontinuity, outputs view normals
-Rgba16Float with coverage in alpha. Audit the existing normal reconstruction helpers
-and share them; do not use heightmap normals as perspective water normals.
+Both new operations use graph-compiler shader generation. The raycast remains an
+explicit fusion boundary because the derived-uniform registry cannot currently
+recompute Transform inputs; it still runs normally in compiled/frozen graphs.
+Existing splat primitives remain readable for serialized graph compatibility;
+the bundled water graphs use the density-field path exclusively.
+
+The target is 1920×1080 at 30 FPS (33.33 ms per complete frame), including 32
+physics substeps at the current 960 Hz. Headless timings include encode, submission
+and GPU completion, but exclude PNG work and do not establish native-app FPS.
+Lower reconstruction resolution and higher offline detail are quality settings,
+not permission to silently drop physics time. Surface validation and numerical
+solver acceptance remain separate; a smooth render cannot close BUG-01vr.
 
 Add OPTIONAL `render_scene` inputs:
 

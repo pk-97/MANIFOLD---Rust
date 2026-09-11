@@ -967,5 +967,7 @@ mod tests {
 
 mod water_particle_bins;
 mod water_surface_fit;
+pub mod water_density_field;
+pub mod volume_isosurface;
 pub use water_particle_bins::{WaterParticleBins, prewarm_pipeline as prewarm_water_particle_bins};
 pub use water_surface_fit::{WaterSurfaceFit, prewarm_pipeline as prewarm_water_surface_fit, shader_source as water_surface_fit_shader};
