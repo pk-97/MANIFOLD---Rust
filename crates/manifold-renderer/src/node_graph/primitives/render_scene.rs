@@ -128,7 +128,11 @@ const MSAA_SAMPLES: u32 = 4;
 /// WATER_SIMULATION_DESIGN.md section 7 (S7): fullscreen water surface
 /// shading pass (Fresnel/IBL/IOR refraction/Beer-Lambert), drawn after the
 /// opaque scene resolves.
-const WATER_PASS_WGSL: &str = include_str!("shaders/water_surface_pass.wgsl");
+const WATER_PASS_WGSL: &str = concat!(
+    include_str!("shaders/pbr_brdf.wgsl"),
+    "\n",
+    include_str!("shaders/water_surface_pass.wgsl"),
+);
 
 /// S6 slab-proof chord factor: sphere-splat additive thickness overshoots
 /// true volume ~10.9x at the default 0.75h radius on an h/2 lattice, so

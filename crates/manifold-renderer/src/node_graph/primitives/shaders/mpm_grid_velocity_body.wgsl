@@ -1,9 +1,8 @@
 // node.mpm_grid_velocity — fusable BUFFER body. Resolves the fixed-point
 // accumulation wire into grid velocities: v_i = dequantise(momentum) /
 // dequantise(mass) + gravity * step_dt for nonempty cells, zero for empty
-// cells, then static-basin and optional translating-collider no-penetration
-// projections — free-slip: only the inward normal component at a solid
-// boundary node is removed, tangential flow is untouched. Output w carries
+// cells, then stationary-basin no-slip and optional translating-collider
+// no-penetration projections. Output w carries
 // the dequantised cell mass for diagnostics.
 //
 // ABI (buffer standalone codegen): the accumulator input is BufferGather —
@@ -48,8 +47,8 @@ fn body(
         v = momentum / mass + gravity * step_dt;
     }
 
-    // Static basin: node positions at or outside a basin face may not move
-    // into the wall. Each face clamps only its own normal component.
+    // Stationary basin: nodes at or outside any basin face are solid and have
+    // zero velocity (no-slip). Interior nodes remain unaffected.
     let n = WATER_GRID_N;
     let node = vec3<f32>(
         f32(idx % n),
@@ -97,23 +96,10 @@ fn body(
         }
     }
 
-    if (pos.x <= basin_min_x) {
-        v.x = max(v.x, 0.0);
-    }
-    if (pos.x >= basin_max_x) {
-        v.x = min(v.x, 0.0);
-    }
-    if (pos.y <= basin_min_y) {
-        v.y = max(v.y, 0.0);
-    }
-    if (pos.y >= basin_max_y) {
-        v.y = min(v.y, 0.0);
-    }
-    if (pos.z <= basin_min_z) {
-        v.z = max(v.z, 0.0);
-    }
-    if (pos.z >= basin_max_z) {
-        v.z = min(v.z, 0.0);
+    if (pos.x <= basin_min_x || pos.x >= basin_max_x ||
+        pos.y <= basin_min_y || pos.y >= basin_max_y ||
+        pos.z <= basin_min_z || pos.z >= basin_max_z) {
+        v = vec3<f32>(0.0);
     }
 
     return vec4<f32>(v, mass);

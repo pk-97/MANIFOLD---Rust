@@ -12,7 +12,7 @@
 //     shadow maps yet), and
 //   - transmission: the opaque-scene colour snapshot refracted by IOR with
 //     Beer-Lambert attenuation exp(-sigma_a * thickness_eff).
-// thickness_eff shortens the splat thickness to the first opaque hit; a
+// thickness_eff shortens the reconstructed thickness to the first opaque hit; a
 // displaced sample that would pull a foreground opaque object through the
 // water is rejected (offset clamped to zero). Uncovered pixels discard.
 
@@ -30,7 +30,7 @@ struct WaterUniforms {
     ior: f32,
     roughness: f32,
     attenuation_distance: f32,
-    thickness_scale: f32, // splat-thickness → metres calibration (S6 chord factor)
+    thickness_scale: f32, // optical thickness multiplier (density isosurface uses metres)
     attenuation_color: vec4<f32>,
     screen_dims: vec4<f32>, // w, h, 1/w, 1/h
     foam_controls: vec4<f32>, // x = foam enabled
@@ -78,6 +78,21 @@ struct FsOut {
     @builtin(frag_depth) depth: f32,
 }
 
+fn ggx_ndf(ndoth: f32, alpha: f32) -> f32 {
+    let a2 = alpha * alpha;
+    let ndoth2 = ndoth * ndoth;
+    // Avoid cancellation at the sharp, head-on highlight.
+    let denom = (1.0 - ndoth2) + ndoth2 * a2;
+    return a2 / (3.14159265 * denom * denom);
+}
+
+fn ggx_correlated_visibility(ndotv: f32, ndotl: f32, alpha: f32) -> f32 {
+    let a2 = alpha * alpha;
+    let view_term = ndotl * sqrt(ndotv * ndotv * (1.0 - a2) + a2);
+    let light_term = ndotv * sqrt(ndotl * ndotl * (1.0 - a2) + a2);
+    return 0.5 / max(view_term + light_term, 1e-6);
+}
+
 @fragment
 fn fs_water(in: VsOut) -> FsOut {
     var out: FsOut;
@@ -115,7 +130,7 @@ fn fs_water(in: VsOut) -> FsOut {
     let v = normalize(-(u.inv_view * vec4<f32>(view_pos, 0.0)).xyz);
 
     // Shorten the optical thickness to the first opaque hit behind the water.
-    let splat_thickness = textureLoad(water_thickness, coord, 0).r * u.thickness_scale;
+    let surface_thickness = textureLoad(water_thickness, coord, 0).r * u.thickness_scale;
     let opaque_raw = textureLoad(opaque_depth, coord, 0);
     let opaque_vz = view_z_of(opaque_raw);
     let water_vz = view_z_of(raw);
@@ -124,7 +139,7 @@ fn fs_water(in: VsOut) -> FsOut {
     let view_ray_z = max(abs(normalize(view_pos).z), 1e-4);
     let axial_gap = max(opaque_vz - water_vz, 0.0);
     let opaque_ray_length = axial_gap / view_ray_z;
-    let thickness_eff = clamp(min(splat_thickness, opaque_ray_length), 0.0, 1e3);
+    let thickness_eff = clamp(min(surface_thickness, opaque_ray_length), 0.0, 1e3);
 
     // Refraction: displace the opaque-scene sample along the refracted dir,
     // scaled by the effective thickness. Reject a displacement that lands
@@ -164,7 +179,8 @@ fn fs_water(in: VsOut) -> FsOut {
     // same convention as the scene env sampling).
     let r = reflect(-v, n);
     let max_lod = 4.0;
-    let env_uv = vec2<f32>(atan2(r.z, r.x) * 0.15915494 + 0.5, acos(clamp(r.y, -1.0, 1.0)) * 0.31830988);
+    // Match the scene baker: +Y is the top of the environment (v = 1).
+    let env_uv = pbr_equirect_uv(r);
     let env = textureSampleLevel(prefiltered_specular, env_sampler, env_uv, spec_roughness * max_lod).rgb;
 
     let ndotv = clamp(dot(n, v), 0.0, 1.0);
@@ -172,24 +188,25 @@ fn fs_water(in: VsOut) -> FsOut {
     let f0 = f0v * f0v;
     let fres = f0 + (1.0 - f0) * pow(1.0 - ndotv, 5.0);
 
-    // Direct Sun: one specular lobe (Blinn-Phong mapped from roughness) —
-    // water's base colour is the attenuated scene, not a Lambert term.
+    // Direct Sun: dielectric GGX specular lobe. Water's base colour is the
+    // attenuated scene, not a Lambert term.
     // No shadow lookup in V1 (named follow-up).
     var sun = vec3<f32>(0.0);
     if u.sun_dir.w > 0.5 {
         let l = normalize(u.sun_dir.xyz);
-        let h = normalize(l + v);
-        let ndoth = max(dot(n, h), 0.0);
-        let base_shininess = clamp(2.0 / max(u.roughness * u.roughness, 1e-3) - 2.0, 2.0, 1024.0);
-        let filtered_shininess = clamp(2.0 / max(spec_roughness * spec_roughness, 1e-3) - 2.0, 2.0, 1024.0);
-        // Normalize the existing fixed-peak Blinn approximation when filtering
-        // broadens it, preserving its hemispherical integral. Flat normals keep
-        // an exact scale of one; this is not a complete physical BRDF.
-        var lobe_scale = 1.0;
-        if (normal_variation > 0.0) {
-            lobe_scale = (filtered_shininess + 1.0) / (base_shininess + 1.0);
+        let ndotl = clamp(dot(n, l), 0.0, 1.0);
+        let h_sum = l + v;
+        let h_len_sq = dot(h_sum, h_sum);
+        if (ndotl > 0.0 && ndotv > 0.0 && h_len_sq > 1e-12) {
+            let h = h_sum / sqrt(h_len_sq);
+            let ndoth = clamp(dot(n, h), 0.0, 1.0);
+            let vdoth = clamp(dot(v, h), 0.0, 1.0);
+            let alpha = clamp(spec_roughness * spec_roughness, 1e-3, 1.0);
+            let d = ggx_ndf(ndoth, alpha);
+            let g = ggx_correlated_visibility(ndotv, ndotl, alpha);
+            let direct_fres = f0 + (1.0 - f0) * pow(1.0 - vdoth, 5.0);
+            sun = u.sun_color.rgb * (d * g * direct_fres * ndotl);
         }
-        sun = u.sun_color.rgb * lobe_scale * pow(ndoth, filtered_shininess) * max(dot(n, l), 0.0);
     }
 
     var col = mix(transmitted, env, fres) + sun;

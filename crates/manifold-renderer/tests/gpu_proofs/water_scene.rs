@@ -21,8 +21,9 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
+use bytemuck::{Pod, Zeroable};
 use half::f16;
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureFormat};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::camera::{Camera, CameraMode, delinearize_depth};
 use manifold_renderer::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -601,6 +602,64 @@ fn render_graph(
         other => panic!("unsupported proof target format {other:?}"),
     });
     Rendered { color, depth, w, h }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct WaterGgxInput {
+    roughness: f32,
+    ndotv: f32,
+    ndotl: f32,
+    ndoth: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct WaterGgxOutput {
+    ndf: f32,
+    visibility: f32,
+    env_uv: [f32; 2],
+}
+
+#[test]
+fn water_ggx_native_reference() {
+    let device = GpuDevice::new();
+    let source = include_str!("../../src/node_graph/primitives/shaders/water_surface_pass.wgsl");
+    let helpers = &source[source.find("fn ggx_ndf").expect("ggx_ndf")..source.find("@fragment").expect("fragment")];
+    let pbr = include_str!("../../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
+    let shader = format!(
+        "{pbr}\n{helpers}\n@group(0) @binding(0) var<storage, read> input: array<vec4<f32>>;\n@group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;\n@compute @workgroup_size(1) fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{ let x = input[id.x]; let a = clamp(x.x * x.x, 1e-3, 1.0); output[id.x] = vec4<f32>(ggx_ndf(x.w, a), ggx_correlated_visibility(x.y, x.z, a), pbr_equirect_uv(vec3<f32>(sqrt(max(0.0, 1.0-x.y*x.y)), x.y, 0.0))); }}"
+    );
+    let pipeline = device.create_compute_pipeline(&shader, "cs_main", "water-ggx-reference");
+    let roughness = [0.001_f64, 0.04, 0.2, 1.0];
+    let cosines = [0.0_f64, 1e-4, 0.5, 1.0];
+    let inputs: Vec<WaterGgxInput> = roughness
+        .iter()
+        .flat_map(|&r| cosines.iter().flat_map(move |&c| [WaterGgxInput { roughness: r as f32, ndotv: c as f32, ndotl: c as f32, ndoth: c as f32 }]))
+        .collect();
+    let in_buf = device.create_buffer_shared((inputs.len() * std::mem::size_of::<WaterGgxInput>()) as u64);
+    let out_buf = device.create_buffer_shared((inputs.len() * std::mem::size_of::<WaterGgxOutput>()) as u64);
+    unsafe { in_buf.write(0, bytemuck::cast_slice(&inputs)); }
+    let mut encoder = device.create_encoder("water-ggx-reference");
+    encoder.dispatch_compute(&pipeline, &[GpuBinding::Buffer { binding: 0, buffer: &in_buf, offset: 0 }, GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 }], [inputs.len() as u32, 1, 1], "water-ggx-reference");
+    encoder.commit_and_wait_completed();
+    let actual = unsafe { std::slice::from_raw_parts(out_buf.mapped_ptr().unwrap().cast::<WaterGgxOutput>(), inputs.len()) };
+    for (i, (input, got)) in inputs.iter().zip(actual).enumerate() {
+        let alpha = (input.roughness as f64 * input.roughness as f64).clamp(1e-3, 1.0);
+        let a2 = alpha * alpha;
+        let c2 = (input.ndoth as f64) * (input.ndoth as f64);
+        let denom = (1.0 - c2) + c2 * a2;
+        let expected_d = a2 / (std::f64::consts::PI * denom * denom);
+        let nv = input.ndotv as f64;
+        let nl = input.ndotl as f64;
+        let expected_g = 0.5 / (nv * (nl * nl * (1.0 - a2) + a2).sqrt() + nl * (nv * nv * (1.0 - a2) + a2).sqrt()).max(1e-6);
+        assert!(got.ndf.is_finite() && got.visibility.is_finite(), "non-finite case {i}");
+        assert!((got.env_uv[0] - 0.5).abs() < 1e-5);
+        let expected_v = nv.asin() / std::f64::consts::PI + 0.5;
+        assert!((f64::from(got.env_uv[1]) - expected_v).abs() < 1e-5, "environment latitude case {i}");
+        assert!((got.ndf as f64 - expected_d).abs() <= 2e-5 * expected_d.abs().max(1.0) + 2e-6, "NDF case {i}: {} != {expected_d}", got.ndf);
+        assert!((got.visibility as f64 - expected_g).abs() <= 2e-5 * expected_g.abs().max(1.0) + 2e-6, "visibility case {i}: {} != {expected_g}", got.visibility);
+    }
 }
 
 fn rgb16(bytes: &[u8], w: u32, x: u32, y: u32) -> [f32; 3] {

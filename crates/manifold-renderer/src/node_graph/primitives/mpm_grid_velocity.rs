@@ -3,10 +3,9 @@
 //! Resolves the fixed-point accumulation wire into grid velocities
 //! (`v_i = dequantise(momentum) / dequantise(mass) + gravity*step_dt` for
 //! nonempty cells, zero for empty cells), then applies the static-basin and
-//! translating-collider no-penetration boundaries: at solid boundary nodes
-//! only the inward normal component is removed (free-slip tangential, design
-//! step 5). The collider is optional so saved basin-only graphs retain their
-//! previous output exactly.
+//! translating-collider no-penetration boundaries. Stationary basin boundary
+//! nodes use no-slip (zero velocity); the optional translating collider keeps
+//! its relative free-slip separation model.
 //!
 //! Contract: docs/WATER_SIMULATION_DESIGN.md sections 3 and 5;
 //! docs/WATER_IMPLEMENTATION_PLAN.md section 2.2 (stage port table).
@@ -22,8 +21,8 @@ use crate::node_graph::water::{DEFAULT_STEP_DT, WaterGridCell};
 
 /// Default static basin interior (design section 8: walls enclose the
 /// default 2x0.5x2 m pool with splash room; the floor sits at the pool
-/// bottom). Nodes at or outside a face are solid and get the no-penetration
-/// projection. The ceiling stays one half-cell below node 63 so a particle
+/// bottom). Nodes at or outside a face are solid and get zero velocity. The
+/// ceiling stays one half-cell below node 63 so a particle
 /// projected onto it retains a complete 27-node transfer stencil.
 pub const BASIN_MIN: [f32; 3] = [-1.125, 0.25, -1.125];
 /// Default static basin interior top — see [`BASIN_MIN`].
@@ -72,7 +71,7 @@ pub struct GridVelocityUniforms {
 crate::primitive! {
     name: MpmGridVelocity,
     type_id: "node.mpm_grid_velocity",
-    purpose: "Resolve the Live Water accumulation wire into grid velocities (design step 5): v_i = dequantised momentum / dequantised mass + gravity*step_dt for nonempty cells, zero for empty cells, written as WaterGridCell (velocity xyz, mass w). Apply static-basin and optional translating-collider no-penetration boundaries: only the inward normal component is removed and tangential flow is free-slip. The optional collider Transform and ScalarVec3 velocity use the same fixed AABB as node.water_collide_box; an unwired collider preserves basin-only behaviour. Bounds arrive as params (defaults enclose the design section 8 pool); gravity arrives on three optional scalar wires (default -9.81 m/s^2 Y).",
+    purpose: "Resolve the Live Water accumulation wire into grid velocities (design step 5): v_i = dequantised momentum / dequantised mass + gravity*step_dt for nonempty cells, zero for empty cells, written as WaterGridCell (velocity xyz, mass w). Apply no-slip zero velocity at stationary basin boundary nodes and optional translating-collider relative free-slip separation. The optional collider Transform and ScalarVec3 velocity use the same fixed AABB as node.water_collide_box; an unwired collider preserves basin-only behaviour. Bounds arrive as params (defaults enclose the design section 8 pool); gravity arrives on three optional scalar wires (default -9.81 m/s^2 Y).",
     inputs: {
         accumulator: Channels["water_grid_accum": I32] required,
         step_dt: ScalarF32 optional,
@@ -179,7 +178,7 @@ crate::primitive! {
     composition_notes: "Fourth stage of the repeated water region body, after the two mpm_scatter stages. The accumulator is consumed BufferGather-style (the body reads the four i32 slots of its own cell); output cell_count must be exactly nx*ny*nz for the configured domain. Wire the accepted collider Transform and collider velocity from node.water_collider_motion to apply the same translating AABB boundary as node.water_collide_box. Leave the optional collider unwired for basin-only compatibility. Basin defaults match node.seed_water's default pool: floor at the pool bottom, walls 0.125 m outside the pool edge.",
     examples: [],
     picker: { label: "MPM Grid Velocity", category: Atom },
-    summary: "Turns accumulated momentum into cell velocities, adds gravity, and applies basin and translating-cube free-slip boundaries.",
+    summary: "Turns accumulated momentum into cell velocities, adds gravity, and applies stationary-basin no-slip plus translating-cube relative free-slip boundaries.",
     category: Particles3D,
     role: Filter,
     aliases: ["mpm grid velocity", "grid resolve", "grid force", "water grid"],

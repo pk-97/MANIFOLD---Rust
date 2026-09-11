@@ -280,7 +280,9 @@ One substep, in this order:
    because stress depends directly on that particle's reconstructed volume.
 5. **Grid velocity.** Resolve mass/momentum, `v_i=momentum_i/m_i + gravity*dt`
    for nonempty cells; empty cells are zero. Apply no-penetration boundary velocities
-   relative to the translating collider. Tangential velocity is free-slip in V1.
+   relative to the translating collider (free-slip separation). Stationary basin
+   nodes on or outside a wall instead enforce no-slip, `v_i = 0`, including
+   tangential velocity. This is solid-wall coupling, not global fluid damping.
 6. **G2P/advection.** `v_p=sum(w*v_i)`,
    `C_p=4/h^2 * sum(w*outer(v_i,d))`, `x_next=x+dt*v_p`.
    Store previous accepted position. Apply particle boundary projection as a separate
@@ -358,6 +360,12 @@ Translation speed above 4 m/s faults visibly; no teleport sweep claimed in V1.
 `Transform` through a declared region result (implementation plan section 2.1
 specifies typed result resources). It has no independent clock. Boundary planes for the
 basin are authored from the SAME dimensions as its visible opaque walls.
+The stationary basin uses no-slip grid velocities so water exchanges tangential
+momentum with its walls and floor. Particle projection remains geometric
+no-penetration cleanup; the moving cube retains relative free-slip separation.
+The late static-pool regression samples 1/5/10/20/30 seconds; after ten seconds,
+mass-weighted RMS speed must remain below 0.1 grid cells/s and maximum speed
+below one cell/s. This settling test does not replace timestep-convergence gates.
 
 Impulse is a velocity change, in m/s, not force multiplied again by dt. Within radius
 R of centre use `max(0,1-distance/R)^2 * impulse_vector`. An integer trigger-count
@@ -458,8 +466,12 @@ pointers. No new opaque Liquid handle or scene identity map.
 V1 water material is PBR dielectric, IOR 1.333, transmission 1, metallic 0; use
 existing material fields for roughness and volume attenuation. Unsupported material
 features produce an error, not an ignored control. Default attenuation distance 2 m,
-attenuation colour (0.70,0.90,0.95), roughness 0.04. Water's appearance is tuned only
-after the grey-lit motion passes the numerical checkpoint.
+attenuation colour (0.70,0.90,0.95), roughness 0.04. Direct sunlight uses dielectric
+GGX with correlated Smith visibility and IOR-derived Schlick Fresnel. The
+roughness-to-alpha mapping and environment latitude follow the scene PBR
+conventions; water reuses `pbr_equirect_uv` so reflections match the environment
+baker. Beer-Lambert transmission and depth-safe refraction remain separate from
+the direct reflection term. Shading changes do not waive numerical acceptance.
 
 **Pass order:** existing shadows → opaque/masked scene → resolve opaque colour/depth
 snapshots → water fullscreen depth-tested shading pass → refresh public depth with

@@ -741,22 +741,32 @@ fn water_grid_velocity_collider_boundary_native() {
     accum[outward_base + 2] = quantise(outward.1[2]);
     accum[outward_base + 3] = GRID_FIXED_SCALE;
 
+    // Stationary basin no-slip includes tangent/outward velocities and corners.
+    let basin_nodes = [[14,16,32], [50,16,32], [32,4,32], [32,62,32],
+        [32,16,14], [32,16,50], [14,4,14], [13,16,32]];
+    let interior = [15,16,32];
+    let wall_velocity = [0.3, -0.4, 0.7];
+    for cell in basin_nodes.into_iter().chain([interior]) {
+        let base = 4 * cell_index(cell);
+        for axis in 0..3 { accum[base+axis] = quantise(wall_velocity[axis]); }
+        accum[base+3] = GRID_FIXED_SCALE;
+    }
     let accum_buf = device().create_buffer_shared(ACCUM_BYTES);
     let output_buf = device().create_buffer_shared(GRID_BYTES * GRID_CELLS as u64);
     unsafe { accum_buf.write(0, bytemuck::cast_slice(&accum)); }
 
-    let dispatch = |enabled: u32| {
+    let dispatch = |enabled: u32, lo: [f32;3], hi: [f32;3]| {
         let uniforms = GridVelocityUniforms {
             step_dt: 0.0,
             cube_half_x: CUBE_HALF[0],
             cube_half_y: CUBE_HALF[1],
             cube_half_z: CUBE_HALF[2],
-            basin_min_x: -10.0,
-            basin_min_y: -10.0,
-            basin_min_z: -10.0,
-            basin_max_x: 10.0,
-            basin_max_y: 10.0,
-            basin_max_z: 10.0,
+            basin_min_x: lo[0],
+            basin_min_y: lo[1],
+            basin_min_z: lo[2],
+            basin_max_x: hi[0],
+            basin_max_y: hi[1],
+            basin_max_z: hi[2],
             cell_count: CELL_COUNT as i32,
             collider_enabled: enabled,
             collider_x: collider[0],
@@ -788,7 +798,7 @@ fn water_grid_velocity_collider_boundary_native() {
         read_grid(&output_buf)
     };
 
-    let disabled = dispatch(0);
+    let disabled = dispatch(0, [-10.0;3], [10.0;3]);
     for (cell, _normal, _tangent, expected) in &velocities {
         let actual = disabled[cell_index(*cell)].velocity_mass;
         for axis in 0..3 {
@@ -804,7 +814,7 @@ fn water_grid_velocity_collider_boundary_native() {
         assert!((*actual - *expected).abs() < 2.0e-4);
     }
 
-    let enabled = dispatch(1);
+    let enabled = dispatch(1, [-10.0;3], [10.0;3]);
     for (cell, normal, tangent, expected) in &velocities {
         let actual = enabled[cell_index(*cell)].velocity_mass;
         let expected_normal = collider_velocity[0] * normal[0]
@@ -829,6 +839,15 @@ fn water_grid_velocity_collider_boundary_native() {
     for (actual, expected) in outward_enabled.iter().zip(outward.1.iter()).take(3) {
         assert!((*actual - *expected).abs() < 2.0e-4, "outward node changed: {outward_enabled:?}");
     }
+    let basin = dispatch(0, BASIN_MIN, BASIN_MAX);
+    for cell in basin_nodes {
+        assert_eq!(basin[cell_index(cell)].velocity_mass, [0.0,0.0,0.0,1.0],
+            "basin wall must have zero grid velocity with mass retained: {cell:?}");
+    }
+    for (actual, expected) in basin[cell_index(interior)].velocity_mass[..3].iter().zip(wall_velocity) {
+        assert!((*actual-expected).abs() < 2e-4, "interior flow changed");
+    }
+
 }
 
 #[test]
@@ -2180,6 +2199,91 @@ fn water_timestep_early_probe() {
         );
         early_stage_diagnostic(&dts, &labels);
     }
+}
+
+/// Numerical late-settling diagnostic for the default static pool. This uses
+/// the existing direct stage helper, which deliberately omits particle
+/// collision; the readings therefore isolate bulk settling and do not claim
+/// to represent the complete production water path.
+#[test]
+fn water_late_settling_probe() {
+    let pool = make_pool(SEED_ACTIVE_PARTICLES as u32, PARTICLE_CAPACITY as u32);
+    seed_pool(&pool);
+    let dt = DEFAULT_STEP_DT;
+    let checkpoints = [(1u32, 960usize), (5, 4_800), (10, 9_600), (20, 19_200), (30, 28_800)];
+    let mut next_checkpoint = 0usize;
+
+    for step in 1..=checkpoints.last().expect("late probe checkpoints").1 {
+        substep(&pool, dt, BASIN_MIN, BASIN_MAX, [0.0, -9.81, 0.0]);
+        if step != checkpoints[next_checkpoint].1 {
+            continue;
+        }
+        assert_eq!(read_status(&pool.status), 0, "late probe faulted at step {step}");
+        let recs = read_particles(&pool.accepted, SEED_ACTIVE_PARTICLES);
+        let mut mass = 0.0f64;
+        let mut momentum_speed_sq = 0.0f64;
+        let mut kinetic = 0.0f64;
+        let mut max_speed = 0.0f64;
+        let mut max_affine = 0.0f64;
+        let mut min_density = f32::INFINITY;
+        let mut max_density = f32::NEG_INFINITY;
+        for (i, p) in recs.iter().enumerate() {
+            assert!(
+                p.position_mass[..3]
+                    .iter()
+                    .chain(p.velocity_density[..4].iter())
+                    .chain(p.affine_x[..3].iter())
+                    .chain(p.affine_y[..3].iter())
+                    .chain(p.affine_z[..3].iter())
+                    .all(|v| v.is_finite()),
+                "late probe nonfinite state at t={} slot {i}",
+                checkpoints[next_checkpoint].0
+            );
+            let m = p.position_mass[3] as f64;
+            let speed_sq = (p.velocity_density[0] as f64).powi(2)
+                + (p.velocity_density[1] as f64).powi(2)
+                + (p.velocity_density[2] as f64).powi(2);
+            let speed = speed_sq.sqrt();
+            let affine_sq = p.affine_x[..3]
+                .iter()
+                .chain(p.affine_y[..3].iter())
+                .chain(p.affine_z[..3].iter())
+                .map(|v| (*v as f64).powi(2))
+                .sum::<f64>();
+            mass += m;
+            momentum_speed_sq += m * speed_sq;
+            kinetic += 0.5 * m * speed_sq;
+            max_speed = max_speed.max(speed);
+            max_affine = max_affine.max(affine_sq.sqrt());
+            min_density = min_density.min(p.velocity_density[3]);
+            max_density = max_density.max(p.velocity_density[3]);
+        }
+        assert!(mass.is_finite() && mass > 0.0, "late probe invalid mass at step {step}");
+        // Settled motion budget: after ten seconds, RMS speed must stay below
+        // one tenth of a grid cell per second, and no particle may exceed
+        // one cell per second. This catches renewed wall-driven motion.
+        if checkpoints[next_checkpoint].0 >= 10 {
+            assert!((momentum_speed_sq / mass).sqrt() < f64::from(GRID_SPACING) * 0.1,
+                "late settling RMS motion exceeded 0.1 grid cells/s at step {step}");
+            assert!(max_speed < f64::from(GRID_SPACING),
+                "late settling max motion exceeded one grid cell/s at step {step}");
+        }
+        println!(
+            "water_late_settling_probe t={}s: speed_rms={:.6e} m/s kinetic={:.6e} J max_speed={:.6e} m/s max_affine={:.6e} 1/s density=[{:.6e}, {:.6e}] kg/m^3",
+            checkpoints[next_checkpoint].0,
+            (momentum_speed_sq / mass).sqrt(),
+            kinetic,
+            max_speed,
+            max_affine,
+            min_density,
+            max_density,
+        );
+        next_checkpoint += 1;
+        if next_checkpoint == checkpoints.len() {
+            break;
+        }
+    }
+    assert_eq!(next_checkpoint, checkpoints.len(), "late probe missed a checkpoint");
 }
 
 /// Per-particle displacement statistics between two runs at the same slot.
