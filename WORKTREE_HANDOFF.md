@@ -1,3 +1,23 @@
+## Wave tank trial — 2026-09-11
+
+User requested a classic asymmetric wave scene. Added a NON-BUNDLED reproduction
+fixture `crates/manifold-renderer/tests/fixtures/presets/WaterWaveTank.json`:
+flat 3.3×2.25 m basin, stationary offset breakwater with matching collision
+half-extents [.12,.35,.30], fixed camera, no pour or cube motion. The initial
+water reservoir at one end releases under gravity. A sloped bed/rock collider
+is outside the current box-only collision path.
+
+Both 240-frame attempts failed the existing kinematics guard (0x8): .5 m
+release height at frame67 (~1.12s); corrected geometry and .3125 m release
+height at frame154 (~2.57s). No solver constants or safety limits changed.
+The fixture stores the second attempt; it is excluded from the bundled preset
+catalog. No app rebuild or main landing for this failed trial. Stop further
+parameter trials; diagnose this reproducible solver failure (BUG-01vr).
+Observed filmstrip `/tmp/water-wave-tank-trial-filmstrip.png`, 154-frame preview
+`/tmp/water-wave-tank-trial.mp4`, fault log `/tmp/water-wave-tank-final.log`.
+Reproduce using the existing release `render-generator-preset WaterWaveTank`
+with `--preset-file` pointing to this fixture and `--size 1280x720 --frames 240`.
+
 ## Surface reconstruction continuation — 2026-09-11
 
 Slot-7 `wave/live-water`: added neighbour covariance ellipsoids shared by depth,
