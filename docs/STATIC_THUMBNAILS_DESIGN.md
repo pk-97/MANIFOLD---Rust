@@ -53,7 +53,7 @@ Consequences, stated honestly: adding an effect mid-show now hits at full streng
 
 **D7 — Freshness is machine-checked, not remembered.** A CPU-only test hashes every factory preset JSON and asserts the committed thumbnail exists and its recorded hash matches. Editing a preset without re-running the bin fails the default test suite. User-library presets keep the existing save-time render; a stale or missing user thumbnail falls back to the flat labeled cell — no browse-time render (existing rule, `dropdowns.rs:259-260`).
 
-**D8 — Missing-from-library snapshot entries leave the picker.** They are self-containment plumbing (the project's embedded copies), not user-manageable choices — right-click already gives them no menu. The layers that use them still show the preset on the layer card, so nothing becomes unfindable that was findable. This deletes the badge and its overlap outright.
+**D8 — Missing-from-library snapshot entries leave the picker.** They are self-containment plumbing (the project's embedded copies), not user-manageable choices — right-click already gives them no menu. The layers that use them still show the preset on the layer card, so nothing becomes unfindable that was findable. This deletes the badge and its overlap outright. A stock or user-library preset remains selectable when the project also snapshots its ID: registry visibility follows the resolved catalog source, not the presence of an embedded snapshot. Explicit Saved project entries remain represented once through This Project.
 
 ## 3. Design body
 
