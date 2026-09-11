@@ -1,6 +1,6 @@
 # Static Browser Thumbnails — a picker that opens instantly and tells the truth
 
-**Status:** APPROVED design, not built · 2026-09-11 · k3 (lead)
+**Status:** SHIPPED · P1–P3 landed 2026-09-11 · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 
@@ -11,7 +11,7 @@ Peter's directives, verbatim:
 - "all effects and generators should default to 100% amount param though"
 - On the stencil default showing broken in the thumbnail: the default is the bug — fix the default, and the grid becomes a standing audit of every preset.
 
-Companion docs: [PRESET_BROWSER_AUDITION_DESIGN.md](PRESET_BROWSER_AUDITION_DESIGN.md) (the live-preview design this supersedes), `docs/archive/PRESET_LIBRARY_DESIGN.md` (P6/D7 built the static path this design finishes).
+Companion docs: [archive/PRESET_BROWSER_AUDITION_DESIGN.md](archive/PRESET_BROWSER_AUDITION_DESIGN.md) (the live-preview design this supersedes), `docs/archive/PRESET_LIBRARY_DESIGN.md` (P6/D7 built the static path this design finishes).
 
 ## 1. Audit — what exists (verified 2026-09-11)
 
@@ -122,7 +122,7 @@ Consequences, stated honestly: the picker loses "what does this effect do to my 
 
 - **Entry state:** P2 landed; all cells have statics available.
 - **Read-back:** D1, D7, D8; section 3.4 (browser simplification); the deletion inventory it names.
-- **Deliverables:** deletions per section 3.4 (pool, surface, signals, panel hooks, app pump, snapshot-entry emission, badge path); cell render = thumbnail-or-flat; PRESET_BROWSER_AUDITION_DESIGN.md status → SUPERSEDED with a one-line pointer here.
+- **Deliverables:** deletions per section 3.4 (pool, surface, signals, panel hooks, app pump, snapshot-entry emission, badge path); cell render = thumbnail-or-flat; archive/PRESET_BROWSER_AUDITION_DESIGN.md status → SUPERSEDED with a one-line pointer here.
 - **Gate:** `cargo nextest run -p manifold-ui -p manifold-app` green; negative gate `rg "AuditionPool|audition_src|take_audition_render_list|missing_from_library" crates/` zero hits; `scripts/landing_gate.py`.
 - **Acceptance demo (L3):** a `scripts/ui-flows/` flow that opens the effect browser and asserts cell count + that every visible cell is an image node; PNG artifact for Peter.
 - **Content-thread gate:** the deletion removes per-frame work; run `MANIFOLD_RENDER_TRACE=1` once to confirm no regression from the browser open path.

@@ -66,18 +66,6 @@ mod journey_proof;
 // gate — no separate harness to maintain).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod bug035_verify;
-// PRESET_BROWSER_AUDITION P2 gate (f): headless MANIFOLD_RENDER_TRACE driver
-// with the browser's audition grid open (pool + tap + transport on the live
-// render path). Shares `journey_proof`'s headless ContentThread infra (same
-// feature gate — no separate harness to maintain).
-#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
-mod p2_audition_trace;
-// TEMP diagnosis harness (lane/audition-fault-repro): headless repro of the
-// live-audition GPU fault that blacklists the command queue. Sibling of
-// `p2_audition_trace` — same infra, layer tap, full factory grids. Delete
-// with the lane.
-#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
-mod audition_fault_repro;
 // BUG-037 regression guard: headless before/after MANIFOLD_RENDER_TRACE proof
 // that node.render_scene / node.gltf_texture_source's lazy pipeline compiles
 // no longer stall a glTF scene layer's first rendered frame. Shares

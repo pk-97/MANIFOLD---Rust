@@ -1802,7 +1802,8 @@ impl Application {
                                                     &gpu.device,
                                                     ctx.kind,
                                                     &ctx.def,
-                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_SIZE,
+                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_WIDTH,
+                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_HEIGHT,
                                                     &png_path,
                                                 )
                                             {
@@ -2524,9 +2525,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 frame_count: 0,
                 time_since_start: manifold_core::Seconds::ZERO,
                 last_data_version: 0,
-                // P2 audition (PRESET_BROWSER_AUDITION_DESIGN D6): the
-                // budget skip signal starts "under budget" (0 ms).
-                audition_last_frame_wall_ms: 0.0,
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
                 rendering_paused: false,

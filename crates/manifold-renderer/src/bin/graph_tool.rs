@@ -176,7 +176,7 @@ fn run_validate(args: &[String]) -> ExitCode {
 /// `render <file.json> --kind effect|generator [--size N] [--out out.png]`
 /// — headless warmed-up render of a graph document through the exact
 /// `preset_thumbnail` path the browser thumbnails use (60 warmup frames,
-/// state committed per frame, effects fed the standard source fixture).
+/// state committed per frame, effects fed the four-region test card).
 /// The look-probe verb: author JSON, render it, Read the PNG.
 fn run_render(args: &[String]) -> ExitCode {
     let mut file: Option<PathBuf> = None;
@@ -275,11 +275,11 @@ fn run_render(args: &[String]) -> ExitCode {
     let device = std::sync::Arc::new(GpuDevice::new());
     let result = if linear {
         manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file_linear(
-            &device, kind, &def, size, &out,
+            &device, kind, &def, size, size, &out,
         )
     } else {
         manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
-            &device, kind, &def, size, &out,
+            &device, kind, &def, size, size, &out,
         )
     };
     match result {

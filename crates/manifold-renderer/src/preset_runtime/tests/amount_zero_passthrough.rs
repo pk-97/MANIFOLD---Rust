@@ -21,7 +21,7 @@ use crate::node_graph::{
     compile, EffectGraphDefExt, Executor, FrameTime, MetalBackend, ParamValue, PrimitiveRegistry,
     StateStore, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID,
 };
-use crate::preset_thumbnail::{build_gradient_input, output_resource};
+use crate::preset_thumbnail::{build_test_card_input, output_resource, test_card_pixel};
 use crate::render_target::RenderTarget;
 
 const SIZE: u32 = 128;
@@ -54,18 +54,15 @@ const FORMERLY_SKIPPABLE_EFFECTS: &[(&str, &str)] = &[
     ("VoronoiPrism", "amount"),
 ];
 
-/// The same non-uniform gradient the thumbnail/parity harness uses, but kept
-/// as raw CPU f16 bytes so we can compare output against a deterministic
-/// expected buffer without an extra GPU readback.
-fn expected_gradient_bytes(w: u32, h: u32) -> Vec<u8> {
+/// The D2 test card the thumbnail path uses (STATIC_THUMBNAILS_DESIGN §3.1),
+/// kept as raw CPU f16 bytes so we can compare output against a deterministic
+/// expected buffer without an extra GPU readback. Shares `test_card_pixel`
+/// with the GPU upload builder so the two can't drift apart.
+fn expected_card_bytes(w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity((w * h * 8) as usize);
-    let wm = ((w.max(1) - 1) as f32).max(1.0);
-    let hm = ((h.max(1) - 1) as f32).max(1.0);
     for y in 0..h {
         for x in 0..w {
-            let u = x as f32 / wm;
-            let v = y as f32 / hm;
-            for &c in &[u, v, (u + v) * 0.5, 1.0f32] {
+            for &c in &test_card_pixel(x, y, w, h) {
                 out.extend_from_slice(&f16::from_f32(c).to_bits().to_le_bytes());
             }
         }
@@ -145,7 +142,7 @@ fn render_effect_raw(
         .ok_or_else(|| "system.final_output has no bound in".to_string())?;
 
     let mut backend = MetalBackend::new(std::sync::Arc::clone(device), SIZE, SIZE, FORMAT);
-    let input_target = build_gradient_input(device, SIZE, SIZE, FORMAT);
+    let input_target = build_test_card_input(device, SIZE, SIZE, FORMAT);
     let source_slot = backend.pre_bind_texture_2d(source_out, input_target);
     let output_slot = if final_in == source_out {
         source_slot
@@ -185,7 +182,7 @@ fn render_effect_raw(
 #[test]
 fn amount_zero_effect_passthrough_is_identity() {
     let device = crate::test_device();
-    let expected = expected_gradient_bytes(SIZE, SIZE);
+    let expected = expected_card_bytes(SIZE, SIZE);
     let catalog = crate::preset_loader::EFFECT_CATALOG.load();
     let mut failures: Vec<String> = Vec::new();
 

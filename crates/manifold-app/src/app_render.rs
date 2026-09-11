@@ -525,90 +525,18 @@ impl Application {
                 .cancel_if_owned_by(crate::text_input::TextSessionOwner::MainOverlay(id));
         }
 
-        // Preset-browser audition pump (PRESET_BROWSER_AUDITION_DESIGN §3.3):
-        // open → ensure_cells + tap once; per-frame → the filtered render
-        // list only when it changed; close → empty list (zero cost, D6/§6.8)
-        // and the cells fall back to flat/static. The panel stashes the
-        // transitions; this pump forwards them over `ContentCommand` exactly
-        // like `SetNodeAtlasVisible` — drain-to-latest, no new channel.
+        // Browser popup search session plumbing (PRESET_BROWSER_AUDITION F5,
+        // kept by STATIC_THUMBNAILS_DESIGN): the popup raised the request
+        // when it opened; take the owned search session exactly like the
+        // graph-editor Node picker does at open. The `MainOverlay(BrowserPopup)`
+        // owner tag is what the closed-overlay pump cancels by on every
+        // close path (backdrop, Escape, pick, perform-mode entry) — no
+        // orphaned SearchFilter session. The anchor is a zero placeholder:
+        // the popup tree isn't built yet this frame, and the re-anchor
+        // pass below pins the overlay over the popup's real search bar as
+        // soon as the tree exists. The dirty flag makes this once per
+        // open, not per frame.
         {
-            use manifold_ui::panels::browser_popup::BrowserPopupMode;
-            enum Pump {
-                Nothing,
-                Ensure {
-                    cells: Vec<(manifold_core::PresetTypeId, manifold_core::preset_def::PresetKind)>,
-                    tap: manifold_renderer::audition::AuditionTapTarget,
-                },
-                List(Vec<manifold_core::PresetTypeId>),
-                Close,
-            }
-            let action = {
-                let popup = &mut self.ws.ui_root.browser_popup;
-                if let Some(open) = popup.take_audition_open() {
-                    let cells = open
-                        .items
-                        .iter()
-                        .map(|(id, mode)| {
-                            let kind = match mode {
-                                BrowserPopupMode::Effect => manifold_core::preset_def::PresetKind::Effect,
-                                BrowserPopupMode::Generator => manifold_core::preset_def::PresetKind::Generator,
-                                // Node mode never dirties the open hook.
-                                BrowserPopupMode::Node => manifold_core::preset_def::PresetKind::Effect,
-                            };
-                            (manifold_core::PresetTypeId::from_string(id.clone()), kind)
-                        })
-                        .collect();
-                    // D2: the tap is the browser's invocation context —
-                    // exactly the context dispatch builds the add's
-                    // EffectTarget from (params.rs: Master tab → master,
-                    // Layer/Group tab → the carried layer_id; Group renders
-                    // through the layer column). An open without a layer id
-                    // falls back to the master tap.
-                    let tap = match (&open.tab, &open.layer_id) {
-                        (
-                            manifold_ui::panels::InspectorTab::Layer
-                            | manifold_ui::panels::InspectorTab::Group,
-                            Some(lid),
-                        ) => manifold_renderer::audition::AuditionTapTarget::Layer(lid.clone()),
-                        _ => manifold_renderer::audition::AuditionTapTarget::Master,
-                    };
-                    Pump::Ensure { cells, tap }
-                } else if popup.take_audition_close() {
-                    popup.set_audition_src(None);
-                    Pump::Close
-                } else if popup.is_open() {
-                    match popup.take_audition_render_list() {
-                        Some(list) => Pump::List(
-                            list.into_iter()
-                                .map(manifold_core::PresetTypeId::from_string)
-                                .collect(),
-                        ),
-                        None => Pump::Nothing,
-                    }
-                } else {
-                    Pump::Nothing
-                }
-            };
-            match action {
-                Pump::Ensure { cells, tap } => self
-                    .send_content_cmd(ContentCommand::AuditionEnsureCells { cells, tap }),
-                Pump::List(ids) => self.send_content_cmd(ContentCommand::AuditionSetRenderList(ids)),
-                Pump::Close => {
-                    self.send_content_cmd(ContentCommand::AuditionSetRenderList(Vec::new()));
-                }
-                Pump::Nothing => {}
-            }
-            // Search auto-focus at open (PRESET_BROWSER_AUDITION F5): the
-            // popup raised the request when it opened; take the owned search
-            // session exactly like the graph-editor Node picker does at
-            // open. The `MainOverlay(BrowserPopup)` owner tag is what the
-            // closed-overlay pump cancels by on every close path (backdrop,
-            // Escape, pick, perform-mode entry) — no orphaned SearchFilter
-            // session. The anchor is a zero placeholder: the popup tree
-            // isn't built yet this frame, and the re-anchor pass below
-            // pins the overlay over the popup's real search bar as soon as
-            // the tree exists. The dirty flag makes this once per open,
-            // not per frame.
             if self.ws.ui_root.browser_popup.take_search_focus() {
                 self.text_input.begin_owned(
                     crate::text_input::TextSessionOwner::MainOverlay(
@@ -644,14 +572,6 @@ impl Application {
                         r.x, r.y, r.width, r.height,
                     ));
                 }
-            }
-            // Per-frame cell source: the shared audition-atlas surface import
-            // (once per generation) + the per-item UV map. Runs while open so
-            // a rebuild frame always sees the current handle; the tree keeps
-            // the handle's nodes between rebuilds (generation-stable per open).
-            #[cfg(target_os = "macos")]
-            if self.ws.ui_root.browser_popup.is_open() {
-                self.update_audition_src();
             }
         }
 
@@ -1901,7 +1821,6 @@ impl Application {
                                 // graph-editor's node picker never renders
                                 // the source row or the management menu.
                                 source: None,
-                                missing_from_library: false,
                                 // Node mode never has a thumbnail (only the
                                 // Effect/Generator preset browser does).
                                 thumbnail: None,
@@ -3741,44 +3660,5 @@ mod unbound_node_param_drag_tests {
             "undo must restore the true pre-drag value, not whatever execute()'s \
              self-capture would have seen post-drag"
         );
-    }
-}
-
-
-
-impl Application {
-    /// Install the browser popup's live audition cell source for this frame
-    /// (PRESET_BROWSER_AUDITION_DESIGN §3.3): import the shared audition-atlas
-    /// IOSurface into the UI renderer once per surface generation (the
-    /// generation-keyed handle means a grid-size change re-imports instead of
-    /// sampling a stale surface — `has_image` makes the steady state one hash
-    /// lookup), then hand the popup the handle + per-item UV rects from the
-    /// content state. Cell rendering takes it from there (`add_image_uv`).
-    #[cfg(target_os = "macos")]
-    pub(crate) fn update_audition_src(&mut self) {
-        let Some(surface) = self.content_state.audition_surface.clone() else {
-            // Transport not up yet (the first frames after open) — cells
-            // fall back to the static thumbnail / flat text this frame.
-            return;
-        };
-        let generation = self.content_state.audition_surface_generation;
-        let key = format!("__manifold_audition_atlas_g{generation}__");
-        let handle = manifold_ui::node::texture_handle_for_key(&key);
-        let (Some(gpu), Some(ui)) = (self.gpu.as_ref(), self.ui_renderer.as_mut()) else {
-            return;
-        };
-        if !ui.has_image(handle) {
-            let tex = unsafe { surface.import_texture_native(&gpu.device) };
-            ui.register_external_texture(handle, tex);
-        }
-        // UV map: every laid-out cell, keyed by type id. The popup looks up
-        // only its own filtered items, so extra entries cost nothing.
-        let map: ahash::AHashMap<String, [f32; 4]> = self
-            .content_state
-            .audition_cells
-            .iter()
-            .map(|(id, uv)| (id.as_str().to_string(), *uv))
-            .collect();
-        self.ws.ui_root.browser_popup.set_audition_src(Some((handle, map)));
     }
 }

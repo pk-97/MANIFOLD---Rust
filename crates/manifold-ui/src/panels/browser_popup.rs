@@ -40,10 +40,10 @@ use manifold_foundation::LayerId;
 //
 // P3 (PRESET_BROWSER_AUDITION_DESIGN D12) replaces the Unity-era fixed
 // POPUP_WIDTH 600 / CELL 185×42.5 / POPUP_MAX_HEIGHT 550. Cells are true
-// 16:9 — the audition atlas cells are 256×144 and the UV mapping assumes
-// the aspect; do not resize cells off 16:9.
+// 16:9 — the committed thumbnails are 16:9 and the grid reads as a wall of
+// small previews; do not resize cells off 16:9.
 
-/// 16:9 cell size. THE ASPECT IS LOAD-BEARING (audition atlas UVs).
+/// 16:9 cell size. THE ASPECT IS LOAD-BEARING (thumbnail cells).
 const CELL_W: f32 = 170.0;
 const CELL_H: f32 = 96.0;
 const CELL_SPACING: f32 = 3.0;
@@ -190,14 +190,11 @@ pub struct BrowserPopupRequest {
 
 /// Per-cell metadata needed for click AND right-click routing. Selection only
 /// needs `type_id`; the right-click management menu (PRESET_LIBRARY_DESIGN
-/// P5) additionally needs the cell's classified source, and whether it's a
-/// "missing from library" Snapshot entry (which gets no menu at all — an
-/// auto-captured cache isn't user-manageable the way a `Saved` entry is).
+/// P5) additionally needs the cell's classified source.
 #[derive(Clone)]
 struct CellMeta {
     type_id: String,
     source: Option<Source>,
-    missing_from_library: bool,
 }
 
 /// Rect/geometry output rebuilt every `build_at` — not meaningful state
@@ -275,33 +272,10 @@ pub struct BrowserPopupPanel {
     screen_w: f32,
     screen_h: f32,
     session: Option<BrowserSession>,
-    /// Live audition cell source (PRESET_BROWSER_AUDITION_DESIGN D1/D3):
-    /// the shared audition-atlas texture handle + per-item UV rects, pushed
-    /// per frame by the app while the browser is open. `None` = flat cells
-    /// (Node mode, transport not up yet, or browser closed) — the cell
-    /// renders exactly as before.
-    audition_src: Option<(crate::node::TextureHandle, ahash::AHashMap<String, [f32; 4]>)>,
-    /// Open/close/render-list transitions for the app pump to drain and
-    /// forward over `ContentCommand` (the panel is pure UI — it never sends
-    /// commands itself).
-    audition_open_dirty: Option<AuditionOpenInfo>,
-    audition_close_dirty: bool,
-    last_render_list: Option<Vec<String>>,
     /// Search-focus request raised at open (F5): the app pump drains it and
     /// takes the owned search session, same as the graph-editor Node picker
     /// does at open. `None` once drained or for Node mode.
     search_focus_dirty: bool,
-}
-
-/// What the app needs to start an audition session on the content thread:
-/// every item's `(type id, mode)` for `ensure_cells` (the app maps mode →
-/// `PresetKind`; the UI crate doesn't see core types), plus the invocation
-/// context for the tap (D2 — master vs layer).
-#[derive(Debug, Clone)]
-pub struct AuditionOpenInfo {
-    pub items: Vec<(String, BrowserPopupMode)>,
-    pub tab: InspectorTab,
-    pub layer_id: Option<LayerId>,
 }
 
 impl Default for BrowserPopupPanel {
@@ -316,10 +290,6 @@ impl BrowserPopupPanel {
             screen_w: 1920.0,
             screen_h: 1080.0,
             session: None,
-            audition_src: None,
-            audition_open_dirty: None,
-            audition_close_dirty: false,
-            last_render_list: None,
             search_focus_dirty: false,
         }
     }
@@ -366,19 +336,9 @@ impl BrowserPopupPanel {
     }
 
     pub fn open(&mut self, req: BrowserPopupRequest) {
-        // Audition is effect/generator-only (D1); Node mode renders flat
-        // cells exactly as before and never dirties the session hooks.
+        // The search-focus hook is effect/generator-only; Node mode never
+        // dirties it.
         if req.mode != BrowserPopupMode::Node {
-            self.audition_open_dirty = Some(AuditionOpenInfo {
-                items: req
-                    .items
-                    .iter()
-                    .map(|it| (it.type_id.clone(), req.mode))
-                    .collect(),
-                tab: req.tab,
-                layer_id: req.layer_id.clone(),
-            });
-            self.last_render_list = None;
             self.search_focus_dirty = true;
         }
         let mut layout = BrowserLayout::new();
@@ -395,26 +355,7 @@ impl BrowserPopupPanel {
     }
 
     pub fn close(&mut self) {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|s| s.mode != BrowserPopupMode::Node)
-        {
-            self.audition_close_dirty = true;
-        }
         self.session = None;
-    }
-
-    /// Drain the open transition (once per open) — the app forwards it as
-    /// the content-thread `ensure_cells` + tap selection.
-    pub fn take_audition_open(&mut self) -> Option<AuditionOpenInfo> {
-        self.audition_open_dirty.take()
-    }
-
-    /// Drain the close transition (once per close) — the app sends an empty
-    /// render list, making a closed browser cost literally zero (D6/§6.8).
-    pub fn take_audition_close(&mut self) -> bool {
-        std::mem::take(&mut self.audition_close_dirty)
     }
 
     /// Drain the open-time search-focus request (once per open, non-Node
@@ -424,36 +365,6 @@ impl BrowserPopupPanel {
     /// re-anchors over the real search bar every frame until close.
     pub fn take_search_focus(&mut self) -> bool {
         std::mem::take(&mut self.search_focus_dirty)
-    }
-
-    /// The current filtered render list, `Some` only when it changed since
-    /// the last drain (search typing / chip picks) — so a stable browse
-    /// sends no per-frame commands at all.
-    pub fn take_audition_render_list(&mut self) -> Option<Vec<String>> {
-        let session = self.session.as_ref()?;
-        if session.mode == BrowserPopupMode::Node {
-            return None;
-        }
-        let current: Vec<String> = session
-            .picker
-            .filtered()
-            .map(|(_, item)| item.type_id.clone())
-            .collect();
-        if self.last_render_list.as_ref() == Some(&current) {
-            return None;
-        }
-        self.last_render_list = Some(current.clone());
-        Some(current)
-    }
-
-    /// Install the live audition cell source for this frame (`None` clears —
-    /// cells fall back to the static thumbnail / flat text). The app
-    /// computes the atlas handle + per-item UVs from the content state.
-    pub fn set_audition_src(
-        &mut self,
-        src: Option<(crate::node::TextureHandle, ahash::AHashMap<String, [f32; 4]>)>,
-    ) {
-        self.audition_src = src;
     }
 
     /// Called when the search filter changes (from TextInputManager commit
@@ -771,32 +682,16 @@ impl BrowserPopupPanel {
                 );
             }
 
-            // Image cell: the live audition atlas at this item's UV takes
-            // precedence (D1); else the save-time-rendered thumbnail; else a
-            // flat-color cell exactly as before (D7's "clean fallback").
-            // Both image paths get the caption strip; the label row and the
-            // badge live INSIDE it on one baseline (F7/F8), with real named
-            // x-insets — the space-padded prefix hack is gone (F10). All
-            // non-interactive nodes paint BEFORE the button, so they never
-            // shadow its click region and its hover/press tint composites
-            // on top.
-            let audition = self
-                .audition_src
-                .as_ref()
-                .and_then(|(handle, map)| map.get(&item.type_id).map(|uv| (*handle, *uv)));
-            let has_image = item.thumbnail.is_some() || audition.is_some();
-            if let Some((handle, uv)) = audition {
-                tree.add_image_uv(
-                    clip_parent,
-                    cell_x,
-                    cell_y,
-                    CELL_W,
-                    CELL_H,
-                    CELL_RADIUS,
-                    handle,
-                    uv,
-                );
-            } else if let Some(path) = item.thumbnail.as_deref() {
+            // Image cell: the save-time-rendered / factory-committed
+            // thumbnail (STATIC_THUMBNAILS_DESIGN D1 — statics only, no live
+            // preview); else a flat-color cell exactly as before (D7's
+            // "clean fallback"). An image cell gets the caption strip with
+            // the name inside it (F7/F8), with real named x-insets — the
+            // space-padded prefix hack is gone (F10). All non-interactive
+            // nodes paint BEFORE the button, so they never shadow its click
+            // region and its hover/press tint composites on top.
+            let has_image = item.thumbnail.is_some();
+            if let Some(path) = item.thumbnail.as_deref() {
                 let handle = crate::node::texture_handle_for_key(path);
                 tree.add_image(clip_parent, cell_x, cell_y, CELL_W, CELL_H, CELL_RADIUS, handle);
             }
@@ -827,22 +722,6 @@ impl BrowserPopupPanel {
                         ..UIStyle::default()
                     },
                 );
-                if let Some(badge) = item.badge.as_deref() {
-                    tree.add_label(
-                        clip_parent,
-                        cell_x + CAPTION_PAD_X,
-                        strip_y,
-                        CELL_W - CAPTION_PAD_X * 2.0,
-                        CAPTION_STRIP_H,
-                        badge,
-                        UIStyle {
-                            font_size: CELL_FONT,
-                            text_color: color::BROWSER_CELL_BADGE_TEXT,
-                            text_align: TextAlign::Right,
-                            ..UIStyle::default()
-                        },
-                    );
-                }
             }
 
             // Cell button — full height, ClipRegion handles visual clipping.
@@ -883,7 +762,6 @@ impl BrowserPopupPanel {
                 CellMeta {
                     type_id: item.type_id.clone(),
                     source: item.source,
-                    missing_from_library: item.missing_from_library,
                 },
             ));
         }
@@ -1023,21 +901,17 @@ impl BrowserPopupPanel {
 
     /// Resolve a right-click on a grid cell to its management context.
     /// Returns `None` for: a miss, Node mode (no source concept — the
-    /// graph-editor's add-node picker never gets this menu), a Factory cell
-    /// (read-only, D6: "NOT Factory"), or a "missing from library" Snapshot
-    /// entry (an auto-captured cache, not user-manageable the way a `Saved`
-    /// entry is). Does NOT close the popup — the management menu (a
-    /// `DropdownPanel` the caller opens) stacks on top of it, same as the
-    /// card's right-click menu stacks on top of the inspector.
+    /// graph-editor's add-node picker never gets this menu), or a Factory
+    /// cell (read-only, D6: "NOT Factory"). Does NOT close the popup — the
+    /// management menu (a `DropdownPanel` the caller opens) stacks on top of
+    /// it, same as the card's right-click menu stacks on top of the
+    /// inspector.
     pub fn handle_right_click(&self, node_id: NodeId) -> Option<BrowserCellContext> {
         let session = self.session.as_ref()?;
         if session.mode == BrowserPopupMode::Node {
             return None;
         }
         let (_, meta) = session.layout.cell_ids.iter().find(|(id, _)| *id == node_id)?;
-        if meta.missing_from_library {
-            return None;
-        }
         match meta.source {
             Some(source @ (Source::MyLibrary | Source::Project)) => Some(BrowserCellContext {
                 mode: session.mode,

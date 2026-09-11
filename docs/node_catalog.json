@@ -25537,7 +25537,7 @@
       "name": "Auto Gain",
       "params": [
         {
-          "default": "0.5",
+          "default": "1",
           "id": "amount",
           "max": "1",
           "min": "0",
@@ -25746,7 +25746,7 @@
       "name": "Blob Track",
       "params": [
         {
-          "default": "0.5",
+          "default": "1",
           "id": "amount",
           "max": "1",
           "min": "0",
@@ -25790,7 +25790,7 @@
       "name": "Bloom",
       "params": [
         {
-          "default": "0.5",
+          "default": "1",
           "id": "amount",
           "max": "5",
           "min": "0",
@@ -26639,7 +26639,7 @@
       "name": "Film Grain",
       "params": [
         {
-          "default": "0.35",
+          "default": "1",
           "id": "amount",
           "max": "1",
           "min": "0",
@@ -33638,7 +33638,7 @@
           "name": "Radius"
         },
         {
-          "default": "0.5",
+          "default": "1",
           "id": "amount",
           "max": "1",
           "min": "0",
@@ -33842,7 +33842,7 @@
       "name": "Stylized Feedback",
       "params": [
         {
-          "default": "0.5",
+          "default": "1",
           "id": "amount",
           "max": "1",
           "min": "0",
@@ -33863,7 +33863,7 @@
           "name": "Rotate"
         },
         {
-          "default": "2",
+          "default": "0",
           "id": "mode",
           "max": "2",
           "min": "0",
@@ -34659,7 +34659,7 @@
       "name": "Watercolor",
       "params": [
         {
-          "default": "0.5",
+          "default": "1",
           "id": "amount",
           "max": "1",
           "min": "0",

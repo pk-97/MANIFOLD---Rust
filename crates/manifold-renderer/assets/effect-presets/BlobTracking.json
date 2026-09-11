@@ -15,7 +15,7 @@
         "name": "Amount",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.5,
+        "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -74,7 +74,7 @@
       {
         "id": "amount",
         "label": "Amount",
-        "defaultValue": 0.5,
+        "defaultValue": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "amount_value",
@@ -225,10 +225,6 @@
       "typeId": "node.scale_offset_value",
       "handle": "amount_value",
       "params": {
-        "a": {
-          "type": "Float",
-          "value": 0.5
-        },
         "offset": {
           "type": "Float",
           "value": 0.0

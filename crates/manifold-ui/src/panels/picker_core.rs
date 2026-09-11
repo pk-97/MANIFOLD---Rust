@@ -26,19 +26,12 @@ pub struct PickerItem {
     /// Extra haystack (aliases etc.); filter matches label + this.
     pub search_text: Option<String>,
     /// Origin badge for library surfaces (PRESET_LIBRARY_DESIGN P5, D6):
-    /// display text only ("Factory" / "My Library" / "Project" / "missing
-    /// from library") — filtering uses [`Self::source`], not this string.
+    /// display text only ("Factory" / "My Library" / "Project") —
+    /// filtering uses [`Self::source`], not this string.
     pub badge: Option<String>,
     /// Source-filter dimension (PRESET_LIBRARY_DESIGN P5, D6): `None` for
     /// pickers with no source concept (the graph-editor node picker).
     pub source: Option<Source>,
-    /// True for a project-embedded `Snapshot` entry surfaced only because its
-    /// library file is gone (PRESET_LIBRARY_DESIGN section 3/D6: "listed only when
-    /// their source file is gone, badged 'missing from library'"). Distinct
-    /// from `source`/`badge` because it also gates the browser's right-click
-    /// management menu off (an auto-captured cache isn't user-manageable the
-    /// way a `Saved` project preset is).
-    pub missing_from_library: bool,
     /// Absolute path to a save-time-rendered thumbnail PNG (PRESET_LIBRARY_DESIGN
     /// P6, D7) — `Some` for a Factory/My-Library entry that has one, `None`
     /// otherwise (This-Project entries never do; browse time never renders one
@@ -57,8 +50,7 @@ pub enum Source {
     Factory,
     /// A file under the user's library folder.
     MyLibrary,
-    /// A project-embedded preset (`origin: Saved`, or a `Snapshot` whose
-    /// library file is gone — see [`PickerItem::missing_from_library`]).
+    /// A project-embedded preset (`origin: Saved`).
     Project,
 }
 
@@ -325,7 +317,6 @@ mod tests {
             search_text: search.map(str::to_string),
             badge: None,
             source,
-            missing_from_library: false,
             thumbnail: None,
         }
     }
