@@ -295,6 +295,7 @@
           "inputs": [
             { "name": "particles", "portType": "Array(WaterParticle)" },
             { "name": "camera", "portType": "Camera" },
+            { "name": "collider", "portType": "Transform" },
             { "name": "reset", "portType": "Scalar(F32)" },
             { "name": "timeScale", "portType": "Scalar(F32)" }
           ],
@@ -405,6 +406,7 @@
         "wires": [
           { "fromNode": 41, "fromPort": "particles", "toNode": 42, "toPort": "particles" },
           { "fromNode": 41, "fromPort": "camera", "toNode": 42, "toPort": "camera" },
+          { "fromNode": 41, "fromPort": "collider", "toNode": 42, "toPort": "collider" },
           { "fromNode": 41, "fromPort": "particles", "toNode": 43, "toPort": "particles" },
           { "fromNode": 41, "fromPort": "camera", "toNode": 43, "toPort": "camera" },
           { "fromNode": 42, "fromPort": "depth", "toNode": 44, "toPort": "in" },
@@ -696,6 +698,7 @@
     { "fromNode": 60, "fromPort": "colliderTarget", "toNode": 10, "toPort": "colliderTarget" },
     { "fromNode": 10, "fromPort": "particles", "toNode": 40, "toPort": "particles" },
     { "fromNode": 60, "fromPort": "camera", "toNode": 40, "toPort": "camera" },
+    { "fromNode": 10, "fromPort": "collider", "toNode": 40, "toPort": "collider" },
     { "fromNode": 40, "fromPort": "depth", "toNode": 60, "toPort": "waterDepth" },
     { "fromNode": 40, "fromPort": "thickness", "toNode": 60, "toPort": "waterThickness" },
     { "fromNode": 40, "fromPort": "normals", "toNode": 60, "toPort": "waterNormals" },

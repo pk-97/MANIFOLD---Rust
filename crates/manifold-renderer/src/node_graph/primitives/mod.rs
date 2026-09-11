@@ -565,8 +565,8 @@ pub use water_impulse::{
 };
 pub use water_validate::{ValidateUniforms, WGSL as VALIDATE_WGSL, WaterValidate};
 pub use particle_surface_depth::{
-    ParticleSurfaceDepth, SurfacePixelUniforms, SurfaceSplatUniforms, SURFACE_DEPTH_CLEAR_WGSL,
-    SURFACE_DEPTH_RESOLVE_WGSL, SURFACE_DEPTH_SPLAT_WGSL,
+    ParticleSurfaceDepth, SurfaceColliderUniforms, SurfacePixelUniforms, SurfaceSplatUniforms,
+    SURFACE_DEPTH_CLEAR_WGSL, SURFACE_DEPTH_RESOLVE_WGSL, SURFACE_DEPTH_SPLAT_WGSL,
 };
 pub use particle_thickness::{
     ParticleThickness, THICKNESS_RESOLVE_WGSL, THICKNESS_SPLAT_WGSL,

@@ -25,9 +25,9 @@ use manifold_gpu::{
 use manifold_renderer::node_graph::camera::{Camera, CameraMode, delinearize_depth};
 use manifold_renderer::node_graph::freeze::codegen::ENTRY;
 use manifold_renderer::node_graph::primitives::{
-    SurfacePixelUniforms, SurfaceSplatUniforms, SURFACE_DEPTH_CLEAR_WGSL,
-    SURFACE_DEPTH_RESOLVE_WGSL, SURFACE_DEPTH_SPLAT_WGSL, THICKNESS_RESOLVE_WGSL,
-    THICKNESS_SPLAT_WGSL,
+    SurfaceColliderUniforms, SurfacePixelUniforms, SurfaceSplatUniforms,
+    SURFACE_DEPTH_CLEAR_WGSL, SURFACE_DEPTH_RESOLVE_WGSL, SURFACE_DEPTH_SPLAT_WGSL,
+    THICKNESS_RESOLVE_WGSL, THICKNESS_SPLAT_WGSL,
 };
 use manifold_renderer::node_graph::water::{GRID_SPACING, PARTICLE_MASS, WaterParticle};
 
@@ -317,6 +317,25 @@ fn pixel_uniforms(w: u32, h: u32) -> SurfacePixelUniforms {
     }
 }
 
+fn collider_uniforms(
+    cam: &Camera,
+    collider: Option<([f32; 3], [f32; 3])>,
+) -> SurfaceColliderUniforms {
+    let (center, half, enabled) = collider
+        .map(|(center, half)| (center, half, 1.0))
+        .unwrap_or(([0.0; 3], [0.0; 3], 0.0));
+    SurfaceColliderUniforms {
+        camera_to_world: [
+            [cam.right[0], cam.right[1], cam.right[2], 0.0],
+            [cam.up[0], cam.up[1], cam.up[2], 0.0],
+            [cam.fwd[0], cam.fwd[1], cam.fwd[2], 0.0],
+            [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
+        ],
+        collider_center: [center[0], center[1], center[2], enabled],
+        collider_half: [half[0], half[1], half[2], 0.0],
+    }
+}
+
 fn make_output(w: u32, h: u32, format: GpuTextureFormat, label: &str) -> GpuTexture {
     device().create_texture(&GpuTextureDesc {
         width: w,
@@ -338,6 +357,17 @@ fn raster_depth(
     w: u32,
     h: u32,
 ) -> (Vec<f32>, Vec<u8>) {
+    raster_depth_with_collider(particles, cam, radius, w, h, None)
+}
+
+fn raster_depth_with_collider(
+    particles: &[WaterParticle],
+    cam: &Camera,
+    radius: f32,
+    w: u32,
+    h: u32,
+    collider: Option<([f32; 3], [f32; 3])>,
+) -> (Vec<f32>, Vec<u8>) {
     let dev = device();
     let particle_buf = dev.create_buffer_shared(particles.len() as u64 * PARTICLE_BYTES);
     write_particles(&particle_buf, particles);
@@ -353,6 +383,7 @@ fn raster_depth(
 
     let pu = pixel_uniforms(w, h);
     let su = splat_uniforms(cam, radius, w, h, particles.len() as u32);
+    let cu = collider_uniforms(cam, collider);
     let mut enc = dev.create_encoder("ws-depth");
     enc.dispatch_compute(
         &clear_pl,
@@ -371,6 +402,7 @@ fn raster_depth(
             GpuBinding::Buffer { binding: 1, buffer: &particle_buf, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: &scratch_depth, offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: &scratch_cov, offset: 0 },
+            GpuBinding::Bytes { binding: 5, data: bytemuck::bytes_of(&cu) },
         ],
         [(particles.len() as u32).div_ceil(256), 1, 1],
         "ws-splat",
@@ -392,6 +424,30 @@ fn raster_depth(
     let depth = readback_f32(&depth_tex, w, h);
     let cov = readback_u8(&cov_tex, w, h);
     (depth, cov)
+}
+
+#[test]
+fn surface_depth_clips_reconstructed_hits_inside_collider() {
+    let cam = proof_camera();
+    let particle = [make_particle([0.0, 0.0, 3.0])];
+    let (w, h) = (96, 96);
+    let radius = 0.4;
+    let (_, open) = raster_depth(&particle, &cam, radius, w, h);
+    let (_, clipped) = raster_depth_with_collider(
+        &particle,
+        &cam,
+        radius,
+        w,
+        h,
+        Some(([0.0, 0.0, 2.7], [0.3, 0.3, 0.3])),
+    );
+    let center = (h / 2 * w + w / 2) as usize;
+    assert_eq!(open[center], 255, "unclipped sphere covers the centre ray");
+    assert_eq!(clipped[center], 0, "hit inside the solid must be removed");
+    assert!(
+        clipped.iter().any(|value| *value != 0),
+        "only the solid overlap is clipped; the rest of the sphere remains"
+    );
 }
 
 /// Full node.particle_thickness pipeline: clear -> splat -> resolve.

@@ -63,6 +63,7 @@ const PARTIAL_SHADERS: &[&str] = &[
     "particle_splat_common.wgsl",
     "particle_surface_depth_splat.wgsl",
     "particle_thickness_splat.wgsl",
+    "particle_foam_splat.wgsl",
     // IMPORT_FIDELITY_DESIGN.md D2/F-P1: prepend pbr_brdf.wgsl at
     // pipeline-creation time (Hammersley / GGX importance sample / equirect
     // direction helpers). Composed validators below.

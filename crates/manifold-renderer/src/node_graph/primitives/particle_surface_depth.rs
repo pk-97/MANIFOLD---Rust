@@ -34,6 +34,8 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::water::{GRID_SPACING, WaterParticle};
 
+use super::CUBE_HALF;
+
 /// Shared splat helpers — see the module doc (single source with
 /// `node.particle_thickness`).
 pub const SURFACE_DEPTH_SPLAT_WGSL: &str = concat!(
@@ -67,6 +69,20 @@ pub struct SurfaceSplatUniforms {
 
 const _: () = assert!(core::mem::size_of::<SurfaceSplatUniforms>() == 96);
 
+/// Optional solid clip for the reconstructed surface. `camera_to_world`
+/// converts the splat kernel's +z-forward view frame back to world space;
+/// `collider_center.w` is 1 when clipping is enabled. The collider matches
+/// the solver's translating, axis-aligned box contract.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SurfaceColliderUniforms {
+    pub camera_to_world: [[f32; 4]; 4],
+    pub collider_center: [f32; 4],
+    pub collider_half: [f32; 4],
+}
+
+const _: () = assert!(core::mem::size_of::<SurfaceColliderUniforms>() == 96);
+
 /// Per-pixel kernel uniforms (clear/resolve): one u32 word each.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -90,11 +106,12 @@ pub struct SurfaceDepthScratch {
 crate::primitive! {
     name: ParticleSurfaceDepth,
     type_id: "node.particle_surface_depth",
-    purpose: "Sphere-impostor depth/coverage raster for water surface reconstruction (design section 7): splats each live WaterParticle as a sphere of radius `radius` (default 0.75*h) with per-pixel depth testing (atomicMin on the f32 bit pattern — nearer impostors win), writing raw [0,1] clip depth (R32Float, empty=1) and 0/1 coverage (R8Unorm). Perspective camera only; near-plane-intersecting spheres, a camera inside a sphere (underwater view) and beyond-far spheres are rejected, never garbage depths. Pair with node.bilateral_blur (ClipDepth mode + coverage) and node.normals_from_depth for the smoothed surface.",
+    purpose: "Sphere-impostor depth/coverage raster for water surface reconstruction (design section 7): splats each live WaterParticle as a sphere of radius `radius` (default 0.75*h) with per-pixel depth testing (atomicMin on the f32 bit pattern — nearer impostors win), writing raw [0,1] clip depth (R32Float, empty=1) and 0/1 coverage (R8Unorm). An optional collider Transform clips reconstructed hits inside the same translating AABB used by the solver, preventing smooth splats from protruding through the solid. Perspective camera only; near-plane-intersecting spheres, a camera inside a sphere (underwater view) and beyond-far spheres are rejected, never garbage depths. Pair with node.bilateral_blur (ClipDepth mode + coverage) and node.normals_from_depth for the smoothed surface.",
     inputs: {
         particles: Array(WaterParticle) required,
         shapes: Channels["surface_center_radius": Vec4F, "surface_axis_x": Vec4F, "surface_axis_y": Vec4F, "surface_axis_z": Vec4F] optional,
         camera: Camera required,
+        collider: Transform optional,
         radius: ScalarF32 optional,
     },
     outputs: {
@@ -110,9 +127,33 @@ crate::primitive! {
             range: Some((0.001, 1.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("cube_half_x"),
+            label: "Collider Half X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(CUBE_HALF[0]),
+            range: Some((0.001, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("cube_half_y"),
+            label: "Collider Half Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(CUBE_HALF[1]),
+            range: Some((0.001, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("cube_half_z"),
+            label: "Collider Half Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(CUBE_HALF[2]),
+            range: Some((0.001, 2.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "First stage of the S6 water surface graph: particles + the shared Camera in; depth + coverage out. Wire coverage + depth into node.bilateral_blur (value_space=ClipDepth) for the H/V smoothed surface, then node.normals_from_depth (depth + coverage + camera) for view normals. Output is always full canvas resolution (design section 7: no half-res before correctness).",
+    composition_notes: "First stage of the S6 water surface graph: particles + the shared Camera in; depth + coverage out. When the simulation uses node.water_collide_box, wire the accepted collider Transform here and keep cube_half_x/y/z identical so the reconstructed surface respects the physical AABB. Wire coverage + depth into node.bilateral_blur (value_space=ClipDepth) for the H/V smoothed surface, then node.normals_from_depth (depth + coverage + camera) for view normals. Output is always full canvas resolution (design section 7: no half-res before correctness).",
     examples: [],
     picker: { label: "Particle Surface Depth", category: Atom },
     summary: "Renders water particles as depth-tested sphere impostors — the surface depth map the rest of the water shading builds on.",
@@ -229,6 +270,27 @@ impl Primitive for ParticleSurfaceDepth {
             ctx.error("node.particle_surface_depth: shapes capacity must match particles");
             return;
         }
+        let collider = ctx.inputs.transform("collider");
+        let read_half = |name: &str, default: f32| match ctx.params.get(name) {
+            Some(ParamValue::Float(value)) => *value,
+            _ => default,
+        };
+        let collider_half = [
+            read_half("cube_half_x", CUBE_HALF[0]),
+            read_half("cube_half_y", CUBE_HALF[1]),
+            read_half("cube_half_z", CUBE_HALF[2]),
+        ];
+        if collider.is_some()
+            && collider_half
+                .iter()
+                .any(|half| !half.is_finite() || *half <= 0.0)
+        {
+            invalid_camera_clear(ctx, depth_tex, coverage_tex);
+            ctx.error(
+                "node.particle_surface_depth: collider half-extents must be finite and positive",
+            );
+            return;
+        }
 
         let gpu = ctx.gpu_encoder();
 
@@ -295,6 +357,7 @@ impl Primitive for ParticleSurfaceDepth {
             count: capacity,
             _pad: 0,
         };
+        let collider_uniforms = surface_collider_uniforms(&cam, collider, collider_half);
 
         // 1. Clear: depth-bits scratch to clip-depth 1.0; coverage to 0.
         gpu.native_enc.dispatch_compute(
@@ -337,6 +400,10 @@ impl Primitive for ParticleSurfaceDepth {
                 buffer: &scratch.coverage,
                 offset: 0,
             },
+            GpuBinding::Bytes {
+                binding: 5,
+                data: bytemuck::bytes_of(&collider_uniforms),
+            },
         ];
         let shaped = [
             GpuBinding::Bytes {
@@ -362,6 +429,10 @@ impl Primitive for ParticleSurfaceDepth {
                 binding: 4,
                 buffer: shapes.unwrap_or(particles),
                 offset: 0,
+            },
+            GpuBinding::Bytes {
+                binding: 5,
+                data: bytemuck::bytes_of(&collider_uniforms),
             },
         ];
         if shapes.is_some() {
@@ -413,6 +484,31 @@ impl Primitive for ParticleSurfaceDepth {
     }
 }
 
+fn surface_collider_uniforms(
+    cam: &crate::node_graph::camera::Camera,
+    collider: Option<crate::node_graph::transform::Transform>,
+    half: [f32; 3],
+) -> SurfaceColliderUniforms {
+    let center = collider.map(|value| value.pos).unwrap_or([0.0; 3]);
+    SurfaceColliderUniforms {
+        // Columns of an affine view-frame -> world transform. The splat
+        // frame uses +z along Camera::fwd.
+        camera_to_world: [
+            [cam.right[0], cam.right[1], cam.right[2], 0.0],
+            [cam.up[0], cam.up[1], cam.up[2], 0.0],
+            [cam.fwd[0], cam.fwd[1], cam.fwd[2], 0.0],
+            [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
+        ],
+        collider_center: [
+            center[0],
+            center[1],
+            center[2],
+            if collider.is_some() { 1.0 } else { 0.0 },
+        ],
+        collider_half: [half[0], half[1], half[2], 0.0],
+    }
+}
+
 /// Error fallback: empty surface — depth cleared to clip depth 1 (empty),
 /// coverage to 0 (the section 7 "no garbage" convention).
 fn invalid_camera_clear(
@@ -440,10 +536,15 @@ mod tests {
             .iter()
             .map(|p| p.name.as_ref())
             .collect();
-        assert_eq!(names, vec!["particles", "camera", "radius"]);
+        assert_eq!(
+            names,
+            vec!["particles", "shapes", "camera", "collider", "radius"]
+        );
         assert!(ParticleSurfaceDepth::INPUTS[0].required);
-        assert!(ParticleSurfaceDepth::INPUTS[1].required);
-        assert!(!ParticleSurfaceDepth::INPUTS[2].required);
+        assert!(!ParticleSurfaceDepth::INPUTS[1].required);
+        assert!(ParticleSurfaceDepth::INPUTS[2].required);
+        assert!(!ParticleSurfaceDepth::INPUTS[3].required);
+        assert!(!ParticleSurfaceDepth::INPUTS[4].required);
         let out_names: Vec<&str> = ParticleSurfaceDepth::OUTPUTS
             .iter()
             .map(|p| p.name.as_ref())

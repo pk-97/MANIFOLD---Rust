@@ -168,6 +168,7 @@
           "inputs": [
             {"name": "particles", "portType": "Array(WaterParticle)"},
             {"name": "camera", "portType": "Camera"},
+            {"name": "collider", "portType": "Transform"},
             {"name": "reset", "portType": "Scalar(F32)"},
             {"name": "timeScale", "portType": "Scalar(F32)"}
           ],
@@ -197,7 +198,17 @@
             "params": {"radius": {"type": "Float", "value": 0.046875}, "center_blend": {"type": "Float", "value": 0.5}}
           },
           {"id": 41, "nodeId": "surface_in", "typeId": "system.group_input", "handle": "input"},
-          {"id": 42, "nodeId": "splat", "typeId": "node.particle_surface_depth", "handle": "surface depth", "params": {}},
+          {
+            "id": 42,
+            "nodeId": "splat",
+            "typeId": "node.particle_surface_depth",
+            "handle": "surface depth",
+            "params": {
+              "cube_half_x": {"type": "Float", "value": 0.12},
+              "cube_half_y": {"type": "Float", "value": 0.35},
+              "cube_half_z": {"type": "Float", "value": 0.3}
+            }
+          },
           {"id": 43, "nodeId": "thick", "typeId": "node.particle_thickness", "handle": "thickness", "params": {}},
           {
             "id": 44,
@@ -245,6 +256,7 @@
         "wires": [
           {"fromNode": 41, "fromPort": "particles", "toNode": 42, "toPort": "particles"},
           {"fromNode": 41, "fromPort": "camera", "toNode": 42, "toPort": "camera"},
+          {"fromNode": 41, "fromPort": "collider", "toNode": 42, "toPort": "collider"},
           {"fromNode": 41, "fromPort": "particles", "toNode": 43, "toPort": "particles"},
           {"fromNode": 41, "fromPort": "camera", "toNode": 43, "toPort": "camera"},
           {"fromNode": 42, "fromPort": "depth", "toNode": 44, "toPort": "in"},
@@ -654,6 +666,7 @@
     {"fromNode": 60, "fromPort": "colliderTarget", "toNode": 10, "toPort": "colliderTarget"},
     {"fromNode": 10, "fromPort": "particles", "toNode": 40, "toPort": "particles"},
     {"fromNode": 60, "fromPort": "camera", "toNode": 40, "toPort": "camera"},
+    {"fromNode": 10, "fromPort": "collider", "toNode": 40, "toPort": "collider"},
     {"fromNode": 40, "fromPort": "depth", "toNode": 60, "toPort": "waterDepth"},
     {"fromNode": 40, "fromPort": "thickness", "toNode": 60, "toPort": "waterThickness"},
     {"fromNode": 40, "fromPort": "normals", "toNode": 60, "toPort": "waterNormals"},

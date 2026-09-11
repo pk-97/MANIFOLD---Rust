@@ -3,6 +3,7 @@
 
 use manifold_gpu::{GpuBinding, GpuDevice};
 use manifold_renderer::node_graph::camera::delinearize_depth;
+use manifold_renderer::node_graph::primitives::SurfaceColliderUniforms;
 
 use manifold_renderer::node_graph::water::WaterParticle;
 
@@ -138,6 +139,16 @@ fn anisotropic_depth_native_matches_f64_oracle() {
         count: 1,
         pad: 0,
     };
+    let clip = SurfaceColliderUniforms {
+        camera_to_world: [
+            [1., 0., 0., 0.],
+            [0., 1., 0., 0.],
+            [0., 0., -1., 0.],
+            [0., 0., 0., 1.],
+        ],
+        collider_center: [0.; 4],
+        collider_half: [0.; 4],
+    };
     for (case, e) in cases.into_iter().enumerate() {
         let r = e
             .axes
@@ -170,7 +181,7 @@ fn anisotropic_depth_native_matches_f64_oracle() {
             }
             let mut enc = device.create_encoder("ellipsoid-proof");
             enc.clear_buffer(&coverage);
-            let bindings = [
+            let mut bindings = vec![
                 GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&u),
@@ -190,15 +201,21 @@ fn anisotropic_depth_native_matches_f64_oracle() {
                     buffer: &coverage,
                     offset: 0,
                 },
-                GpuBinding::Buffer {
+            ];
+            if !sphere {
+                bindings.push(GpuBinding::Buffer {
                     binding: 4,
                     buffer: &shapes,
                     offset: 0,
-                },
-            ];
+                });
+            }
+            bindings.push(GpuBinding::Bytes {
+                binding: 5,
+                data: bytemuck::bytes_of(&clip),
+            });
             enc.dispatch_compute(
                 if sphere { &legacy } else { &fitted },
-                &bindings[..if sphere { 4 } else { 5 }],
+                &bindings,
                 [1, 1, 1],
                 "ellipsoid-proof",
             );
