@@ -6,9 +6,10 @@
 //! along the minimum-penetration axis to the face (post-projection
 //! penetration 0, inside the 0.1*h acceptance), and the into-surface normal
 //! component of the RELATIVE velocity (v − collider_velocity) is removed —
-//! free-slip tangential, design section 6. The basin uses the same geometry
-//! as `node.mpm_grid_velocity`; this stage corrects particle penetration,
-//! while the grid stage enforces the stationary wall no-slip velocity.
+//! free-slip tangential, design section 6. The static basin faces mirror
+//! `node.mpm_grid_velocity`'s boundary path exactly: same geometry, same
+//! free-slip rule, so the particle-level projection stays consistent with
+//! the grid-level one.
 //!
 //! The collider translation arrives on a `Transform` wire (the accepted
 //! collider from `node.water_collider_motion`, which the displayed cube
@@ -65,7 +66,7 @@ pub struct CollideBoxUniforms {
 crate::primitive! {
     name: WaterCollideBox,
     type_id: "node.water_collide_box",
-    purpose: "Project Live Water particles against the translating cube collider and the static basin (design step 6). Particles inside the cube's fixed-half-extents AABB are pushed out along the minimum-penetration axis to the face (post-projection penetration 0, within the 0.1*h acceptance), and the into-surface normal component of the relative velocity (v - collider_velocity) is removed — free-slip tangential, design section 6. The basin faces use the geometry of node.mpm_grid_velocity for particle no-penetration cleanup; the grid stage separately enforces stationary-wall no-slip velocity. The collider translation arrives on a Transform wire — the accepted collider emitted by node.water_collider_motion, which the displayed cube consumes — so collision and display can never diverge. Rotation/scale are display-only. Inactive slots pass through; density and affine state are untouched.",
+    purpose: "Project Live Water particles against the translating cube collider and the static basin (design step 6). Particles inside the cube's fixed-half-extents AABB are pushed out along the minimum-penetration axis to the face (post-projection penetration 0, within the 0.1*h acceptance), and the into-surface normal component of the relative velocity (v - collider_velocity) is removed — free-slip tangential, design section 6. The basin faces use the exact rule and geometry of node.mpm_grid_velocity's boundary path so particle-level projection closes the grid-resolution leakage consistently. The collider translation arrives on a Transform wire — the accepted collider emitted by node.water_collider_motion, which the displayed cube consumes — so collision and display can never diverge. Rotation/scale are display-only. Inactive slots pass through; density and affine state are untouched.",
     inputs: {
         in: Array(WaterParticle) required,
         collider: Transform required,

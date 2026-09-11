@@ -4,9 +4,9 @@
 // box, the particle is pushed out along the minimum-penetration axis to the
 // face (penetration 0 <= 0.1*h acceptance), and the into-surface component of
 // the RELATIVE velocity (v - collider_velocity) is removed — free-slip
-// tangential, design section 6. Static basin geometry matches the grid; this
-// particle stage only corrects penetration. No-slip wall velocity is enforced
-// on the grid before G2P.
+// tangential, design section 6. The static basin faces mirror
+// node.mpm_grid_velocity's boundary path exactly (same geometry, same
+// free-slip rule) so particle and grid stay consistent.
 //
 // ABI (buffer standalone codegen): `in` is coincident (pre-read into
 // e_particles); the collider translation and velocity arrive as derived
@@ -82,8 +82,8 @@ fn body(
         }
     }
 
-    // Static basin: geometric no-penetration cleanup after advection.
-    // The grid stage separately enforces no-slip wall velocity.
+    // Static basin — identical rule and geometry to mpm_grid_velocity's
+    // boundary path, applied to the particle after advection.
     if (pos.x <= basin_min_x) { pos.x = basin_min_x; v.x = max(v.x, 0.0); }
     if (pos.x >= basin_max_x) { pos.x = basin_max_x; v.x = min(v.x, 0.0); }
     if (pos.y <= basin_min_y) { pos.y = basin_min_y; v.y = max(v.y, 0.0); }
