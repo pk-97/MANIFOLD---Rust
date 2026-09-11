@@ -1,8 +1,8 @@
 # Preset Browser — live audition grid, crud removal, and layout polish
 
-**Status:** SHIPPED P1–P3 · 2026-09-05 · k3 (lead) — live audition grid, crud removal, atomic context adds, layout polish all on main; Deferred section carries the follow-ups (audio-modulated audition, clip-slot entry, aliases authoring, triple-bridge upgrade on tearing)
+**Status:** SUPERSEDED by STATIC_THUMBNAILS_DESIGN.md — the live audition grid it specified is deleted (statics-only browser); this doc survives as history of the shipped P1–P3 browser work only.
 **Prerequisites:** none
-Lifecycle: contract — defines live audition behaviour and the remaining browser audition extensions.
+Lifecycle: superseded — STATIC_THUMBNAILS_DESIGN.md (D1) deleted the live audition machinery this doc specified; body kept for the shipped browser-layout/crud history.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 The effect/generator browser is a wall of identical gradient thumbnails on enormous

@@ -70,6 +70,9 @@
       "calibrated-param",
       "param-step"
     ],
+    "crates/manifold-ui/src/panels/browser_popup.rs": [
+      "effect-browser"
+    ],
     "crates/manifold-app/src/ui_bridge/projection/timeline.rs": [
       "drag-clip",
       "trim-clip",
@@ -132,6 +135,7 @@
     "audio-dock-scroll": "audiosends",
     "calibrated-param-card-reads-manifest": "inspector",
     "drag-clip-release-over-inspector": "timeline",
+    "effect-browser-open": "inspector",
     "scene-setup-ux-p2-demo": "gltfscene",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "rt-quality-panel-demo": "rtquality"

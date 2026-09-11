@@ -514,7 +514,6 @@ pub fn render_graph_editor_to_png(
                 search_text: None,
                 badge: None,
                 source: None,
-                missing_from_library: false,
                 thumbnail: None,
             })
             .collect();

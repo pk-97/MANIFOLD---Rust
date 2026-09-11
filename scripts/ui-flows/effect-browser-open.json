@@ -1,0 +1,43 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Effect",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Effect",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Bloom",
+          "type": "Label"
+        }
+      },
+      "check": "Exists"
+    }
+  }
+]

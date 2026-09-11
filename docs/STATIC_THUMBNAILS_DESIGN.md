@@ -1,6 +1,6 @@
 # Static Browser Thumbnails — a picker that opens instantly and tells the truth
 
-**Status:** APPROVED design, not built · 2026-09-11 · k3 (lead)
+**Status:** P1–P2 landed · P3 in flight · 2026-09-11 · k3 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs)–section 6 (seam briefs) before starting any phase.
 

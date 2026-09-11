@@ -243,15 +243,11 @@ impl UIRoot {
             .filter(|r| !lib.is_user_entry(kind, &r.id))
             .map(|r| r.id.as_str().to_string())
             .collect();
-        let mut seen_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::with_capacity(available.len());
-
         let mut items: Vec<PickerItem> = available
             .iter()
             .map(|reg| {
                 let is_user = lib.is_user_entry(kind, &reg.id);
                 let id = reg.id.as_str().to_string();
-                seen_ids.insert(id.clone());
                 // PRESET_LIBRARY_DESIGN P6, D7: a My-Library entry's PNG
                 // sits beside its JSON (`UserLibrary::thumbnail_path`); a
                 // Factory entry's comes from the committed one-shot bin
@@ -287,7 +283,6 @@ impl UIRoot {
                         None
                     },
                     source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
-                    missing_from_library: false,
                     thumbnail,
                 }
             })
@@ -295,18 +290,15 @@ impl UIRoot {
 
         for e in self.embedded_presets.iter().filter(|e| e.kind == kind) {
             use manifold_core::project::EmbeddedOrigin;
-            let missing = match e.origin {
-                EmbeddedOrigin::Saved => false,
-                // A Snapshot whose id already resolves elsewhere (disk file
-                // still there) is already represented via `available` above
-                // — skip it entirely rather than list it twice.
-                EmbeddedOrigin::Snapshot => {
-                    if seen_ids.contains(&e.type_id) {
-                        continue;
-                    }
-                    true
-                }
-            };
+            // STATIC_THUMBNAILS_DESIGN D8: an unresolvable Snapshot (its
+            // library file gone) is self-containment plumbing, not a
+            // user-manageable choice — it never becomes a PickerItem (the
+            // layers using it still show it on the layer card). A Snapshot
+            // whose id resolves elsewhere is already represented via
+            // `available` above.
+            if e.origin == EmbeddedOrigin::Snapshot {
+                continue;
+            }
             items.push(PickerItem {
                 label: e.display_name.clone(),
                 type_id: e.type_id.clone(),
@@ -317,11 +309,9 @@ impl UIRoot {
                     &e.type_id,
                 )),
                 // Saved project presets are an ordinary state, not an
-                // exceptional one (D10) — only the unresolvable Snapshot
-                // gets a badge.
-                badge: missing.then(|| "missing from library".to_string()),
+                // exceptional one (D10) — no badge.
+                badge: None,
                 source: Some(Source::Project),
-                missing_from_library: missing,
                 // This-Project entries never get a thumbnail (D7 only
                 // covers Save to Library + the factory bin) — text fallback.
                 thumbnail: None,
