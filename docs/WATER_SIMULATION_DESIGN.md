@@ -1,8 +1,108 @@
-# Live Water — MLS-MPM in the scene graph
+# Live Water — solver replacement and scene integration
 
 <!-- index: Dedicated MLS-MPM water: bounded graph substeps, persistent layer state, moving colliders, scene depth/refraction, and the pool-and-cube prototype. -->
 
-**Status:** PROPOSED implementation specification · 2026-09-09 · Astra. Peter approved the direction and MVP; the numerical defaults below are hypotheses to prove, not measured capability. No water implementation is claimed. Execution review 2026-09-09 (Astra, via Peter): the k3 lead seat owns S2/S7 and all landing; Q=2^20 is the sole momentum encoding, conditional on S1 proof; c0=10 stays baseline, with softness classified as expected only after the half-timestep stability gate (sections 5 and 8).
+**Status:** IMPLEMENTED ON `wave/live-water`, RELEASE BLOCKED by BUG-01vr · 2026-09-11. Production at `bf9e56965` retains density-field rendering, dielectric shading and collocated MLS-MPM physics. Timestep convergence and late resting motion remain unresolved. The user authorized a researched solver replacement. APIC/MAC is under numerical validation, not accepted production behavior. No main landing while the blocker is open.
+
+## Replacement decision — 2026-09-11
+
+The replacement candidate is **incompressible MAC-grid APIC**, following
+Jiang et al. 2015 section 6, equations 12–14, and the complete free-surface
+pipeline in the maintained FLIP Fluids engine. This supersedes the earlier
+MLS-MPM-only decision for this authorized replacement. The numbered MLS-MPM
+formulas below describe the existing implementation until replacement; they
+are not formulas to mix into APIC.
+
+The implementation reference is `rlguy/Blender-FLIP-Fluids` commit
+`70a0e954018fe39e1f9c3631264989569752bb7a`, dated 2026-08-24. Engine files
+declare MIT; the separately GPL Blender add-on is not an import source.
+No Blender dependency is introduced. Adapted source must retain applicable
+notices. The f64 references independently implement the stated equations.
+
+| Primary source / implementation | Date and applicability | Evidence limits / decision |
+|---|---|---|
+| [APIC paper](https://www.andyselle.com/papers/24/apic.pdf), [publication record](https://doi.org/10.1145/2766996) | Published 2015-07-27. Section 6 defines trilinear staggered-face transfers. | Figure 15 reports offline timing, not 1080p real time. Selected transfer formulation. |
+| [FLIP Fluids engine](https://github.com/rlguy/Blender-FLIP-Fluids/tree/70a0e954018fe39e1f9c3631264989569752bb7a/src/engine), [APIC comparisons](https://github.com/rlguy/Blender-FLIP-Fluids/wiki/Domain-Advanced-Settings) | Maintained through August 2026; APIC introduced April 2021. Pressure, SDF, transfers, extrapolation and collision inspected together. | Offline CPU implementation. Dam-break example uses 1221 APIC versus 1427 FLIP timesteps, not a frame-rate benchmark. Selected coherent reference. |
+| [Batty et al. coupling](https://www.cs.ubc.ca/labs/imager/tr/2007/Batty_VariationalFluids/) | SIGGRAPH 2007. Fractional solid boundaries and compatible pressure projection; supplied liquid sample includes ghost-fluid conditions. | Reduced-resolution interactive example is not our performance proof. |
+| [ST-FLIP](https://ge.in.tum.de/publications/spatiotemporal-flip/) | SIGGRAPH 2026. Spacetime deposition and phase-field pressure address large-step temporal aliasing. | Authors report 2–8x speedups on large offline simulations. Deposition and pressure change together; not selected or mixed into APIC. |
+| [Leapfrog Flow Maps](https://yuchen-sun-cg.github.io/projects/lfm/) | SIGGRAPH 2025. Real-time vortical flows and GPU AMGPCG. | Fire and aerodynamic examples do not establish particle free-surface water behavior. |
+| [SPlisHSPlasH](https://github.com/InteractiveComputerGraphics/SPlisHSPlasH), [DFSPH](https://animation.rwth-aachen.de/media/papers/2015-SCA-DFSPH.pdf) | Maintained MIT library implementing the 2015 divergence/density pressure method and later boundary work. | Credible alternative with a different neighborhood and boundary formulation; no SPH corrections mixed into APIC. |
+| [gl-pic-fluid](https://github.com/loganzartman/gl-pic-fluid) | MIT interactive 3D GPU PIC/FLIP. | Author reports biased wall pressures and corner explosions. Rejected as a correctness reference. |
+| [Particles4All](https://github.com/matsuoka-601/Particles4All) | Current MIT interactive PBD fluid/rigid demo. | Different constraint method; no matched long-run/refinement/performance evidence for this task. |
+
+### Coupled numerical contract
+
+1. Trilinear P2G accumulates `m*w` and `m*w*(v_axis+C_row dot displacement)`
+   on staggered faces. G2P uses the same weights and their gradients (APIC
+   equation 14). The old quadratic MAC prototype is not a drop-in transfer.
+2. The physics liquid SDF is a particle sphere union, radius `sqrt(3)*h/2`,
+   with the pinned engine's `0.005*h` near-zero conditioning and solid
+   extension. It is separate from the retained density-field renderer.
+3. Extrapolate face velocities by bounded six-neighbor layers, apply gravity,
+   then solve fractional MAC pressure. With `q=dt*p/rho`, RHS is negative
+   divergence of face flux `openFace*uFluid + (openCenter-openFace)*uSolid`
+   evaluated with each liquid cell’s open-volume fraction, matching the pinned
+   engine’s moving-solid correction. Coefficients are open fractions divided
+   by `h²`. Matrix and gradient use identical liquid-air ghost
+   distance ratios, capped at 25 as in the pinned engine. Never apply the
+   open fraction twice or multiply the q-gradient by dt/rho again.
+4. Zero-pressure air, fractional solid apertures and solid normal velocities
+   form one boundary discretization. The cell-volume correction is retained
+   even when the solid velocity extension is not divergence-free. Closed
+   incompatible pockets and pressure nonconvergence are explicit failures.
+5. Extrapolate pressure-valid velocities and enforce solid normal flux.
+   The CPU box fixture uses an explicit free-slip sampling extension: even
+   tangential and odd normal reflection through aligned static basin walls.
+   This intentionally differs from the reference engine's zero-valued samples
+   inside static solids, which introduce tangential drag in particle gathering.
+   The pressure aperture constraints remain unchanged. Gather APIC velocity/
+   affine state, use reference RK3 advection, then geometric particle collision.
+   No affine suppression or PIC blend. General moving-obstacle sampling remains
+   unimplemented.
+6. Pressure iteration limits require a checked residual and fault on
+   exhaustion. CFL safety and timestep refinement govern timestep selection;
+   the old 960 Hz default is not inherited as evidence.
+
+The target is **1920×1080 at 30 FPS for the complete scene**. None of these
+sources proves that target on Peter's Mac. Explicit sketch/offline tiers
+must report settings and cannot silently discard simulation time. Earlier
+60 FPS targets below are historical. Measure the combined solver and retained
+rendering before claiming a real-time tier.
+
+Validation runs from independent f64 kernels through a combined particle/SDF/
+projection timestep, native GPU parity, physical cases and observed renders.
+Required cases include 60-second rest and post-impact settling, small-amplitude
+wave frequency/decay, impacts, translating boundaries, particle mass and
+reconstructed volume, and timestep refinement. Lower kinetic energy alone
+does not pass. Stage-only tests cannot close BUG-01vr or permit main landing.
+
+### Current numerical evidence
+
+The coupled CPU fixture is experimental and its acceptance tests remain red.
+At fixed basin width 1.25 m and water depth 0.375 m, refining h from 0.125 to
+0.0625 to 0.03125 m substantially improves wave dispersion. With the final
+free-slip sampling correction at h=0.03125 m and dt=1/120 s, the measured
+period is 1.45614 s versus theoretical 1.47462 s, and the later peak envelope
+retains 96.7% of its initial height. These pass the 10% period and 50% retention
+bounds. The 60→120 Hz and 120→240 Hz normalized waveform differences are
+2.42% and 3.45% respectively: both satisfy the original 10% agreement bound,
+but successive timestep refinement does not improve agreement. The additional
+monotonic-refinement gate failed before and after the wall correction; further
+solver changes stopped at the repository attempt limit. No passing coupled
+acceptance, moving-object validation, production GPU solver or video is claimed.
+
+The three native transfer/extrapolation drafts passed eight shader/ABI unit
+checks and renderer clippy, but native compilation panicked in Naga 28
+SPIR-V emission (`Expression [97] is not cached`) before dispatch. GPU parity
+is unverified. Their module/startup/proof registrations were removed so these
+unaccepted drafts do not affect app startup. Re-integration must restore the
+`mac_velocity`/`mac_valid` channel names and pass the scoped native gate.
+
+The previously reported 5% amplitude retention sampled at the theoretical
+period despite the phase error; it was not a peak-decay measurement. The
+fixture now reports peak envelopes separately. Occupied-cell volume is only
+a geometric proxy, not a proof of volume conservation.
+
 **Prerequisites:** existing scene renderer, material system and native Metal backend. No cloth, ropes, baked-cache import or generic physics engine prerequisite.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; executable assignments are in [WATER_IMPLEMENTATION_PLAN.md](WATER_IMPLEMENTATION_PLAN.md).
 
