@@ -30,9 +30,9 @@ type LeafMap = BTreeMap<String, Vec<NodeId>>;
 mod conformance;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod parameter_guard_tests;
+#[cfg(test)]
+mod tests;
 
 fn invalid(path: impl Into<String>, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::InvalidRecipe {
@@ -65,15 +65,30 @@ pub fn validate_modifier_runtime(
     graph: &crate::node_graph::Graph,
 ) -> Result<(), SceneModifierExpandError> {
     for instance in &owner.scene_modifiers {
-        let writes_vertices = instance.graph.preset_metadata.as_ref()
+        let writes_vertices = instance
+            .graph
+            .preset_metadata
+            .as_ref()
             .and_then(|metadata| metadata.scene_modifier.as_ref())
-            .is_some_and(|recipe| recipe.stages.iter().any(|stage|
-                stage.outputs.iter().any(|output| output.endpoint == SceneEndpoint::Vertices)));
-        if !writes_vertices { continue; }
-        let scene = graph.instance_by_node_id(&instance.scene.node)
+            .is_some_and(|recipe| {
+                recipe.stages.iter().any(|stage| {
+                    stage
+                        .outputs
+                        .iter()
+                        .any(|output| output.endpoint == SceneEndpoint::Vertices)
+                })
+            });
+        if !writes_vertices {
+            continue;
+        }
+        let scene = graph
+            .instance_by_node_id(&instance.scene.node)
             .and_then(|id| graph.get_node(id))
             .ok_or_else(|| invalid(instance.id.to_string(), "prepared scene target is absent"))?;
-        if matches!(scene.params.get("rt_enabled"), Some(crate::node_graph::parameters::ParamValue::Bool(true))) {
+        if matches!(
+            scene.params.get("rt_enabled"),
+            Some(crate::node_graph::parameters::ParamValue::Bool(true))
+        ) {
             return Err(SceneModifierExpandError::UnsupportedRenderMode {
                 path: instance.id.to_string(),
                 detail: "effective ray tracing is incompatible with a vertices modifier, including while bypassed".into(),
@@ -140,6 +155,7 @@ pub fn prepare_scene_modifiers(
         return Ok(PreparedSceneModifierGraph {
             def: owner.clone(),
             routes: Vec::new(),
+            event_routes: Vec::new(),
             binding_sources: Vec::new(),
         });
     }
@@ -161,6 +177,7 @@ pub fn prepare_scene_modifiers(
         reference: BTreeMap::new(),
         written: BTreeSet::new(),
         contexts: BTreeMap::new(),
+        event_routes: Vec::new(),
     };
     let mut leaf_maps = BTreeMap::new();
     let mut target_maps = BTreeMap::new();
@@ -259,6 +276,7 @@ pub fn prepare_scene_modifiers(
     Ok(PreparedSceneModifierGraph {
         def: prepared,
         routes,
+        event_routes: builder.event_routes,
         binding_sources,
     })
 }
@@ -321,6 +339,7 @@ struct Builder<'a> {
     reference: BTreeMap<EndpointKey, Option<PortAddress>>,
     written: BTreeSet<EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
+    event_routes: Vec<super::SceneModifierEventRoute>,
 }
 
 fn preflight_expansion(
@@ -365,6 +384,21 @@ fn preflight_expansion(
             .as_ref()
             .and_then(|metadata| metadata.scene_modifier.as_ref())
             .ok_or_else(|| invalid(instance.id.to_string(), "instance has no recipe"))?;
+        if recipe
+            .stages
+            .iter()
+            .flat_map(|stage| &stage.inputs)
+            .any(|input| {
+                matches!(
+                    input.source,
+                    SceneStageSource::Context {
+                        value: SceneContextValue::TriggerCount | SceneContextValue::TriggerBaseline
+                    }
+                )
+            })
+        {
+            node_count = node_count.saturating_add(2);
+        }
         for node in &instance.graph.nodes {
             let (nodes, wires) = count(node, 0)?;
             let stage = recipe
@@ -493,8 +527,58 @@ impl Builder<'_> {
     ) -> Result<PortAddress, SceneModifierExpandError> {
         if matches!(
             value,
-            SceneContextValue::Time | SceneContextValue::Beat | SceneContextValue::TriggerCount | SceneContextValue::TriggerBaseline
+            SceneContextValue::TriggerCount | SceneContextValue::TriggerBaseline
         ) {
+            if !self
+                .event_routes
+                .iter()
+                .any(|route| route.modifier_id == instance.id)
+            {
+                let mut nodes = Vec::with_capacity(2);
+                for kind in ["count", "baseline"] {
+                    let key = serde_json::to_string(&(instance.id.as_str(), "events", kind))
+                        .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
+                    let params = BTreeMap::from([(
+                        "value".into(),
+                        SerializedParamValue::Float { value: 0.0 },
+                    )]);
+                    let (id, _) = self.constant_node(key, "node.value", params, "out")?;
+                    nodes.push(
+                        self.derived
+                            .nodes
+                            .iter()
+                            .find(|node| node.id == id)
+                            .unwrap()
+                            .node_id
+                            .clone(),
+                    );
+                }
+                self.event_routes.push(super::SceneModifierEventRoute {
+                    modifier_id: instance.id.clone(),
+                    count_node: nodes.remove(0),
+                    baseline_node: nodes.remove(0),
+                });
+            }
+            let route = self
+                .event_routes
+                .iter()
+                .find(|route| route.modifier_id == instance.id)
+                .unwrap();
+            let node_id = if value == SceneContextValue::TriggerCount {
+                &route.count_node
+            } else {
+                &route.baseline_node
+            };
+            let id = self
+                .derived
+                .nodes
+                .iter()
+                .find(|node| &node.node_id == node_id)
+                .unwrap()
+                .id;
+            return Ok((id, "out".into()));
+        }
+        if matches!(value, SceneContextValue::Time | SceneContextValue::Beat) {
             let mut sources = self
                 .index
                 .flat
@@ -518,8 +602,7 @@ impl Builder<'_> {
                 match value {
                     SceneContextValue::Time => "time",
                     SceneContextValue::Beat => "beat",
-                    SceneContextValue::TriggerBaseline => "trigger_baseline",
-                    _ => "trigger_count",
+                    _ => unreachable!("only time and beat use the host boundary"),
                 }
                 .into(),
             ));

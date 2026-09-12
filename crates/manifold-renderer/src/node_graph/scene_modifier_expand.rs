@@ -5,6 +5,8 @@
 
 mod bindings;
 mod buffer_budget;
+mod event_state;
+pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use bindings::SceneModifierBindingSource;
 pub use buffer_budget::{
     MODIFIER_BUFFER_LIMIT_BYTES, ModifierBufferUsage, PreparedModifierBufferBudget,

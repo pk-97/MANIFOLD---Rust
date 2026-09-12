@@ -1856,7 +1856,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// section 8 P2: fold this tick's audio-trigger fires into the renderer's
     /// per-layer (or master) `audio_count`. `pulses` is
     /// `PlaybackEngine::take_trigger_pulses`'s output for this tick — pure
-    /// bookkeeping, no GPU work. A `Some(layer_id)` pulse bumps that layer's
+    /// bookkeeping, no GPU work. A `Some(layer_id)` pulse targets its modifier
+    /// when the firing owner and gate match; legacy gates bump the layer's
     /// `GeneratorRenderer` counter (a no-op if the layer's generator was
     /// deleted the same tick); `None` (D5: master/global chains have no
     /// layer) bumps `master_trigger_count`. Takes the counter by `&mut u32`
@@ -1877,7 +1878,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             match &pulse.layer_id {
                 Some(layer_id) => {
                     if let Some(gr) = gen_renderer.as_deref_mut() {
-                        gr.bump_audio_count(layer_id);
+                        gr.route_audio_pulse(layer_id, &pulse.owner_id, pulse.param_key);
                     }
                 }
                 None => {

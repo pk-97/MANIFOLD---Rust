@@ -338,7 +338,7 @@ impl PresetRuntime {
                     .filter_map(|(binding, source)| matches!(binding.target, BindingTarget::Node { .. }).then_some(source))
                     .collect::<Vec<_>>()).unwrap_or_default();
             let guards = crate::node_graph::scene_modifier_expand::PreparedModifierParameterGuards::prepare(&doc)?;
-            (prepared.def, Some((doc, prepared.routes, sources, guards)))
+            (prepared.def, Some((doc, prepared.routes, sources, guards, prepared.event_routes)))
         } else { (doc, None) };
         let fused = if render_fused {
             crate::node_graph::freeze::install::fused_generator_view_for(&render_def)
@@ -351,13 +351,16 @@ impl PresetRuntime {
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }
-        if let Some((canonical, routes, sources, guards)) = authoring {
+        if let Some((canonical, routes, sources, guards, event_routes)) = authoring {
             crate::node_graph::scene_modifier_expand::validate_modifier_runtime(&canonical, &runtime.graph)?;
             let empty_members = ahash::AHashMap::default();
             let members = fused.as_ref().map_or(&empty_members, |view| &view.node_retarget);
             let budget = PreparedModifierBufferBudget::prepare(&canonical, &routes, &runtime.graph, members)?;
             runtime.graph.set_modifier_buffer_budget(budget);
             guards.install(&mut runtime.graph)?;
+            runtime.modifier_events = Some(crate::node_graph::scene_modifier_expand::PreparedModifierEvents::prepare(
+                &canonical, &event_routes, &runtime.graph,
+            )?);
             runtime.modifier_control_state = Some(crate::node_graph::scene_modifier_expand::PreparedModifierControlState::prepare_with_fusion(
                 &canonical, &routes, &runtime.graph, members,
             )?);
@@ -705,6 +708,7 @@ impl PresetRuntime {
             modifier_preview_routes: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
+            modifier_events: None,
             group_mix_nodes: Vec::new(),
             io: PresetIo::Generate {
                 generator_input_id,

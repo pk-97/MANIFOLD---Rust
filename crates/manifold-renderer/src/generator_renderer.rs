@@ -40,6 +40,7 @@ impl ActiveClip {
 /// temporal state (particle positions, attractors, etc.).
 struct LayerGeneratorState {
     generator: Box<PresetRuntime>,
+    event_owner: Option<manifold_core::EffectId>,
     generator_type: PresetTypeId,
     /// The layer's clip-launch edge counter (existing behavior, unconditional
     /// pre-section 8) — bumped in `acquire_clip`, gated by the generator's own
@@ -329,6 +330,18 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Modifier-owned audio stays in that modifier's stream. Legacy host and
+    /// effect gates retain the existing layer counter behavior.
+    pub fn route_audio_pulse(&mut self, layer_id: &LayerId, owner: &manifold_core::EffectId, param_key: u64) {
+        if let Some(layer) = self.layer_generators.get_mut(layer_id)
+            && layer.event_owner.as_ref() == Some(owner)
+            && layer.generator.note_modifier_audio_key(param_key)
+        {
+            return;
+        }
+        self.bump_audio_count(layer_id);
+    }
+
     /// section 8 D1: `layer_id`'s effective `trigger_count` (clip edge + audio
     /// fires) for the content pipeline to feed into that layer's effect
     /// chain's `PresetContext` (D5 — replaces the old pinned 0.0). `0` if the
@@ -421,6 +434,7 @@ impl GeneratorRenderer {
         override_version: u32,
         param_version: u32,
         clip_edge_enabled: bool,
+        modifier_event: Option<(&manifold_core::effects::PresetInstance, bool)>,
         // The layer's live per-instance manifest, forwarded to
         // `install_layer_generator` when this clip start triggers a build so
         // the reshape sources from the manifest, not the stale shadow (BUG-078).
@@ -500,9 +514,18 @@ impl GeneratorRenderer {
         // generator's own `audio_trigger.mode` (no config = always on,
         // preserving pre-section 8 behavior byte-for-byte for every project that
         // hasn't touched this feature).
-        if clip_edge_enabled && let Some(ls) = self.layer_generators.get_mut(&layer_id) {
-            ls.generator.note_trigger_event(ls.effective_trigger_count());
-            ls.clip_count = ls.clip_count.wrapping_add(1);
+        if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
+            let clip_edge_enabled = modifier_event.map_or(clip_edge_enabled, |(host, fire)| {
+                fire && host.clip_edge_enabled_matching(|param| !ls.generator.is_modifier_trigger_param(param))
+            });
+            if let Some((host, fire_clip_edge)) = modifier_event {
+                ls.event_owner = Some(host.id.clone());
+                if fire_clip_edge { ls.generator.note_modifier_clip_event(Some(host)); }
+            }
+            if clip_edge_enabled {
+                ls.generator.note_trigger_event(ls.effective_trigger_count());
+                ls.clip_count = ls.clip_count.wrapping_add(1);
+            }
         }
 
         // Create render target at full output resolution. Pool-recycle when
@@ -1052,6 +1075,7 @@ impl GeneratorRenderer {
         // never misses a --profile run in progress.
         generator.set_profiling(self.profiling_enabled);
         generator.set_profile_scope(&gen_scope(&layer_id));
+        let event_owner = self.layer_generators.get(&layer_id).and_then(|prior| prior.event_owner.clone());
         if let Some(prior) = self.layer_generators.get_mut(&layer_id)
             && prior.generator_type == gen_type
         {
@@ -1061,6 +1085,7 @@ impl GeneratorRenderer {
             layer_id.clone(),
             LayerGeneratorState {
                 generator,
+                event_owner,
                 generator_type: gen_type,
                 clip_count,
                 audio_count,
@@ -1299,6 +1324,7 @@ impl ClipRenderer for GeneratorRenderer {
             override_version,
             param_version,
             clip_edge_enabled,
+            layer.and_then(|layer| layer.gen_params()).map(|host| (host, fire_clip_edge)),
             manifest,
             relight,
             relight_params,
@@ -1849,6 +1875,7 @@ mod tests {
             0,
             true,
             None,
+            None,
             false,
             manifold_core::effects::RelightParams::default(),
         ));
@@ -1862,6 +1889,7 @@ mod tests {
             0,
             0,
             true,
+            None,
             None,
             false,
             manifold_core::effects::RelightParams::default(),
@@ -1894,6 +1922,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             None,
             false,
             manifold_core::effects::RelightParams::default(),

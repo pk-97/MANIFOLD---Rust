@@ -25,6 +25,7 @@ pub struct SceneModifierNodeRoute {
 pub struct PreparedSceneModifierGraph {
     pub def: EffectGraphDef,
     pub routes: Vec<SceneModifierNodeRoute>,
+    pub event_routes: Vec<super::SceneModifierEventRoute>,
     /// One entry per expanded numeric binding, before runtime target resolution.
     pub binding_sources: Vec<Option<super::bindings::SceneModifierBindingSource>>,
 }

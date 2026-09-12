@@ -740,7 +740,9 @@ fn evaluate_instance_audio_mods(
             if m.trigger_edge.advance(edge_level, 0.5)
                 && m.trigger_mode.unwrap_or(TriggerFireMode::Both).wants_transient()
             {
-                pulses.push(TriggerPulse { layer_id: layer_id.clone() });
+                pulses.push(TriggerPulse {
+                    layer_id: layer_id.clone(), owner_id: fx.id.clone(), param_key: fire_meter_key_for_param("", m.param_id.as_ref()),
+                });
             }
             continue;
         }
@@ -884,13 +886,19 @@ fn evaluate_instance_audio_mods(
 
 /// One instance's trigger-gate fire this tick (section 9 U1, formerly section 8 D1's
 /// `audio_trigger` pulse), for the renderer (P2) to fold into its
-/// `audio_count`. `layer_id` is `None` for a master-chain instance (D5:
+/// `audio_count` or route to one prepared scene modifier. The explicit owner
+/// and parameter token prevent a modifier's audio edge from becoming a layer
+/// broadcast. `layer_id` is `None` for a master-chain instance (D5:
 /// "master/global chains have no layer... audio fires still work") — the
 /// renderer keys a master-scoped counter off that sentinel. Collected by
 /// [`evaluate_all_audio_mods`] itself now — no separate walk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerPulse {
     pub layer_id: Option<manifold_core::id::LayerId>,
+    /// Preserve the firing gate's owner through renderer dispatch.
+    pub owner_id: manifold_core::id::EffectId,
+    /// Allocation-free parameter token; owner identity is carried separately.
+    pub param_key: u64,
 }
 
 /// BUG-051 fix (section 8 D4, still true post-section 9): drop every audio-mod's trigger
@@ -1748,7 +1756,11 @@ mod tests {
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
         evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
-        assert_eq!(pulses, vec![TriggerPulse { layer_id: Some(layer_id) }]);
+        assert_eq!(pulses, vec![TriggerPulse {
+            layer_id: Some(layer_id),
+            owner_id: project.timeline.layers[0].gen_params().unwrap().id.clone(),
+            param_key: fire_meter_key_for_param("", "clip_trigger"),
+        }]);
     }
 
     #[test]
@@ -1808,7 +1820,9 @@ mod tests {
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
         evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
-        assert_eq!(pulses, vec![TriggerPulse { layer_id: None }]);
+        assert_eq!(pulses, vec![TriggerPulse {
+            layer_id: None, owner_id: project.settings.master_effects[0].id.clone(), param_key: fire_meter_key_for_param("", "clip_trigger"),
+        }]);
     }
 
     #[test]

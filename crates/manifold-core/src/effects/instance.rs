@@ -1349,11 +1349,18 @@ impl PresetInstance {
     /// silently killing clip triggers on reload), now expressed with zero
     /// trigger-specific storage: a fire-mode mod is just a normal audio mod.
     pub fn clip_edge_enabled(&self) -> bool {
+        self.clip_edge_enabled_matching(|_| true)
+    }
+
+    /// Apply the existing clip-mode policy to a selected set of gate params.
+    /// Scene modifier macros use this to keep independent event owners.
+    pub fn clip_edge_enabled_matching(&self, matches_param: impl Fn(&str) -> bool) -> bool {
         let Some(mods) = self.audio_mods.as_ref() else {
             return true;
         };
         let gate_mod = mods.iter().find(|m| {
             m.enabled
+                && matches_param(m.param_id.as_ref())
                 && self
                     .params
                     .get(m.param_id.as_ref())
@@ -2225,6 +2232,8 @@ mod tests {
 
         inst.audio_mods.as_mut().unwrap()[0].enabled = true;
         assert!(!inst.clip_edge_enabled(), "armed Transient mode gates the clip edge");
+        assert!(!inst.clip_edge_enabled_matching(|param| param == "clip_trigger"));
+        assert!(inst.clip_edge_enabled_matching(|param| param != "clip_trigger"), "another owner's transient gate cannot suppress this clip edge");
 
         inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
         assert!(inst.clip_edge_enabled());

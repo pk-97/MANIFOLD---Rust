@@ -92,6 +92,7 @@ pub struct PresetRuntime {
     /// nonzero counter alone never creates this marker.
     pub(super) pending_trigger_baseline: Option<u32>,
     pub(super) modifier_control_state: Option<crate::node_graph::scene_modifier_expand::PreparedModifierControlState>,
+    pub(super) modifier_events: Option<crate::node_graph::scene_modifier_expand::PreparedModifierEvents>,
     pub(super) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
@@ -1285,6 +1286,7 @@ impl PresetRuntime {
             modifier_preview_routes: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
+            modifier_events: None,
             group_mix_nodes,
             io: PresetIo::Transform {
                 source_slot,
@@ -1832,6 +1834,7 @@ impl PresetRuntime {
     /// alongside instance-local state.
     pub fn clear_state(&mut self) {
         self.pending_trigger_baseline = None;
+        if let Some(events) = &mut self.modifier_events { events.clear(); }
         // Collect node ids first so we can release the &self borrow
         // before calling get_node_mut on each.
         let mut nodes_to_clear: Vec<NodeInstanceId> = Vec::new();
@@ -1868,6 +1871,30 @@ impl PresetRuntime {
         self.executor = executor;
     }
 
+    pub(crate) fn is_modifier_trigger_param(&self, param: &str) -> bool {
+        self.modifier_events.as_ref().is_some_and(|events| events.is_modifier_param(param))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn note_modifier_audio_event(&mut self, param: &str) -> bool {
+        self.modifier_events.as_mut().is_some_and(|events| events.note_audio(param))
+    }
+
+    pub(crate) fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
+        self.modifier_events.as_mut().is_some_and(|events| events.note_audio_key(param_key))
+    }
+
+    pub(crate) fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
+        if let Some(events) = &mut self.modifier_events {
+            events.note_clip(|param| host.is_none_or(|host| host.clip_edge_enabled_matching(|candidate| candidate == param)));
+        }
+    }
+
+    fn consume_trigger_markers(&mut self) {
+        self.pending_trigger_baseline = None;
+        if let Some(events) = &mut self.modifier_events { events.consume_pending(); }
+    }
+
     /// Called by the event owner before incrementing its clip/audio counter.
     /// Multiple events before an evaluation preserve the earliest baseline.
     pub fn note_trigger_event(&mut self, previous_count: u32) {
@@ -1880,6 +1907,9 @@ impl PresetRuntime {
 
     pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
         self.carry_pending_trigger_from(prior);
+        if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events) {
+            current.carry_from(previous);
+        }
         if let (Some(current), Some(previous)) = (&self.modifier_control_state, &prior.modifier_control_state) {
             current.harvest_from(previous, &mut self.graph, &mut prior.graph, &mut self.state_store, &mut prior.state_store);
         }
@@ -1888,6 +1918,7 @@ impl PresetRuntime {
     /// Update the `system.generator_input` node's per-frame context. No-op on
     /// an effect-chain runtime.
     pub fn set_frame_context(&mut self, fc: FrameContextInputs) {
+        if let Some(events) = &self.modifier_events { events.write_context(&mut self.graph); }
         let FrameContextInputs {
             time,
             beat,
@@ -2055,13 +2086,13 @@ impl PresetRuntime {
     /// Run one frame against the configured executor (mock-backend test path).
     pub fn execute_frame(&mut self, time: FrameTime) {
         if self.refresh_prepared_parameter_error() {
-            self.pending_trigger_baseline = None;
+            self.consume_trigger_markers();
             return;
         }
         self.refresh_plan_if_forced_outputs_changed();
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
-        self.pending_trigger_baseline = None;
+        self.consume_trigger_markers();
     }
 
     /// Install the host-provided target texture as the source for
@@ -2119,7 +2150,7 @@ impl PresetRuntime {
 
         if self.refresh_prepared_parameter_error() {
             gpu.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
-            self.pending_trigger_baseline = None;
+            self.consume_trigger_markers();
             return ctx.anim_progress;
         }
 
@@ -2149,7 +2180,7 @@ impl PresetRuntime {
             ctx.owner_key,
         );
 
-        self.pending_trigger_baseline = None;
+        self.consume_trigger_markers();
         ctx.anim_progress
     }
 
@@ -2157,6 +2188,7 @@ impl PresetRuntime {
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
         self.pending_trigger_baseline = None;
+        if let Some(events) = &mut self.modifier_events { events.clear(); }
         for inst in self.graph.nodes_mut() {
             inst.node.clear_state();
         }
@@ -2187,6 +2219,7 @@ impl PresetRuntime {
     /// `ContentCommand::LoadProject` arms.
     pub fn clear_trigger_state(&mut self) {
         self.pending_trigger_baseline = None;
+        if let Some(events) = &mut self.modifier_events { events.clear(); }
         let mut latch_ids: Vec<NodeInstanceId> = Vec::new();
         for inst in self.graph.nodes_mut() {
             if inst.node.is_trigger_latch() {
