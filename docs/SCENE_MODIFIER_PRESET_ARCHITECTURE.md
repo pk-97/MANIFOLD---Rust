@@ -192,6 +192,8 @@ Every production consumer must see the same expansion: editor validation/preview
 
 Host manifests expose modifier params using stable `(instance ID, param ID)` identity. The new BindingTarget variant is an authoring address resolved before runtime, not a new runtime modulation engine. Parameter commands resolve it back to the local snapshot and existing manifest slot; live effective values continue through the current binding fan-out. Removing a modifier prunes only its own bindings, slots and mappings. Undo restores them together. Labels can collide harmlessly.
 
+The outer SceneModifier macro address uses `ParamConvert::Float`: it addresses a scalar manifest value. Its scale/offset compose with each local binding's scale/offset, and the local leaf retains the final Bool/Enum/Int/Trigger conversion. Reject a non-Float outer conversion rather than silently changing conversion order. Ordinary existing host bindings keep their conversion unchanged. Fresh calibration updates both the manifest default and matching binding defaults; otherwise normal binding initialization would undo the calibration at the next rebuild.
+
 ## 5. Sources, identity and bypass
 
 ### Clip-edge response contract

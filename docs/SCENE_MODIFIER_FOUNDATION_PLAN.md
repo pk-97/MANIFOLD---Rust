@@ -2,7 +2,7 @@
 
 <!-- index: Baseline qualification and eight phases for unified photoscan presets, coordinates, migration, catalog, file-only authoring and release proof. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F0 immutable baselines captured; F1 data support implemented and under integration verification; F2–F8 pending. The shipped photoscan slice supplies working inputs; it does not implement the unified foundation.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F0 immutable baselines captured; F1 data support verified; F2 structural expansion implemented, production preparation integration pending; F3–F8 pending. The shipped photoscan slice supplies working inputs; it does not implement the complete unified foundation.
 **Prerequisites:** [Preset Architecture](SCENE_MODIFIER_PRESET_ARCHITECTURE.md); existing graph/preset/editor infrastructure.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Architecture decisions A/D references below refer to the companion architecture; test policy is [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
 
@@ -138,6 +138,12 @@ F1 verification in the leased branch: 20 focused core/IO tests cover schema reje
 ## 5. F2 — typed expansion
 
 **Entry:** F1 tests; read scene_object, graph_loader, bound_graph, freeze/install, generator registry. Re-derive all preparation entrances.
+
+The structural implementation in the leased branch has 26 passing renderer tests covering scoped attachment, saved coordinate frames, shared control-stage broadcast, Reference versus Previous, namespace stability, actual primitive ports, binding fan-out and preparation limits. Ten core expression/initializer tests pass; a follow-up initializer check also verifies calibrated binding defaults, preventing the existing default-planting path from restoring stale values. Focused core/renderer clippy passes. These are CPU structural proofs, not observed geometry or production-path qualification. Common fused/unfused/preview preparation, actual prepared-buffer accounting, clip-event initialization and beat response remain F2 work. Asset relocation must preserve frame calibration while refreshing the source fingerprint through the same explicit path rewrite; it must not look like a replacement mesh.
+
+The expander keeps the authored host nested and immutable, and returns a derived flat graph with original host handles restored. A bounded preflight counts copied group boundaries and context inputs before allocation as well as checking the final flattened node/wire limits. `node.compose_vec3` is the small CPU scalar constructor needed for typed SceneMin/SceneMax context; the inventory had an F32 constant and a texture-readback Vec3 bridge, but no direct vector constructor.
+
+**Preparation boundary refinement:** `BoundGraph::apply_inner_overrides` is reached from generator value-only edits, despite its current internal call to `flatten_groups`. It must not call the structural expander. Prepare canonical-local-node → generated-leaf routes once, resolve them through the existing runtime node map/fusion retarget, and reuse those routes for value writes and preview lookup. Preserve the host's canonical group preview map before deriving the flat graph. `rebake_reshapes` must likewise retain the local leaf scale/offset when the host macro's mapping changes. The no-rebuild proof must cover these editor-value and mapping-spec paths as well as ordinary LFO/card writes.
 
 **Deliverables:** expansion and applicability functions; stable identity allocation; stage routing; reference/current distinction; admission limits; expanded binding fan-out. Use one shared preparation function at entrances that currently flatten directly: `graph_loader.rs:771`, `bound_graph.rs:290,495`, and pre-fusion generator entry (`generators/registry.rs:267`). Follow callers for viewport, thumbnail, warmup and export. Add A3/A4/A5/A10 tests, including two noncommuting stages, renamed groups, duplicate labels, reordered numeric IDs and explicit missing targets. Add neutral CPU fixture nodes for structural tests; do not introduce production test-only fallbacks.
 

@@ -56,6 +56,7 @@ pub mod primitive;
 pub mod primitives;
 pub mod relight;
 pub mod scene_modifier;
+pub mod scene_modifier_expand;
 pub mod scene_vm;
 mod snapshot;
 mod state_store;

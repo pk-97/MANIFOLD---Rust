@@ -9,7 +9,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::effect_graph_def::{BindingTarget, EffectGraphDef, ParamSpecDef};
+use crate::effect_graph_def::{
+    BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef, SerializedParamValue,
+};
 use crate::id::NodeId;
 
 /// Graph version required by a definition that carries `sceneModifiers`.
@@ -318,6 +320,289 @@ fn validate_expr(path: &str, expr: &SceneScalarExpr) -> Result<(), SceneModifier
     visit(path, expr, 1, &mut nodes)
 }
 
+/// Evaluate one bounded recipe expression against imported scene bounds.
+///
+/// Evaluation stays in `f64`; callers that write a serialized `f32` value
+/// remain responsible for checking that final conversion. Intermediate
+/// results must still be finite so authored overflow cannot be hidden by a
+/// later operation.
+pub fn evaluate_scene_scalar_expr(
+    expr: &SceneScalarExpr,
+    bounds: ([f64; 3], [f64; 3]),
+) -> Result<f64, SceneModifierSchemaError> {
+    validate_expr("expression", expr)?;
+    for axis in 0..3 {
+        let min = bounds.0[axis];
+        let max = bounds.1[axis];
+        if !min.is_finite() || !max.is_finite() || min > max {
+            return Err(SceneModifierSchemaError::InvalidRecipe {
+                path: format!("bounds[{axis}]"),
+                detail: "bounds must be finite and min must not exceed max".into(),
+            });
+        }
+    }
+
+    fn evaluate(
+        expr: &SceneScalarExpr,
+        bounds: &([f64; 3], [f64; 3]),
+    ) -> Result<f64, SceneModifierSchemaError> {
+        let value = match expr {
+            SceneScalarExpr::Constant { value } => *value,
+            SceneScalarExpr::BoundsMin { axis } => bounds.0[axis_index(*axis)],
+            SceneScalarExpr::BoundsMax { axis } => bounds.1[axis_index(*axis)],
+            SceneScalarExpr::Add { a, b } => evaluate(a, bounds)? + evaluate(b, bounds)?,
+            SceneScalarExpr::Subtract { a, b } => evaluate(a, bounds)? - evaluate(b, bounds)?,
+            SceneScalarExpr::Multiply { a, b } => evaluate(a, bounds)? * evaluate(b, bounds)?,
+            SceneScalarExpr::Max { a, b } => evaluate(a, bounds)?.max(evaluate(b, bounds)?),
+        };
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(SceneModifierSchemaError::InvalidRecipe {
+                path: "expression".into(),
+                detail: "expression evaluation produced a non-finite value".into(),
+            })
+        }
+    }
+
+    fn axis_index(axis: SceneAxis) -> usize {
+        match axis {
+            SceneAxis::X => 0,
+            SceneAxis::Y => 1,
+            SceneAxis::Z => 2,
+        }
+    }
+
+    evaluate(expr, &bounds)
+}
+
+/// Apply a recipe's initializers and manifest calibrations to a fresh local
+/// snapshot. The input graph is never mutated; all validation and evaluation
+/// happen before the completed clone is returned.
+pub fn initialize_scene_modifier_snapshot(
+    recipe_graph: &EffectGraphDef,
+    bounds: ([f64; 3], [f64; 3]),
+) -> Result<EffectGraphDef, SceneModifierSchemaError> {
+    validate_scene_modifier_schema(recipe_graph)?;
+    let recipe = recipe_graph
+        .preset_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.scene_modifier.as_ref())
+        .cloned()
+        .ok_or_else(|| SceneModifierSchemaError::InvalidRecipe {
+            path: "graph.presetMetadata.sceneModifier".into(),
+            detail: "fresh scene-modifier application requires recipe metadata".into(),
+        })?;
+
+    let mut snapshot = recipe_graph.clone();
+    let mut initializer_targets = HashSet::new();
+    for (index, initializer) in recipe.initializers.iter().enumerate() {
+        let path = format!("graph.presetMetadata.sceneModifier.initializers[{index}]");
+        let identity = (initializer.target.clone(), initializer.param.clone());
+        if !initializer_targets.insert(identity) {
+            return Err(SceneModifierSchemaError::DuplicateIdentity {
+                path: format!("{path}.target"),
+                detail: "initializer target and parameter must be unique".into(),
+            });
+        }
+        let value = evaluate_scene_scalar_expr(&initializer.value, bounds)?;
+        let node = resolve_leaf_node_mut(
+            &mut snapshot,
+            &initializer.target,
+            &format!("{path}.target"),
+        )?;
+        let Some(serialized) = node.params.get_mut(&initializer.param) else {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{path}.param"),
+                detail: format!("serialized parameter '{}' was not found", initializer.param),
+            });
+        };
+        apply_scalar_value(serialized, value, &format!("{path}.value"))?;
+    }
+
+    let mut calibration_ids = HashSet::new();
+    for (index, calibration) in recipe.calibrations.iter().enumerate() {
+        let path = format!("graph.presetMetadata.sceneModifier.calibrations[{index}]");
+        if !calibration_ids.insert(calibration.param_id.clone()) {
+            return Err(SceneModifierSchemaError::DuplicateIdentity {
+                path: format!("{path}.paramId"),
+                detail: "calibration parameter ids must be unique".into(),
+            });
+        }
+        let min = evaluate_scene_scalar_expr(&calibration.min, bounds)?;
+        let max = evaluate_scene_scalar_expr(&calibration.max, bounds)?;
+        let default_value = evaluate_scene_scalar_expr(&calibration.default_value, bounds)?;
+        if min > max || !(min..=max).contains(&default_value) {
+            return Err(SceneModifierSchemaError::InvalidRecipe {
+                path,
+                detail: "calibration min/max/default must be ordered and in range before conversion".into(),
+            });
+        }
+        let min = finite_f32(min, &format!("{path}.min"))?;
+        let max = finite_f32(max, &format!("{path}.max"))?;
+        let default_value = finite_f32(default_value, &format!("{path}.defaultValue"))?;
+        if min > max || !(min..=max).contains(&default_value) {
+            return Err(SceneModifierSchemaError::InvalidRecipe {
+                path,
+                detail: "calibration min/max/default must be ordered and in range".into(),
+            });
+        }
+        let Some(metadata) = snapshot.preset_metadata.as_mut() else {
+            unreachable!("recipe metadata was present after cloning");
+        };
+        let Some(param) = metadata
+            .params
+            .iter_mut()
+            .find(|param| param.id == calibration.param_id)
+        else {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{path}.paramId"),
+                detail: format!(
+                    "calibration parameter '{}' was not found",
+                    calibration.param_id
+                ),
+            });
+        };
+        param.min = min;
+        param.max = max;
+        param.default_value = default_value;
+        for binding in &mut metadata.bindings {
+            if binding.id == calibration.param_id {
+                binding.default_value = default_value;
+            }
+        }
+    }
+
+    Ok(snapshot)
+}
+
+fn resolve_leaf_node_mut<'a>(
+    graph: &'a mut EffectGraphDef,
+    target: &SceneNodeRef,
+    path: &str,
+) -> Result<&'a mut EffectGraphNode, SceneModifierSchemaError> {
+    resolve_leaf_in_nodes(&mut graph.nodes, &target.scope, &target.node, path)
+}
+
+fn resolve_leaf_in_nodes<'a>(
+    nodes: &'a mut [EffectGraphNode],
+    scope: &[NodeId],
+    leaf: &NodeId,
+    path: &str,
+) -> Result<&'a mut EffectGraphNode, SceneModifierSchemaError> {
+    if scope.is_empty() {
+        let matches: Vec<usize> = nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| (node.node_id == *leaf).then_some(index))
+            .collect();
+        let Some(&index) = matches.first() else {
+            return Err(SceneModifierSchemaError::MissingTarget {
+                path: path.into(),
+                detail: format!("leaf node '{leaf}' was not found"),
+            });
+        };
+        if matches.len() > 1 {
+            return Err(SceneModifierSchemaError::DuplicateIdentity {
+                path: path.into(),
+                detail: format!("leaf node '{leaf}' is ambiguous"),
+            });
+        }
+        let node = &mut nodes[index];
+        if node.group.is_some() {
+            return Err(SceneModifierSchemaError::MissingTarget {
+                path: path.into(),
+                detail: format!("target node '{leaf}' is not a leaf"),
+            });
+        }
+        return Ok(node);
+    }
+
+    let group_id = &scope[0];
+    let matches: Vec<usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| (node.node_id == *group_id).then_some(index))
+        .collect();
+    let Some(&index) = matches.first() else {
+        return Err(SceneModifierSchemaError::MissingTarget {
+            path: path.into(),
+            detail: format!("scope group '{group_id}' was not found"),
+        });
+    };
+    if matches.len() > 1 {
+        return Err(SceneModifierSchemaError::DuplicateIdentity {
+            path: path.into(),
+            detail: format!("scope group '{group_id}' is ambiguous"),
+        });
+    }
+    let node = &mut nodes[index];
+    let Some(group) = node.group.as_mut() else {
+        return Err(SceneModifierSchemaError::MissingTarget {
+            path: path.into(),
+            detail: format!("scope node '{group_id}' is not a group"),
+        });
+    };
+    resolve_leaf_in_nodes(&mut group.nodes, &scope[1..], leaf, path)
+}
+
+fn finite_f32(value: f64, path: &str) -> Result<f32, SceneModifierSchemaError> {
+    let converted = value as f32;
+    if converted.is_finite() {
+        Ok(converted)
+    } else {
+        Err(SceneModifierSchemaError::InvalidRecipe {
+            path: path.into(),
+            detail: "value must remain finite after f32 conversion".into(),
+        })
+    }
+}
+
+fn apply_scalar_value(
+    target: &mut SerializedParamValue,
+    value: f64,
+    path: &str,
+) -> Result<(), SceneModifierSchemaError> {
+    match target {
+        SerializedParamValue::Float { value: target } => {
+            *target = finite_f32(value, path)?;
+        }
+        SerializedParamValue::Int { value: target } => {
+            if !value.is_finite()
+                || value.fract() != 0.0
+                || value < f64::from(i32::MIN)
+                || value > f64::from(i32::MAX)
+            {
+                return Err(SceneModifierSchemaError::InvalidRecipe {
+                    path: path.into(),
+                    detail: "integer initializer must be an exact i32 value".into(),
+                });
+            }
+            *target = value as i32;
+        }
+        SerializedParamValue::Enum { value: target } => {
+            if !value.is_finite()
+                || value.fract() != 0.0
+                || value < 0.0
+                || value > f64::from(u32::MAX)
+            {
+                return Err(SceneModifierSchemaError::InvalidRecipe {
+                    path: path.into(),
+                    detail: "enum initializer must be an exact u32 value".into(),
+                });
+            }
+            *target = value as u32;
+        }
+        _ => {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: path.into(),
+                detail: "initializer target must be a serialized numeric scalar".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn find_param<'a>(params: &'a [ParamSpecDef], id: &str) -> Option<&'a ParamSpecDef> {
     params.iter().find(|param| param.id == id)
 }
@@ -580,7 +865,8 @@ fn validate_recipe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effect_graph_def::{BindingTarget, EffectGraphDef};
+    use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef};
+    use crate::effects::ParamConvert;
     use serde_json::{Value, json};
 
     fn recipe_json() -> Value {
@@ -622,6 +908,46 @@ mod tests {
         })
     }
 
+    fn initializer_fixture() -> EffectGraphDef {
+        let mut raw = graph_json(Some(recipe_json()), json!([]));
+        raw["presetMetadata"]["params"] = json!([
+            {"id": "enabled", "name": "Enabled", "min": 0.0,
+             "max": 1.0, "defaultValue": 1.0},
+            {"id": "amount", "name": "Amount", "min": -2.0,
+             "max": 2.0, "defaultValue": 0.0}
+        ]);
+        raw["presetMetadata"]["sceneModifier"]["initializers"] = json!([
+            {
+                "target": {"scope": ["group-id"], "node": "leaf-id"},
+                "param": "amount",
+                "value": {"constant": {"value": 0.0}}
+            }
+        ]);
+        raw["nodes"] = json!([
+            {
+                "id": 1,
+                "nodeId": "group-id",
+                "typeId": "group",
+                "group": {
+                    "interface": {"inputs": [], "outputs": [], "params": []},
+                    "nodes": [{
+                        "id": 1,
+                        "nodeId": "leaf-id",
+                        "typeId": "node.test",
+                        "params": {
+                            "amount": {"type": "Float", "value": 0.0},
+                            "count": {"type": "Int", "value": 0},
+                            "mode": {"type": "Enum", "value": 0},
+                            "toggle": {"type": "Bool", "value": false}
+                        }
+                    }],
+                    "wires": []
+                }
+            }
+        ]);
+        serde_json::from_value(raw).expect("initializer fixture parses")
+    }
+
     #[test]
     fn scene_modifier_v3_standalone_recipe_round_trips_and_validates() {
         let def: EffectGraphDef =
@@ -633,6 +959,318 @@ mod tests {
         assert_eq!(wire["presetMetadata"]["sceneModifier"]["schemaVersion"], 1);
         let back: EffectGraphDef = serde_json::from_value(wire).expect("scene modifier reparses");
         assert_eq!(def, back);
+    }
+
+    #[test]
+    fn scene_modifier_expand_scalar_expr_loop_cell_size() {
+        let expr = SceneScalarExpr::Multiply {
+            a: Box::new(SceneScalarExpr::Constant { value: 2.0 }),
+            b: Box::new(SceneScalarExpr::Subtract {
+                a: Box::new(SceneScalarExpr::BoundsMax { axis: SceneAxis::Z }),
+                b: Box::new(SceneScalarExpr::BoundsMin { axis: SceneAxis::Z }),
+            }),
+        };
+        let value = evaluate_scene_scalar_expr(&expr, ([-1.0, 2.0, -3.5], [4.0, 8.0, 2.5]))
+            .expect("Loop cell size evaluates");
+        assert_eq!(value, 12.0);
+    }
+
+    #[test]
+    fn scene_modifier_expand_scalar_expr_axes_and_large_finite_intermediate() {
+        let axes = [SceneAxis::X, SceneAxis::Y, SceneAxis::Z];
+        let bounds = ([-2.0, -4.0, -8.0], [3.0, 6.0, 10.0]);
+        for (index, axis) in axes.into_iter().enumerate() {
+            let min = evaluate_scene_scalar_expr(&SceneScalarExpr::BoundsMin { axis }, bounds)
+                .expect("minimum evaluates");
+            let max = evaluate_scene_scalar_expr(&SceneScalarExpr::BoundsMax { axis }, bounds)
+                .expect("maximum evaluates");
+            assert_eq!(min, bounds.0[index]);
+            assert_eq!(max, bounds.1[index]);
+        }
+
+        let cancellation = SceneScalarExpr::Subtract {
+            a: Box::new(SceneScalarExpr::Constant { value: 1.0e200 }),
+            b: Box::new(SceneScalarExpr::Constant { value: 1.0e200 }),
+        };
+        assert_eq!(
+            evaluate_scene_scalar_expr(&cancellation, ([-1.0; 3], [1.0; 3]))
+                .expect("large finite intermediates remain legal"),
+            0.0
+        );
+    }
+
+    #[test]
+    fn scene_modifier_expand_scalar_expr_rejects_overflow_and_invalid_bounds() {
+        let overflow = SceneScalarExpr::Multiply {
+            a: Box::new(SceneScalarExpr::Constant { value: f64::MAX }),
+            b: Box::new(SceneScalarExpr::Constant { value: 2.0 }),
+        };
+        assert!(matches!(
+            evaluate_scene_scalar_expr(&overflow, ([-1.0; 3], [1.0; 3])),
+            Err(SceneModifierSchemaError::InvalidRecipe { .. })
+        ));
+
+        let reversed = evaluate_scene_scalar_expr(
+            &SceneScalarExpr::Constant { value: 1.0 },
+            ([2.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+        );
+        assert!(matches!(
+            reversed,
+            Err(SceneModifierSchemaError::InvalidRecipe { .. })
+        ));
+        let nonfinite = evaluate_scene_scalar_expr(
+            &SceneScalarExpr::Constant { value: 1.0 },
+            ([f64::NAN; 3], [1.0; 3]),
+        );
+        assert!(matches!(
+            nonfinite,
+            Err(SceneModifierSchemaError::InvalidRecipe { .. })
+        ));
+    }
+
+    #[test]
+    fn scene_modifier_expand_scalar_expr_reuses_depth_and_node_limits() {
+        fn deep_add(depth: usize) -> SceneScalarExpr {
+            if depth == 0 {
+                SceneScalarExpr::Constant { value: 1.0 }
+            } else {
+                SceneScalarExpr::Add {
+                    a: Box::new(deep_add(depth - 1)),
+                    b: Box::new(SceneScalarExpr::Constant { value: 0.0 }),
+                }
+            }
+        }
+        fn wide_add(depth: usize) -> SceneScalarExpr {
+            if depth == 0 {
+                SceneScalarExpr::Constant { value: 1.0 }
+            } else {
+                SceneScalarExpr::Add {
+                    a: Box::new(wide_add(depth - 1)),
+                    b: Box::new(wide_add(depth - 1)),
+                }
+            }
+        }
+
+        assert!(matches!(
+            evaluate_scene_scalar_expr(&deep_add(16), ([-1.0; 3], [1.0; 3])),
+            Err(SceneModifierSchemaError::CapacityExceeded { .. })
+        ));
+        assert!(matches!(
+            evaluate_scene_scalar_expr(&wide_add(6), ([-1.0; 3], [1.0; 3])),
+            Err(SceneModifierSchemaError::CapacityExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn scene_modifier_expand_initializers_nested_loop_and_calibration() {
+        let mut input = initializer_fixture();
+        input
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .bindings
+            .push(BindingDef {
+                id: "amount".into(),
+                label: "Amount".into(),
+                default_value: -0.25,
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("leaf-id"),
+                    param: "amount".into(),
+                },
+                convert: ParamConvert::Float,
+                user_added: false,
+                scale: 1.0,
+                offset: 0.0,
+                default_mirrors_node_param: false,
+            });
+        let recipe = input
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .scene_modifier
+            .as_mut()
+            .expect("recipe");
+        recipe.initializers[0].value = SceneScalarExpr::Multiply {
+            a: Box::new(SceneScalarExpr::Constant { value: 2.0 }),
+            b: Box::new(SceneScalarExpr::Subtract {
+                a: Box::new(SceneScalarExpr::BoundsMax { axis: SceneAxis::Z }),
+                b: Box::new(SceneScalarExpr::BoundsMin { axis: SceneAxis::Z }),
+            }),
+        };
+        recipe.calibrations.push(SceneParamCalibration {
+            param_id: "amount".into(),
+            min: SceneScalarExpr::Constant { value: -1.0 },
+            max: SceneScalarExpr::Constant { value: 2.0 },
+            default_value: SceneScalarExpr::Constant { value: 0.5 },
+        });
+        let snapshot =
+            initialize_scene_modifier_snapshot(&input, ([0.0, 0.0, 0.0], [1.0, 2.0, 0.75]))
+                .expect("fresh initializer applies");
+        let leaf = &snapshot.nodes[0].group.as_ref().expect("group").nodes[0];
+        assert_eq!(
+            leaf.params["amount"],
+            SerializedParamValue::Float { value: 1.5 }
+        );
+        let amount = &snapshot.preset_metadata.as_ref().expect("metadata").params[1];
+        assert_eq!(
+            (amount.min, amount.max, amount.default_value),
+            (-1.0, 2.0, 0.5)
+        );
+        assert_eq!(
+            snapshot.preset_metadata.as_ref().expect("metadata").bindings[0].default_value,
+            0.5
+        );
+        assert_eq!(
+            input.nodes[0].group.as_ref().expect("group").nodes[0].params["amount"],
+            SerializedParamValue::Float { value: 0.0 }
+        );
+    }
+
+    #[test]
+    fn scene_modifier_expand_initializers_is_transactional_on_success_and_failure() {
+        let mut input = initializer_fixture();
+        input
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .scene_modifier
+            .as_mut()
+            .expect("recipe")
+            .initializers[0]
+            .value = SceneScalarExpr::Constant { value: 1.0 };
+        let original = input.clone();
+        let snapshot = initialize_scene_modifier_snapshot(&input, ([-1.0; 3], [1.0; 3]))
+            .expect("valid initializer applies");
+        assert_ne!(snapshot, input);
+        assert_eq!(input, original);
+
+        let mut invalid = input.clone();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .scene_modifier
+            .as_mut()
+            .expect("recipe")
+            .initializers
+            .push(SceneNodeInitializer {
+                target: SceneNodeRef {
+                    scope: vec![NodeId::new("group-id")],
+                    node: NodeId::new("leaf-id"),
+                },
+                param: "missing".into(),
+                value: SceneScalarExpr::Constant { value: 1.0 },
+            });
+        let invalid_original = invalid.clone();
+        assert!(initialize_scene_modifier_snapshot(&invalid, ([-1.0; 3], [1.0; 3])).is_err());
+        assert_eq!(invalid, invalid_original);
+    }
+
+    #[test]
+    fn scene_modifier_expand_initializers_rejects_duplicate_and_missing_targets() {
+        let mut duplicate = initializer_fixture();
+        let recipe = duplicate
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .scene_modifier
+            .as_mut()
+            .expect("recipe");
+        let initializer = recipe.initializers[0].clone();
+        recipe.initializers.push(initializer);
+        assert!(matches!(
+            initialize_scene_modifier_snapshot(&duplicate, ([-1.0; 3], [1.0; 3])),
+            Err(SceneModifierSchemaError::DuplicateIdentity { .. })
+        ));
+
+        let mut missing = initializer_fixture();
+        missing
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .scene_modifier
+            .as_mut()
+            .expect("recipe")
+            .initializers[0]
+            .target
+            .node = NodeId::new("missing-leaf");
+        assert!(matches!(
+            initialize_scene_modifier_snapshot(&missing, ([-1.0; 3], [1.0; 3])),
+            Err(SceneModifierSchemaError::MissingTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn scene_modifier_expand_initializers_rejects_integer_fraction_and_overflow() {
+        for value in [1.5, f64::from(i32::MAX) + 1.0] {
+            let mut input = initializer_fixture();
+            let leaf = &mut input.nodes[0].group.as_mut().expect("group").nodes[0];
+            leaf.params
+                .insert("amount".into(), SerializedParamValue::Int { value: 0 });
+            input
+                .preset_metadata
+                .as_mut()
+                .expect("metadata")
+                .scene_modifier
+                .as_mut()
+                .expect("recipe")
+                .initializers[0]
+                .value = SceneScalarExpr::Constant { value };
+            assert!(matches!(
+                initialize_scene_modifier_snapshot(&input, ([-1.0; 3], [1.0; 3])),
+                Err(SceneModifierSchemaError::InvalidRecipe { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn scene_modifier_expand_initializers_allows_large_finite_cancellation() {
+        let mut input = initializer_fixture();
+        input
+            .preset_metadata
+            .as_mut()
+            .expect("metadata")
+            .scene_modifier
+            .as_mut()
+            .expect("recipe")
+            .initializers[0]
+            .value = SceneScalarExpr::Subtract {
+            a: Box::new(SceneScalarExpr::Constant { value: 1.0e200 }),
+            b: Box::new(SceneScalarExpr::Constant { value: 1.0e200 }),
+        };
+        let snapshot = initialize_scene_modifier_snapshot(&input, ([-1.0; 3], [1.0; 3]))
+            .expect("large finite intermediate remains valid");
+        assert_eq!(
+            snapshot.nodes[0].group.as_ref().expect("group").nodes[0].params["amount"],
+            SerializedParamValue::Float { value: 0.0 }
+        );
+    }
+
+    #[test]
+    fn scene_modifier_expand_initializers_rejects_invalid_calibration_ranges() {
+        for (min, max, default_value) in [(2.0, 1.0, 1.0), (0.0, 1.0, 2.0)] {
+            let mut input = initializer_fixture();
+            input
+                .preset_metadata
+                .as_mut()
+                .expect("metadata")
+                .scene_modifier
+                .as_mut()
+                .expect("recipe")
+                .calibrations
+                .push(SceneParamCalibration {
+                    param_id: "amount".into(),
+                    min: SceneScalarExpr::Constant { value: min },
+                    max: SceneScalarExpr::Constant { value: max },
+                    default_value: SceneScalarExpr::Constant {
+                        value: default_value,
+                    },
+                });
+            assert!(matches!(
+                initialize_scene_modifier_snapshot(&input, ([-1.0; 3], [1.0; 3])),
+                Err(SceneModifierSchemaError::InvalidRecipe { .. })
+            ));
+        }
     }
 
     #[test]

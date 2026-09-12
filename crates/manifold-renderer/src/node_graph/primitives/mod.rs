@@ -272,6 +272,7 @@ mod extrude_curve;
 mod uv_displace_by_flow;
 mod uv_field;
 mod value;
+mod compose_vec3;
 mod vignette;
 mod voronoi_2d;
 mod voxelize_mesh;
