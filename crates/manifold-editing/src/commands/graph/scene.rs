@@ -1696,6 +1696,10 @@ impl Command for RenameSceneObjectCommand {
             return;
         };
         let Some(inst) = resolve_target_instance(&self.target, project) else {
+            if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+                self.swept = super::param_sections::rename_modifier_sections(
+                    project, &self.target, &inside, &old_name, &self.new_handle);
+            }
             return;
         };
         let target_ids: Vec<String> = inst
@@ -1735,6 +1739,12 @@ impl Command for RenameSceneObjectCommand {
                 if let Some(p) = inst.params.get_mut(&param_id) {
                     p.spec.section = prev_section;
                 }
+            }
+        }
+
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            for (id, section) in self.swept.drain(..) {
+                super::param_sections::set_modifier_section(project, &self.target, &id, section);
             }
         }
 

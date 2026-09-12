@@ -10,6 +10,8 @@ use manifold_core::project::Project;
 
 use crate::command::Command;
 
+mod modifier;
+
 use super::{
     descend_level, innermost_group_display_name, with_existing_target_graph_mut,
     with_target_graph_mut,
@@ -96,6 +98,10 @@ pub struct ToggleNodeParamExposeCommand {
 enum NodeExposeReverse {
     #[default]
     None,
+    Modifier {
+        graph: Option<EffectGraphDef>,
+        instance: super::scene_modifier::InstanceLayerSnapshot,
+    },
     /// Captured on execute. Restored on undo.
     Captured {
         /// Previous membership of `inner_param` in the node's
@@ -312,6 +318,10 @@ fn static_slot_for(
 
 impl Command for ToggleNodeParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::execute(self, project);
+            return;
+        }
         let node_handle = self.node_handle.clone();
         // Mirror-side identity for the card binding: apply the same "node_id
         // defaults to handle" convention the runtime graph loader uses
@@ -389,6 +399,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .map(|(_, layer)| layer.gen_params_or_init()),
+            GraphTarget::SceneModifier { .. } => unreachable!("handled above"),
         };
         let mirror = match instance {
             Some(inst) => mirror_effect_side(
@@ -419,6 +430,10 @@ impl Command for ToggleNodeParamExposeCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::undo(self, project);
+            return;
+        }
         let reverse = std::mem::take(&mut self.reverse);
         let NodeExposeReverse::Captured {
             prev_in_set,
@@ -440,6 +455,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .map(|(_, layer)| layer.gen_params_or_init()),
+            GraphTarget::SceneModifier { .. } => unreachable!("handled above"),
         };
         if let Some(inst) = instance {
             unmirror_effect_side(inst, mirror);
@@ -459,6 +475,10 @@ impl Command for ToggleNodeParamExposeCommand {
         } else {
             "Hide Param"
         }
+    }
+
+    fn was_applied(&self) -> bool {
+        !matches!(self.reverse, NodeExposeReverse::None)
     }
 }
 

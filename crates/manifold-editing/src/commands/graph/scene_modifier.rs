@@ -356,7 +356,7 @@ fn apply_mesh_stage_splices(
 /// whole before pruning (the same level-snapshot pattern the graph layer
 /// uses) so undo restores the pre-remove state verbatim.
 #[derive(Debug, Clone)]
-struct InstanceLayerSnapshot {
+pub(crate) struct InstanceLayerSnapshot {
     params: manifold_core::params::ParamManifest,
     drivers: Option<Vec<manifold_core::effects::ParameterDriver>>,
     envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
@@ -366,7 +366,7 @@ struct InstanceLayerSnapshot {
 }
 
 impl InstanceLayerSnapshot {
-    fn capture(instance: &manifold_core::effects::PresetInstance) -> Self {
+    pub(crate) fn capture(instance: &manifold_core::effects::PresetInstance) -> Self {
         Self {
             params: instance.params.clone(),
             drivers: instance.drivers.clone(),
@@ -377,7 +377,7 @@ impl InstanceLayerSnapshot {
         }
     }
 
-    fn restore(self, instance: &mut manifold_core::effects::PresetInstance) {
+    pub(crate) fn restore(self, instance: &mut manifold_core::effects::PresetInstance) {
         instance.params = self.params;
         instance.drivers = self.drivers;
         instance.envelopes = self.envelopes;
@@ -986,7 +986,7 @@ impl Command for RemoveSceneModifierCommand {
 /// `ToggleEffectParamExposeCommand` prune, minus the capture — the remove
 /// command snapshots the whole vec for undo, so entries are dropped, not
 /// harvested). `None` stays `None`; an emptied `Some` collapses to `None`.
-fn prune_by_param_id<T>(
+pub(super) fn prune_by_param_id<T>(
     vec: &mut Option<Vec<T>>,
     ids: &std::collections::BTreeSet<&str>,
     param_id: impl Fn(&T) -> &str,
@@ -997,4 +997,18 @@ fn prune_by_param_id<T>(
             *vec = None;
         }
     }
+}
+
+/// Remove only controls whose public addresses disappeared in a prepared edit.
+pub(crate) fn prune_instance_params(
+    instance: &mut manifold_core::effects::PresetInstance,
+    removed: &[String],
+) {
+    let ids: std::collections::BTreeSet<&str> = removed.iter().map(String::as_str).collect();
+    for id in &ids { instance.params.remove(id); }
+    prune_by_param_id(&mut instance.drivers, &ids, |item| &item.param_id);
+    prune_by_param_id(&mut instance.envelopes, &ids, |item| &item.param_id);
+    prune_by_param_id(&mut instance.ableton_mappings, &ids, |item| &item.param_id);
+    prune_by_param_id(&mut instance.audio_mods, &ids, |item| &item.param_id);
+    prune_by_param_id(&mut instance.automation_lanes, &ids, |item| &item.param_id);
 }

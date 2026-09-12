@@ -67,7 +67,7 @@ impl EditingService {
 
     /// Execute a command through the undo system.
     pub fn execute(&mut self, command: Box<dyn Command>, project: &mut Project) {
-        self.undo_manager.execute(command, project);
+        if !self.undo_manager.execute(command, project) { return; }
         self.data_version += 1;
 
         #[cfg(debug_assertions)]
@@ -93,6 +93,7 @@ impl EditingService {
 
     /// Record an already-executed command (e.g., end of drag).
     pub fn record(&mut self, command: Box<dyn Command>) {
+        if !command.was_applied() { return; }
         self.undo_manager.record(command);
         self.data_version += 1;
     }

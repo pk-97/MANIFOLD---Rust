@@ -15,6 +15,67 @@ use manifold_core::types::LayerType;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
 use manifold_core::effects::PresetInstance;
+pub(super) fn modifier_draft_fixture() -> (Project, GraphTarget, EffectGraphDef) {
+    use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection};
+    let local: EffectGraphDef = serde_json::from_value(serde_json::json!({
+        "version":3, "presetMetadata":{"id":"recipe","displayName":"Recipe","category":"Geometry",
+            "oscPrefix":"recipe","params":[],"bindings":[]},
+        "nodes":[{"id":1,"nodeId":"value","typeId":"node.value","handle":"value",
+            "params":{"value":{"type":"Float","value":0.2}}}],"wires":[]
+    })).unwrap();
+    let mut graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
+        "version":3,"presetMetadata":{"id":"host","displayName":"Host","category":"Geometry",
+            "oscPrefix":"host","params":[],"bindings":[]},"nodes":[],"wires":[]
+    }))
+    .unwrap();
+    for id in ["a", "b"] {
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: NodeId::new(id),
+            scene: SceneNodeRef {
+                scope: vec![],
+                node: NodeId::new("scene"),
+            },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: vec![],
+            graph: Box::new(local.clone()),
+        });
+    }
+    let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("host"), 0);
+    layer.layer_id = LayerId::new("layer");
+    let host = layer.gen_params_or_init();
+    host.graph = Some(graph.clone());
+    host.refresh_manifest_from_graph();
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+    let target = GraphTarget::SceneModifier {
+        owner: Box::new(GraphTarget::Generator(LayerId::new("layer"))),
+        modifier_id: NodeId::new("a"),
+    };
+    (project, target, graph)
+}
+
+pub(super) fn modifier_exposure_command(
+    target: GraphTarget,
+    graph: EffectGraphDef,
+    expose: bool,
+) -> ToggleNodeParamExposeCommand {
+    ToggleNodeParamExposeCommand::new(
+        target,
+        NodeId::new("value"),
+        1,
+        "value".into(),
+        "value".into(),
+        expose,
+        graph,
+        "Value".into(),
+        0.0,
+        1.0,
+        0.2,
+        manifold_core::effects::ParamConvert::Float,
+        false,
+        vec![],
+    )
+}
 
 pub(super) fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
     let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {

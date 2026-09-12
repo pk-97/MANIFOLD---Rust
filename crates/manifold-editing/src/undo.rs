@@ -20,14 +20,21 @@ impl UndoRedoManager {
     }
 
     /// Execute a command and push to undo stack.
-    pub fn execute(&mut self, mut command: Box<dyn Command>, project: &mut Project) {
+    pub fn execute(&mut self, mut command: Box<dyn Command>, project: &mut Project) -> bool {
         command.execute(project);
+        if !command.was_applied() {
+            return false;
+        }
         self.push_undo(command);
         self.redo_stack.clear();
+        true
     }
 
     /// Record an already-executed command (e.g., end of drag).
     pub fn record(&mut self, command: Box<dyn Command>) {
+        if !command.was_applied() {
+            return;
+        }
         self.push_undo(command);
         self.redo_stack.clear();
     }
@@ -49,6 +56,10 @@ impl UndoRedoManager {
     pub fn redo(&mut self, project: &mut Project) -> bool {
         if let Some(mut cmd) = self.redo_stack.pop() {
             cmd.execute(project);
+            if !cmd.was_applied() {
+                self.redo_stack.push(cmd);
+                return false;
+            }
             self.undo_stack.push_back(cmd);
             // Cap undo stack
             while self.undo_stack.len() > MAX_UNDO_HISTORY {

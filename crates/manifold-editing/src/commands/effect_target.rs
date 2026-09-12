@@ -77,6 +77,9 @@ impl From<&manifold_core::GraphTarget> for DriverTarget {
             manifold_core::GraphTarget::Generator(lid) => DriverTarget::GeneratorParam {
                 layer_id: lid.clone(),
             },
+            // Modulation addresses the owning manifest. The caller resolves
+            // the modifier's explicit public macro ID before this conversion.
+            manifold_core::GraphTarget::SceneModifier { owner, .. } => Self::from(owner.as_ref()),
         }
     }
 }

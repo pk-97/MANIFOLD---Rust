@@ -13,6 +13,9 @@ use manifold_core::effect_graph_def::{
 use manifold_core::project::Project;
 
 use crate::command::Command;
+use crate::commands::preset::RevertToLibraryCommand;
+
+mod modifier;
 
 use super::{
     descend_level, install_target_graph, take_target_graph, with_existing_target_graph_mut,
@@ -157,6 +160,10 @@ pub struct RemoveGraphNodeCommand {
     /// (binding + spec + value slot + automation). Empty when the node backed
     /// no exposed params. Captured for undo; restored before the node is.
     removed_exposures: Vec<manifold_core::effects::RemovedExposure>,
+    /// Scene-modifier targets snapshot their owning graph and instance layer
+    /// because the edited graph is nested inside the generator owner.
+    modifier_removed: Option<modifier::RemovedNode>,
+    applied: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +204,8 @@ impl RemoveGraphNodeCommand {
             scope_path: Vec::new(),
             removed: None,
             removed_exposures: Vec::new(),
+            modifier_removed: None,
+            applied: false,
         }
     }
 
@@ -211,6 +220,14 @@ impl Command for RemoveGraphNodeCommand {
     fn execute(&mut self, project: &mut Project) {
         let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            let state = modifier::execute(project, &self.target, node_u32, &scope);
+            if self.modifier_removed.is_none() {
+                self.modifier_removed = state.clone();
+            }
+            self.applied = state.is_some();
+            return;
+        }
         let catalog_default = &self.catalog_default;
         // One borrow of the instance: remove the node + wires, then prune any
         // card sliders bound to it. Done together so the whole thing is one
@@ -254,10 +271,19 @@ impl Command for RemoveGraphNodeCommand {
         if let Some((removed, removed_exposures)) = captured {
             self.removed = Some(removed);
             self.removed_exposures = removed_exposures;
+            self.applied = true;
+        } else {
+            self.applied = false;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if let Some(state) = self.modifier_removed.as_ref()
+            && self.applied
+        {
+            if modifier::undo(project, &self.target, state) { self.applied = false; }
+            return;
+        }
         let Some(removed) = self.removed.clone() else {
             return;
         };
@@ -274,10 +300,15 @@ impl Command for RemoveGraphNodeCommand {
             inst.restore_exposures(removed_exposures);
             inst.bump_graph_structure_version();
         });
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Remove Graph Node"
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -778,9 +809,9 @@ impl SetGraphNodeParamCommand {
         let node_id = self.node_id;
         let param_name = self.param_name.clone();
         let new_value = self.new_value.clone();
-        project.with_preset_graph_mut(&target, |inst| {
+        project.with_preset_graph_mut(target.host_target()?, |inst| {
             let def = inst.graph_def().as_ref().unwrap_or(catalog);
-            let slot = manifold_core::effects::card_slot_for_node_param(def, node_id, &param_name)?;
+            let slot = target.card_slot_for_node_param(def, node_id, &param_name)?;
             let target_value = manifold_core::effects::serialized_value_as_f32(&new_value)?;
             let card_value = manifold_core::effects::invert_card_reshape(
                 target_value,
@@ -857,9 +888,9 @@ impl Command for SetGraphNodeParamCommand {
     fn undo(&mut self, project: &mut Project) {
         if let Some((outer_id, previous)) = self.card_redirect.take() {
             let target = self.target.clone();
-            let _ = project.with_preset_graph_mut(&target, |inst| {
+            let _ = target.host_target().and_then(|host| project.with_preset_graph_mut(host, |inst| {
                 inst.set_base_param(&outer_id, previous);
-            });
+            }));
             return;
         }
         let Some(prev) = self.previous_value.take() else {
@@ -1013,6 +1044,9 @@ pub struct RevertEffectGraphCommand {
     /// prune it (PARAM_STORAGE_DESIGN.md D3); without it the manifest still
     /// holds the orphaned param and the sweep is a no-op.
     removed_params: Vec<(usize, manifold_core::params::Param)>,
+    /// Scene-modifier library reset delegates to the owner-aware preset
+    /// transaction, which replaces only the nested recipe graph.
+    modifier_delegate: Option<RevertToLibraryCommand>,
 }
 
 impl RevertEffectGraphCommand {
@@ -1022,12 +1056,36 @@ impl RevertEffectGraphCommand {
             previous: None,
             removed_automation: Default::default(),
             removed_params: Vec::new(),
+            modifier_delegate: None,
         }
+    }
+
+    /// Supply the renderer-resolved catalog recipe for a local scene modifier.
+    /// Resolution remains outside editing, while the delegate keeps the
+    /// modifier reset in the same owner graph and instance-layer transaction.
+    pub fn with_resolved_def(mut self, def: EffectGraphDef) -> Self {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            self.modifier_delegate = Some(
+                RevertToLibraryCommand::new(self.target.clone(), true).with_resolved_def(def),
+            );
+        }
+        self
     }
 }
 
 impl Command for RevertEffectGraphCommand {
     fn execute(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            if let Some(delegate) = self.modifier_delegate.as_mut() {
+                delegate.execute(project);
+            } else {
+                eprintln!(
+                    "[manifold-editing] Revert Graph: no resolved recipe supplied for {}",
+                    self.target.label()
+                );
+            }
+            return;
+        }
         let first = self.previous.is_none();
         if first {
             // First execute: capture and clear.
@@ -1074,6 +1132,12 @@ impl Command for RevertEffectGraphCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            if let Some(delegate) = self.modifier_delegate.as_mut() {
+                delegate.undo(project);
+            }
+            return;
+        }
         let Some(prev) = self.previous.take() else {
             return;
         };
@@ -1092,6 +1156,16 @@ impl Command for RevertEffectGraphCommand {
 
     fn description(&self) -> &str {
         "Revert Graph"
+    }
+
+    fn was_applied(&self) -> bool {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            self.modifier_delegate
+                .as_ref()
+                .is_some_and(|delegate| delegate.was_applied())
+        } else {
+            true
+        }
     }
 }
 

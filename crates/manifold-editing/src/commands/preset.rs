@@ -15,6 +15,8 @@ use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
 use crate::command::Command;
 
+mod modifier;
+
 /// Fork the preset behind the instance at `target`: register `source_def` as a
 /// new project-embedded preset (id minted from its current id) and retarget the
 /// instance to it, keeping its param values.
@@ -41,6 +43,7 @@ pub struct ForkPresetCommand {
     /// The created embedded preset (with its minted id), captured on first
     /// execute so redo re-inserts the SAME preset deterministically.
     forked: Option<EmbeddedPreset>,
+    modifier_reverse: Option<modifier::ForkReverse>,
 }
 
 impl ForkPresetCommand {
@@ -54,6 +57,7 @@ impl ForkPresetCommand {
             old_type: None,
             old_param_values: None,
             forked: None,
+            modifier_reverse: None,
         }
     }
 
@@ -69,6 +73,7 @@ impl ForkPresetCommand {
             old_type: None,
             old_param_values: None,
             forked: None,
+            modifier_reverse: None,
         }
     }
 
@@ -80,6 +85,10 @@ impl ForkPresetCommand {
 
 impl Command for ForkPresetCommand {
     fn execute(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::fork_execute(self, project);
+            return;
+        }
         if self.forked.is_none() {
             self.old_type = project.instance_preset_id(&self.target);
             let base = self
@@ -120,6 +129,10 @@ impl Command for ForkPresetCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::fork_undo(self, project);
+            return;
+        }
         if let Some(fp) = &self.forked
             && let Some(id) = fp.id().cloned()
         {
@@ -137,6 +150,14 @@ impl Command for ForkPresetCommand {
 
     fn description(&self) -> &str {
         "Fork Preset"
+    }
+
+    fn was_applied(&self) -> bool {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::fork_was_applied(self)
+        } else {
+            true
+        }
     }
 }
 
@@ -242,16 +263,38 @@ pub struct RevertToLibraryCommand {
     /// redo re-executes against the value undo just restored, so no
     /// separate first-execute flag is needed.
     old_graph: Option<EffectGraphDef>,
+    /// A resolved catalog recipe is required when the target is a scene
+    /// modifier. The renderer-aware caller supplies it before dispatch.
+    resolved_def: Option<EffectGraphDef>,
+    modifier_reverse: Option<modifier::RevertReverse>,
 }
 
 impl RevertToLibraryCommand {
     pub fn new(target: GraphTarget, resolves_in_catalog: bool) -> Self {
-        Self { target, resolves_in_catalog, old_graph: None }
+        Self {
+            target,
+            resolves_in_catalog,
+            old_graph: None,
+            resolved_def: None,
+            modifier_reverse: None,
+        }
+    }
+
+    /// Supply the already-resolved catalog definition for a scene-modifier
+    /// target. Editing stays renderer-free, so resolution belongs at the UI
+    /// boundary and is replayed as part of this command.
+    pub fn with_resolved_def(mut self, def: EffectGraphDef) -> Self {
+        self.resolved_def = Some(def);
+        self
     }
 }
 
 impl Command for RevertToLibraryCommand {
     fn execute(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::revert_execute(self, project);
+            return;
+        }
         if !self.resolves_in_catalog {
             eprintln!(
                 "[manifold-editing] RevertToLibrary: {} no longer resolves in the catalog; refusing to revert (staying diverged is safer than reverting to nothing)",
@@ -270,6 +313,10 @@ impl Command for RevertToLibraryCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::revert_undo(self, project);
+            return;
+        }
         // `execute` was a no-op fail-loud refusal — the graph was never
         // touched, so undo must be a no-op too (an unconditional restore
         // here would WRITE `None` over an untouched `Some(diverged_def)`).
@@ -285,6 +332,14 @@ impl Command for RevertToLibraryCommand {
 
     fn description(&self) -> &str {
         "Revert to Library"
+    }
+
+    fn was_applied(&self) -> bool {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::revert_was_applied(self)
+        } else {
+            true
+        }
     }
 }
 

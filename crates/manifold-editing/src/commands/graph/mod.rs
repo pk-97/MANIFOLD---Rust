@@ -28,6 +28,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::project::Project;
 
 mod card_owned_write;
+mod param_sections;
 mod node_edit;
 pub use node_edit::*;
 mod expose;
@@ -36,8 +37,10 @@ mod groups;
 pub use groups::*;
 mod scene;
 pub use scene::*;
-mod scene_modifier;
+pub(crate) mod scene_modifier;
 pub use scene_modifier::*;
+mod modifier_stack;
+pub use modifier_stack::*;
 mod layer_plane;
 pub use layer_plane::*;
 mod modifiers;
@@ -77,18 +80,7 @@ pub(super) fn with_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    project.with_preset_graph_mut(target, |host| {
-        let def = host
-            .graph_def_mut()
-            .get_or_insert_with(|| catalog_default.clone());
-        let r = f(def);
-        if structural {
-            host.bump_graph_structure_version();
-        } else {
-            host.bump_graph_version();
-        }
-        r
-    })
+    project.with_graph_for_target_mut(target, Some(catalog_default), structural, f)
 }
 
 /// Variant of [`with_target_graph_mut`] that doesn't lift the graph
@@ -105,18 +97,7 @@ pub(super) fn with_existing_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    project
-        .with_preset_graph_mut(target, |host| {
-            let def = host.graph_def_mut().as_mut()?;
-            let r = f(def);
-            if structural {
-                host.bump_graph_structure_version();
-            } else {
-                host.bump_graph_version();
-            }
-            Some(r)
-        })
-        .flatten()
+    project.with_graph_for_target_mut(target, None, structural, f)
 }
 
 /// Refresh the target's live `ParamManifest` from its just-mutated graph
@@ -275,6 +256,7 @@ pub(super) fn resolve_target_instance<'p>(
         GraphTarget::Generator(layer_id) => {
             project.timeline.find_layer_by_id_mut(layer_id).map(|(_, layer)| layer.gen_params_or_init())
         }
+        GraphTarget::SceneModifier { .. } => None,
     }
 }
 

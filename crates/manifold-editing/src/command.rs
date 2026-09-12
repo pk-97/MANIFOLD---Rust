@@ -7,6 +7,11 @@ pub trait Command: Debug + Send {
     fn execute(&mut self, project: &mut Project);
     fn undo(&mut self, project: &mut Project);
     fn description(&self) -> &str;
+    /// Commands that can reject a stale prepared edit report whether execute
+    /// actually changed the project. Existing commands retain their behavior.
+    fn was_applied(&self) -> bool {
+        true
+    }
 }
 
 /// Callbacks for layer lifecycle events (add/remove).
@@ -43,13 +48,22 @@ impl Command for CompositeCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        for cmd in self.commands.iter_mut().rev() {
+        for cmd in self
+            .commands
+            .iter_mut()
+            .rev()
+            .filter(|cmd| cmd.was_applied())
+        {
             cmd.undo(project);
         }
     }
 
     fn description(&self) -> &str {
         &self.desc
+    }
+
+    fn was_applied(&self) -> bool {
+        self.commands.iter().any(|command| command.was_applied())
     }
 }
 
@@ -69,7 +83,10 @@ mod tests {
 
     impl Command for AppendCommand {
         fn execute(&mut self, project: &mut Project) {
-            project.settings.video_library_paths.push(self.to_append.clone());
+            project
+                .settings
+                .video_library_paths
+                .push(self.to_append.clone());
         }
         fn undo(&mut self, project: &mut Project) {
             project.settings.video_library_paths.pop();
@@ -82,7 +99,11 @@ mod tests {
     fn composite(items: &[&str]) -> CompositeCommand {
         let commands = items
             .iter()
-            .map(|&s| Box::new(AppendCommand { to_append: s.to_string() }) as Box<dyn Command>)
+            .map(|&s| {
+                Box::new(AppendCommand {
+                    to_append: s.to_string(),
+                }) as Box<dyn Command>
+            })
             .collect();
         CompositeCommand::new(commands, "Append Many".to_string())
     }
