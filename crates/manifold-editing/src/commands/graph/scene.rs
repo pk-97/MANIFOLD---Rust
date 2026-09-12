@@ -23,7 +23,7 @@ use crate::command::Command;
 use super::{
     collect_node_ids, dedup_handle, descend_level, refresh_target_manifest,
     resolve_target_instance, scene_build_node, scene_build_wire, with_existing_target_graph_mut,
-    with_target_graph_mut,
+    with_target_graph_def_mut, with_target_graph_mut,
 };
 
 /// The add-object gesture (D7): one undoable composite edit that (1) bumps
@@ -545,6 +545,12 @@ impl RemoveSceneObjectCommand {
 
 impl Command for RemoveSceneObjectCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
+        if deletion_breaks_explicit_modifier_target(def, &self.scope_path, self.render_scene_node_id, self.object_index) {
+            eprintln!("[manifold-editing] object is explicitly targeted by a scene modifier; retarget or remove that modifier first");
+            return;
+        }
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.object_index;
@@ -580,7 +586,7 @@ impl Command for RemoveSceneObjectCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some((pn, pw)) = self.prev.take() else {
             return;
         };
         let scope = self.scope_path.clone();
@@ -595,6 +601,33 @@ impl Command for RemoveSceneObjectCommand {
     fn description(&self) -> &str {
         "Remove Object"
     }
+
+    fn was_applied(&self) -> bool { self.prev.is_some() }
+}
+
+fn deletion_breaks_explicit_modifier_target(
+    def: &EffectGraphDef, scope: &[u32], render_id: u32, object_index: u32,
+) -> bool {
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    if def.scene_modifiers.is_empty() { return false; }
+    let mut nodes = def.nodes.as_slice();
+    let mut wires = def.wires.as_slice();
+    let mut path = Vec::with_capacity(scope.len());
+    for id in scope {
+        let Some(node) = nodes.iter().find(|node| node.id == *id) else { return false; };
+        let Some(group) = node.group.as_deref() else { return false; };
+        path.push(node.node_id.clone()); nodes = &group.nodes; wires = &group.wires;
+    }
+    let port = format!("object_{object_index}");
+    let Some(wire) = wires.iter().find(|wire| wire.to_node == render_id && wire.to_port == port) else { return false; };
+    let Some(producer) = nodes.iter().find(|node| node.id == wire.from_node) else { return false; };
+    let removed = SceneNodeRef { scope: path, node: producer.node_id.clone() };
+    def.scene_modifiers.iter().any(|modifier| match &modifier.targets {
+        SceneTargetSelection::AllObjects => false,
+        SceneTargetSelection::Explicit { objects } => objects.iter().any(|object|
+            object == &removed || (object.scope.starts_with(&removed.scope)
+                && object.scope.get(removed.scope.len()) == Some(&removed.node))),
+    })
 }
 
 /// The remove-light gesture (BUG-193): the inverse of
@@ -937,43 +970,43 @@ impl Command for DuplicateSceneObjectCommand {
         // Reached at the same undo-unit boundary `RenameSceneObjectCommand`'s
         // D5 sweep uses (`resolve_target_instance`, outside
         // `with_target_graph_mut`'s narrower graph-only view).
-        if !node_id_map.is_empty()
-            && let Some(inst) = resolve_target_instance(&self.target, project)
-            && let Some(meta) = inst.graph.as_mut().and_then(|g| g.preset_metadata.as_mut())
-        {
-            self.prev_string_bindings = Some(meta.string_bindings.clone());
-            let new_entries: Vec<StringBindingDef> = meta
-                .string_bindings
-                .iter()
-                .filter_map(|b| match &b.target {
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => node_id_map
-                        .iter()
-                        .find(|(old, _)| old == node_id)
-                        .map(|(_, new_id)| StringBindingDef {
-                            id: b.id.clone(),
-                            label: b.label.clone(),
-                            default_value: b.default_value.clone(),
-                            target: manifold_core::effect_graph_def::BindingTarget::Node {
-                                node_id: new_id.clone(),
-                                param: param.clone(),
-                            },
-                        }),
-                    manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
-                    manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => None,
-                })
-                .collect();
-            meta.string_bindings.extend(new_entries);
-        } else {
-            self.prev_string_bindings = None;
+        if !node_id_map.is_empty() {
+            self.prev_string_bindings = with_target_graph_def_mut(project, &self.target, |def| {
+                let meta = def.preset_metadata.as_mut()?;
+                let previous = meta.string_bindings.clone();
+                let new_entries: Vec<StringBindingDef> = meta
+                    .string_bindings
+                    .iter()
+                    .filter_map(|b| match &b.target {
+                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => node_id_map
+                            .iter()
+                            .find(|(old, _)| old == node_id)
+                            .map(|(_, new_id)| StringBindingDef {
+                                id: b.id.clone(),
+                                label: b.label.clone(),
+                                default_value: b.default_value.clone(),
+                                target: manifold_core::effect_graph_def::BindingTarget::Node {
+                                    node_id: new_id.clone(),
+                                    param: param.clone(),
+                                },
+                            }),
+                        manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
+                        manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => None,
+                    })
+                    .collect();
+                meta.string_bindings.extend(new_entries);
+                Some(previous)
+            }).flatten();
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(prev_sb) = self.prev_string_bindings.clone()
-            && let Some(inst) = resolve_target_instance(&self.target, project)
-            && let Some(meta) = inst.graph.as_mut().and_then(|g| g.preset_metadata.as_mut())
-        {
-            meta.string_bindings = prev_sb;
+        if let Some(prev_sb) = self.prev_string_bindings.clone() {
+            let _ = with_target_graph_def_mut(project, &self.target, |def| {
+                if let Some(meta) = def.preset_metadata.as_mut() {
+                    meta.string_bindings = prev_sb;
+                }
+            });
         }
 
         let Some((pn, pw)) = self.prev.clone() else {
@@ -2249,6 +2282,38 @@ mod tests {
     }
 
     #[test]
+    fn scene_modifier_explicit_object_delete_rejects_without_history_or_mutation() {
+        use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+        let (mut project, local_target, _) = modifier_draft_fixture();
+        let owner_target = local_target.host_target().unwrap().clone();
+        let (scene, ids) = render_scene_with_objects(1);
+        let node = scene.nodes.iter().find(|node| node.id == ids[0]).unwrap().node_id.clone();
+        let host = project.graph_target_owner_mut(&owner_target).unwrap();
+        let graph = host.graph.as_mut().unwrap();
+        graph.nodes = scene.nodes;
+        graph.wires = scene.wires;
+        graph.scene_modifiers[0].targets = SceneTargetSelection::Explicit {
+            objects: vec![SceneNodeRef { scope: vec![], node }],
+        };
+        let before = graph.clone();
+        let version = host.graph_structure_version;
+        let command = RemoveSceneObjectCommand::new(owner_target.clone(), vec![], 0, 0, before.clone());
+        let mut undo = crate::undo::UndoRedoManager::new();
+        assert!(!undo.execute(Box::new(command), &mut project));
+        let host = project.graph_target_owner(&owner_target).unwrap();
+        assert_eq!(host.graph.as_ref(), Some(&before));
+        assert_eq!(host.graph_structure_version, version);
+        let host = project.graph_target_owner_mut(&owner_target).unwrap();
+        let graph = host.graph.as_mut().unwrap();
+        graph.scene_modifiers[0].targets = SceneTargetSelection::AllObjects;
+        let all_objects = graph.clone();
+        let command = RemoveSceneObjectCommand::new(owner_target.clone(), vec![], 0, 0, all_objects.clone());
+        assert!(undo.execute(Box::new(command), &mut project));
+        assert!(undo.undo(&mut project));
+        assert_eq!(project.graph_target_owner(&owner_target).unwrap().graph.as_ref(), Some(&all_objects));
+    }
+
+    #[test]
     fn remove_scene_light_only_light_removes_node_and_zeroes_count() {
         let (mut project, fx) = project_with_graph(render_scene_graph(0, 1));
         // Wire the fixture's declared single light exactly like
@@ -3355,5 +3420,116 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-merge graph AND metadata exactly");
+    }
+
+    fn local_modifier_scene_project(mut local: EffectGraphDef) -> (Project, GraphTarget) {
+        let (mut project, target, _) = modifier_draft_fixture();
+        let owner_target = target.host_target().unwrap().clone();
+        let host = project.graph_target_owner_mut(&owner_target).unwrap();
+        let owner_graph = host.graph.as_mut().unwrap();
+        local.preset_metadata = target.graph_in(owner_graph).unwrap().preset_metadata.clone();
+        *target.graph_in_mut(owner_graph).unwrap() = local;
+        (project, target)
+    }
+
+    #[test]
+    fn scene_modifier_structural_refresh_updates_host_manifest_and_roundtrips() {
+        let (mut project, target) = local_modifier_scene_project(render_scene_graph(0, 0));
+        let before_params = project.graph_target_owner(&target).unwrap().params.clone();
+        let mut command = AddSceneObjectCommand::new(
+            target.clone(),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            vec![scene_param_meta("ambient", "Ambient")],
+            vec![scene_param_meta("pos_x", "X")],
+            vec![scene_param_meta("visible", "Visible")],
+            render_scene_graph(0, 0),
+        );
+
+        command.execute(&mut project);
+        let host = project.graph_target_owner(&target).unwrap();
+        let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
+        assert_eq!(local.preset_metadata.as_ref().unwrap().params.len(), 3);
+        assert_eq!(host.params.len(), 3, "local metadata refreshes the owning generator manifest");
+
+        command.undo(&mut project);
+        let host = project.graph_target_owner(&target).unwrap();
+        assert!(target.graph_in(host.graph.as_ref().unwrap()).unwrap().preset_metadata.as_ref().unwrap().params.is_empty());
+        assert_eq!(host.params, before_params, "undo restores host live values exactly");
+
+        command.execute(&mut project);
+        let host = project.graph_target_owner(&target).unwrap();
+        assert_eq!(host.params.len(), 3, "redo refreshes the host manifest again");
+    }
+
+    #[test]
+    fn scene_modifier_duplicate_copies_local_string_binding_and_preserves_sibling() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, target) = local_modifier_scene_project(render_scene_graph(0, 0));
+        AddSceneObjectCommand::new(
+            target.clone(),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            render_scene_graph(0, 0),
+        )
+        .execute(&mut project);
+        let source_mesh = {
+            let host = project.graph_target_owner(&target).unwrap();
+            let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
+            local
+                .nodes
+                .iter()
+                .find(|node| node.handle.as_deref() == Some("Object 1"))
+                .and_then(|group| group.group.as_ref())
+                .and_then(|group| group.nodes.iter().find(|node| node.type_id == "node.cube_mesh"))
+                .unwrap()
+                .node_id
+                .clone()
+        };
+        {
+            let owner_target = target.host_target().unwrap().clone();
+            let host = project.graph_target_owner_mut(&owner_target).unwrap();
+            let local = target.graph_in_mut(host.graph.as_mut().unwrap()).unwrap();
+            local.preset_metadata.as_mut().unwrap().string_bindings.push(StringBindingDef {
+                id: "model_file".into(),
+                label: "Model File".into(),
+                default_value: "assets/hero.glb".into(),
+                target: BindingTarget::Node { node_id: source_mesh.clone(), param: "path".into() },
+            });
+        }
+        let mut command = DuplicateSceneObjectCommand::new(
+            target.clone(), vec![], 0, 0, render_scene_graph(0, 0),
+        );
+        command.execute(&mut project);
+        let host = project.graph_target_owner(&target).unwrap();
+        let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
+        let clone = local.nodes.iter().find(|node| node.handle.as_deref() == Some("Object 1 2")).unwrap();
+        let clone_mesh = clone.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == "node.cube_mesh").unwrap();
+        let strings = &local.preset_metadata.as_ref().unwrap().string_bindings;
+        assert_eq!(strings.len(), 2);
+        assert!(strings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == source_mesh)));
+        assert!(strings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == clone_mesh.node_id)));
+
+        let sibling = GraphTarget::SceneModifier {
+            owner: Box::new(target.host_target().unwrap().clone()),
+            modifier_id: NodeId::new("b"),
+        };
+        let sibling_host = project.graph_target_owner(&sibling).unwrap();
+        assert!(sibling.graph_in(sibling_host.graph.as_ref().unwrap()).unwrap().preset_metadata.as_ref().unwrap().string_bindings.is_empty());
+
+        command.undo(&mut project);
+        let host = project.graph_target_owner(&target).unwrap();
+        let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
+        let strings = &local.preset_metadata.as_ref().unwrap().string_bindings;
+        assert_eq!(strings.len(), 1);
+        assert!(matches!(&strings[0].target, BindingTarget::Node { node_id, .. } if *node_id == source_mesh));
     }
 }

@@ -271,7 +271,11 @@ pub(super) fn seed_local_defaults(
                 ));
             }
         };
-        let value = binding.default_value * binding.scale + binding.offset;
+        let spec = metadata.params.iter().find(|spec| spec.id == binding.id);
+        let value = if let Some(spec) = spec {
+            manifold_core::effects::apply_card_reshape(binding.default_value,
+                spec.min, spec.max, spec.invert, spec.curve, binding.scale, binding.offset)
+        } else { binding.default_value * binding.scale + binding.offset };
         if !value.is_finite() {
             return Err(invalid_binding(
                 &binding.id,
@@ -687,5 +691,18 @@ mod tests {
             mirrored.nodes[0].params["amount"],
             SerializedParamValue::Float { value: 9.0 }
         );
+    }
+
+    #[test]
+    fn scene_modifier_preparation_default_uses_calibrated_reshape_before_conversion() {
+        let mut raw = local_json();
+        raw["presetMetadata"]["params"] = json!([{
+            "id":"inner", "name":"Inner", "min":0.0, "max":1.0,
+            "defaultValue":0.25, "invert":true
+        }]);
+        let local: EffectGraphDef = serde_json::from_value(raw).unwrap();
+        let seeded = seed_local_defaults(&local).unwrap();
+        assert_eq!(seeded.nodes[0].params["amount"], SerializedParamValue::Float { value: 2.0 });
+        assert_ne!(seeded.nodes[0].params["amount"], local.nodes[0].params["amount"]);
     }
 }

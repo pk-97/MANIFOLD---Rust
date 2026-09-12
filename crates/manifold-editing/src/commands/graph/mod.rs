@@ -39,6 +39,7 @@ mod scene;
 pub use scene::*;
 pub(crate) mod scene_modifier;
 pub use scene_modifier::*;
+use scene_modifier::prune_instance_params;
 mod modifier_stack;
 pub use modifier_stack::*;
 mod layer_plane;
@@ -111,7 +112,49 @@ where
 /// touches `preset_metadata` at runtime — see call sites below. A no-op if
 /// the target no longer resolves (effect/layer deleted).
 pub(super) fn refresh_target_manifest(project: &mut Project, target: &GraphTarget) {
+    if let GraphTarget::SceneModifier { modifier_id, .. } = target {
+        let Some(owner_target) = target.host_target() else {
+            eprintln!("[manifold-editing] cannot refresh invalid scene modifier target {}", target.label());
+            return;
+        };
+        let Some(owner) = project.graph_target_owner(owner_target) else {
+            eprintln!("[manifold-editing] cannot refresh missing scene modifier owner {}", target.label());
+            return;
+        };
+        let Some(owner_graph) = owner.graph.clone() else {
+            eprintln!("[manifold-editing] cannot refresh scene modifier without owner graph {}", target.label());
+            return;
+        };
+        let edit = match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &owner_graph,
+            modifier_id,
+        ) {
+            Ok(edit) => edit,
+            Err(error) => {
+                eprintln!("[manifold-editing] scene modifier metadata refresh failed for {}: {error}", target.label());
+                return;
+            }
+        };
+        if let Some(host) = project.graph_target_owner_mut(owner_target) {
+            host.graph = Some(edit.graph);
+            prune_instance_params(host, &edit.removed_param_ids);
+            host.refresh_manifest_from_graph();
+        }
+        return;
+    }
     project.with_preset_graph_mut(target, |host| host.refresh_manifest_from_graph());
+}
+
+/// Borrow the complete authored graph selected by `target`, including a
+/// modifier-local graph nested in its owning generator. The host instance
+/// remains the owner of storage and the runtime manifest.
+pub(super) fn with_target_graph_def_mut<R>(
+    project: &mut Project,
+    target: &GraphTarget,
+    f: impl FnOnce(&mut EffectGraphDef) -> R,
+) -> Option<R> {
+    let host = project.graph_target_owner_mut(target)?;
+    Some(f(target.graph_in_mut(host.graph.as_mut()?)?))
 }
 
 /// Helper for the Revert command: take the target's current

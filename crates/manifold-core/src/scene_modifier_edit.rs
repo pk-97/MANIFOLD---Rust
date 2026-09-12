@@ -356,6 +356,112 @@ pub fn reconcile_scene_modifier_parameters(
     })
 }
 
+/// Set one preparation-only recipe parameter to a fixed authored value.
+/// Preparation parameters are evaluated before runtime routes are built, so
+/// this changes only the local recipe metadata and its leaf default seed. It
+/// deliberately does not create or reshape an owner's public macro.
+pub fn set_scene_modifier_preparation_param(
+    owner: &EffectGraphDef,
+    id: &NodeId,
+    param_id: &str,
+    value: f32,
+) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+    let mut matches = owner.scene_modifiers.iter().filter(|item| &item.id == id);
+    let instance = matches
+        .next()
+        .ok_or_else(|| SceneModifierEditError::MissingModifier { id: id.to_string() })?;
+    if matches.next().is_some() {
+        return Err(SceneModifierEditError::DuplicateModifierId { id: id.to_string() });
+    }
+    let local = local_metadata(instance)?;
+    let recipe = local
+        .scene_modifier
+        .as_ref()
+        .ok_or_else(|| SceneModifierEditError::InvalidSchema {
+            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                path: format!("{}.graph.presetMetadata", id),
+                detail: "preparation parameter requires scene modifier recipe metadata".into(),
+            },
+        })?;
+    if !recipe.preparation_params.iter().any(|param| param == param_id) {
+        return Err(SceneModifierEditError::InvalidSchema {
+            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                path: format!("{}.graph.presetMetadata.sceneModifier.preparationParams", id),
+                detail: format!("parameter `{param_id}` is not declared as preparation-only"),
+            },
+        });
+    }
+    let spec = local
+        .params
+        .iter()
+        .find(|param| param.id == param_id)
+        .ok_or_else(|| SceneModifierEditError::InvalidSchema {
+            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                path: format!("{}.graph.presetMetadata.params", id),
+                detail: format!("preparation parameter `{param_id}` is not numeric"),
+            },
+        })?;
+    if !value.is_finite() || !spec.min.is_finite() || !spec.max.is_finite()
+        || value < spec.min || value > spec.max
+    {
+        return Err(SceneModifierEditError::InvalidSchema {
+            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                path: format!("{}.graph.presetMetadata.params.{param_id}", id),
+                detail: format!("value {value} must be finite and within [{}, {}]", spec.min, spec.max),
+            },
+        });
+    }
+    let leaf_targets: Vec<(NodeId, String)> = local
+        .bindings
+        .iter()
+        .filter(|binding| binding.id == param_id)
+        .filter_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, param } => Some((node_id.clone(), param.clone())),
+            BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
+        })
+        .collect();
+    if leaf_targets.is_empty() {
+        return Err(SceneModifierEditError::InvalidSchema {
+            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                path: format!("{}.graph.presetMetadata.bindings", id),
+                detail: format!("preparation parameter `{param_id}` requires a direct node binding"),
+            },
+        });
+    }
+
+    let mut graph = owner.clone();
+    let edited = graph
+        .scene_modifiers
+        .iter_mut()
+        .find(|item| &item.id == id)
+        .expect("modifier was found above");
+    let metadata = edited
+        .graph
+        .preset_metadata
+        .as_mut()
+        .expect("local metadata was found above");
+    metadata
+        .params
+        .iter_mut()
+        .find(|param| param.id == param_id)
+        .expect("numeric preparation parameter was found above")
+        .default_value = value;
+    for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == param_id) {
+        binding.default_value = value;
+        binding.default_mirrors_node_param = false;
+    }
+    if let Some(recipe) = metadata.scene_modifier.as_mut() {
+        recipe.calibrations.retain(|calibration| calibration.param_id != param_id);
+        recipe.initializers.retain(|initializer| {
+            !leaf_targets.iter().any(|(node_id, param)| {
+                initializer.target.node == *node_id && initializer.param == *param
+            })
+        });
+    }
+    validate(&graph)?;
+    Ok(SceneModifierGraphEdit { graph, removed_param_ids: Vec::new() })
+}
+
 /// Move a modifier to its final post-removal index. `index == len - 1`
 /// appends to the end; the original owner remains untouched.
 pub fn move_scene_modifier(
@@ -612,6 +718,115 @@ mod tests {
             Err(SceneModifierEditError::IndexOutOfRange { .. })
         ));
         assert_eq!(graph, snapshot);
+    }
+
+    fn preparation_owner() -> EffectGraphDef {
+        use crate::effect_graph_def::{EffectGraphNode, SerializedParamValue};
+        use crate::scene_modifier_preset::{SceneNodeInitializer, SceneParamCalibration, SceneScalarExpr};
+        let mut instance = recipe("preparation");
+        let metadata = instance.graph.preset_metadata.as_mut().unwrap();
+        metadata
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .preparation_params
+            .push("gain".into());
+        metadata.bindings.push(BindingDef {
+            id: "gain".into(),
+            label: "Gain".into(),
+            default_value: 0.3,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("leaf"),
+                param: "gain".into(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        });
+        metadata
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .initializers
+            .push(SceneNodeInitializer {
+                target: SceneNodeRef { scope: vec![], node: NodeId::new("leaf") },
+                param: "gain".into(),
+                value: SceneScalarExpr::Constant { value: 0.8 },
+            });
+        metadata
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .calibrations
+            .push(SceneParamCalibration {
+                param_id: "gain".into(),
+                min: SceneScalarExpr::Constant { value: 0.0 },
+                max: SceneScalarExpr::Constant { value: 1.0 },
+                default_value: SceneScalarExpr::Constant { value: 0.3 },
+            });
+        instance.graph.nodes.push(EffectGraphNode {
+            id: 1,
+            node_id: NodeId::new("leaf"),
+            type_id: "node.value".into(),
+            handle: None,
+            params: [
+                ("gain".into(), SerializedParamValue::Float { value: 0.3 }),
+            ]
+            .into_iter()
+            .collect(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        });
+        let mut owner = owner();
+        owner.scene_modifiers.push(instance);
+        owner
+    }
+
+    #[test]
+    fn scene_modifier_preparation_sets_fixed_default_and_removes_dynamic_seeders() {
+        let owner = preparation_owner();
+        let edited = set_scene_modifier_preparation_param(
+            &owner,
+            &NodeId::new("preparation"),
+            "gain",
+            0.75,
+        )
+        .expect("declared preparation parameter edits");
+        let local = &edited.graph.scene_modifiers[0].graph;
+        let metadata = local.preset_metadata.as_ref().unwrap();
+        assert_eq!(metadata.params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.75);
+        let binding = metadata.bindings.iter().find(|b| b.id == "gain").unwrap();
+        assert_eq!(binding.default_value, 0.75);
+        assert!(!binding.default_mirrors_node_param);
+        let recipe = metadata.scene_modifier.as_ref().unwrap();
+        assert!(recipe.calibrations.iter().all(|c| c.param_id != "gain"));
+        assert!(recipe.initializers.iter().all(|i| i.param != "gain"));
+        assert_eq!(metadata.params.iter().find(|p| p.id == "enabled").unwrap().default_value, 1.0);
+        assert_eq!(owner.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.3);
+        assert!(edited.removed_param_ids.is_empty());
+    }
+
+    #[test]
+    fn scene_modifier_preparation_rejects_undeclared_nonfinite_and_out_of_range_values() {
+        let owner = preparation_owner();
+        for (param_id, value) in [("enabled", 0.5), ("gain", f32::NAN), ("gain", 3.0)] {
+            assert!(matches!(
+                set_scene_modifier_preparation_param(
+                    &owner,
+                    &NodeId::new("preparation"),
+                    param_id,
+                    value,
+                ),
+                Err(SceneModifierEditError::InvalidSchema { .. })
+            ));
+        }
     }
 
     #[test]

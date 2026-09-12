@@ -10,7 +10,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_edit::{
     SceneModifierEditError, SceneModifierGraphEdit, delete_scene_modifier, insert_scene_modifier,
-    move_scene_modifier, retarget_scene_modifier,
+    move_scene_modifier, retarget_scene_modifier, set_scene_modifier_preparation_param,
 };
 use manifold_core::scene_modifier_preset::{
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
@@ -378,9 +378,63 @@ impl Command for RetargetSceneModifierCommand {
     }
 }
 
+/// Set a preparation-only local modifier parameter and preserve it as one
+/// undoable stack transaction. The command is prepared against the complete
+/// resolved owner graph, just like structural modifier edits.
+#[derive(Debug)]
+pub struct SetSceneModifierPreparationParamCommand {
+    transaction: StackTransaction,
+}
+
+impl SetSceneModifierPreparationParamCommand {
+    pub fn new(
+        project: &Project,
+        owner: GraphTarget,
+        owner_default: &EffectGraphDef,
+        id: NodeId,
+        param_id: String,
+        value: f32,
+    ) -> Result<Self, SceneModifierStackError> {
+        Ok(Self {
+            transaction: StackTransaction::prepare(
+                project,
+                owner,
+                owner_default,
+                "Set Scene Modifier Preparation Parameter",
+                move |graph| set_scene_modifier_preparation_param(graph, &id, &param_id, value),
+            )?,
+        })
+    }
+
+    pub fn prepared_graph(&self) -> &EffectGraphDef {
+        self.transaction.prepared_graph()
+    }
+
+    pub fn error(&self) -> Option<&SceneModifierStackError> {
+        self.transaction.error()
+    }
+}
+
+impl Command for SetSceneModifierPreparationParamCommand {
+    fn execute(&mut self, project: &mut Project) {
+        self.transaction.execute(project);
+    }
+    fn undo(&mut self, project: &mut Project) {
+        self.transaction.undo(project);
+    }
+    fn description(&self) -> &str {
+        self.transaction.description
+    }
+    fn was_applied(&self) -> bool {
+        self.transaction.was_applied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::effect_graph_def::{BindingDef, BindingTarget};
+    use manifold_core::effects::ParamConvert;
     use std::borrow::Cow;
 
     use manifold_core::ableton_mapping::{
@@ -433,6 +487,32 @@ mod tests {
             mesh_frames: vec![],
             graph: Box::new(graph),
         }
+    }
+
+    fn preparation_modifier(id: &str) -> SceneModifierInstanceDef {
+        let mut instance = modifier(id);
+        let metadata = instance.graph.preset_metadata.as_mut().unwrap();
+        metadata
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .preparation_params
+            .push("gain".into());
+        metadata.bindings.push(BindingDef {
+            id: "gain".into(),
+            label: "Gain".into(),
+            default_value: 0.5,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("leaf"),
+                param: "gain".into(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        });
+        instance
     }
 
     fn project_with_graph(graph: Option<EffectGraphDef>) -> (Project, GraphTarget, EffectGraphDef) {
@@ -743,6 +823,52 @@ mod tests {
         let after = project.timeline.layers[0].gen_params().unwrap();
         assert_eq!(after.graph, before.graph);
         assert_eq!(instance_state(after), before_state);
+    }
+
+    #[test]
+    fn scene_modifier_preparation_stack_execute_undo_redo_and_stale_rejection() {
+        let default = owner_default();
+        let graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+            &default,
+            0,
+            preparation_modifier("prep"),
+        )
+        .unwrap()
+        .graph;
+        let (mut project, target, default) = project_with_graph(Some(graph));
+        let before = project.graph_target_owner(&target).unwrap().graph.clone();
+        let mut command = SetSceneModifierPreparationParamCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            NodeId::new("prep"),
+            "gain".into(),
+            0.8,
+        )
+        .unwrap();
+        assert_eq!(command.prepared_graph().scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.8);
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        assert_eq!(project.graph_for_target(&target, Some(&default)).unwrap().scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.8);
+        command.undo(&mut project);
+        assert!(!command.was_applied());
+        assert_eq!(project.graph_target_owner(&target).unwrap().graph, before);
+        command.execute(&mut project);
+        assert!(command.was_applied());
+
+        let mut stale = SetSceneModifierPreparationParamCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            NodeId::new("prep"),
+            "gain".into(),
+            0.9,
+        )
+        .unwrap();
+        project.graph_target_owner_mut(&target).unwrap().graph = Some(default.clone());
+        stale.execute(&mut project);
+        assert!(!stale.was_applied());
+        assert_eq!(stale.error(), Some(&SceneModifierStackError::StaleOwner));
     }
 
     #[test]
