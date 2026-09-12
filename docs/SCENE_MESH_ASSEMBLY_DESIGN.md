@@ -2,15 +2,15 @@
 
 <!-- index: Reference geometry, vertex and triangle-face targets, progressive assembly, normal/tangent handling and matched-mesh morph contracts. -->
 
-**Status:** PROPOSED · 2026-09-10 · Codex lead · not implemented.
-**Prerequisites:** Foundation F8 and fields W1–W3. Existing mesh deformers remain authoritative.
+**Status:** PROPOSED · 2026-09-12 · Codex lead · not implemented.
+**Prerequisites:** Foundation F8 (F1–F8 remains unbuilt; that foundation migrates Elastic Sculpture, Surface Peel, Vortex Fragments and Loop/Fog) and the later field seams W1–W3 where required. The landed photoscan slice is a current/reference mesh-stage precedent, not this assembly contract. Existing mesh deformers remain authoritative.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; conformance treatment, with fresh source/schema verification before each phase.
 
-Peter asks for vertices and faces to be "warped and distorted or split apart or morphed into their final mesh creatively". **The first assembly operation returns elements of one source mesh to their own reference geometry.** This gives reliable reconstruction without solving correspondence between unrelated models.
+Peter asks for vertices and faces to be "warped and distorted or split apart or morphed into their final mesh creatively". **The first assembly operation returns elements of one source mesh to their own reference geometry.** This gives reliable reconstruction without solving correspondence between unrelated models. The shipped photoscan examples establish the adjacent behaviours: Elastic Sculpture continuously deforms, while Surface Peel and Vortex Fragments move rigid fixed-cell patches. Assembly and coherent slicing remain proposed next families.
 
-Shared gates and resource limits: [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
+Shared gates and resource limits: [Validation V9](SCENE_MODIFIER_VALIDATION_PLAN.md#4-shared-gates). Creative admission follows the [September 12 direction](SCENE_MODIFIER_PROGRAMME.md#2c-september-12-direction-and-creative-admission).
 
-## 1. Audit — verified 2026-09-10
+## 1. Audit — original source audit 2026-09-10; amendment 2026-09-12
 
 | Piece | Source under `crates/manifold-renderer/src` | Finding |
 |---|---|---|
@@ -21,21 +21,22 @@ Shared gates and resource limits: [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md
 | Growth mask | `node_graph/primitives/mesh_ramp.rs:51` | Vertex spatial weights already exist |
 | Flat normals | `node_graph/primitives/facet_normals.rs:41` | Triangle-list normal recomputation; unsuitable as a hidden replacement for smooth scan normals |
 | RT invalidation | `node_graph/primitives/render_scene.rs:1018`, `:1519` | Geometry/content/topology keys and refit eligibility already owned by renderer |
+| Shipped photoscan mesh stages | `primitives/wave_shear_mesh.rs`, `primitives/transform_mesh_patches.rs`; [landing report](landings/2026-09-11-photoscan-modifiers.md) | Existing current/reference group contract, analytic normal/tangent transport, fixed spatial-cell patch rigidity, exact bypass and raster qualification |
 
 Read the actual shader and capacity method of every reused deformer. Some purpose/comments reflect older limitations; current code and focused proofs decide. No blanket normal-policy change to existing effects in this programme.
 
 ## 2. Decisions
 
-- **D1 — Three distinct targets.** Vertex changes deform surfaces; face changes apply a common transform to each triangle's three corners; object changes move the whole object. Do not label per-vertex random displacement as face shattering.
+- **D1 — Three distinct targets.** Vertex changes deform surfaces; face changes apply a common transform to each triangle's three corners; object changes move the whole object. Do not label per-vertex random displacement as face shattering. In the recipe schema, mesh stages use `SceneStageScope::EachObject` plus `SceneEndpoint::Vertices`; `EachMesh` is prose shorthand, not another enum.
 - **D2 — Reference preserves every source attribute.** A cached immutable source/bind mesh is distinct from the pre-stack animated mesh. Default assembly destination is the current pre-stack mesh, so skinned/morph animation continues. A bind-pose destination is an explicit graph option, not silently captured from the first frame encountered.
 - **D3 — Deterministic Progress.** In the explicit reconstruction preset, Progress 0 is the scattered arrangement and Progress 1 returns exact reference vertices, normals, tangents and UVs. Ordinary deformation presets return Current when their offset reaches zero. Amount/Enabled bypass always returns Current, preserving upstream modifiers. No integrated velocity required.
-- **D4 — Face identity follows source topology.** Triangle ID is stable only while topology/order stays unchanged. Topology replacement is a structural rebuild that resets correspondence and temporal history explicitly.
+- **D4 — Face identity follows source topology.** Triangle ID is stable only while topology/order stays unchanged. Topology replacement is a structural rebuild that resets correspondence and temporal history explicitly. The shipped patch atom groups reference triangle centroids into fixed spatial cells; that membership is not adjacency, connected-surface segmentation or fracture topology.
 - **D5 — Existing render paths own shading and acceleration.** Modified geometry must feed raster/depth/shadow/RT consistently. No raster-only vertex shader deformation hidden from RT. Nonlinear deformations update normals/tangents using an explicit policy.
 - **D6 — Matched topology only for reliable morph.** New preset validation requires equal counts and declared source correspondence. Two unrelated scans with equal counts are not necessarily matched. General remeshing/correspondence and watertight fracture are separate projects.
 
 ## 3. Geometry contract
 
-Use existing `Array<MeshVertex>` and weights. A face operation dispatches per triangle or gathers its three corners, but emits the same flat triangle-list layout. A source using indices must pass through the existing supported triangle-list conversion before this path; M3 does not change scene index-buffer ownership. Source triangle count and corner order are validated at preparation.
+Use existing `Array<MeshVertex>` and weights. A face operation dispatches per triangle or gathers its three corners, but emits the same flat triangle-list layout. A source using indices must pass through the existing supported triangle-list conversion before this path; M3 does not change scene index-buffer ownership. Source triangle count and corner order are validated at preparation. `transform_mesh_patches` supplies a rigid fixed-cell response and reference-gather precedent. It does not provide coherent sections: the later slicing brief must decide the missing membership/response seam without changing this shipped atom's semantics.
 
 Proposed seams (⚠ VERIFY-AT-IMPL reuse existing equivalent operations first):
 
@@ -66,7 +67,17 @@ Geometry buffer generations, conservative changed bounds and topology keys must 
 
 ## 5. Cards and presets
 
-First presets: **Face Bloom** (triangles rotate and spread), **Assemble** (scattered source returns), **Surface Wave** (vertex weights), **Folded Scan** (existing bend/fold composition). Typical card: Progress or Amount, Spread, Distance, Rotation and Seed; mathematical direction stays a graph control unless needed live. A source mesh can be a photoscan or procedural primitive. High-poly scans pay per-vertex work and dynamic RT costs; preparation reports counts.
+Current saved names and controls remain stable while the foundation migrates them: **Elastic Sculpture** is continuous deformation (Bend, Cross Bend, Detail, Phase, Yaw, Pitch); **Surface Peel** is rigid fixed-cell patch motion (Lift, Curl, Spread, Phase, Detail, Yaw, Pitch); **Vortex Fragments** is an orbital/rise variation of that same patch response (Orbit, Rise, Separation, Phase, Detail, Yaw, Pitch). Their variation in pattern, noise or seed does not create a new family.
+
+Candidate next families are behaviourally separate: **Assemble** (progressive return to reference) is the primary candidate; **Face Bloom** (rigid triangle separation) is a variation only if V9 proves a distinct action; **Surface Wave** (continuous vertex response) and **Folded Scan** (existing bend/fold composition) are reuse/regression examples, not mandatory new cards. **Coherent Slices** is a later bounded design-entry proposal owned by this contract, with ordered spatial sections that move as units. Typical future cards use Progress or Amount, Spread, Distance, Rotation and Seed; mathematical direction stays a graph control unless needed live. A source mesh can be a photoscan or procedural primitive. High-poly scans pay per-vertex work and ordinary raster cost; preparation reports counts. Dynamic ray-traced geometry is not a prerequisite for the raster foundation and remains a separately tracked qualification.
+
+### Programme acceptance boundary
+
+| Family | Behaviour and gesture | Contrast and validation |
+|---|---|---|
+| Current photoscan slice | Scrub Phase and the named controls on the imported textured scan | L3 controls and L2 raster visuals passed; Peter reports LFO response; reopen/audio/performance remain unqualified |
+| Progressive assembly | Sweep Progress from scattered to exact source and back after save/reload | Must reach exact reference attributes and differ from continuous deformation and rigid patch motion; use V1/V3/V4/V5 plus M1/M6 |
+| Coherent slicing (later design entry) | Define and then move ordered spatial sections through the scan while preserving each section's internal geometry | This contract owns the bounded proposal; it must differ from per-vertex noise and fixed-cell patch variation before any implementation phase is admitted |
 
 Matched Morph is a separate two-input authoring recipe with a clear compatibility error. It can connect two variants generated from the same topology. It must not reuse `morph_mesh`'s min-count truncation as validation: validate correspondence/counts upstream and test the endpoint. Preserve the existing primitive's legacy behaviour for other graphs.
 
@@ -87,13 +98,13 @@ V3 numeric tolerance; face edge-length relative error ≤1e-5 outside exact zero
 
 All phases read back D1–D6 and refresh topology/animation/RT anchors first. They inherit the validation contract's bounded execution and absolute manifest-path convention.
 
-**M1 — reference and weights.** Entry: W3 and exact current importer order. Deliver reference selection, field-to-vertex/face weights and topology admission; `scene_modifier_assembly_order`/correspondence tests. Gate: focused CPU mesh-admission tests and GPU `scene_modifier_mesh_weights`; renderer clippy. Demo: sampled positions/weights — L1. Forbidden: first-frame pose capture, guessed topology equivalence.
+**M1 — reference and weights.** Entry: F8, W1 coordinate adapters and W4 field/weight cardinality; object formations W3 are not required. Deliver reference selection, field-to-vertex/face weights and topology admission; `scene_modifier_assembly_order`/correspondence tests. Gate: focused CPU mesh-admission tests and GPU `scene_modifier_mesh_weights`; renderer clippy. Demo: sampled positions/weights — L1. Forbidden: first-frame pose capture, guessed topology equivalence.
 
-**M2 — rigid faces and reconstruction.** Entry: M1. Deliver centres/rigid response if absent, FaceBloom/Assemble JSON, exact return branch and M1–M3 invariants. Gate: GPU `scene_modifier_face` and `scene_modifier_mesh_return`; check-presets. Demo/gesture: sweep Progress 0→1 on a textured scan, save/reload, repeat — L3 target. Forbidden: random displacement per corner, replacing smooth source normals at bypass.
+**M2 — rigid faces and progressive Assemble.** Entry: M1. Deliver centres/rigid response if absent, candidate Assemble JSON, exact return branch and M1–M3 invariants. FaceBloom remains a variation and requires V9 contrast evidence before promotion. Gate: GPU `scene_modifier_face` and `scene_modifier_mesh_return`; check-presets. Demo/gesture: sweep Progress 0→1 on a textured scan, save/reload, repeat — L3 target. Forbidden: random displacement per corner, replacing smooth source normals at bypass.
 
-**M3 — deformation composition and matched morph.** Entry: M2. Deliver SurfaceWave/FoldedScan presets using existing atoms; validated paired source for MatchedMorph; selected normal/tangent transport proof. Gate: GPU `scene_modifier_mesh_deform` and `scene_modifier_morph_correspondence`; focused renderer clippy. Demo/gesture: animate a fold then release to exact source — L3 target. Forbidden: new generic remesher, collider fracture or arbitrary scan matching.
+**M3 — deformation regression and matched morph.** Entry: M2. Use SurfaceWave/FoldedScan as reuse/regression examples with existing atoms, rather than mandatory new similar tools; deliver the validated paired source for MatchedMorph and selected normal/tangent transport proof. Gate: GPU `scene_modifier_mesh_deform` and `scene_modifier_morph_correspondence`; focused renderer clippy. Demo/gesture: animate a fold then release to exact source — L3 target. Forbidden: new generic remesher, collider fracture or arbitrary scan matching.
 
-**M4 — render and performance qualification.** Entry: M3; current raster/RT/history keys verified. Deliver M5 proof, conservative bounds/update fixes only where this geometry requires them, held-out scan run and budget table. Gate: GPU `scene_modifier_mesh_render_paths`; V8 trace for 250k-triangle fixture and an independently reported RT configuration; required landing gate. Demo: raster/shadow/RT comparison artifacts and existing flow — L3 target. Forbidden: claiming RT support from raster images or disabling temporal paths without a visible supported-mode contract.
+**M4 — raster and performance qualification.** Entry: M3; current raster/history keys verified. Deliver M5 proof, conservative bounds/update fixes only where this geometry requires them, held-out scan run and budget table. Gate: GPU `scene_modifier_mesh_render_paths`; V8 trace for the declared triangle fixture and an independently reported RT configuration only when that path is available; required landing gate. Demo: raster comparison artifacts and existing flow — L3 target. Dynamic RT is a separate tracked qualification; do not make it a prerequisite for the raster foundation or claim it from static frames. Forbidden: raster-only claims for RT or disabling temporal paths without a visible supported-mode contract.
 
 ## 8. Decided — do not reopen
 

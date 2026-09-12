@@ -2,26 +2,26 @@
 
 <!-- index: Modifier integration for the approved Gaussian splat design: reference channels, masks, anisotropic transforms, assembly and qualification. -->
 
-**Status:** PROPOSED · 2026-09-10 · Codex lead · not implemented.
-**Prerequisites:** Foundation F8, fields W1–W4 and [GAUSSIAN_SPLATS_DESIGN](GAUSSIAN_SPLATS_DESIGN.md) source/renderer phases. This contract does not build a second splat renderer.
+**Status:** PROPOSED · 2026-09-12 · Codex lead · not implemented.
+**Prerequisites:** Foundation F8 (F1–F8 remains unbuilt; that foundation migrates Elastic Sculpture, Surface Peel, Vortex Fragments and Loop/Fog), fields W1–W4 and [GAUSSIAN_SPLATS_DESIGN](GAUSSIAN_SPLATS_DESIGN.md) source/renderer phases. This contract does not build a second splat renderer, and no Gaussian splat renderer is currently shipped.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment; the old splat design's source/render/depth anchors must be refreshed before implementation.
 
-Splats share the same coordinate/weight/response composition as other geometry. A scan can ripple, open into a spiral and reconstruct. Its anisotropic shape, orientation, opacity and view-dependent appearance remain part of the representation, not incidental point-cloud attributes.
+Splats share the same coordinate/weight/response composition as other geometry. A scan can ripple, open into a spiral and reconstruct. Its anisotropic shape, orientation, opacity and view-dependent appearance remain part of the representation, not incidental point-cloud attributes. This remains a later proposed family; the landed photoscan slice qualifies textured mesh raster behaviour only.
 
 All splat source/render symbols below are future dependencies until the existing Gaussian design lands.
 
-Shared gates and resource limits: [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
+Shared gates and resource limits: [Validation V9](SCENE_MODIFIER_VALIDATION_PLAN.md#4-shared-gates). Creative admission follows the [September 12 direction](SCENE_MODIFIER_PROGRAMME.md#2c-september-12-direction-and-creative-admission).
 
-## 1. Audit — verified 2026-09-10
+## 1. Audit — original source audit 2026-09-10; amendment 2026-09-12
 
 `rg -n -i 'gaussian.?splat|gaussian_splat|splatting' crates docs` finds the approved design and its references; no implemented Gaussian splat pipeline was found in crates. The Gaussian Splats header says approved/not built. Its D1 proposes `Channels[position: Vec3F, mask: F32, rotation: Vec4F, scale: Vec3F, opacity: F32, color: Vec4F]`; D5 requires rest-derived displacement; D6 owns projection/sort/draw; D10's placement/depth anchors are dated and need current-code reconciliation.
 
-Existing channels, GPU dispatch and scene depth infrastructure are reusable. Particle scatter is not a Gaussian renderer and is not a compatibility fallback. The current modifier endpoint enum has no Splats target; adding that endpoint is S1's explicit schema extension.
+Existing channels, GPU dispatch and scene depth infrastructure are reusable. Particle scatter is not a Gaussian renderer and is not a compatibility fallback. The current modifier endpoint enum has no Splats target; adding that endpoint is S1's explicit schema extension. The future recipe keeps `SceneStageScope::EachSplatSource` with a default-empty `splat_sources: Vec<SceneNodeRef>` selection field; mesh stages use `SceneStageScope::EachObject` plus `SceneEndpoint::Vertices`. `EachMesh` remains descriptive shorthand for mesh prose, not a second enum. *(The amendment records the scope distinction; the source audit above remains dated 2026-09-10.)*
 
 ## 2. Decisions
 
 - **D1 — Existing Gaussian contract owns import, sort and rendering.** This contract adds graph attachment and mathematical responses only. Do not duplicate its sort or treat an unbuilt renderer as a minor adapter.
-- **D2 — Add a typed Splats endpoint after its representation lands.** Extend `SceneEndpoint` with Splats and recipe schemaVersion=2. Add `SceneStageScope::EachSplatSource` and a default-empty `splat_sources: Vec<SceneNodeRef>` selection field on the instance. A splat preset requires an explicit nonempty source selection in v1; object AllObjects does not silently select cloud sources. The enclosing graph version advances as needed to reject older readers that do not know these enum variants.
+- **D2 — Add a typed Splats endpoint after its representation lands.** Extend `SceneEndpoint` with Splats and recipe schemaVersion=2. Add `SceneStageScope::EachSplatSource` and a default-empty `splat_sources: Vec<SceneNodeRef>` selection field on the instance. A splat preset requires an explicit nonempty source selection in v1; object `AllObjects` does not silently select cloud sources. The enclosing graph version advances as needed to reject older readers that do not know these enum variants.
 - **D3 — Immutable source channels are the reconstruction reference.** Sample mathematical fields at source positions; apply offsets to Current. Progress=1 assembly returns exact source attributes, and ordinary Amount=0 bypass preserves Current.
 - **D4 — Move splat shape coherently.** Rigid rotation updates both centre and quaternion. Scale changes anisotropic extent consistently and preserves nonnegative scales. Moving only the centre is an explicit displacement effect, not claimed as a faithful deformation of the scanned surface.
 - **D5 — Masks are reusable weights.** Existing proposed splat colour/bounds masks feed shared field responses. Preserve mask/opacity distinction: selection weight does not permanently erase source opacity.
@@ -37,11 +37,21 @@ For rigid transform A=R*s, update centre and shape using `Σ' = A Σ Aᵀ` (equi
 
 The original splat design proposes DC-only appearance. Modifier integration honours the landed appearance contract rather than revisiting importer scope. If higher spherical-harmonic bands land first, rigid orientation changes require an explicit appearance-frame decision and tests before S2; do not rotate shape and leave view-dependent appearance accidentally inconsistent.
 
-## 4. First presets and controls
+## 4. Candidate variants and controls
 
-**Cloud Wave:** shared wave weights displace centres along a direction. **Spiral Assemble:** reference-relative radial/rotational positions return to the source with staggered Progress. **Breathing Scan:** rigidly scaled splat extents and/or source-relative centre spread, separate graph operations. **Reveal Sphere:** spatial mask modulates opacity from immutable source opacity.
+Candidate variants include **Cloud Wave:** shared wave weights displace centres along a direction; **Spiral Assemble:** reference-relative radial/rotational positions return to the source with staggered Progress; **Breathing Scan:** rigidly scaled splat extents and/or source-relative centre spread; and **Reveal Sphere:** spatial mask modulates opacity from immutable source opacity. They are candidate names and controls, not mandatory stock cards or an authorized wholesale implementation wave; promotion requires V9.
 
 Typical live controls are Amount/Progress, Spread, Period, Radius and Phase. Source import, history duration and capacity are authoring settings. New labels expose only controls active in the chosen preset; no large universal mode switch with dead rows.
+
+### Programme acceptance boundary
+
+| Family | Behaviour and gesture | Contrast and validation |
+|---|---|---|
+| Cloud Wave | Sweep Amount/Phase to ripple splat centres while preserving shape channels | Representation-specific support for the continuous-deformation family; do not market a new behaviour merely because its input is splats; validate S1/S3 and V3/V5 after the renderer lands |
+| Spiral Assemble | Sweep Progress from opened cloud to exact source | Must preserve anisotropic orientation/extent and return source channels exactly; validate S1/S2/S6 |
+| Reveal Sphere | Move a spatial reveal through the scan | Mask weight must remain distinct from source opacity; validate S3 and renderer-owned depth/sort |
+
+Pattern, noise or seed changes are preset variations unless the behaviour changes. The current static photoscan raster/control evidence does not qualify splat rendering, project reopen, audio modulation or performance.
 
 ## 5. Resource and rendering contract
 
@@ -66,7 +76,7 @@ V3 field tolerance; exact source endpoint bytes. Test one clearly elongated spla
 
 Read back D1–D6 and the landed source/renderer/channel contracts first. Current Gaussian design phases run under their own ownership/gates; no parallel modifications to render_scene or splat shaders by two leads.
 
-**S1 — endpoint and adapters.** Entry: Gaussian source/render/depth integration shipped and F8/W4 available. Deliver recipe v2 extension, explicit cloud-source selection, POSITION/weight adapters, layout admission and resource accounting. Gate: core/IO `scene_modifier_splat_schema`, renderer `scene_modifier_splat_signature`, roundtrip after selection and focused clippy. Demo: typed source selection/diagnostic flow — L3 target. Forbidden: Particle fallback, duplicate importer, silent channel dropping.
+**S1 — endpoint and adapters.** Entry: Gaussian source/render/depth integration shipped and F8/W4 available. Deliver recipe v2 extension, explicit cloud-source selection under `EachSplatSource`, POSITION/weight adapters, layout admission and resource accounting. Gate: core/IO `scene_modifier_splat_schema`, renderer `scene_modifier_splat_signature`, roundtrip after selection and focused clippy. Demo: typed source selection/diagnostic flow — L3 target. Forbidden: Particle fallback, duplicate importer, silent channel dropping or a second splat-selection scope.
 
 **S2 — mathematical presets.** Entry: S1. Deliver CloudWave, SpiralAssemble and RevealSphere using shared fields; only missing splat response atoms; S1–S3 numerical proofs. Gate: GPU `scene_modifier_splat_return`/`scene_modifier_splat_orientation`/`scene_modifier_splat_mask`, modifier check-presets. Demo/gesture: displace a scan then return to exact source after reload — L3 target. Forbidden: arbitrary covariance warp or undocumented SH handling.
 
