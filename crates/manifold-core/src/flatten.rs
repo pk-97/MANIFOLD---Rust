@@ -86,13 +86,12 @@ pub enum FlattenError {
     /// A wire uses a boundary node the wrong way round (into a `group_input`,
     /// or out of a `group_output`).
     MalformedBoundaryWire { node_id: u32, side: WireSide },
-    /// A wire connects a group's input directly to its output. Legal in
-    /// principle but unsupported in v1 — insert an explicit pass-through node.
-    PassthroughNotSupported {
-        group_handle: String,
-        input_port: String,
-        output_port: String,
-    },
+    /// A direct boundary alias has more than one external producer.
+    AmbiguousGroupInput { group_handle: String, port: String, producers: usize },
+    /// A chain of direct boundary aliases feeds back into itself.
+    PassthroughCycle { group_handle: String, port: String },
+    /// A direct alias cannot change its declared wire type.
+    PassthroughTypeMismatch { group_handle: String, input: String, output: String },
     /// Nesting exceeded [`MAX_DEPTH`] (pathological input or a reference cycle).
     GroupCycle { depth: usize },
 }
@@ -145,15 +144,9 @@ impl std::fmt::Display for FlattenError {
             FlattenError::MalformedBoundaryWire { node_id, side } => {
                 write!(f, "node {node_id}: wire {side:?} misuses a group boundary node")
             }
-            FlattenError::PassthroughNotSupported {
-                group_handle,
-                input_port,
-                output_port,
-            } => write!(
-                f,
-                "group '{group_handle}': direct input '{input_port}' -> output '{output_port}' \
-                 passthrough is unsupported; insert an explicit pass-through node"
-            ),
+            FlattenError::AmbiguousGroupInput { group_handle, port, producers } => write!(f, "group '{group_handle}': passthrough input '{port}' has {producers} producers"),
+            FlattenError::PassthroughCycle { group_handle, port } => write!(f, "group '{group_handle}': passthrough output '{port}' forms a cycle"),
+            FlattenError::PassthroughTypeMismatch { group_handle, input, output } => write!(f, "group '{group_handle}': passthrough '{input}' -> '{output}' has different declared port types"),
             FlattenError::GroupCycle { depth } => write!(
                 f,
                 "group nesting exceeded depth {depth} (reference cycle or pathological nesting)"
@@ -214,7 +207,7 @@ struct FlatFragment {
     /// `group_input` port name -> the concrete inner endpoints it feeds.
     input_consumers: BTreeMap<String, Vec<(u32, String)>>,
     /// `group_output` port name -> the single concrete inner endpoint feeding it.
-    output_producer: BTreeMap<String, (u32, String)>,
+    output_producer: BTreeMap<String, Producer>,
 }
 
 /// How a node id in the current fragment resolves once flattened.
@@ -229,14 +222,16 @@ enum Resolved {
     Group {
         handle: String,
         input_consumers: BTreeMap<String, Vec<(u32, String)>>,
-        output_producer: BTreeMap<String, (u32, String)>,
+        output_producer: BTreeMap<String, Producer>,
         valid_inputs: BTreeSet<String>,
         valid_outputs: BTreeSet<String>,
     },
 }
 
 /// The producer side of a wire, after resolution.
+#[derive(Clone)]
 enum Producer {
+    Unconnected,
     Concrete(u32, String),
     FromFragmentInput(String),
 }
@@ -262,7 +257,7 @@ fn flatten_fragment(
     let mut out_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut out_wires: Vec<EffectGraphWire> = Vec::new();
     let mut input_consumers: BTreeMap<String, Vec<(u32, String)>> = BTreeMap::new();
-    let mut output_producer: BTreeMap<String, (u32, String)> = BTreeMap::new();
+    let mut output_producer: BTreeMap<String, Producer> = BTreeMap::new();
     let mut resolved: BTreeMap<u32, Resolved> = BTreeMap::new();
 
     // ── Node pass: classify each node, expand sub-groups inline ──
@@ -289,6 +284,18 @@ fn flatten_fragment(
                 flatten_fragment(&group.nodes, &group.wires, &child_prefix, handle, alloc, depth + 1)?;
 
             apply_param_overrides(node, group, &child_prefix, &mut body.nodes)?;
+
+            for (output, producer) in &body.output_producer {
+                if let Producer::FromFragmentInput(input) = producer {
+                    let from = group.interface.inputs.iter().find(|p| p.name == *input)
+                        .ok_or_else(|| FlattenError::UnknownGroupPort { group_handle: handle.into(), port: input.clone(), side: WireSide::To })?;
+                    let to = group.interface.outputs.iter().find(|p| p.name == *output)
+                        .ok_or_else(|| FlattenError::UnknownGroupPort { group_handle: handle.into(), port: output.clone(), side: WireSide::From })?;
+                    if from.port_type != to.port_type {
+                        return Err(FlattenError::PassthroughTypeMismatch { group_handle: handle.into(), input: input.clone(), output: output.clone() });
+                    }
+                }
+            }
 
             let valid_inputs = group.interface.inputs.iter().map(|p| p.name.clone()).collect();
             let valid_outputs = group.interface.outputs.iter().map(|p| p.name.clone()).collect();
@@ -324,7 +331,7 @@ fn flatten_fragment(
 
     // ── Wire pass: resolve endpoints, fold boundaries, emit concrete wires ──
     for w in wires {
-        let producer = resolve_from(w, &resolved, scope_label)?;
+        let producer = resolve_from(w, wires, &resolved, scope_label)?;
         let sink = resolve_to(w, &resolved, scope_label)?;
 
         match (producer, sink) {
@@ -334,7 +341,7 @@ fn flatten_fragment(
                 input_consumers.entry(port).or_default().extend(consumers);
             }
             // Producer -> this fragment's output -> record the producer (folded).
-            (Producer::Concrete(pid, pport), Sink::ToFragmentOutput(port)) => {
+            (producer, Sink::ToFragmentOutput(port)) => {
                 if output_producer.contains_key(&port) {
                     return Err(FlattenError::AmbiguousGroupOutput {
                         group_handle: scope_label.to_string(),
@@ -342,16 +349,9 @@ fn flatten_fragment(
                         producers: 2,
                     });
                 }
-                output_producer.insert(port, (pid, pport));
+                output_producer.insert(port, producer);
             }
-            // Direct input->output bypass: unsupported in v1.
-            (Producer::FromFragmentInput(input_port), Sink::ToFragmentOutput(output_port)) => {
-                return Err(FlattenError::PassthroughNotSupported {
-                    group_handle: scope_label.to_string(),
-                    input_port,
-                    output_port,
-                });
-            }
+            (Producer::Unconnected, Sink::Concrete(_)) => {}
             // Ordinary internal wire (possibly fanned out across consumers).
             (Producer::Concrete(pid, pport), Sink::Concrete(consumers)) => {
                 for (cid, cport) in consumers {
@@ -375,44 +375,44 @@ fn flatten_fragment(
 }
 
 fn resolve_from(
-    w: &EffectGraphWire,
+    wire: &EffectGraphWire,
+    wires: &[EffectGraphWire],
     resolved: &BTreeMap<u32, Resolved>,
     scope_label: &str,
 ) -> Result<Producer, FlattenError> {
-    match resolved.get(&w.from_node) {
-        Some(Resolved::Plain(id)) => Ok(Producer::Concrete(*id, w.from_port.clone())),
-        Some(Resolved::FragmentInput) => Ok(Producer::FromFragmentInput(w.from_port.clone())),
-        Some(Resolved::FragmentOutput) => Err(FlattenError::MalformedBoundaryWire {
-            node_id: w.from_node,
-            side: WireSide::From,
-        }),
-        Some(Resolved::Group {
-            handle,
-            output_producer,
-            valid_outputs,
-            ..
-        }) => {
-            if !valid_outputs.contains(&w.from_port) {
-                return Err(FlattenError::UnknownGroupPort {
-                    group_handle: handle.clone(),
-                    port: w.from_port.clone(),
-                    side: WireSide::From,
-                });
+    let mut from_node = wire.from_node;
+    let mut from_port = wire.from_port.as_str();
+    let mut visited = BTreeSet::new();
+    loop {
+        match resolved.get(&from_node) {
+            Some(Resolved::Plain(id)) => return Ok(Producer::Concrete(*id, from_port.into())),
+            Some(Resolved::FragmentInput) => return Ok(Producer::FromFragmentInput(from_port.into())),
+            Some(Resolved::FragmentOutput) => return Err(FlattenError::MalformedBoundaryWire { node_id: from_node, side: WireSide::From }),
+            Some(Resolved::Group { handle, output_producer, valid_inputs, valid_outputs, .. }) => {
+                if !valid_outputs.contains(from_port) {
+                    return Err(FlattenError::UnknownGroupPort { group_handle: handle.clone(), port: from_port.into(), side: WireSide::From });
+                }
+                if !visited.insert((from_node, from_port.to_string())) {
+                    return Err(FlattenError::PassthroughCycle { group_handle: handle.clone(), port: from_port.into() });
+                }
+                match output_producer.get(from_port) {
+                    Some(Producer::FromFragmentInput(input)) => {
+                        if !valid_inputs.contains(input) {
+                            return Err(FlattenError::UnknownGroupPort { group_handle: handle.clone(), port: input.clone(), side: WireSide::To });
+                        }
+                        let mut producers = wires.iter().filter(|w| w.to_node == from_node && w.to_port == *input);
+                        let Some(upstream) = producers.next() else { return Ok(Producer::Unconnected); };
+                        let extras = producers.count();
+                        if extras > 0 { return Err(FlattenError::AmbiguousGroupInput { group_handle: handle.clone(), port: input.clone(), producers: extras + 1 }); }
+                        from_node = upstream.from_node;
+                        from_port = &upstream.from_port;
+                    }
+                    Some(producer) => return Ok(producer.clone()),
+                    None => return Err(FlattenError::AmbiguousGroupOutput { group_handle: handle.clone(), port: from_port.into(), producers: 0 }),
+                }
             }
-            match output_producer.get(&w.from_port) {
-                Some((id, port)) => Ok(Producer::Concrete(*id, port.clone())),
-                None => Err(FlattenError::AmbiguousGroupOutput {
-                    group_handle: handle.clone(),
-                    port: w.from_port.clone(),
-                    producers: 0,
-                }),
-            }
+            None => return Err(FlattenError::UnknownGroupPort { group_handle: scope_label.into(), port: from_port.into(), side: WireSide::From }),
         }
-        None => Err(FlattenError::UnknownGroupPort {
-            group_handle: scope_label.to_string(),
-            port: w.from_port.clone(),
-            side: WireSide::From,
-        }),
     }
 }
 
@@ -568,8 +568,8 @@ fn check_unique_interface(group: &GroupDef, group_handle: &str) -> Result<(), Fl
 /// Every group container in `def` (at any nesting depth) paired with the
 /// concrete inner producer of its primary texture output, plus that output
 /// port's interface name. One entry per group whose primary output resolves to
-/// a concrete (non-group) node; groups whose primary output is an unsupported
-/// input→output passthrough are omitted.
+/// a concrete (non-group) node; groups whose primary output aliases an external input are omitted
+/// because they have no inner producer to preview.
 ///
 /// Built once at graph-build time (both the effect splice path and the
 /// generator load path) and consulted by the node-output preview: a selected
@@ -618,7 +618,7 @@ fn primary_output_port(group: &GroupDef) -> Option<&str> {
 /// The stable `NodeId` of the concrete inner node producing `output_port` of
 /// `group`, resolving through nested groups. `None` if the port has no inner
 /// producer, or the producer is the group's own input (an unsupported
-/// input→output passthrough, which the flattener also rejects).
+/// input→output passthrough, which has no inner producer).
 fn producer_for_output(group: &GroupDef, output_port: &str) -> Option<crate::NodeId> {
     let out_boundary = group
         .nodes
@@ -1018,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_not_supported_errors() {
+    fn passthrough_with_second_output_producer_is_rejected() {
         let mut g = soft_focus_group(1, "g");
         if let Some(body) = g.group.as_deref_mut() {
             // GroupInput.src -> GroupOutput.out directly.
@@ -1027,11 +1027,56 @@ mod tests {
         let d = def(vec![g], vec![]);
         assert!(matches!(
             flatten_groups(&d),
-            Err(FlattenError::PassthroughNotSupported { .. })
+            Err(FlattenError::AmbiguousGroupOutput { .. })
         ));
     }
 
     // ── group_output_producer_map (node-output preview resolution) ──
+
+    fn identity_group(id: u32, handle: &str) -> EffectGraphNode {
+        let mut g = node(id, GROUP_TYPE_ID, Some(handle));
+        g.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![port("src")], outputs: vec![port("out")], params: Vec::new() },
+            nodes: vec![node(0, GROUP_INPUT_TYPE_ID, None), node(1, GROUP_OUTPUT_TYPE_ID, None)],
+            wires: vec![wire(0, "src", 1, "out")], tint: None,
+        }));
+        g
+    }
+
+    #[test]
+    fn passthrough_chains_nested_groups_and_fanout_without_nodes_or_copies() {
+        let mut nested = identity_group(3, "outer");
+        let body = nested.group.as_mut().unwrap();
+        body.nodes.push(identity_group(2,"inner"));
+        body.wires = vec![wire(0,"src",2,"src"),wire(2,"out",1,"out")];
+        let original = def(vec![node(0,"source",Some("source")),node(1,"sink",Some("a")),node(2,"sink",Some("b")),nested,identity_group(4,"next")], vec![wire(0,"out",3,"src"),wire(3,"out",4,"src"),wire(4,"out",1,"in"),wire(4,"out",2,"in")]);
+        let flat = flatten_groups(&original).unwrap();
+        assert_eq!(flat.nodes.len(),3);
+        let source=flat.nodes.iter().find(|n|n.handle.as_deref()==Some("source")).unwrap().id;
+        assert_eq!(flat.wires.len(),2);
+        assert!(flat.wires.iter().all(|w|w.from_node==source&&w.from_port=="out"&&w.to_port=="in"));
+    }
+
+    #[test]
+    fn passthrough_missing_input_stays_unwired_and_ambiguous_input_fails() {
+        let mut graph=def(vec![node(0,"source",Some("source")),identity_group(1,"alias"),node(2,"sink",Some("sink"))],vec![wire(1,"out",2,"in")]);
+        assert!(flatten_groups(&graph).unwrap().wires.is_empty());
+        graph.wires.extend([wire(0,"a",1,"src"),wire(0,"b",1,"src")]);
+        assert!(matches!(flatten_groups(&graph),Err(FlattenError::AmbiguousGroupInput {producers:2,..})));
+    }
+
+    #[test]
+    fn passthrough_feedback_is_rejected_before_runtime() {
+        let graph=def(vec![identity_group(1,"a"),identity_group(2,"b"),node(3,"sink",Some("sink"))],vec![wire(1,"out",2,"src"),wire(2,"out",1,"src"),wire(1,"out",3,"in")]);
+        assert!(matches!(flatten_groups(&graph),Err(FlattenError::PassthroughCycle {..})));
+    }
+
+    #[test]
+    fn passthrough_cannot_relabel_a_wire_type() {
+        let mut alias=identity_group(1,"alias");
+        alias.group.as_mut().unwrap().interface.outputs[0].port_type="Camera".into();
+        assert!(matches!(flatten_groups(&def(vec![alias],vec![])),Err(FlattenError::PassthroughTypeMismatch {..})));
+    }
 
     /// Set a node's stable id by handle inside a (possibly nested) body.
     fn set_node_id(d: &mut EffectGraphDef, handle: &str, id: &str) {
