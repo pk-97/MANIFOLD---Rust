@@ -65,6 +65,7 @@ impl Project {
                 .iter()
                 .find(|l| &l.layer_id == lid)
                 .and_then(|l| l.gen_params()),
+            crate::GraphTarget::SceneModifier { .. } => None,
         }
     }
 
@@ -83,7 +84,24 @@ impl Project {
                 .iter_mut()
                 .find(|l| &l.layer_id == lid)
                 .and_then(|l| l.gen_params_mut()),
+            crate::GraphTarget::SceneModifier { .. } => None,
         }
+    }
+
+    /// Resolve the effect or generator instance that owns a graph target.
+    pub fn graph_target_owner(
+        &self,
+        target: &crate::GraphTarget,
+    ) -> Option<&crate::effects::PresetInstance> {
+        self.preset_instance(target.host_target()?)
+    }
+
+    /// Mutable counterpart to [`Self::graph_target_owner`].
+    pub fn graph_target_owner_mut(
+        &mut self,
+        target: &crate::GraphTarget,
+    ) -> Option<&mut crate::effects::PresetInstance> {
+        self.preset_instance_mut(target.host_target()?)
     }
 
     /// Mutable variant of [`Self::find_effect_by_id`]. Used by
@@ -390,7 +408,68 @@ impl Project {
                 let (_, layer) = self.timeline.find_layer_by_id_mut(lid.as_str())?;
                 Some(f(layer.gen_params_or_init()))
             }
+            crate::graph_target::GraphTarget::SceneModifier { .. } => None,
         }
+    }
+
+    /// Read the graph selected by a target, using the owner override first,
+    /// then the caller default, then the project embedded preset.
+    pub fn graph_for_target<'a>(
+        &'a self,
+        target: &crate::GraphTarget,
+        owner_default: Option<&'a crate::effect_graph_def::EffectGraphDef>,
+    ) -> Option<&'a crate::effect_graph_def::EffectGraphDef> {
+        let owner = self.graph_target_owner(target)?;
+        if let Some(graph) = owner.graph.as_ref() {
+            return target.graph_in(graph);
+        }
+        if let Some(graph) = owner_default {
+            return target.graph_in(graph);
+        }
+        let embedded = self.embedded_preset(owner.effect_type())?;
+        target.graph_in(&embedded.def)
+    }
+
+    /// Mutate the graph selected by a target. Selection is validated before
+    /// materialization. Embedded presets are never implicitly materialized.
+    pub fn with_graph_for_target_mut<R>(
+        &mut self,
+        target: &crate::GraphTarget,
+        owner_default: Option<&crate::effect_graph_def::EffectGraphDef>,
+        structural: bool,
+        f: impl FnOnce(&mut crate::effect_graph_def::EffectGraphDef) -> R,
+    ) -> Option<R> {
+        let host = target.host_target()?;
+        let can_select = match self.graph_target_owner(target) {
+            Some(owner) => match owner.graph.as_ref() {
+                Some(graph) => target.graph_in(graph).is_some(),
+                None => owner_default.is_some_and(|graph| target.graph_in(graph).is_some()),
+            },
+            None => {
+                // Validate a missing generator instance before initialization.
+                matches!(host, crate::GraphTarget::Generator(_))
+                    && owner_default.is_some_and(|graph| target.graph_in(graph).is_some())
+                    && self.preset_instance(host).is_none()
+            }
+        };
+        if !can_select {
+            return None;
+        }
+
+        self.with_preset_graph_mut(host, |owner| {
+            if owner.graph.is_none() {
+                owner.graph = Some(owner_default?.clone());
+            }
+            let graph = owner.graph.as_mut()?;
+            let selected = target.graph_in_mut(graph)?;
+            let result = f(selected);
+            if structural {
+                owner.bump_graph_structure_version();
+            } else {
+                owner.bump_graph_version();
+            }
+            Some(result)
+        })?
     }
 
     /// The `&mut PresetInstance` an Ableton mapping target addresses —
@@ -787,6 +866,152 @@ mod tests {
             b_consumers[0].1,
             "Clip trigger \u{2022} L \u{2022} Centroid Full",
             "non-Transients spells out the detector"
+        );
+    }
+
+    #[test]
+    fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
+        let mut project = Project::default();
+        let mut host = graph_def_with_id("host", "Host");
+        host.scene_modifiers.push(crate::scene_modifier_preset::SceneModifierInstanceDef {
+            id: crate::NodeId::new("modifier"),
+            scene: crate::scene_modifier_preset::SceneNodeRef {
+                scope: Vec::new(),
+                node: "scene".into(),
+            },
+            targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            graph: Box::new(graph_def_with_id("local", "Local")),
+        });
+        let mut layer = crate::layer::Layer::new_generator(
+            "Generator".into(),
+            PresetTypeId::new("PLASMA"),
+            0,
+        );
+        layer.layer_id = crate::LayerId::new("layer");
+        layer.gen_params_mut().unwrap().graph = Some(host);
+        project.timeline.layers.push(layer);
+
+        let target = crate::GraphTarget::SceneModifier {
+            owner: Box::new(crate::GraphTarget::Generator(crate::LayerId::new("layer"))),
+            modifier_id: crate::NodeId::new("modifier"),
+        };
+        assert!(project.preset_instance(&target).is_none());
+        assert_eq!(project.instance_preset_id(&target).unwrap().as_str(), "local");
+        let version = project.graph_target_owner(&target).unwrap().graph_version;
+        project
+            .with_graph_for_target_mut(&target, None, false, |graph| {
+                graph.name = Some("Changed".into());
+            })
+            .expect("local snapshot resolves");
+        assert_eq!(
+            project.graph_for_target(&target, None).unwrap().name.as_deref(),
+            Some("Changed")
+        );
+        assert_eq!(project.graph_target_owner(&target).unwrap().graph_version, version + 1);
+
+        let new_id = PresetTypeId::new("local-renamed");
+        assert!(project.set_instance_preset_id(&target, new_id.clone()));
+        assert_eq!(project.instance_preset_id(&target).unwrap(), new_id);
+        assert_eq!(
+            project.graph_target_owner(&target).unwrap().generator_type().as_str(),
+            "PLASMA"
+        );
+    }
+
+    #[test]
+    fn scene_modifier_target_invalid_lookup_does_not_initialize_generator() {
+        let mut project = Project::default();
+        let mut layer = crate::layer::Layer::new(
+            "Generator".into(),
+            crate::types::LayerType::Generator,
+            0,
+        );
+        layer.layer_id = crate::LayerId::new("layer");
+        project.timeline.layers.push(layer);
+        let target = crate::GraphTarget::SceneModifier {
+            owner: Box::new(crate::GraphTarget::Generator(crate::LayerId::new("layer"))),
+            modifier_id: crate::NodeId::new("missing"),
+        };
+        let default = graph_def_with_id("host", "Host");
+        assert!(project
+            .with_graph_for_target_mut(&target, Some(&default), true, |_| {})
+            .is_none());
+        assert!(project.timeline.layers[0].gen_params().is_none());
+    }
+
+    #[test]
+    fn scene_modifier_target_materializes_default_and_bumps_versions() {
+        let mut project = Project::default();
+        let mut layer = crate::layer::Layer::new(
+            "Generator".into(),
+            crate::types::LayerType::Generator,
+            0,
+        );
+        layer.layer_id = crate::LayerId::new("layer");
+        project.timeline.layers.push(layer);
+        let target = crate::GraphTarget::Generator(crate::LayerId::new("layer"));
+        let default = graph_def_with_id("default", "Default");
+
+        project
+            .with_graph_for_target_mut(&target, Some(&default), false, |graph| {
+                graph.name = Some("Edited".into());
+            })
+            .expect("default host graph materializes");
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.graph_version, 1);
+        assert_eq!(owner.graph_structure_version, 0);
+        assert_eq!(owner.graph.as_ref().unwrap().name.as_deref(), Some("Edited"));
+
+        project
+            .with_graph_for_target_mut(&target, None, true, |_| {})
+            .expect("existing graph remains editable without a default");
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.graph_version, 2);
+        assert_eq!(owner.graph_structure_version, 1);
+    }
+
+    #[test]
+    fn scene_modifier_target_duplicate_lookup_is_atomic() {
+        let mut project = Project::default();
+        let mut host = graph_def_with_id("host", "Host");
+        let modifier = crate::scene_modifier_preset::SceneModifierInstanceDef {
+            id: crate::NodeId::new("duplicate"),
+            scene: crate::scene_modifier_preset::SceneNodeRef {
+                scope: Vec::new(),
+                node: "scene".into(),
+            },
+            targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            graph: Box::new(graph_def_with_id("local", "Local")),
+        };
+        host.scene_modifiers.push(modifier.clone());
+        host.scene_modifiers.push(modifier);
+        let mut layer = crate::layer::Layer::new_generator(
+            "Generator".into(),
+            PresetTypeId::new("PLASMA"),
+            0,
+        );
+        layer.layer_id = crate::LayerId::new("layer");
+        layer.gen_params_mut().unwrap().graph = Some(host);
+        project.timeline.layers.push(layer);
+        let target = crate::GraphTarget::SceneModifier {
+            owner: Box::new(crate::GraphTarget::Generator(crate::LayerId::new("layer"))),
+            modifier_id: crate::NodeId::new("duplicate"),
+        };
+        let before = project.graph_target_owner(&target).unwrap().graph.clone();
+        let before_versions = {
+            let owner = project.graph_target_owner(&target).unwrap();
+            (owner.graph_version, owner.graph_structure_version)
+        };
+        assert!(project
+            .with_graph_for_target_mut(&target, None, true, |_| {})
+            .is_none());
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.graph, before);
+        assert_eq!(
+            (owner.graph_version, owner.graph_structure_version),
+            before_versions
         );
     }
 }

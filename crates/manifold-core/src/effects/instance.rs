@@ -775,53 +775,9 @@ impl PresetInstance {
     /// `manifold-editing`) provides the canonical collision-free
     /// shape.
     pub fn append_user_binding(&mut self, binding: UserParamBinding) {
-        use crate::effect_graph_def::{
-            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
-        };
-        let whole_numbers = matches!(
-            binding.convert,
-            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
-        );
-        // The param descriptor: the manifest holds the live copy (the runtime
-        // authority), and `meta.params` keeps a consistent shadow so the graph
-        // def stays uniform with a bundled preset JSON.
-        let spec = ParamSpecDef {
-            id: binding.id.clone(),
-            name: binding.label.clone(),
-            min: binding.min,
-            max: binding.max,
-            default_value: binding.default_value,
-            whole_numbers,
-            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
-            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: binding.value_labels.clone(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: binding.curve,
-            invert: binding.invert,
-            // Captured from the inner param's `ParamType::Angle` at expose time
-            // (rides `UserParamBinding.is_angle`). The spec is now the single
-            // home for the flag, so the card reads it straight off the manifest.
-            is_angle: binding.is_angle,
-            // A user-exposed inner-graph param is never the trigger-gate card
-            // (that's the preset-authored `clip_trigger` outer card only).
-            is_trigger_gate: false,
-            wraps: false,
-            // Section seeding from the innermost enclosing group's display
-            // name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D5) — resolved
-            // by the expose command (`mirror_effect_side`) and carried on
-            // the `UserParamBinding` this fn receives.
-            section: binding.section.clone(),
-            // A user-added expose (the graph editor's checkbox) always shows
-            // on the card — `card_visible_for`'s curated hiding only applies
-            // to the P1 scene-vocabulary auto-stamping path.
-            card_visible: true,
-        };
+        use crate::effect_graph_def::PresetMetadata;
+        let spec = binding.param_spec();
 
-        // The per-instance graph is the single binding-storage list.
-        // The live expose command lifts the canonical graph before this
-        // runs; for graph-less callers (storage unit tests) we synthesize
-        // a metadata-only graph so the binding still has a home.
         let graph = self.graph.get_or_insert_with(|| EffectGraphDef {
             version: 0,
             name: None,
@@ -850,20 +806,7 @@ impl PresetInstance {
             scene_bounds: None,
         });
         meta.params.push(spec.clone());
-        meta.bindings.push(BindingDef {
-            id: binding.id.clone(),
-            label: binding.label.clone(),
-            default_value: binding.default_value,
-            target: BindingTarget::Node {
-                node_id: binding.node_id.clone(),
-                param: binding.inner_param.clone(),
-            },
-            convert: binding.convert,
-            user_added: true,
-            scale: binding.scale,
-            offset: binding.offset,
-            default_mirrors_node_param: false,
-        });
+        meta.bindings.push(binding.binding_def());
 
         // The manifest entry (id as identity, order = card order). `push`
         // bumps topology (D8). base + value both seed from the spec default.
@@ -2242,4 +2185,30 @@ mod tests {
         assert!(inst.clip_edge_enabled());
     }
 
+
+    #[test]
+    fn scene_modifier_binding_metadata_matches_append_output() {
+        let mut binding = sample_user_binding("user.rotate.angle.1", "rotate", "angle");
+        binding.min = -180.0;
+        binding.max = 180.0;
+        binding.default_value = 15.0;
+        binding.convert = ParamConvert::EnumRound;
+        binding.is_angle = true;
+        binding.invert = true;
+        binding.curve = crate::macro_bank::MacroCurve::SCurve;
+        binding.scale = 0.5;
+        binding.offset = 2.0;
+        binding.value_labels = vec!["Low".into(), "High".into()];
+        binding.section = Some("Motion Controls".into());
+
+        let expected_spec = binding.param_spec();
+        let expected_binding = binding.binding_def();
+        let mut instance = PresetInstance::new(PresetTypeId::BLOOM);
+        instance.append_user_binding(binding);
+
+        let graph = instance.graph.as_ref().expect("append creates graph");
+        let metadata = graph.preset_metadata.as_ref().expect("append creates metadata");
+        assert_eq!(metadata.params, vec![expected_spec]);
+        assert_eq!(metadata.bindings, vec![expected_binding]);
+    }
 }

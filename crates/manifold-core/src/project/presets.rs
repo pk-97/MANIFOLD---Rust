@@ -63,6 +63,12 @@ impl Project {
                 .find(|l| &l.layer_id == layer_id)
                 .and_then(|l| l.gen_params())
                 .map(|gp| gp.generator_type().clone()),
+            crate::GraphTarget::SceneModifier { .. } => self
+                .graph_target_owner(target)
+                .and_then(|owner| owner.graph.as_ref())
+                .and_then(|graph| target.graph_in(graph))
+                .and_then(|graph| graph.preset_metadata.as_ref())
+                .map(|metadata| metadata.id.clone()),
         }
     }
 
@@ -217,6 +223,22 @@ impl Project {
                     }
                 }
                 false
+            }
+            crate::GraphTarget::SceneModifier { .. } => {
+                let Some(owner) = self.graph_target_owner_mut(target) else {
+                    return false;
+                };
+                let Some(graph) = owner.graph.as_mut() else {
+                    return false;
+                };
+                let Some(local) = target.graph_in_mut(graph) else {
+                    return false;
+                };
+                let Some(metadata) = local.preset_metadata.as_mut() else {
+                    return false;
+                };
+                metadata.id = id;
+                true
             }
         }
     }
