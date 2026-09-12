@@ -111,7 +111,7 @@ pub struct SceneParamCalibration {
 pub enum SceneStageScope { Scene, EachObject }
 pub enum SceneEndpoint { Camera, Atmosphere, Transform, Instances, Vertices }
 pub enum SceneContextValue {
-    Beat, Time, TriggerCount, ObjectOrdinal, ObjectCount,
+    Beat, Time, TriggerCount, TriggerBaseline, ObjectOrdinal, ObjectCount,
     ObjectSeed, SceneMin, SceneMax,
     SceneRadius, SourceOffsetX, SourceOffsetY, SourceOffsetZ,
 }
@@ -204,7 +204,9 @@ Three authored response patterns are required vocabulary: hit/return (restart a 
 
 Retrigger policy belongs to the recipe: hit/return restarts its pulse; glide starts from the current visible output; advance/hold takes a new target. There is no implicit unbounded accumulation or backlog when Clip Trigger is off. Mode/variation choices intended for a whole gesture are captured at its edge with existing latch nodes. Live Enable bypass preserves geometry exactly; event acceptance is controlled separately by the trigger gate, so bypass does not silently arm a surprise hit. Runtime event state is not baked animation and is not serialized as authored geometry.
 
-**September 12 trigger audit:** `generator_renderer.rs` increments the first live clip counter before evaluation; cold and post-warmup latches therefore first observe count 1. `trigger_gate` arms without emitting, so that real first hit is currently suppressed. Warmup itself does not increment. F2 must provide explicit event initialization for modifier responses while preserving legacy first-sample semantics; a nonzero count alone cannot distinguish load from a real event. Audio gates detect edges per preset instance but emit into a layer counter; independent modifier gates must not mistake another modifier's audio edge for their own. These are integration gaps, not completed behaviour.
+**September 12 trigger audit and implementation:** `generator_renderer.rs` increments the first live clip counter before evaluation; cold and post-warmup latches therefore first observe count 1. Legacy unwired `trigger_gate` arms without emitting. The F2 worktree adds opt-in `initial_count` and a `TriggerBaseline` context: the counter before the earliest pending real event, otherwise the current counter. Runtime event markers distinguish a real first edge from loading a nonzero count, survive a compatible rebuild and are consumed after evaluation. Warmup itself does not increment. CPU runtime tests cover this boundary; production transport observation is still outstanding.
+
+`node.envelope_beats` supplies a bounded linear hit/return response with an optional first-event baseline; ordinary graph arithmetic supplies strength and shaping. `trigger_ease_to` gains optional `initial_count`/`initial_value` inputs for first-event glides while retaining its unwired first-sample snap. CPU trigger state is carried only for matching modifier IDs, unchanged local recipes and explicitly routed eligible nodes. GPU feedback is outside that transfer. Audio gates still emit into a layer counter; independent modifier gates must not mistake another modifier's audio edge for their own. Audio routing, rebuild qualification and file-only recipe proof remain unfinished.
 
 Tests must distinguish a real first clip edge from initializing/loading a graph with an already nonzero counter. A real first edge fires once; idle load/seek/reset must not manufacture an edge. The actual transport policy is Stop/Load reset and Pause/Seek preserve; primitive comments claiming pause/seek reset are stale. Preserve that policy and define triggered playback as event-history-dependent between resets: unlike an analytic phase wave, the same beat alone does not reconstruct an accumulated pose sequence. Reordering/removing another instance cannot alias its trigger state. Any shared-layer reset or audio fanout gap is resolved in the common runtime seam before claiming instance independence.
 

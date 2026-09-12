@@ -39,6 +39,7 @@ mod execution_plan;
 pub mod freeze;
 mod graph;
 mod graph_loader;
+pub mod resource_allocation;
 mod gltf_anim_cache;
 pub mod gltf_import;
 mod gltf_load;

@@ -31,6 +31,8 @@ mod conformance;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod parameter_guard_tests;
 
 fn invalid(path: impl Into<String>, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::InvalidRecipe {
@@ -54,6 +56,31 @@ fn endpoint_scope(endpoint: SceneEndpoint) -> SceneStageScope {
         SceneEndpoint::Camera | SceneEndpoint::Atmosphere => SceneStageScope::Scene,
         _ => SceneStageScope::EachObject,
     }
+}
+
+/// Recheck effective render settings after initial manifest values are applied.
+/// Serialized defaults alone cannot decide whether the live owner requests RT.
+pub fn validate_modifier_runtime(
+    owner: &EffectGraphDef,
+    graph: &crate::node_graph::Graph,
+) -> Result<(), SceneModifierExpandError> {
+    for instance in &owner.scene_modifiers {
+        let writes_vertices = instance.graph.preset_metadata.as_ref()
+            .and_then(|metadata| metadata.scene_modifier.as_ref())
+            .is_some_and(|recipe| recipe.stages.iter().any(|stage|
+                stage.outputs.iter().any(|output| output.endpoint == SceneEndpoint::Vertices)));
+        if !writes_vertices { continue; }
+        let scene = graph.instance_by_node_id(&instance.scene.node)
+            .and_then(|id| graph.get_node(id))
+            .ok_or_else(|| invalid(instance.id.to_string(), "prepared scene target is absent"))?;
+        if matches!(scene.params.get("rt_enabled"), Some(crate::node_graph::parameters::ParamValue::Bool(true))) {
+            return Err(SceneModifierExpandError::UnsupportedRenderMode {
+                path: instance.id.to_string(),
+                detail: "effective ray tracing is incompatible with a vertices modifier, including while bypassed".into(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Validate a complete proposed attachment using the same expansion as load.
@@ -466,7 +493,7 @@ impl Builder<'_> {
     ) -> Result<PortAddress, SceneModifierExpandError> {
         if matches!(
             value,
-            SceneContextValue::Time | SceneContextValue::Beat | SceneContextValue::TriggerCount
+            SceneContextValue::Time | SceneContextValue::Beat | SceneContextValue::TriggerCount | SceneContextValue::TriggerBaseline
         ) {
             let mut sources = self
                 .index
@@ -491,6 +518,7 @@ impl Builder<'_> {
                 match value {
                     SceneContextValue::Time => "time",
                     SceneContextValue::Beat => "beat",
+                    SceneContextValue::TriggerBaseline => "trigger_baseline",
                     _ => "trigger_count",
                 }
                 .into(),

@@ -153,6 +153,9 @@ mod amount_zero_passthrough_tests;
 #[cfg(test)]
 #[path = "tests/generator_runtime.rs"]
 mod generator_runtime_tests;
+#[cfg(test)]
+#[path = "tests/trigger_initialization.rs"]
+mod trigger_initialization;
 
 #[cfg(test)]
 #[path = "tests/bool_convert_heal.rs"]

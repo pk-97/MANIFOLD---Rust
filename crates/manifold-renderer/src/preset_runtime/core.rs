@@ -88,12 +88,17 @@ pub struct PresetRuntime {
     /// pending-segments-style handshake `awaiting_segment_swap` uses.
     /// Never cleared: the rebuild replaces the runtime, flag and all.
     pub(super) forced_outputs_stale: bool,
+    /// Earliest counter before a real event awaiting evaluation. A loaded
+    /// nonzero counter alone never creates this marker.
+    pub(super) pending_trigger_baseline: Option<u32>,
+    pub(super) modifier_control_state: Option<crate::node_graph::scene_modifier_expand::PreparedModifierControlState>,
     pub(super) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
     /// Per-frame param refresh walks this in parallel with the live
     /// `effects` slice.
     pub(super) effect_nodes: Vec<EffectSlot>,
+    pub(super) modifier_preview_routes: Vec<crate::node_graph::scene_modifier_expand::SceneModifierNodeRoute>,
     /// One slot per Mix node introduced for a wet/dry group. The
     /// Mix's `amount` param is set to the group's `wet_dry` value
     /// every frame (so dragging a wet/dry slider in the UI doesn't
@@ -1277,6 +1282,9 @@ impl PresetRuntime {
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
+            modifier_preview_routes: Vec::new(),
+            pending_trigger_baseline: None,
+            modifier_control_state: None,
             group_mix_nodes,
             io: PresetIo::Transform {
                 source_slot,
@@ -1726,6 +1734,10 @@ impl PresetRuntime {
                     "trigger_count",
                     ParamValue::Float(ctx.trigger_count as f32),
                 );
+                // Effect owners currently supply a sampled count, without
+                // the generator's real-event marker. Loading that count must
+                // therefore arm an explicitly initialized gate silently.
+                let _ = self.graph.set_param(node, "trigger_baseline", ParamValue::Float(ctx.trigger_count as f32));
                 let _ = self.graph.set_param(
                     node,
                     "output_width",
@@ -1819,6 +1831,7 @@ impl PresetRuntime {
     /// there (e.g. `temporal::Feedback`'s prev-frame buffer) reset
     /// alongside instance-local state.
     pub fn clear_state(&mut self) {
+        self.pending_trigger_baseline = None;
         // Collect node ids first so we can release the &self borrow
         // before calling get_node_mut on each.
         let mut nodes_to_clear: Vec<NodeInstanceId> = Vec::new();
@@ -1855,6 +1868,23 @@ impl PresetRuntime {
         self.executor = executor;
     }
 
+    /// Called by the event owner before incrementing its clip/audio counter.
+    /// Multiple events before an evaluation preserve the earliest baseline.
+    pub fn note_trigger_event(&mut self, previous_count: u32) {
+        self.pending_trigger_baseline.get_or_insert(previous_count);
+    }
+
+    pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
+        self.pending_trigger_baseline = prior.pending_trigger_baseline;
+    }
+
+    pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
+        self.carry_pending_trigger_from(prior);
+        if let (Some(current), Some(previous)) = (&self.modifier_control_state, &prior.modifier_control_state) {
+            current.harvest_from(previous, &mut self.graph, &mut prior.graph, &mut self.state_store, &mut prior.state_store);
+        }
+    }
+
     /// Update the `system.generator_input` node's per-frame context. No-op on
     /// an effect-chain runtime.
     pub fn set_frame_context(&mut self, fc: FrameContextInputs) {
@@ -1880,6 +1910,8 @@ impl PresetRuntime {
         let _ = self
             .graph
             .set_param(id, "trigger_count", ParamValue::Float(trigger_count));
+        let baseline = self.pending_trigger_baseline.map_or(trigger_count, |count| count as f32);
+        let _ = self.graph.set_param(id, "trigger_baseline", ParamValue::Float(baseline));
         let _ = self
             .graph
             .set_param(id, "anim_progress", ParamValue::Float(anim_progress));
@@ -1921,6 +1953,18 @@ impl PresetRuntime {
     /// until this returns `false` for every generator layer.
     pub fn warmup_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.warmup_pending())
+    }
+
+    /// Explicit local preview targets. Per-object copies remain distinct so
+    /// the editor can request an object rather than silently selecting one.
+    pub fn modifier_node_copies(
+        &self,
+        modifier: &NodeId,
+        local: &manifold_core::scene_modifier_preset::SceneNodeRef,
+    ) -> Option<&[crate::node_graph::scene_modifier_expand::SceneModifierNodeCopy]> {
+        self.modifier_preview_routes.iter()
+            .find(|route| &route.modifier_id == modifier && &route.local == local)
+            .map(|route| route.copies.as_slice())
     }
 
     /// Push a value/position editor edit's inner-node values into the running
@@ -1992,11 +2036,32 @@ impl PresetRuntime {
         self.forced_outputs_stale
     }
 
+    fn refresh_prepared_parameter_error(&mut self) -> bool {
+        let violation = self.graph.prepared_param_violation();
+        if let Some((node, param)) = violation {
+            if !self.errors.iter().any(|error| matches!(error,
+                ChainError::PreparedParameterChanged { node_id, param: name }
+                if node_id == node.as_str() && name == param)) {
+                self.errors.retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
+                self.errors.push(ChainError::PreparedParameterChanged { node_id: node.to_string(), param: param.into() });
+            }
+            true
+        } else {
+            self.errors.retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
+            false
+        }
+    }
+
     /// Run one frame against the configured executor (mock-backend test path).
     pub fn execute_frame(&mut self, time: FrameTime) {
+        if self.refresh_prepared_parameter_error() {
+            self.pending_trigger_baseline = None;
+            return;
+        }
         self.refresh_plan_if_forced_outputs_changed();
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
+        self.pending_trigger_baseline = None;
     }
 
     /// Install the host-provided target texture as the source for
@@ -2052,6 +2117,12 @@ impl PresetRuntime {
         // 2. Push the host's outer-card slider values through the bindings.
         self.apply_param_values(params);
 
+        if self.refresh_prepared_parameter_error() {
+            gpu.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            self.pending_trigger_baseline = None;
+            return ctx.anim_progress;
+        }
+
         // 3. Install the host's target as the FinalOutput's source slot.
         self.install_target(target);
 
@@ -2078,12 +2149,14 @@ impl PresetRuntime {
             ctx.owner_key,
         );
 
+        self.pending_trigger_baseline = None;
         ctx.anim_progress
     }
 
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
+        self.pending_trigger_baseline = None;
         for inst in self.graph.nodes_mut() {
             inst.node.clear_state();
         }
@@ -2113,6 +2186,7 @@ impl PresetRuntime {
     /// `ContentThread::handle_command`'s `ContentCommand::Stop` /
     /// `ContentCommand::LoadProject` arms.
     pub fn clear_trigger_state(&mut self) {
+        self.pending_trigger_baseline = None;
         let mut latch_ids: Vec<NodeInstanceId> = Vec::new();
         for inst in self.graph.nodes_mut() {
             if inst.node.is_trigger_latch() {

@@ -71,6 +71,7 @@ mod draw_scanlines;
 mod draw_ticks;
 mod edge_detect;
 mod envelope_decay;
+mod envelope_beats;
 mod envelope_follower_ar;
 mod fbm_per_instance;
 mod field_combine;

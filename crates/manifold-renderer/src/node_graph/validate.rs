@@ -137,7 +137,7 @@ impl From<&LoadError> for ValidationIssue {
             // `BindingConvertTypeMismatch`'s field docs) — left out of
             // the structured field, kept in the message text.
             BindingConvertTypeMismatch { param, .. } => (None, None, Some(param.clone())),
-            Flatten(_) => (None, None, None),
+            SceneModifier(_) | Flatten(_) => (None, None, None),
         };
         ValidationIssue {
             node_id,
@@ -153,6 +153,7 @@ impl From<&GraphError> for ValidationIssue {
         use GraphError::*;
         let (node_id, port) = match e {
             NodeNotFound(id) => (Some(id.0), None),
+            PreparedParameterChanged { node } => (Some(node.0), None),
             PortNotFound { node, port } => (Some(node.0), Some(port.clone())),
             PortKindMismatch { node, port, .. } => (Some(node.0), Some(port.clone())),
             PortTypeMismatch { .. } => (None, None),
@@ -215,7 +216,7 @@ impl From<&JsonGeneratorLoadError> for ValidationIssue {
                 port: Some(producer_port.clone()),
                 message: e.to_string(),
             },
-            Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
+            SceneModifier(_) | Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
                 ValidationIssue {
                     node_id: None,
                     type_id: None,

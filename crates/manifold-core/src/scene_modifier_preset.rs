@@ -169,6 +169,9 @@ pub enum SceneContextValue {
     Beat,
     Time,
     TriggerCount,
+    /// Counter before the first real event pending for this evaluation;
+    /// equals TriggerCount when no event is pending.
+    TriggerBaseline,
     ObjectOrdinal,
     ObjectCount,
     ObjectSeed,

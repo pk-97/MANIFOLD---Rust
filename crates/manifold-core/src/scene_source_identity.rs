@@ -103,7 +103,9 @@ pub fn scene_source_definition_hash(
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-fn effective_source_params(
+/// Authored source selectors used by the calibration fingerprint, including
+/// the effective asset path. Runtime statistics and buffer capacity are omitted.
+pub fn effective_source_params(
     owner: &EffectGraphDef,
     node: &EffectGraphNode,
 ) -> Result<BTreeMap<String, SerializedParamValue>, SceneSourceIdentityError> {

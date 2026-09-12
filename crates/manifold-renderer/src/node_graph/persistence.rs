@@ -226,6 +226,7 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
 /// Errors raised by [`GraphDocument::into_graph`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadError {
+    SceneModifier(super::scene_modifier_expand::SceneModifierExpandError),
     /// Document `version` is newer than this binary understands.
     UnsupportedVersion { found: u32, max: u32 },
     /// Two nodes share the same document id.
@@ -376,6 +377,7 @@ impl std::fmt::Display for LoadError {
                  Pick a convert variant that matches: Float / IntRound → Float or Int targets, \
                  BoolThreshold → Bool targets, EnumRound → Enum targets."
             ),
+            Self::SceneModifier(error) => error.fmt(f),
             Self::Flatten(msg) => write!(f, "group flatten failed: {msg}"),
         }
     }
@@ -747,6 +749,7 @@ fn load_error_from_build(e: crate::node_graph::graph_loader::GraphBuildError) ->
             reason: "graph_loader reported a Splice-only boundary error from a Standalone build"
                 .to_string(),
         },
+        G::SceneModifier(error) => LoadError::SceneModifier(error),
         G::Flatten(e) => LoadError::Flatten(e.to_string()),
     }
 }

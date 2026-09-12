@@ -54,6 +54,68 @@ pub(super) fn fixture() -> EffectGraphDef {
 }
 
 #[test]
+fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
+    use crate::node_graph::parameters::ParamValue;
+    let registry = PrimitiveRegistry::with_builtin();
+    for fused_mode in [false, true] {
+        let mut owner = fixture();
+        let original = owner.clone();
+        let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
+        let mut runtime = crate::preset_runtime::PresetRuntime::from_def_for_render(owner.clone(), &registry, None, fused_mode).unwrap();
+        assert!(runtime.graph.modifier_buffer_budget().is_some());
+        let local = SceneNodeRef { scope: vec![NodeId::new("elastic_stage")], node: NodeId::new("shear_x") };
+        let copies = runtime.modifier_node_copies(&owner.scene_modifiers[0].id, &local).unwrap().to_vec();
+        assert_eq!(copies.len(), 2);
+        assert!(copies.iter().all(|copy| copy.object.is_some()));
+        owner.scene_modifiers[0].graph.nodes[0].group.as_mut().unwrap().nodes.iter_mut()
+            .find(|node| node.node_id == local.node).unwrap().params
+            .insert("amplitude".into(), SerializedParamValue::Float { value: 0.27 });
+        runtime.apply_inner_param_overrides(&owner);
+        let fused = fused_mode.then(|| crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def).unwrap());
+        for copy in copies {
+            let (target, param) = match &fused {
+                Some(view) => view.retarget.get(&(copy.node_id.to_string(), "amplitude".into())).unwrap().clone(),
+                None => (copy.node_id, "amplitude".into()),
+            };
+            let id = runtime.graph.instance_by_node_id(&target).unwrap();
+            assert_eq!(runtime.graph.get_node(id).unwrap().params.get(param.as_str()), Some(&ParamValue::Float(0.27)));
+        }
+        assert_eq!(original, fixture(), "loading never mutates the canonical snapshot");
+    }
+    let graph = fixture().into_graph(&registry).unwrap();
+    assert!(graph.modifier_buffer_budget().is_some(), "direct host graph loads retain admission metadata too");
+}
+
+#[test]
+fn scene_modifier_expand_runtime_rejects_ray_tracing_enabled_by_live_manifest() {
+    use manifold_core::params::{Param, ParamManifest};
+    let mut owner = fixture();
+    let local = owner.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap();
+    let mut spec = local.params[0].clone();
+    spec.id = "rt_test".into();
+    spec.default_value = 0.0;
+    spec.min = 0.0;
+    spec.max = 1.0;
+    spec.is_toggle = true;
+    let mut binding = local.bindings[0].clone();
+    binding.id = spec.id.clone();
+    binding.default_value = 0.0;
+    binding.convert = manifold_core::effects::ParamConvert::BoolThreshold;
+    binding.target = BindingTarget::Node { node_id: owner.scene_modifiers[0].scene.node.clone(), param: "rt_enabled".into() };
+    owner.preset_metadata.as_mut().unwrap().params.push(spec.clone());
+    owner.preset_metadata.as_mut().unwrap().bindings.push(binding);
+    let mut parameter = Param::bundled(spec);
+    parameter.value = 1.0;
+    let manifest = ParamManifest::from_params(vec![parameter]);
+    let registry = PrimitiveRegistry::with_builtin();
+    assert!(prepare_scene_modifiers(&owner, &registry).is_ok(), "authored RT default is off");
+    let result = crate::preset_runtime::PresetRuntime::from_def(owner, &registry, Some(&manifest));
+    assert!(matches!(result, Err(crate::preset_runtime::JsonGeneratorLoadError::SceneModifier(
+        SceneModifierExpandError::UnsupportedRenderMode { .. }
+    ))));
+}
+
+#[test]
 fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
     use crate::node_graph::parameters::ParamValue;
     use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
@@ -157,6 +219,46 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
     let fused = crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def)
         .expect("existing elastic mesh atoms fuse");
     let mut graph = (*fused.def).clone().into_graph(&registry).unwrap();
+    use crate::node_graph::resource_allocation::plan_array_allocations;
+    use crate::node_graph::scene_modifier_expand::PreparedModifierBufferBudget;
+    let allocation = plan_array_allocations(
+        &graph,
+        &crate::node_graph::compile(&graph).unwrap(),
+        (1024, 1024),
+        &ahash::AHashMap::default(),
+    )
+    .unwrap();
+    let budget = PreparedModifierBufferBudget::prepare(
+        &owner,
+        &prepared.routes,
+        &graph,
+        &fused.node_retarget,
+    )
+    .unwrap();
+    let fused_usage = budget.check(&allocation).unwrap();
+    let scene = &owner.scene_modifiers[0].scene;
+    assert!(fused_usage.modifier_bytes[scene] > 0);
+    let unfused_graph = prepared.def.clone().into_graph(&registry).unwrap();
+    let unfused_allocation = plan_array_allocations(
+        &unfused_graph,
+        &crate::node_graph::compile(&unfused_graph).unwrap(),
+        (1024, 1024),
+        &ahash::AHashMap::default(),
+    )
+    .unwrap();
+    let unfused_budget = PreparedModifierBufferBudget::prepare(
+        &owner,
+        &prepared.routes,
+        &unfused_graph,
+        &ahash::AHashMap::default(),
+    )
+    .unwrap();
+    let unfused_usage = unfused_budget.check(&unfused_allocation).unwrap();
+    assert!(fused_usage.modifier_bytes[scene] <= unfused_usage.modifier_bytes[scene]);
+    assert!(
+        unfused_usage.baseline_bytes > 0,
+        "host source buffers reported separately"
+    );
     let writes =
         PreparedGraphValueWrites::prepare(&owner, &prepared.routes, &graph, &fused.retarget)
             .unwrap();
@@ -201,6 +303,11 @@ fn scene_modifier_expand_compiler_attaches_preserves_host_and_is_idempotent() {
     let canonical = owner.clone();
     let registry = PrimitiveRegistry::with_builtin();
     let expanded = expand_scene_modifiers(&owner, &registry).unwrap();
+    assert_eq!(
+        crate::node_graph::freeze::fusion_report::fusion_report(&owner, &registry),
+        crate::node_graph::freeze::fusion_report::fusion_report(&expanded, &registry),
+        "diagnostics inspect the same prepared graph as rendering"
+    );
     assert!(expanded.scene_modifiers.is_empty());
     assert_eq!(
         expanded

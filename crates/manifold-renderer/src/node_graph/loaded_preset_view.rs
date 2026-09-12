@@ -139,11 +139,19 @@ fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
 
 fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     let def = bundled_preset_def(type_id)?;
-    if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
-        log::error!("preset `{type_id}` requires scene modifier attachment expansion before runtime view creation");
-        return None;
-    }
-    let metadata = def.preset_metadata.as_ref()?;
+    let prepared;
+    let metadata = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+        prepared = match crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+            def, &crate::node_graph::PrimitiveRegistry::with_builtin(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                log::error!("preset `{type_id}` scene modifier preparation failed: {error}");
+                return None;
+            }
+        };
+        prepared.def.preset_metadata.as_ref()?
+    } else { def.preset_metadata.as_ref()? };
     Some(LoadedPresetView {
         type_id: type_id.clone(),
         // `bundled_preset_def` stays `&'static` (bundled-preset parsing is

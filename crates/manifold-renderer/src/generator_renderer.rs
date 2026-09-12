@@ -324,6 +324,7 @@ impl GeneratorRenderer {
     /// pulse fired).
     pub fn bump_audio_count(&mut self, layer_id: &LayerId) {
         if let Some(ls) = self.layer_generators.get_mut(layer_id) {
+            ls.generator.note_trigger_event(ls.effective_trigger_count());
             ls.audio_count = ls.audio_count.wrapping_add(1);
         }
     }
@@ -500,6 +501,7 @@ impl GeneratorRenderer {
         // preserving pre-section 8 behavior byte-for-byte for every project that
         // hasn't touched this feature).
         if clip_edge_enabled && let Some(ls) = self.layer_generators.get_mut(&layer_id) {
+            ls.generator.note_trigger_event(ls.effective_trigger_count());
             ls.clip_count = ls.clip_count.wrapping_add(1);
         }
 
@@ -1050,6 +1052,11 @@ impl GeneratorRenderer {
         // never misses a --profile run in progress.
         generator.set_profiling(self.profiling_enabled);
         generator.set_profile_scope(&gen_scope(&layer_id));
+        if let Some(prior) = self.layer_generators.get_mut(&layer_id)
+            && prior.generator_type == gen_type
+        {
+            generator.carry_modifier_control_state_from(&mut prior.generator);
+        }
         self.layer_generators.insert(
             layer_id.clone(),
             LayerGeneratorState {

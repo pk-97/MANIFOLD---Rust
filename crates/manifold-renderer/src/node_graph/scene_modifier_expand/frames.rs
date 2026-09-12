@@ -2,14 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
-};
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
     SceneContextValue, SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef,
     SceneStageSource, SceneTargetSelection,
 };
-use sha2::{Digest, Sha256};
+use manifold_core::scene_source_identity::{
+    SceneSourceIdentityError, scene_source_definition_hash,
+};
 
 use super::{SceneModifierExpandError, index::FlatSceneIndex};
 
@@ -137,8 +137,14 @@ pub fn resolve_modifier_mesh_frames(
                     "fresh coordinate capture requires a direct static glTF mesh source",
                 ));
             }
-            if !matches!(source_node.params.get("fit"), None | Some(SerializedParamValue::Enum { value: 0 })) {
-                return Err(frame_error(&target, "per-part fitted sources require a separately qualified coordinate frame"));
+            if !matches!(
+                source_node.params.get("fit"),
+                None | Some(SerializedParamValue::Enum { value: 0 })
+            ) {
+                return Err(frame_error(
+                    &target,
+                    "per-part fitted sources require a separately qualified coordinate frame",
+                ));
             }
             let source_offset = static_offset(&index, &target)?;
             result.push(SceneMeshReferenceFrame {
@@ -299,8 +305,14 @@ fn static_offset(
             "fresh capture requires an unwired static translation transform",
         ));
     }
-    if !matches!(node.params.get("billboard"), None | Some(SerializedParamValue::Bool { value: false })) {
-        return Err(frame_error(target, "camera-facing transforms cannot define a static source frame"));
+    if !matches!(
+        node.params.get("billboard"),
+        None | Some(SerializedParamValue::Bool { value: false })
+    ) {
+        return Err(frame_error(
+            target,
+            "camera-facing transforms cannot define a static source frame",
+        ));
     }
     for key in ["rot_x", "rot_y", "rot_z"] {
         if scalar(node, key, 0.0)? != 0.0 {
@@ -372,58 +384,27 @@ fn source_fingerprint(
     owner: &EffectGraphDef,
     node: &EffectGraphNode,
 ) -> Result<String, SceneModifierExpandError> {
-    let mut params: BTreeMap<String, SerializedParamValue> = node
-        .params
-        .iter()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "source_vertex_count" | "source_bbox_radius" | "max_capacity"
-            )
-        })
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    if let Some(metadata) = &owner.preset_metadata {
-        let mut path = None;
-        for binding in &metadata.string_bindings {
-            if matches!(&binding.target, BindingTarget::Node { node_id, param } if *node_id == node.node_id && param == "path")
-            {
-                let value = metadata
-                    .string_params
-                    .iter()
-                    .find(|param| param.id == binding.id)
-                    .map_or(&binding.default_value, |param| &param.default_value);
-                if path.is_some_and(|previous| previous != value) {
-                    return Err(SceneModifierExpandError::ConflictingSource {
-                        path: node.node_id.to_string(),
-                        detail: "mesh source has conflicting asset bindings".into(),
-                    });
-                }
-                path = Some(value);
+    scene_source_definition_hash(owner, node).map_err(|error| match error {
+        SceneSourceIdentityError::ConflictingAssetBindings { node_id } => {
+            SceneModifierExpandError::ConflictingSource {
+                path: node_id,
+                detail: "mesh source has conflicting asset bindings".into(),
             }
         }
-        if let Some(path) = path {
-            params.insert(
-                "path".into(),
-                SerializedParamValue::String {
-                    value: path.clone(),
-                },
-            );
+        SceneSourceIdentityError::Encoding { node_id, detail } => {
+            SceneModifierExpandError::UnsupportedCoordinateFrame {
+                path: node_id,
+                detail: format!("source definition cannot be fingerprinted: {detail}"),
+            }
         }
-    }
-    let bytes = serde_json::to_vec(&(node.type_id.as_str(), params)).map_err(|error| {
-        SceneModifierExpandError::UnsupportedCoordinateFrame {
-            path: node.node_id.to_string(),
-            detail: format!("source definition cannot be fingerprinted: {error}"),
-        }
-    })?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use manifold_core::NodeId;
+    use manifold_core::effect_graph_def::BindingTarget;
     use manifold_core::scene_modifier_preset::{
         SceneModifierRecipe, SceneModifierStageDef, SceneStageInput, SceneStageScope,
     };

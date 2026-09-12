@@ -10,6 +10,7 @@ fn generator_error_from_prealloc(
 ) -> JsonGeneratorLoadError {
     use crate::node_graph::PreAllocationError as P;
     match e {
+        P::ModifierAdmission(error) => JsonGeneratorLoadError::SceneModifier(error),
         P::UnsizedArrayOutput { node_type, port, .. } => {
             JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port }
         }
@@ -310,6 +311,66 @@ impl PresetRuntime {
     /// calibration and the next save (BUG-078). `None` keeps reading the
     /// shadow, correct for a fresh-from-disk def whose shadow is accurate.
     pub fn from_def(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        Self::from_def_for_render(doc, registry, manifest, false)
+    }
+
+    /// Shared structural entry for watched, standalone and fused generators.
+    pub(crate) fn from_def_for_render(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
+        render_fused: bool,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        use manifold_core::effect_graph_def::BindingTarget;
+        use crate::node_graph::scene_modifier_expand::{
+            PreparedGraphValueWrites, PreparedModifierBufferBudget, prepare_scene_modifiers,
+        };
+        let (render_def, authoring) = if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc) {
+            let prepared = prepare_scene_modifiers(&doc, registry)?;
+            // The generator resolver drops Composite bindings. Keep provenance
+            // in the same order before installing the resolved binding list.
+            let sources = prepared.def.preset_metadata.as_ref()
+                .map(|metadata| metadata.bindings.iter().zip(prepared.binding_sources)
+                    .filter_map(|(binding, source)| matches!(binding.target, BindingTarget::Node { .. }).then_some(source))
+                    .collect::<Vec<_>>()).unwrap_or_default();
+            let guards = crate::node_graph::scene_modifier_expand::PreparedModifierParameterGuards::prepare(&doc)?;
+            (prepared.def, Some((doc, prepared.routes, sources, guards)))
+        } else { (doc, None) };
+        let fused = if render_fused {
+            crate::node_graph::freeze::install::fused_generator_view_for(&render_def)
+        } else { None };
+        let render_def = match &fused {
+            Some(view) => (*view.def).clone(),
+            None => render_def,
+        };
+        let mut runtime = Self::from_render_def(render_def, registry, manifest)?;
+        if let Some(view) = &fused {
+            runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
+        }
+        if let Some((canonical, routes, sources, guards)) = authoring {
+            crate::node_graph::scene_modifier_expand::validate_modifier_runtime(&canonical, &runtime.graph)?;
+            let empty_members = ahash::AHashMap::default();
+            let members = fused.as_ref().map_or(&empty_members, |view| &view.node_retarget);
+            let budget = PreparedModifierBufferBudget::prepare(&canonical, &routes, &runtime.graph, members)?;
+            runtime.graph.set_modifier_buffer_budget(budget);
+            guards.install(&mut runtime.graph)?;
+            runtime.modifier_control_state = Some(crate::node_graph::scene_modifier_expand::PreparedModifierControlState::prepare_with_fusion(
+                &canonical, &routes, &runtime.graph, members,
+            )?);
+            let segment = &mut runtime.effect_nodes[0];
+            let writes = PreparedGraphValueWrites::prepare(&canonical, &routes, &runtime.graph, &segment.bound.fused_retarget)?;
+            segment.bound.install_prepared_routes(writes, sources)?;
+            segment.group_preview_map = manifold_core::flatten::group_output_producer_map(&canonical);
+            runtime.modifier_preview_routes = routes;
+        }
+        Ok(runtime)
+    }
+
+    fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
@@ -641,6 +702,9 @@ impl PresetRuntime {
             forced_outputs_stale: false,
             executor: Executor::with_mock(),
             effect_nodes: vec![segment],
+            modifier_preview_routes: Vec::new(),
+            pending_trigger_baseline: None,
+            modifier_control_state: None,
             group_mix_nodes: Vec::new(),
             io: PresetIo::Generate {
                 generator_input_id,
@@ -697,7 +761,17 @@ impl PresetRuntime {
         format: GpuTextureFormat,
         manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        let mut g = Self::from_def(doc, registry, manifest)?;
+        Self::from_def(doc, registry, manifest)?.with_generator_device(device, width, height, format)
+    }
+
+    pub(crate) fn with_generator_device(
+        mut self,
+        device: std::sync::Arc<GpuDevice>,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let g = &mut self;
         g.width = width;
         g.height = height;
         let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), width, height, format);
@@ -729,7 +803,7 @@ impl PresetRuntime {
             .map_err(generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
-        Ok(g)
+        Ok(self)
     }
 
 }
