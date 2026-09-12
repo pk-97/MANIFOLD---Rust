@@ -2,8 +2,8 @@
 
 <!-- index: Analytic echoes, reversible attraction and bounded recorded-transform history, with explicit seek and simulation boundaries. -->
 
-**Status:** PROPOSED · 2026-09-12 · Codex lead · not implemented.
-**Prerequisites:** Foundation F8 (F1–F8 remains unbuilt; that foundation migrates Elastic Sculpture, Surface Peel, Vortex Fragments and Loop/Fog) and fields W3. The landed photoscan slice does not include echoes; mesh history is not a prerequisite for transform echoes.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Spatial Echoes is the approved bounded analytic-copy slice; recorded history and dynamics remain proposed.
+**Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment; state-store and buffer lifecycle signatures must be re-derived before E3. Analytic echoes are the next proposed family; recorded history remains a separately gated later phase.
 
 Echoes turn a trajectory into a sculpture. Attraction makes a scene gather, orbit and release. **The first versions evaluate mathematical motion at chosen phases; recorded history is a separate, explicitly stateful feature.** This preserves predictable seek/loop behaviour for the majority of looks. It is a distinct behaviour from the landed photoscan slice's continuous deformation and rigid patch motion; changing pattern, noise or seed is a preset variation rather than a new echo family.
@@ -17,6 +17,8 @@ Existing array/state vocabulary is in `crates/manifold-renderer/src/node_graph/p
 The shipped field precedents are `wave_field_3d`, `copy_positions` and `displace_copies`; the landed photoscan mesh precedents are `wave_shear_mesh` and `transform_mesh_patches`. Reuse their phase, capacity, identity and exact-bypass semantics where an echo composition needs them. No Gaussian splat renderer or generic transform-history primitive is shipped.
 
 Read [EFFECT_CHAIN_LIFECYCLE](EFFECT_CHAIN_LIFECYCLE.md), actual state-store APIs and current GPU retirement rules before E3. Search `clear_state`, `owner_key`, `array_feedback`, `slot_write_generation`, `rt_refit_eligible` across renderer source. No existing generic transform-history primitive was confirmed by this audit.
+
+**September 12 implementation slice:** The current `SpatialEchoes.json` modifier uses `primitives/analytic_echo_instances.rs` and its WGSL body. It consumes Previous Instances and prepares eight stable slots per source instance; Count reveals slots without growing buffers. Echo 0 preserves the source, while other copies share geometry and use analytic arc/helix positions. Radius and Rise scale with the source scene radius; Taper scales complete objects coherently using source offsets. Orientation and reflection markers survive, and zero spatial extent leaves only the source visible. This is a separate dispatch with an explicit gather boundary, not recorded animation. The broader echo/history programme below remains future work.
 
 ## 2. Decisions
 

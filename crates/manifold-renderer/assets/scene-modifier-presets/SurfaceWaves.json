@@ -1,0 +1,77 @@
+{
+  "version": 3,
+  "name": "Surface Waves",
+  "presetMetadata": {
+    "id": "SurfaceWaves",
+    "displayName": "Surface Waves",
+    "category": "Geometry",
+    "oscPrefix": "surface_waves",
+    "available": true,
+    "params": [
+      {"id":"amplitude","name":"Amplitude","min":-0.5,"max":0.5,"defaultValue":0.12},
+      {"id":"frequency","name":"Frequency","min":0.0,"max":6.0,"defaultValue":1.5},
+      {"id":"phase","name":"Phase","min":0.0,"max":1.0,"defaultValue":0.0},
+      {"id":"yaw","name":"Yaw","min":-3.1415927,"max":3.1415927,"defaultValue":0.0,"isAngle":true,"wraps":true},
+      {"id":"pitch","name":"Pitch","min":-3.1415927,"max":3.1415927,"defaultValue":0.0,"isAngle":true,"wraps":true},
+      {"id":"enabled","name":"Enabled","min":0.0,"max":1.0,"defaultValue":1.0,"isToggle":true}
+    ],
+    "bindings": [
+      {"id":"amplitude","label":"Amplitude","defaultValue":0.12,"target":{"kind":"node","nodeId":"wave","param":"amplitude"}},
+      {"id":"frequency","label":"Frequency","defaultValue":1.5,"target":{"kind":"node","nodeId":"wave","param":"frequency"}},
+      {"id":"phase","label":"Phase","defaultValue":0.0,"target":{"kind":"node","nodeId":"wave","param":"phase"}},
+      {"id":"yaw","label":"Yaw","defaultValue":0.0,"target":{"kind":"node","nodeId":"wave","param":"yaw"}},
+      {"id":"pitch","label":"Pitch","defaultValue":0.0,"target":{"kind":"node","nodeId":"wave","param":"pitch"}},
+      {"id":"enabled","label":"Enabled","defaultValue":1.0,"target":{"kind":"node","nodeId":"wave","param":"enabled"}}
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [{
+        "group":"surface_waves_stage",
+        "scope":"eachObject",
+        "inputs":[
+          {"port":"current","source":{"previous":{"endpoint":"vertices"}}},
+          {"port":"sourceRadius","source":{"context":{"value":"sceneRadius"}}},
+          {"port":"sourceOffsetX","source":{"context":{"value":"sourceOffsetX"}}},
+          {"port":"sourceOffsetY","source":{"context":{"value":"sourceOffsetY"}}},
+          {"port":"sourceOffsetZ","source":{"context":{"value":"sourceOffsetZ"}}}
+        ],
+        "outputs":[{"port":"vertices","endpoint":"vertices"}]
+      }]
+    }
+  },
+  "nodes": [{
+    "id":1,"nodeId":"surface_waves_stage","typeId":"group","handle":"SurfaceWavesStage",
+    "group":{
+      "interface":{
+        "inputs":[
+          {"name":"current","portType":"Array(MeshVertex)"},
+          {"name":"sourceRadius","portType":"Scalar(F32)"},
+          {"name":"sourceOffsetX","portType":"Scalar(F32)"},
+          {"name":"sourceOffsetY","portType":"Scalar(F32)"},
+          {"name":"sourceOffsetZ","portType":"Scalar(F32)"}
+        ],
+        "outputs":[{"name":"vertices","portType":"Array(MeshVertex)"}]
+      },
+      "nodes":[
+        {"id":1,"nodeId":"group_current","typeId":"system.group_input","handle":"current"},
+        {"id":2,"nodeId":"group_source_radius","typeId":"system.group_input","handle":"sourceRadius"},
+        {"id":3,"nodeId":"group_source_offset_x","typeId":"system.group_input","handle":"sourceOffsetX"},
+        {"id":4,"nodeId":"group_source_offset_y","typeId":"system.group_input","handle":"sourceOffsetY"},
+        {"id":5,"nodeId":"group_source_offset_z","typeId":"system.group_input","handle":"sourceOffsetZ"},
+        {"id":9,"nodeId":"wave","typeId":"node.normal_wave_mesh","handle":"wave","params":{"amplitude":{"type":"Float","value":0.12},"frequency":{"type":"Float","value":1.5},"phase":{"type":"Float","value":0.0},"yaw":{"type":"Float","value":0.0},"pitch":{"type":"Float","value":0.0},"scale":{"type":"Float","value":1.0},"source_offset_x":{"type":"Float","value":0.0},"source_offset_y":{"type":"Float","value":0.0},"source_offset_z":{"type":"Float","value":0.0},"enabled":{"type":"Float","value":1.0}}},
+        {"id":10,"nodeId":"group_output","typeId":"system.group_output","handle":"output"}
+      ],
+      "wires":[
+        {"fromNode":1,"fromPort":"current","toNode":9,"toPort":"in"},
+        {"fromNode":2,"fromPort":"sourceRadius","toNode":9,"toPort":"scale"},
+        {"fromNode":3,"fromPort":"sourceOffsetX","toNode":9,"toPort":"source_offset_x"},
+        {"fromNode":4,"fromPort":"sourceOffsetY","toNode":9,"toPort":"source_offset_y"},
+        {"fromNode":5,"fromPort":"sourceOffsetZ","toNode":9,"toPort":"source_offset_z"},
+        {"fromNode":9,"fromPort":"out","toNode":10,"toPort":"vertices"}
+      ]
+    }
+  }],
+  "wires":[]
+}

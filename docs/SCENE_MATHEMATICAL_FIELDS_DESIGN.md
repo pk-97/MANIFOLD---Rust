@@ -2,8 +2,8 @@
 
 <!-- index: Shared spatial fields and object/instance responses for travelling waves, interference, formation transitions and selective transformation. -->
 
-**Status:** PROPOSED · 2026-09-12 · Codex lead · not implemented.
-**Prerequisites:** Foundation F8 (F1–F8 remains unbuilt; that foundation migrates Elastic Sculpture, Surface Peel, Vortex Fragments and Loop/Fog); the landed photoscan slice is the current mesh-stage precedent. W1–W4 are later field compositions, not prerequisites for the foundation migration.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Surface Waves is the approved bounded mesh-wave slice; the wider W1–W4 field programme remains proposed.
+**Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment: the shipped atoms and their semantics are fixed; re-verify channel projections at implementation and extend exact equivalents instead of duplicating them. Foundation F7 is a file-only authorship proof using those atoms, not another travelling-wave implementation.
 
 The performer controls a relationship: how a wave travels, how objects fall into phase, or how a formation opens. The camera can remain still. The graph exposes the mathematics as reusable fields and responses, while the card exposes a small useful set of controls. The current photoscan slice demonstrates this contract with ordinary saved groups: Elastic Sculpture is continuous deformation, while Surface Peel and Vortex Fragments are rigid fixed-cell patch motion. Their controls and names remain part of the migration surface.
@@ -26,6 +26,8 @@ Shared gates and resource limits: [Validation V9](SCENE_MODIFIER_VALIDATION_PLAN
 | Photoscan attachment precedent | `node_graph/scene_modifier.rs`, `scene_modifier_mesh.rs`; [landing report](landings/2026-09-11-photoscan-modifiers.md) | Current v2 JSON groups use `current`/`reference` → `vertices`; the future recipe migration reuses these graphs and control IDs |
 
 Re-run `rg -n 'type_id:|purpose:' crates/manifold-renderer/src/node_graph/primitives/` and inspect the nearest complete preset before implementing any operation. Survey channel selection/packing macros as well as files; absence of a guessed filename is not an absence proof. F7 must author a file using the shipped atoms above; it must not add a second travelling-wave implementation. Every genuinely new atom still needs at least two concrete consumers listed below. *(The amendment records the shipped atom reuse and schema wording; the source inventory above remains anchored to the original audit.)*
+
+**September 12 implementation slice:** The current `SurfaceWaves.json` modifier uses `primitives/normal_wave_mesh.rs` and its WGSL body. It displaces the incoming mesh along smooth normals with explicit phase, scene-relative amplitude and directional frequency. A triangle deformation map transports normals and tangents while retaining UVs. This gather operation uses the existing separate-dispatch boundary; it does not extend the fusion compiler. Zero amplitude and disabled state preserve incoming geometry. Degenerate triangle frames retain source shading. The broader generic field, formation and mask phases below remain future work.
 
 ## 2. Decisions
 

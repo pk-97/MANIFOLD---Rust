@@ -9,7 +9,11 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use std::collections::BTreeMap;
 
-pub const MODIFIER_BUFFER_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+/// Optional aggregate byte ceiling override, expressed in MiB. This is read
+/// and validated once at each structural admission boundary (never per frame).
+pub const MODIFIER_MEMORY_OVERRIDE_ENV: &str = "MANIFOLD_MODIFIER_MEMORY_MIB";
+const DEFAULT_WORKING_SET_FRACTION_NUMERATOR: u64 = 3;
+const DEFAULT_WORKING_SET_FRACTION_DENOMINATOR: u64 = 4;
 
 /// Physical prepared arrays shared by references or aliases are counted once.
 /// Baseline excludes the union of all modifier-owned allocations in this owner.
@@ -17,6 +21,9 @@ pub const MODIFIER_BUFFER_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 pub struct ModifierBufferUsage {
     pub baseline_bytes: u64,
     pub modifier_bytes: BTreeMap<SceneNodeRef, u64>,
+    /// Total bytes in fresh physical array roots in this candidate, including
+    /// arrays belonging to the unmodified baseline graph.
+    pub candidate_bytes: u64,
 }
 
 pub struct PreparedModifierBufferBudget {
@@ -64,20 +71,52 @@ impl PreparedModifierBufferBudget {
         Ok(Self { scenes })
     }
 
+    /// Account the candidate's physical arrays without applying a device
+    /// ceiling. This is useful to diagnostics and tests that intentionally
+    /// have no GPU snapshot. Admission callers must use
+    /// [`Self::check_with_snapshot`] so current device allocations are part of
+    /// the projected peak.
+    pub fn account(
+        &self,
+        allocation: &ArrayAllocationPlan,
+    ) -> Result<ModifierBufferUsage, SceneModifierExpandError> {
+        self.account_impl(allocation)
+    }
+
+    /// Compatibility alias for callers that only need pure accounting.
+    #[doc(hidden)]
     pub fn check(
         &self,
         allocation: &ArrayAllocationPlan,
     ) -> Result<ModifierBufferUsage, SceneModifierExpandError> {
-        self.check_limit(allocation, MODIFIER_BUFFER_LIMIT_BYTES)
+        self.account(allocation)
     }
 
-    fn check_limit(
+    /// Admit the candidate against one point-in-time device memory snapshot.
+    /// The current allocation is intentionally retained in the sum: replacing
+    /// a live scene can overlap old and new resources until GPU retirement.
+    pub fn check_with_snapshot(
         &self,
         allocation: &ArrayAllocationPlan,
-        limit: u64,
+        snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    ) -> Result<ModifierBufferUsage, SceneModifierExpandError> {
+        let snapshot = snapshot
+            .ok_or_else(|| Self::memory_unavailable("device memory limits are unavailable"))?;
+        let (allowed, policy) = configured_limit(snapshot.recommended_max_working_set_bytes)?;
+        let usage = self.account(allocation)?;
+        let candidate = usage.candidate_bytes;
+        admit_candidate_bytes_with_limit(snapshot, candidate, allowed, &policy)?;
+        Ok(usage)
+    }
+
+    fn account_impl(
+        &self,
+        allocation: &ArrayAllocationPlan,
     ) -> Result<ModifierBufferUsage, SceneModifierExpandError> {
         let mut modifiers = AHashSet::default();
         let mut usage = BTreeMap::new();
+        let mut candidate_bytes = 0u64;
+        let mut candidate_roots = AHashSet::default();
         for (scene, nodes) in &self.scenes {
             let mut roots = AHashSet::default();
             let mut bytes = 0u64;
@@ -86,16 +125,24 @@ impl PreparedModifierBufferBudget {
                     && nodes.contains(&item.node)
                     && roots.insert(item.resource)
                 {
-                    bytes = bytes
-                        .checked_add(item.bytes)
-                        .ok_or_else(|| Self::exceeded(scene, u64::MAX, limit))?;
+                    bytes = bytes.checked_add(item.bytes).ok_or_else(|| {
+                        Self::memory_exceeded(0, u64::MAX, u64::MAX, "checked arithmetic overflow")
+                    })?;
                     modifiers.insert(item.resource);
                 }
             }
-            if bytes > limit {
-                return Err(Self::exceeded(scene, bytes, limit));
-            }
             usage.insert(scene.clone(), bytes);
+        }
+        // Count every newly planned physical root, including baseline arrays.
+        // Aliases do not allocate and therefore do not increase the peak.
+        for action in &allocation.actions {
+            if let ArrayAllocationAction::Allocate(item) = action
+                && candidate_roots.insert(item.resource)
+            {
+                candidate_bytes = candidate_bytes.checked_add(item.bytes).ok_or_else(|| {
+                    Self::memory_exceeded(0, u64::MAX, u64::MAX, "checked arithmetic overflow")
+                })?;
+            }
         }
         let mut baseline_bytes = 0u64;
         let mut roots = AHashSet::default();
@@ -112,17 +159,113 @@ impl PreparedModifierBufferBudget {
         Ok(ModifierBufferUsage {
             baseline_bytes,
             modifier_bytes: usage,
+            candidate_bytes,
         })
     }
 
-    fn exceeded(scene: &SceneNodeRef, requested: u64, allowed: u64) -> SceneModifierExpandError {
+    fn memory_unavailable(detail: impl Into<String>) -> SceneModifierExpandError {
         SceneModifierExpandError::CapacityExceeded {
-            path: format!("scene {:?} modifierBuffers", scene),
+            path: "modifierBufferBudget".into(),
+            detail: detail.into(),
+        }
+    }
+
+    fn memory_exceeded(
+        current: u64,
+        candidate: u64,
+        allowed: u64,
+        policy: &str,
+    ) -> SceneModifierExpandError {
+        let available = allowed.saturating_sub(current);
+        SceneModifierExpandError::CapacityExceeded {
+            path: "modifierBufferBudget".into(),
             detail: format!(
-                "requested {requested} additional prepared buffer bytes; allowed {allowed}"
+                "projected GPU memory peak {projected} bytes (current {current} + candidate {candidate}) exceeds allowed {allowed} bytes; available for this candidate: {available} bytes ({policy})",
+                projected = current.saturating_add(candidate),
             ),
         }
     }
+}
+
+/// Apply the same aggregate ceiling to candidates from multiple graph owners.
+/// Each owner is accounted independently, then this function is called once so
+/// all fresh physical roots consume one shared device allowance.
+pub fn admit_candidate_bytes(
+    snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    candidate: u64,
+) -> Result<(), SceneModifierExpandError> {
+    let snapshot = snapshot.ok_or_else(|| {
+        PreparedModifierBufferBudget::memory_unavailable("device memory limits are unavailable")
+    })?;
+    let (allowed, policy) = configured_limit(snapshot.recommended_max_working_set_bytes)?;
+    admit_candidate_bytes_with_limit(snapshot, candidate, allowed, &policy)
+}
+
+fn admit_candidate_bytes_with_limit(
+    snapshot: manifold_gpu::GpuMemorySnapshot,
+    candidate: u64,
+    allowed: u64,
+    policy: &str,
+) -> Result<(), SceneModifierExpandError> {
+    let _projected = snapshot
+        .current_allocated_bytes
+        .checked_add(candidate)
+        .ok_or_else(|| {
+            PreparedModifierBufferBudget::memory_exceeded(
+                snapshot.current_allocated_bytes,
+                candidate,
+                u64::MAX,
+                "checked arithmetic overflow",
+            )
+        })?;
+    if _projected > allowed {
+        return Err(PreparedModifierBufferBudget::memory_exceeded(
+            snapshot.current_allocated_bytes,
+            candidate,
+            allowed,
+            policy,
+        ));
+    }
+    Ok(())
+}
+
+fn configured_limit(recommended: u64) -> Result<(u64, String), SceneModifierExpandError> {
+    configured_limit_from(
+        recommended,
+        std::env::var(MODIFIER_MEMORY_OVERRIDE_ENV).ok().as_deref(),
+    )
+}
+
+fn configured_limit_from(
+    recommended: u64,
+    override_mib: Option<&str>,
+) -> Result<(u64, String), SceneModifierExpandError> {
+    if let Some(raw) = override_mib {
+        let mib = raw
+            .parse::<u64>()
+            .map_err(|_| SceneModifierExpandError::CapacityExceeded {
+                path: MODIFIER_MEMORY_OVERRIDE_ENV.into(),
+                detail: format!("expected a non-negative integer MiB ceiling, got `{raw}`"),
+            })?;
+        let bytes = mib.checked_mul(1024 * 1024).ok_or_else(|| {
+            SceneModifierExpandError::CapacityExceeded {
+                path: MODIFIER_MEMORY_OVERRIDE_ENV.into(),
+                detail: format!("MiB ceiling `{mib}` overflows byte arithmetic"),
+            }
+        })?;
+        return Ok((bytes, format!("explicit {mib} MiB ceiling")));
+    }
+    let bytes = recommended
+        .checked_mul(DEFAULT_WORKING_SET_FRACTION_NUMERATOR)
+        .and_then(|bytes| bytes.checked_div(DEFAULT_WORKING_SET_FRACTION_DENOMINATOR))
+        .ok_or_else(|| SceneModifierExpandError::CapacityExceeded {
+            path: "modifierBufferBudget".into(),
+            detail: format!("recommended working set {recommended} overflows the 75% ceiling"),
+        })?;
+    Ok((
+        bytes,
+        format!("75% of recommended working set {recommended} bytes"),
+    ))
 }
 
 #[cfg(test)]
@@ -196,12 +339,72 @@ mod tests {
             warnings: Vec::new(),
         };
         let unchanged = allocation.clone();
-        let usage = budget.check_limit(&allocation, 80).unwrap();
+        let usage = budget.account(&allocation).unwrap();
         assert_eq!(usage.baseline_bytes, 100);
         assert_eq!(usage.modifier_bytes[&scene], 80);
-        let error = budget.check_limit(&allocation, 79).unwrap_err();
-        assert!(error.to_string().contains("requested 80"));
-        assert!(error.to_string().contains("allowed 79"));
+        assert_eq!(usage.candidate_bytes, 180);
+        let error = admit_candidate_bytes(
+            Some(manifold_gpu::GpuMemorySnapshot {
+                current_allocated_bytes: 0,
+                recommended_max_working_set_bytes: 100,
+            }),
+            usage.candidate_bytes,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("candidate 180"));
+        assert!(error.to_string().contains("allowed 75"));
         assert_eq!(allocation, unchanged);
+    }
+
+    #[test]
+    fn aggregate_admission_includes_current_device_bytes() {
+        let error = admit_candidate_bytes(
+            Some(manifold_gpu::GpuMemorySnapshot {
+                current_allocated_bytes: 10,
+                recommended_max_working_set_bytes: 240,
+            }),
+            180,
+        )
+        .unwrap_err();
+        let detail = error.to_string();
+        assert!(detail.contains("current 10 + candidate 180"));
+        assert!(detail.contains("allowed 180"));
+        assert!(detail.contains("available for this candidate: 170"));
+    }
+
+    #[test]
+    fn aggregate_admission_reports_unavailable_snapshot() {
+        let error = admit_candidate_bytes(None, 1).unwrap_err();
+        assert!(error.to_string().contains("memory limits are unavailable"));
+    }
+
+    #[test]
+    fn configured_limit_override_is_pure_and_checked() {
+        let (bytes, detail) = configured_limit_from(4_000, Some("12")).unwrap();
+        assert_eq!(bytes, 12 * 1024 * 1024);
+        assert!(detail.contains("explicit 12 MiB"));
+
+        let invalid = configured_limit_from(4_000, Some("nope")).unwrap_err();
+        assert!(
+            invalid
+                .to_string()
+                .contains("expected a non-negative integer MiB")
+        );
+
+        let overflow = configured_limit_from(4_000, Some("18446744073709551615")).unwrap_err();
+        assert!(overflow.to_string().contains("overflows byte arithmetic"));
+    }
+
+    #[test]
+    fn aggregate_admission_reports_current_plus_candidate_overflow() {
+        let error = admit_candidate_bytes(
+            Some(manifold_gpu::GpuMemorySnapshot {
+                current_allocated_bytes: u64::MAX,
+                recommended_max_working_set_bytes: 4 * 1024 * 1024 * 1024,
+            }),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("checked arithmetic overflow"));
     }
 }

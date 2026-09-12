@@ -39,6 +39,17 @@ fn get_existing_mapping(
 }
 
 impl ContentThread {
+    fn modifier_budget_device(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
+        #[cfg(target_os = "macos")]
+        {
+            self.content_pipeline.native_device_handle()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
     /// Re-install the renderer's project-preset catalog overlay if an editing
     /// command changed the project's embedded ("forked") presets — a fork mint
     /// or an in-place recalibration of an embedded preset. Guarded by a cheap
@@ -740,7 +751,10 @@ impl ContentThread {
                 }
             }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
-                let cmd = crate::scene_modifier_edit::with_admission(cmd);
+                let cmd = crate::scene_modifier_edit::with_admission_device(
+                    cmd,
+                    self.modifier_budget_device(),
+                );
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute(cmd, p);
                 }
@@ -759,9 +773,13 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
+                let budget_device = self.modifier_budget_device();
                 if let Some(p) = self.engine.project_mut() {
                     let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
-                    self.editing_service.execute(crate::scene_modifier_edit::with_admission(command), p);
+                    self.editing_service.execute(
+                        crate::scene_modifier_edit::with_admission_device(command, budget_device),
+                        p,
+                    );
                 }
                 if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 self.engine.mark_compositor_dirty_now();

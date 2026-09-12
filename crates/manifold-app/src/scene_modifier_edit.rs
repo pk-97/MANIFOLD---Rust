@@ -399,8 +399,40 @@ fn collect_scenes(nodes: &[EffectGraphNode], scope: &mut Vec<NodeId>, out: &mut 
 }
 
 /// Only declared structural edits take a private project snapshot. Numeric
-/// gestures have no admission targets and keep the existing direct path.
+/// gestures have no admission targets and keep the existing direct path. This
+/// device-less helper is reserved for snapshot tooling and pure editing tests.
+#[cfg(any(test, feature = "ui-snapshot"))]
 pub(crate) fn with_admission(command: Box<dyn Command>) -> Box<dyn Command> {
+    with_admission_inner(command, None, None, true)
+}
+
+/// Wrap a structural edit with a deterministic memory snapshot. Tests and
+/// offline snapshot tooling use this to exercise the real policy without a
+/// live device; production commands should use [`with_admission_device`].
+#[cfg(test)]
+pub(crate) fn with_admission_snapshot(
+    command: Box<dyn Command>,
+    snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+) -> Box<dyn Command> {
+    with_admission_inner(command, None, snapshot, false)
+}
+
+/// Wrap a structural edit with the shared GPU device used to refresh memory
+/// admission on every execute, including redo. The renderer's loader performs
+/// its own fresh check immediately before allocation.
+pub(crate) fn with_admission_device(
+    command: Box<dyn Command>,
+    budget_device: Option<std::sync::Arc<manifold_gpu::GpuDevice>>,
+) -> Box<dyn Command> {
+    with_admission_inner(command, budget_device, None, false)
+}
+
+fn with_admission_inner(
+    command: Box<dyn Command>,
+    budget_device: Option<std::sync::Arc<manifold_gpu::GpuDevice>>,
+    budget_snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    accounting_only: bool,
+) -> Box<dyn Command> {
     let mut targets = Vec::new();
     command.graph_admission_targets(&mut targets);
     let mut clips = Vec::new();
@@ -420,6 +452,9 @@ pub(crate) fn with_admission(command: Box<dyn Command>) -> Box<dyn Command> {
         command,
         owners,
         clips,
+        budget_device,
+        budget_snapshot,
+        accounting_only,
         applied: false,
         rejection: None,
         frame_changes: Vec::new(),
@@ -427,15 +462,37 @@ pub(crate) fn with_admission(command: Box<dyn Command>) -> Box<dyn Command> {
     })
 }
 
-#[derive(Debug)]
 struct AdmittedGraphCommand {
     command: Box<dyn Command>,
     owners: Vec<GraphTarget>,
     clips: Vec<manifold_core::ClipId>,
+    budget_device: Option<std::sync::Arc<manifold_gpu::GpuDevice>>,
+    budget_snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    accounting_only: bool,
     applied: bool,
     rejection: Option<String>,
     frame_changes: Vec<FrameChange>,
     frames_captured: bool,
+}
+
+impl std::fmt::Debug for AdmittedGraphCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdmittedGraphCommand")
+            .field("command", &self.command)
+            .field("owners", &self.owners)
+            .field("clips", &self.clips)
+            .field(
+                "budget_device",
+                &self.budget_device.as_ref().map(|_| "shared"),
+            )
+            .field("budget_snapshot", &self.budget_snapshot)
+            .field("accounting_only", &self.accounting_only)
+            .field("applied", &self.applied)
+            .field("rejection", &self.rejection)
+            .field("frame_changes", &self.frame_changes)
+            .field("frames_captured", &self.frames_captured)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -485,13 +542,68 @@ impl Command for AdmittedGraphCommand {
             return;
         }
         let registry = PrimitiveRegistry::with_builtin();
+        let mut candidate_bytes = 0u64;
         for owner in &owners {
-            if let Err(error) = validate_owner(&candidate, owner, &registry) {
-                // Reset the command's reverse state as well, so a rejected redo
-                // can be retried after the source is restored.
+            match validate_owner(&candidate, owner, &registry) {
+                Ok(bytes) => {
+                    candidate_bytes = match candidate_bytes.checked_add(bytes) {
+                        Some(total) => total,
+                        None => {
+                            restore_frame_changes(&mut candidate, &self.frame_changes);
+                            self.command.undo(&mut candidate);
+                            self.rejection = Some("Scene modifier edit rejected: aggregate prepared buffer byte count overflow".into());
+                            return;
+                        }
+                    };
+                }
+                Err(error) => {
+                    // Reset the command's reverse state as well, so a rejected redo
+                    // can be retried after the source is restored.
+                    restore_frame_changes(&mut candidate, &self.frame_changes);
+                    self.command.undo(&mut candidate);
+                    self.rejection = Some(error);
+                    return;
+                }
+            }
+        }
+        if candidate_bytes > 0 {
+            if let Some(device) = &self.budget_device {
+                let snapshot = device.modifier_memory_snapshot();
+                if let Err(error) =
+                    manifold_renderer::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                        snapshot,
+                        candidate_bytes,
+                    )
+                {
+                    restore_frame_changes(&mut candidate, &self.frame_changes);
+                    self.command.undo(&mut candidate);
+                    self.rejection = Some(format!("Scene modifier edit rejected: {error}"));
+                    return;
+                }
+            } else if let Some(snapshot) = self.budget_snapshot {
+                if let Err(error) =
+                    manifold_renderer::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                        Some(snapshot),
+                        candidate_bytes,
+                    )
+                {
+                    restore_frame_changes(&mut candidate, &self.frame_changes);
+                    self.command.undo(&mut candidate);
+                    self.rejection = Some(format!("Scene modifier edit rejected: {error}"));
+                    return;
+                }
+            } else if self.accounting_only {
+                // UI snapshot and pure editing tests intentionally have no
+                // device; they retain accounting and leave device admission
+                // to the loader's explicit unavailable check.
+                log::debug!(
+                    "scene modifier edit accounted {candidate_bytes} candidate bytes without a GPU snapshot"
+                );
+            } else {
                 restore_frame_changes(&mut candidate, &self.frame_changes);
                 self.command.undo(&mut candidate);
-                self.rejection = Some(error);
+                self.rejection =
+                    Some("Scene modifier edit rejected: GPU memory limits are unavailable".into());
                 return;
             }
         }
@@ -603,12 +715,12 @@ fn validate_owner(
     project: &Project,
     target: &GraphTarget,
     registry: &PrimitiveRegistry,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let Some(graph) = crate::graph_target::resolve(project, target) else {
-        return Ok(());
+        return Ok(0);
     };
     if graph.scene_modifiers.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let host = project
         .graph_target_owner(target)
@@ -627,7 +739,7 @@ fn validate_owner(
         .ok()
         .filter(|&value| value > 0)
         .ok_or("Scene modifier edit rejected: output height must be positive")?;
-    runtime
+    let usage = runtime
         .prepared_modifier_buffer_usage((width, height))
         .map_err(|e| format!("Scene modifier edit rejected: {e}"))?;
     if let GraphTarget::Generator(layer) = target {
@@ -645,7 +757,7 @@ fn validate_owner(
             }
         }
     }
-    Ok(())
+    Ok(usage.map_or(0, |usage| usage.candidate_bytes))
 }
 
 #[cfg(test)]

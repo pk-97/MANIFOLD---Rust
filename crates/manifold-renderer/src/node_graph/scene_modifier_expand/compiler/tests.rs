@@ -235,7 +235,7 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
         &fused.node_retarget,
     )
     .unwrap();
-    let fused_usage = budget.check(&allocation).unwrap();
+    let fused_usage = budget.account(&allocation).unwrap();
     let scene = &owner.scene_modifiers[0].scene;
     assert!(fused_usage.modifier_bytes[scene] > 0);
     let unfused_graph = prepared.def.clone().into_graph(&registry).unwrap();
@@ -253,7 +253,7 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
         &ahash::AHashMap::default(),
     )
     .unwrap();
-    let unfused_usage = unfused_budget.check(&unfused_allocation).unwrap();
+    let unfused_usage = unfused_budget.account(&unfused_allocation).unwrap();
     assert!(fused_usage.modifier_bytes[scene] <= unfused_usage.modifier_bytes[scene]);
     assert!(
         unfused_usage.baseline_bytes > 0,

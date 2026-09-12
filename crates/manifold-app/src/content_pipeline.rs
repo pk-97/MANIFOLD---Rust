@@ -1525,6 +1525,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.native_device.as_deref()
     }
 
+    /// Clone the content device handle for command admission. The handle is
+    /// shared with the pipeline, so redo admissions can query fresh allocator
+    /// values without introducing another device or synchronization primitive.
+    #[cfg(target_os = "macos")]
+    pub fn native_device_handle(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
+        self.native_device.clone()
+    }
+
     /// Raw Metal device pointer for FFI interop (encoder sharing).
     #[cfg(target_os = "macos")]
     pub fn native_device_ptr(&self) -> Option<*mut std::ffi::c_void> {

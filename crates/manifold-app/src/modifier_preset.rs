@@ -150,7 +150,7 @@ mod tests {
         let recipe =
             manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("SurfacePeel"))
                 .unwrap();
-        graph.scene_modifiers[0].graph = Box::new(recipe.clone());
+        *graph.scene_modifiers[0].graph = recipe.clone();
         let baseline = crate::graph_target::catalog_default(&project, &target).unwrap();
         assert_eq!(target.graph_in(&baseline).unwrap(), recipe);
         let host = project.graph_target_owner_mut(&target).unwrap();

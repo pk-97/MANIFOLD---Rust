@@ -19,6 +19,15 @@ pub use types::*;
 pub mod trace_planner;
 pub use trace_planner::*;
 
+/// Point-in-time device memory values used by resource admission. The
+/// snapshot is deliberately plain data so callers can capture it once at an
+/// admission boundary and pass it through pure planning code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GpuMemorySnapshot {
+    pub current_allocated_bytes: u64,
+    pub recommended_max_working_set_bytes: u64,
+}
+
 // Backend-neutral shader compilation pipeline (WGSL → naga → SPIR-V).
 // Compiled on every platform; each backend's shader compiler consumes the
 // optimised SPIR-V and emits platform-specific shader modules.

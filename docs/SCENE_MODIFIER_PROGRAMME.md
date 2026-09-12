@@ -2,7 +2,7 @@
 
 <!-- index: Programme scope, milestones and ownership for file-defined mathematical scene modifiers across objects, instances, meshes and splats. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Photoscan modifiers shipped; Peter reports successful visual/LFO play. Unified F1–F8 design approved for the next work, not implemented. Later creative families remain proposed.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Unified modifiers are implemented in the worktree; Peter reports successful release rendering and LFO play. Full-system qualification remains deferred. Surface Waves, Ordered Recon and Spatial Echoes are the next approved implementation slice; RT remains separate.
 **Document type:** Working guide. The contracts below own implementation decisions and phase gates.
 
 Peter's direction: "displaying the 'beauty' of mathematics" and "presets just being jsonl files". The intended result is a live instrument: add a preset, combine it with another, perform its controls, open its graph, and save a variation. The existing file convention is a JSON document (`.json` or `.manifoldpreset`); this programme extends that convention rather than introducing JSONL records.
@@ -102,6 +102,8 @@ The existing three looks are reference cases for the unified migration. Preserve
 | Analytic echoes (candidate) | Simultaneous phase samples build a spatial sculpture | Multiple visible poses and bounded copies; no claim to record deformed history |
 
 M1 proves file-only authorship using existing operations. That proof may remain a private conformance preset; it need not become another near-duplicate factory card. Later family work adds missing reusable operations only after the primitive audit. Shared fields/weights and representation-specific responses are the direction; do not rewrite the working photoscan atoms just to force a universal kernel or alter old appearances.
+
+**Current bounded slice (September 12):** Peter approved Surface Waves (coherent travelling surface displacement), Ordered Recon (staggered rigid-band arrival) and Spatial Echoes (analytic shared-mesh copies). These use the existing v3 modifier attachments and parameter surface on an already-loaded GLB. Motion is controlled by Phase/Progress and existing modulation, with no private animation clock. Defaults favour restrained geometry and visible source textures. Spatial Echoes begins with at most eight echoes per source instance, preserves orientation, and does not record past deformations. Review and focused GPU/CPU checks precede Peter's aesthetic playtest; broad native/performance sweeps and dynamic RT are excluded from this slice.
 
 ## 3. What gets shared
 

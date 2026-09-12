@@ -456,7 +456,33 @@ impl PresetRuntime {
             &AHashMap::default(),
         )?;
         budget
-            .check(&allocation)
+            .account(&allocation)
+            .map(Some)
+            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
+    }
+
+    /// Account and admit a prepared-array candidate against a captured GPU
+    /// memory snapshot. The snapshot belongs to the caller's admission
+    /// boundary; this method does no device query and performs no allocation.
+    pub fn prepared_modifier_buffer_usage_with_snapshot(
+        &self,
+        canvas: (u32, u32),
+        snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    ) -> Result<
+        Option<crate::node_graph::scene_modifier_expand::ModifierBufferUsage>,
+        crate::node_graph::PreAllocationError,
+    > {
+        let Some(budget) = self.graph.modifier_buffer_budget() else {
+            return Ok(None);
+        };
+        let allocation = crate::node_graph::resource_allocation::plan_array_allocations(
+            &self.graph,
+            &self.plan,
+            canvas,
+            &AHashMap::default(),
+        )?;
+        budget
+            .check_with_snapshot(&allocation, snapshot)
             .map(Some)
             .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
     }

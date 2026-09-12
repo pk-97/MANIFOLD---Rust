@@ -208,6 +208,16 @@ impl GpuDevice {
         }
     }
 
+    /// Capture the Metal allocator state used by scene-modifier admission.
+    /// Metal reports both values for every valid device; keep the `Option`
+    /// contract shared with backends that cannot expose equivalent limits.
+    pub fn modifier_memory_snapshot(&self) -> Option<crate::GpuMemorySnapshot> {
+        Some(crate::GpuMemorySnapshot {
+            current_allocated_bytes: self.raw_device().currentAllocatedSize() as u64,
+            recommended_max_working_set_bytes: self.raw_device().recommendedMaxWorkingSetSize(),
+        })
+    }
+
     /// Whether this device supports per-dispatch GPU timestamp profiling
     /// (timestamp counter set + stage-boundary sampling). True on Apple
     /// silicon.

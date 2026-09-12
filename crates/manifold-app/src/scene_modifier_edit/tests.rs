@@ -10,7 +10,7 @@ use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_editing::service::EditingService;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 
-use super::{SceneModifierAction, build_action, with_admission};
+use super::{SceneModifierAction, build_action, with_admission, with_admission_snapshot};
 
 const MUSHROOM_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -204,17 +204,59 @@ fn oversized_photoscan_stack_is_rejected_before_project_or_history_changes() {
         SceneModifierAction::Add(layer_id.clone(), "ElasticSculpture".into()),
     )
     .expect("recipe construction succeeds before allocation admission");
-    service.execute(with_admission(command), &mut project);
+    service.execute(
+        with_admission_snapshot(
+            command,
+            Some(manifold_gpu::GpuMemorySnapshot {
+                current_allocated_bytes: 0,
+                recommended_max_working_set_bytes: 512 * 1024 * 1024,
+            }),
+        ),
+        &mut project,
+    );
     let rejection = service
         .take_rejection()
         .expect("oversized stack is diagnosed");
-    assert!(rejection.contains("modifierBuffers"), "{rejection}");
-    assert!(rejection.contains("494979072"), "{rejection}");
-    assert!(rejection.contains("268435456"), "{rejection}");
+    assert!(
+        rejection.contains("projected GPU memory peak"),
+        "{rejection}"
+    );
+    assert!(rejection.contains("current 0"), "{rejection}");
+    assert!(
+        rejection.contains("available for this candidate"),
+        "{rejection}"
+    );
     assert_eq!(service.data_version(), version);
     assert!(!service.can_undo());
     assert!(!service.can_redo());
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
+}
+
+#[test]
+fn modifier_stack_over_256mib_is_admitted_with_device_room() {
+    let (mut project, layer_id) = project_with_mushroom();
+    let mut service = EditingService::new();
+    apply_stock(&mut service, &mut project, &layer_id, "ElasticSculpture");
+    let mut service = EditingService::new();
+    let before = serde_json::to_value(&project).expect("project serializes");
+    let command = build_action(
+        &project,
+        SceneModifierAction::Add(layer_id.clone(), "ElasticSculpture".into()),
+    )
+    .expect("recipe construction succeeds before allocation admission");
+    service.execute(
+        with_admission_snapshot(
+            command,
+            Some(manifold_gpu::GpuMemorySnapshot {
+                current_allocated_bytes: 0,
+                recommended_max_working_set_bytes: 4 * 1024 * 1024 * 1024,
+            }),
+        ),
+        &mut project,
+    );
+    assert!(service.take_rejection().is_none());
+    assert!(service.can_undo());
+    assert_ne!(serde_json::to_value(&project).unwrap(), before);
 }
 
 #[test]

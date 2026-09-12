@@ -1366,6 +1366,9 @@ fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Optio
 #[derive(Debug, Clone)]
 pub enum PreAllocationError {
     ModifierAdmission(super::scene_modifier_expand::SceneModifierExpandError),
+    /// The graph has modifier-owned allocations but the active GPU backend
+    /// cannot provide a memory snapshot for admission.
+    ModifierMemoryUnavailable,
     /// A primitive declared an `Array<T>` output but
     /// `array_output_capacity()` returned `None` — pre-bound allocation
     /// is a hard contract, so partial allocation is rejected loudly
@@ -1401,6 +1404,10 @@ impl std::fmt::Display for PreAllocationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ModifierAdmission(error) => error.fmt(f),
+            Self::ModifierMemoryUnavailable => write!(
+                f,
+                "scene modifier memory admission unavailable: the GPU did not expose current allocated size and working-set capacity"
+            ),
             Self::UnsizedArrayOutput {
                 node_type,
                 port,
@@ -1515,7 +1522,15 @@ fn pre_allocate_array_buffers(
         graph, plan, Backend::canvas_dims(backend), &prebound,
     )?;
     if let Some(budget) = graph.modifier_buffer_budget() {
-        let usage = budget.check(&allocation).map_err(PreAllocationError::ModifierAdmission)?;
+        // Capture immediately before allocation. `currentAllocatedSize`
+        // includes the live scene being replaced, so the projected peak must
+        // conservatively cover old and candidate resources overlapping.
+        let snapshot = device
+            .modifier_memory_snapshot()
+            .ok_or(PreAllocationError::ModifierMemoryUnavailable)?;
+        let usage = budget
+            .check_with_snapshot(&allocation, Some(snapshot))
+            .map_err(PreAllocationError::ModifierAdmission)?;
         log::debug!("prepared modifier buffer usage: {usage:?}");
     }
     for warning in &allocation.warnings {

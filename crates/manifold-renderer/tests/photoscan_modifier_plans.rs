@@ -53,7 +53,10 @@ fn find_scoped_node<'a>(
 fn photoscan_stock_recipes_capture_real_mesh_frames_and_prepare() {
     let host = imported_host();
     let registry = PrimitiveRegistry::with_builtin();
-    for preset in ["ElasticSculpture", "SurfacePeel", "VortexFragments"] {
+    for preset in [
+        "ElasticSculpture", "SurfacePeel", "VortexFragments",
+        "SurfaceWaves", "OrderedRecon", "SpatialEchoes",
+    ] {
         let instance = prepare_new_scene_modifier(
             &host,
             &common::stock_recipe(preset),
@@ -76,6 +79,28 @@ fn photoscan_stock_recipes_capture_real_mesh_frames_and_prepare() {
             .nodes
             .iter()
             .any(|node| node.type_id == "node.render_scene"));
+    }
+}
+
+#[test]
+fn photoscan_structured_stack_roundtrips_and_prepares_in_both_orders() {
+    let registry = PrimitiveRegistry::with_builtin();
+    for names in [
+        ["SurfaceWaves", "OrderedRecon", "SpatialEchoes"],
+        ["SpatialEchoes", "OrderedRecon", "SurfaceWaves"],
+    ] {
+        let mut host = imported_host();
+        for name in names {
+            host = common::attach(&host, name, name);
+        }
+        let saved = serde_json::to_string(&host).expect("stack serializes");
+        let reopened: EffectGraphDef = serde_json::from_str(&saved).expect("stack reopens");
+        assert_eq!(host, reopened);
+        let prepared = prepare_scene_modifiers(&reopened, &registry)
+            .unwrap_or_else(|error| panic!("{names:?} expansion failed: {error}"));
+        assert!(prepared.def.scene_modifiers.is_empty());
+        manifold_renderer::preset_runtime::PresetRuntime::from_def(reopened, &registry, None)
+            .unwrap_or_else(|error| panic!("{names:?} runtime preparation failed: {error}"));
     }
 }
 

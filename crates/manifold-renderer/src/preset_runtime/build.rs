@@ -11,6 +11,12 @@ fn generator_error_from_prealloc(
     use crate::node_graph::PreAllocationError as P;
     match e {
         P::ModifierAdmission(error) => JsonGeneratorLoadError::SceneModifier(error),
+        P::ModifierMemoryUnavailable => JsonGeneratorLoadError::SceneModifier(
+            crate::node_graph::scene_modifier_expand::SceneModifierExpandError::CapacityExceeded {
+                path: "modifierBufferBudget".into(),
+                detail: "the GPU did not expose current allocated size and working-set capacity".into(),
+            },
+        ),
         P::UnsizedArrayOutput { node_type, port, .. } => {
             JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port }
         }
