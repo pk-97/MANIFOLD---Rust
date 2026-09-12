@@ -105,6 +105,8 @@ M1 proves file-only authorship using existing operations. That proof may remain 
 
 ## 3. What gets shared
 
+**Clip-edge gestures (September 12 addition):** a rising clip edge can initiate a hit/return, advance/hold or transition/settle response. Existing Strobe, NestedCubes and BasicShapes graphs supply the gate, decay, pose-cycle and glide precedents. Trigger response is a reusable control graph feeding geometry, evaluated once per modifier and broadcast across its targets. Its Strength/Duration and coordinated parameter curves define a gesture; a Phase reset alone is not the acceptance criterion. F7's file-only proof is a Surface Peel burst/return variation, not another stock family. See the architecture's clip-edge contract for first-edge, retrigger and reset semantics.
+
 The reusable composition is **reference coordinates → field → weight → response**. A wave may drive object rotation, instance elevation, vertex displacement or splat opacity. The mathematics is shared; data-specific readers and writers preserve each representation's rules. A mesh face is a triangle group, not an independent mesh vertex; a splat also has orientation, anisotropic extent and opacity.
 
 Source geometry remains available as a reference. Current upstream data supplies animation and previous modifier results. The distinction enables reversible gestures while preserving ordinary scene animation. Static photoscans require no special motion engine. A scan imported as one object cannot acquire meaningful chair/wall/body-part identities without segmentation.
