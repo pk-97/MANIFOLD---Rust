@@ -89,3 +89,10 @@ impl From<SceneModifierSchemaError> for SceneModifierExpandError {
         }
     }
 }
+
+pub(super) fn scene_objects_for_authoring(
+    owner: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
+) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
+    index::FlatSceneIndex::build(owner)?.scene_objects(scene)
+}

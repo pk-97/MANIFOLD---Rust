@@ -84,6 +84,10 @@ impl ForkPresetCommand {
 }
 
 impl Command for ForkPresetCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::fork_execute(self, project);
@@ -290,6 +294,10 @@ impl RevertToLibraryCommand {
 }
 
 impl Command for RevertToLibraryCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             modifier::revert_execute(self, project);

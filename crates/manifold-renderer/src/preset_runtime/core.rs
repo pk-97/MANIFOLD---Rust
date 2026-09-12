@@ -436,6 +436,31 @@ pub struct FrameContextInputs {
 }
 
 impl PresetRuntime {
+    /// Check the same prepared-array plan used by native allocation, without
+    /// creating GPU resources. Structural admission calls this before publishing
+    /// an edited owner so an oversized stack cannot replace a working scene.
+    pub fn prepared_modifier_buffer_usage(
+        &self,
+        canvas: (u32, u32),
+    ) -> Result<
+        Option<crate::node_graph::scene_modifier_expand::ModifierBufferUsage>,
+        crate::node_graph::PreAllocationError,
+    > {
+        let Some(budget) = self.graph.modifier_buffer_budget() else {
+            return Ok(None);
+        };
+        let allocation = crate::node_graph::resource_allocation::plan_array_allocations(
+            &self.graph,
+            &self.plan,
+            canvas,
+            &AHashMap::default(),
+        )?;
+        budget
+            .check(&allocation)
+            .map(Some)
+            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
+    }
+
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
     /// pre-group texture fans out into both the group's effects in

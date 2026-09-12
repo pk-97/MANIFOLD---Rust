@@ -2,7 +2,7 @@
 
 <!-- index: Baseline qualification and eight phases for unified photoscan presets, coordinates, migration, catalog, file-only authoring and release proof. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F0 immutable baselines captured; F1 data support verified; F2 runtime preparation, buffer admission, source guards, relocation and independent event routing implemented with focused CPU checks; production qualification remains open; F3–F8 pending. The shipped photoscan slice supplies working inputs; it does not implement the complete unified foundation.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F1–F6 integrated in the leased worktree; F7 two-stage CPU proof passes and Surface Peel - Clip Hit is promoted as a variation. Peter confirmed release-app rendering and LFO operation. Shared card interaction/preset cleanup is integrated; F8 is narrowed to static review plus focused checks by explicit request, with full playback/performance qualification deferred. Main is unchanged.
 **Prerequisites:** [Preset Architecture](SCENE_MODIFIER_PRESET_ARCHITECTURE.md); existing graph/preset/editor infrastructure.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Architecture decisions A/D references below refer to the companion architecture; test policy is [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
 
@@ -10,7 +10,7 @@ The next release makes the existing photoscan journey reliable and generic: load
 
 ## 1. Audit and re-derivation
 
-Historical inventory: `28c8486f0`, 2026-09-10. Refresh it against the shipped photoscan implementation before F1; counts and line numbers below are historical. The architecture owns data definitions; this plan owns migration call sites. Current additions are `scene_modifier_mesh.rs`, core `MeshStageSplice`, generic editing preflight/removal, three JSON files, two GPU atoms and the photoscan plan/editing/UI fixtures. Preserve those tests as migration inputs.
+Historical inventory: `28c8486f0`, 2026-09-10. Refresh it against the shipped photoscan implementation before F1; counts and line numbers below are historical. The architecture owns data definitions; this plan owns migration call sites. At that audit, additions were `scene_modifier_mesh.rs`, core `MeshStageSplice`, generic editing preflight/removal, three JSON files, two GPU atoms and photoscan plan/editing/UI fixtures. The leased implementation replaces those factories and ports their meaningful assertions to file-based preparation and migration; immutable v2 fixtures remain unchanged.
 
 ```sh
 rg -n 'scene_modifier::(descriptors|descriptor_for|build_plan|trace_modifier)' crates/manifold-app/src crates/manifold-renderer/src
@@ -78,32 +78,38 @@ SceneModifier { owner: Box<GraphTarget>, modifier_id: NodeId }
 
 Only `owner = Generator(layer_id)` is accepted in v1. Nested SceneModifier owners and Effect owners fail target resolution. `preset_kind()` returns SceneModifier for this variant. The existing internally tagged GraphTarget derive cannot serialize its transparent string-ID newtypes; no working historical JSON representation was found. F3 establishes explicit `{kind: effect|generator, id}` objects and `{kind: sceneModifier, owner, modifierId}` while retaining the Rust enum API. This is an editor address, not a new persisted project owner. Add the variant with its working resolver in F3; F1 introduces the persisted data without temporary editor dispatch branches. Resolve the modifier snapshot in one shared graph-target resolver, not independent implementations in editor/export/fork.
 
-New editing commands in `commands/graph/scene_modifier.rs` use existing Command/EditingService and graph snapshot undo:
+New editing commands in `commands/graph/modifier_stack.rs` use existing Command/EditingService and graph snapshot undo. They receive the content-thread project and resolved owner default so preparation captures the exact owner graph and preset identity:
 
 ```rust
 pub struct InsertSceneModifierCommand {
     // private undo state; constructor is the public seam
 }
 impl InsertSceneModifierCommand {
-    pub fn new(owner: GraphTarget, index: usize,
-               instance: SceneModifierInstanceDef) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, index: usize,
+               instance: SceneModifierInstanceDef) -> Result<Self, SceneModifierStackError>;
 }
 pub struct DeleteSceneModifierCommand { /* private undo state */ }
 impl DeleteSceneModifierCommand {
-    pub fn new(owner: GraphTarget, modifier_id: NodeId) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, modifier_id: NodeId) -> Result<Self, SceneModifierStackError>;
 }
 pub struct MoveSceneModifierCommand { /* private undo state */ }
 impl MoveSceneModifierCommand {
-    pub fn new(owner: GraphTarget, modifier_id: NodeId, index: usize) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, modifier_id: NodeId,
+               index: usize) -> Result<Self, SceneModifierStackError>;
 }
 pub struct RetargetSceneModifierCommand { /* private undo state */ }
 impl RetargetSceneModifierCommand {
-    pub fn new(owner: GraphTarget, modifier_id: NodeId,
-               targets: SceneTargetSelection) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, modifier_id: NodeId,
+               targets: SceneTargetSelection,
+               mesh_frames: Vec<SceneMeshReferenceFrame>) -> Result<Self, SceneModifierStackError>;
 }
 ```
 
-`index` is the final zero-based position after removal for Move; out-of-range is an error, never clamped. Renderer validation happens during preparation before dispatch. Editing rechecks structural identity and source-order invariants from core data before mutation, so a stale UI plan cannot modify a different instance. Error transport reuses existing Command results; no renderer dependency in editing. Invalid commands have no undo entry and change no state.
+`index` is the final zero-based position after removal for Move; out-of-range is an error, never clamped. Each command exposes `prepared_graph()` for renderer admission before dispatch. Core candidate helpers preserve surviving saved frames; only the renderer captures frames for newly selected targets. Execute rechecks the expected owned graph and generator preset identity before mutation, so a stale plan cannot modify another snapshot. `Command::was_applied()` lets EditingService reject a stale or no-op edit without adding undo history, clearing redo, or marking the project dirty. Typed errors remain available on the prepared command; editing has no renderer dependency.
 
 **D3 — Generic defaults replace bespoke Loop callbacks.** Architecture section 3 defines bounded `SceneScalarExpr` initializers and calibrations for apply-time bounds-derived values/ranges. Implement them in F1/F2 and author their declarations in F6. Shared live values use ordinary bindings and graph arithmetic, never coupled UI writes. No per-preset callback survives.
 
@@ -165,6 +171,8 @@ Also deliver A11/A13: source-frame resolver, SceneRadius/SourceOffset context, a
 
 ## 6. F3 — commands and parameter identity
 
+The leased branch has nested graph targets, transactional insert/delete/move/retarget commands, exact instance cards and explicit object preview selection. Structural commands are admitted against a private candidate on the content thread. Source and unsupported RT edits reject before mutation; ordinary modulation remains live. Nineteen app tests cover instance independence, reorder/remove, retargeting, preparation, stable object duplication/removal, stale redo and clip-source overrides. Nine shared command/guard tests and focused app/editing/UI clippy pass. Native UI and production modulation/render qualification remain open; this is not a main landing.
+
 **Entry:** F2; read GraphTarget resolution, existing graph snapshot commands, host manifest/mapping pruning and param bindings. Inventory all new enum matches.
 
 **Deliverables:** four commands in section 2, shared nested graph-target resolver, stable host macro addresses, fan-out through the existing runtime binding path. Add insert/delete/move/retarget undo/redo tests and mapping restoration after reload. Two instances of the same preset with identical titles must remain independent. Changing selection recompiles without changing surviving target/node IDs. Delete-object command checks references as specified in architecture section 6.
@@ -202,6 +210,8 @@ Metadata supplies all card controls; remove hardcoded photoscan row whitelists a
 **Entry:** F5; read current Loop/Fog builders and photoscan adapter end-to-end plus the corridor contract. Verify F1/F2 initializer/calibration tests before dispatch. All admitted defaults and controls must be represented in files and shared infrastructure.
 
 **Deliverables:** `assets/scene-modifier-presets/SceneLoop.json` and `SceneFog.json`; adopt ElasticSculpture/SurfacePeel/VortexFragments JSON with explicit recipe/context ports; catalog discovery/validation; preserved names and control identities; graph-based shared values; old runtime descriptor/builders removed. Legacy recognisers move into a narrowly named migration module. check-presets gains modifier-specific boundary validation and host-fixture expansion, since modifier files intentionally have no final texture output. Preserve source restrictions rather than fabricating universal bypass.
+
+The file-based Loop keeps Pattern and Spacing shared through declarative binding fanout. Home remains an independent live control: changing Spacing no longer overwrites Home. This is an intentional change from the old UI callback, preserving a held or modulated Home value; saved initial framing remains unchanged. Periodic wrap still depends on matching camera and array period, not resetting Home on a slider gesture.
 
 **Gate:** focused `check-presets` scene-modifier mode (new CLI `--kind sceneModifier`, delivered here); `cargo test -p manifold-renderer --test scene_modifier_stock`; focused migration/legacy GPU proof after file conversion. Negative: production code has no `SceneModifierDescriptor`, `SceneModifierDescriptorEntry`, `build_scene_loop_plan`, `build_scene_fog_plan`, `RecipeKind`, photoscan row/trace tables or atom-name-specific attachment patching. Exact source searches exclude only the named load-time migration module where legacy constants are required; do not rename a runtime callback to make a grep pass. Existing tests move to file loading, not duplicated in a legacy runtime harness. **Demo:** all five kinds load from files through the same picker; saved photoscan controls still work — L3 via the F5 flow extended here. **Forbidden:** per-preset Rust callback or display-name switch.
 

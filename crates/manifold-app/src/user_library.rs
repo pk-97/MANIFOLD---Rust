@@ -4,7 +4,7 @@
 //! Writes/renames/duplicates/deletes standalone preset JSON files under the
 //! SAME user preset root `manifold_renderer::preset_loader` already resolves
 //! read-only (`~/Library/Application Support/MANIFOLD/presets/{effects,
-//! generators}`), so a save here is picked up by the existing hot-reload
+//! generators,scene-modifiers}`), so a save here is picked up by the existing hot-reload
 //! watcher with no separate wiring — no new storage tier, just a writer for
 //! the one that already exists.
 //!
@@ -131,9 +131,10 @@ impl UserLibrary {
             PresetKind::Generator => {
                 manifold_renderer::preset_loader::GENERATOR_CATALOG.load().json(id).is_some()
             }
-            PresetKind::SceneModifier => manifold_core::preset_definition_registry::try_get(
-                &PresetTypeId::from_string(id.to_owned()),
-            ).is_some_and(|preset| preset.kind == PresetKind::SceneModifier),
+            PresetKind::SceneModifier => manifold_renderer::preset_loader::SCENE_MODIFIER_CATALOG
+                .load()
+                .json(id)
+                .is_some(),
         }
     }
 
@@ -156,7 +157,7 @@ impl UserLibrary {
     }
 
     /// Save `def` as a new library entry named `name` (disambiguated on
-    /// collision). Writes `<root>/{effects,generators}/<mintedName>.json` —
+    /// collision). Writes `<root>/{effects,generators,scene-modifiers}/<mintedName>.json` —
     /// the id and filename stem are the minted name itself (D2's
     /// display-based-id style), so the file is human-readable AND
     /// self-describing. Never overwrites an existing entry (that's `Push to

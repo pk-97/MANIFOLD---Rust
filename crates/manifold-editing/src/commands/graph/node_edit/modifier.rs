@@ -13,7 +13,7 @@ use manifold_core::project::Project;
 use manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters;
 
 use super::super::descend_level;
-use super::super::scene_modifier::{InstanceLayerSnapshot, prune_instance_params};
+use super::super::{InstanceLayerSnapshot, prune_instance_params};
 use super::subtree_node_ids;
 
 #[derive(Debug, Clone)]

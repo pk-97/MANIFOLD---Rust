@@ -13,6 +13,7 @@ use manifold_core::scene_modifier_preset::{
 use sha2::{Digest, Sha256};
 
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
+use crate::node_graph::PortType;
 
 use super::{
     SceneModifierExpandError, bindings, frames,
@@ -22,13 +23,15 @@ use super::{
 };
 
 type PortAddress = (u32, String);
-type EndpointKey = (SceneNodeRef, &'static str);
+type EndpointKey = (SceneNodeRef, String);
 type CloneKey = (u32, Option<SceneNodeRef>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
 
 #[cfg(test)]
 mod conformance;
 
+#[cfg(test)]
+mod camera_endpoint_tests;
 #[cfg(test)]
 mod parameter_guard_tests;
 #[cfg(test)]
@@ -173,9 +176,11 @@ pub fn prepare_scene_modifiers(
             .ok_or_else(|| invalid("graph", "numeric node IDs exhausted"))?,
         derived: index.flat.clone(),
         index: &index,
+        registry,
         current: BTreeMap::new(),
         reference: BTreeMap::new(),
         written: BTreeSet::new(),
+        camera_anchors: BTreeMap::new(),
         contexts: BTreeMap::new(),
         event_routes: Vec::new(),
     };
@@ -222,12 +227,12 @@ pub fn prepare_scene_modifiers(
         builder
             .derived
             .wires
-            .retain(|wire| !(wire.to_node == target && wire.to_port == key.1));
+            .retain(|wire| !(wire.to_node == target && wire.to_port.as_str() == key.1.as_str()));
         builder.derived.wires.push(EffectGraphWire {
             from_node: *producer,
             from_port: port.clone(),
             to_node: target,
-            to_port: key.1.into(),
+            to_port: key.1.clone(),
         });
     }
     builder.derived.name = owner.name.clone();
@@ -334,10 +339,12 @@ fn validate_binding_leaves(
 struct Builder<'a> {
     derived: EffectGraphDef,
     index: &'a FlatSceneIndex,
+    registry: &'a PrimitiveRegistry,
     next_id: u32,
     current: BTreeMap<EndpointKey, Option<PortAddress>>,
     reference: BTreeMap<EndpointKey, Option<PortAddress>>,
     written: BTreeSet<EndpointKey>,
+    camera_anchors: BTreeMap<SceneNodeRef, EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
     event_routes: Vec<super::SceneModifierEventRoute>,
 }
@@ -481,7 +488,7 @@ impl Builder<'_> {
         if let Some(Some(address)) = table.get(key) {
             return Ok(address.clone());
         }
-        let identity_key = serde_json::to_string(&("identity", &key.0, key.1))
+        let identity_key = serde_json::to_string(&("identity", &key.0, &key.1))
             .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
         let mut params = BTreeMap::new();
         let address = match endpoint {
@@ -772,16 +779,101 @@ impl Builder<'_> {
                 )
             })?,
         };
-        let key = (reference.clone(), endpoint_port(endpoint));
+        let key = if endpoint == SceneEndpoint::Camera {
+            if let Some(key) = self.camera_anchors.get(reference) {
+                key.clone()
+            } else {
+                let key = self.resolve_camera_anchor(instance)?;
+                self.camera_anchors.insert(reference.clone(), key.clone());
+                key
+            }
+        } else {
+            (reference.clone(), endpoint_port(endpoint).into())
+        };
         if !self.current.contains_key(&key) {
             let initial = self
                 .index
-                .input(reference, key.1)?
+                .input(&key.0, key.1.as_str())?
                 .map(|wire| (wire.from_node, wire.from_port.clone()));
             self.current.insert(key.clone(), initial.clone());
             self.reference.insert(key.clone(), initial);
         }
         Ok(key)
+    }
+
+    /// Find the stable insertion point for a scene-wide camera source stage.
+    ///
+    /// A pass-through camera processor is safe to cross only when its actual
+    /// registry shape has one Camera input and the output feeding the current
+    /// consumer is Camera. This deliberately leaves muxes and other
+    /// ambiguous nodes at the current consumer port instead of selecting a
+    /// branch by convention.
+    fn resolve_camera_anchor(
+        &self,
+        instance: &SceneModifierInstanceDef,
+    ) -> Result<EndpointKey, SceneModifierExpandError> {
+        let mut target = instance.scene.clone();
+        let mut port = endpoint_port(SceneEndpoint::Camera).to_string();
+        let mut visited = BTreeSet::new();
+        loop {
+            let key = (target.clone(), port.clone());
+            if !visited.insert(key.clone()) {
+                return Err(invalid(
+                    instance.id.to_string(),
+                    "camera processing chain contains a cycle",
+                ));
+            }
+            let Some(wire) = self.index.input(&target, &port)? else {
+                return Ok(key);
+            };
+            let producer_ref = self
+                .index
+                .by_id
+                .get(&wire.from_node)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid(
+                        instance.id.to_string(),
+                        format!(
+                            "camera producer {} has no stable scene reference",
+                            wire.from_node
+                        ),
+                    )
+                })?;
+            let producer_node = self.index.node(&producer_ref)?;
+            let producer = self
+                .registry
+                .construct(&producer_node.type_id)
+                .ok_or_else(|| {
+                    invalid(
+                        producer_node.type_id.clone(),
+                        "camera chain producer is not registered",
+                    )
+                })?;
+            let camera_inputs: Vec<_> = producer
+                .inputs()
+                .iter()
+                .filter(|input| input.ty == PortType::Camera)
+                .collect();
+            if camera_inputs.len() != 1 {
+                return Ok(key);
+            }
+            let Some(output) = producer
+                .outputs()
+                .iter()
+                .find(|output| output.name.as_ref() == wire.from_port.as_str())
+            else {
+                return Err(invalid(
+                    producer_node.type_id.clone(),
+                    format!("camera wire names missing output port '{}'", wire.from_port),
+                ));
+            };
+            if output.ty != PortType::Camera {
+                return Ok(key);
+            }
+            target = producer_ref;
+            port = camera_inputs[0].name.to_string();
+        }
     }
 
     fn append_instance(

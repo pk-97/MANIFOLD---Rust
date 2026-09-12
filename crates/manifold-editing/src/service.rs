@@ -66,6 +66,10 @@ impl EditingService {
     // ─── Mutation gateway ───
 
     /// Execute a command through the undo system.
+    pub fn take_rejection(&mut self) -> Option<String> {
+        self.undo_manager.take_rejection()
+    }
+
     pub fn execute(&mut self, command: Box<dyn Command>, project: &mut Project) {
         if !self.undo_manager.execute(command, project) { return; }
         self.data_version += 1;

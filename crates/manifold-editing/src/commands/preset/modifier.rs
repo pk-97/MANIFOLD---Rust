@@ -11,7 +11,7 @@ use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 use manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters;
 use manifold_core::scene_modifier_preset::validate_scene_modifier_schema;
 
-use super::super::graph::scene_modifier::{InstanceLayerSnapshot, prune_instance_params};
+use super::super::graph::{InstanceLayerSnapshot, prune_instance_params};
 use super::{ForkPresetCommand, RevertToLibraryCommand};
 
 #[derive(Debug)]

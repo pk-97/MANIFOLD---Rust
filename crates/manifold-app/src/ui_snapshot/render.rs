@@ -387,7 +387,7 @@ pub fn render_graph_editor_to_png(
     // the topology fix: no more scratch `tree` + throwaway `editor_ui.tree`.
     let mut ui_root = crate::ui_root::UIRoot::new();
     let active_idx = match target.host_target() {
-        manifold_core::GraphTarget::Generator(lid) => {
+        Some(manifold_core::GraphTarget::Generator(lid)) => {
             project.timeline.layers.iter().position(|l| &l.layer_id == lid)
         }
         _ => None,

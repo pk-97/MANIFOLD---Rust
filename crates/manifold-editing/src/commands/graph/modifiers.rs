@@ -10,7 +10,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, PresetMetadata,
 };
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
+use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
 
@@ -61,8 +61,14 @@ fn wire_producer(wires: &[EffectGraphWire], to_node: u32, to_port: &str) -> Opti
 }
 
 /// Remove and return the wire feeding `(to_node, to_port)`, if any.
-fn remove_wire_into(wires: &mut Vec<EffectGraphWire>, to_node: u32, to_port: &str) -> Option<(u32, String)> {
-    let idx = wires.iter().position(|w| w.to_node == to_node && w.to_port == to_port)?;
+fn remove_wire_into(
+    wires: &mut Vec<EffectGraphWire>,
+    to_node: u32,
+    to_port: &str,
+) -> Option<(u32, String)> {
+    let idx = wires
+        .iter()
+        .position(|w| w.to_node == to_node && w.to_port == to_port)?;
     let w = wires.remove(idx);
     Some((w.from_node, w.from_port))
 }
@@ -153,7 +159,11 @@ fn walk_mesh_modifier_chain(
 /// node) and Move (which then re-splices the SAME node elsewhere). `None`
 /// (refuse) if `node_id` isn't a modifier with exactly the expected in/out
 /// wire shape.
-fn detach_modifier(nodes: &[EffectGraphNode], wires: &mut Vec<EffectGraphWire>, node_id: u32) -> Option<()> {
+fn detach_modifier(
+    nodes: &[EffectGraphNode],
+    wires: &mut Vec<EffectGraphWire>,
+    node_id: u32,
+) -> Option<()> {
     if !nodes
         .iter()
         .any(|n| n.id == node_id && MESH_MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()))
@@ -161,9 +171,16 @@ fn detach_modifier(nodes: &[EffectGraphNode], wires: &mut Vec<EffectGraphWire>, 
         return None;
     }
     let (pred_node, pred_port) = remove_wire_into(wires, node_id, "in")?;
-    let succ_idx = wires.iter().position(|w| w.from_node == node_id && w.from_port == "out")?;
+    let succ_idx = wires
+        .iter()
+        .position(|w| w.from_node == node_id && w.from_port == "out")?;
     let succ = wires.remove(succ_idx);
-    wires.push(scene_build_wire(pred_node, &pred_port, succ.to_node, &succ.to_port));
+    wires.push(scene_build_wire(
+        pred_node,
+        &pred_port,
+        succ.to_node,
+        &succ.to_port,
+    ));
     Some(())
 }
 
@@ -184,9 +201,14 @@ fn splice_modifier_into_chain(
     node_id: u32,
     position: Option<usize>,
 ) -> Option<()> {
-    let (chain, mesh_source, scene_object_id) = walk_mesh_modifier_chain(nodes, wires, group_out_id)?;
+    let (chain, mesh_source, scene_object_id) =
+        walk_mesh_modifier_chain(nodes, wires, group_out_id)?;
     let p = position.unwrap_or(chain.len()).min(chain.len());
-    let (pred_node, pred_port) = if p == 0 { mesh_source } else { (chain[p - 1], "out".to_string()) };
+    let (pred_node, pred_port) = if p == 0 {
+        mesh_source
+    } else {
+        (chain[p - 1], "out".to_string())
+    };
     let (succ_node, succ_port) = if p < chain.len() {
         (chain[p], "in".to_string())
     } else {
@@ -196,7 +218,10 @@ fn splice_modifier_into_chain(
         }
     };
     let idx = wires.iter().position(|w| {
-        w.from_node == pred_node && w.from_port == pred_port && w.to_node == succ_node && w.to_port == succ_port
+        w.from_node == pred_node
+            && w.from_port == pred_port
+            && w.to_node == succ_node
+            && w.to_port == succ_port
     })?;
     wires.remove(idx);
     wires.push(scene_build_wire(pred_node, &pred_port, node_id, "in"));
@@ -225,7 +250,11 @@ pub struct InsertMeshModifierCommand {
     /// The object group body's `(nodes, wires)` before this edit, plus the
     /// pre-edit whole-def `preset_metadata` (exposures land there, outside
     /// the scoped level). Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl InsertMeshModifierCommand {
@@ -275,68 +304,76 @@ impl Command for InsertMeshModifierCommand {
         let scope = full_modifier_scope(&self.scope_path, self.group_node_id);
         let type_id = self.type_id.clone();
         let position = self.position;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let prev_metadata = def.preset_metadata.clone();
-            // The object group's own display name prefixes the section
-            // (e.g. "Object 1 — Bend"), mirroring the importer's modifier
-            // section convention — computed BEFORE the nested block below so
-            // this read of `def.nodes` doesn't overlap the block's `&mut`.
-            let section = match innermost_group_display_name(&def.nodes, &scope) {
-                Some(group_name) => format!("{group_name} — {}", modifier_section_label(&type_id)),
-                None => modifier_section_label(&type_id),
-            };
+        let result = with_target_graph_mut(
+            project,
+            &self.target,
+            &self.catalog_default,
+            true,
+            |def| {
+                let prev_metadata = def.preset_metadata.clone();
+                // The object group's own display name prefixes the section
+                // (e.g. "Object 1 — Bend"), mirroring the importer's modifier
+                // section convention — computed BEFORE the nested block below so
+                // this read of `def.nodes` doesn't overlap the block's `&mut`.
+                let section = match innermost_group_display_name(&def.nodes, &scope) {
+                    Some(group_name) => {
+                        format!("{group_name} — {}", modifier_section_label(&type_id))
+                    }
+                    None => modifier_section_label(&type_id),
+                };
 
-            let (new_id, new_node_id, prev) = {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
-                // Validate the chain is parseable BEFORE mutating anything — a
-                // custom/unparseable chain refuses the insert (D6), never a
-                // blind splice.
-                walk_mesh_modifier_chain(nodes, wires, out_id)?;
-                let prev = (nodes.clone(), wires.clone());
-                let new_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                let new_node = scene_build_node(new_id, &type_id, None, BTreeMap::new());
-                let new_node_id = new_node.node_id.clone();
-                nodes.push(new_node);
-                splice_modifier_into_chain(nodes, wires, out_id, new_id, position)
+                let (new_id, new_node_id, prev) = {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
+                    // Validate the chain is parseable BEFORE mutating anything — a
+                    // custom/unparseable chain refuses the insert (D6), never a
+                    // blind splice.
+                    walk_mesh_modifier_chain(nodes, wires, out_id)?;
+                    let prev = (nodes.clone(), wires.clone());
+                    let new_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                    let new_node = scene_build_node(new_id, &type_id, None, BTreeMap::new());
+                    let new_node_id = new_node.node_id.clone();
+                    nodes.push(new_node);
+                    splice_modifier_into_chain(nodes, wires, out_id, new_id, position)
                     .expect("chain re-validated above via walk_mesh_modifier_chain; splice cannot fail here");
-                (new_id, new_node_id, prev)
-            };
+                    (new_id, new_node_id, prev)
+                };
 
-            // P1: expose every param of the freshly minted modifier node,
-            // into the def's TOP-LEVEL preset_metadata, targeting its bare
-            // NodeId — same convention the glTF importer uses.
-            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                display_name: "Scene".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "scene".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
+                // P1: expose every param of the freshly minted modifier node,
+                // into the def's TOP-LEVEL preset_metadata, targeting its bare
+                // NodeId — same convention the glTF importer uses.
+                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                    display_name: "Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
                     layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                scene_modifier: None,
-                scene_bounds: None,
-            });
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                new_id,
-                &new_node_id,
-                &type_id,
-                &section,
-                &self.modifier_metadata,
-                &BTreeMap::new(),
-            );
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_modifier: None,
+                    scene_bounds: None,
+                });
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    new_id,
+                    &new_node_id,
+                    &type_id,
+                    &section,
+                    &self.modifier_metadata,
+                    &BTreeMap::new(),
+                );
 
-            Some((prev, prev_metadata))
-        });
+                Some((prev, prev_metadata))
+            },
+        );
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
@@ -398,13 +435,14 @@ impl Command for RemoveMeshModifierCommand {
     fn execute(&mut self, project: &mut Project) {
         let scope = full_modifier_scope(&self.scope_path, self.group_node_id);
         let modifier_id = self.modifier_node_id;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
-            detach_modifier(nodes, wires, modifier_id)?;
-            nodes.retain(|n| n.id != modifier_id);
-            Some(prev)
-        });
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
+                detach_modifier(nodes, wires, modifier_id)?;
+                nodes.retain(|n| n.id != modifier_id);
+                Some(prev)
+            });
         self.prev = result.flatten();
     }
 
@@ -469,18 +507,19 @@ impl Command for MoveMeshModifierCommand {
         let scope = full_modifier_scope(&self.scope_path, self.group_node_id);
         let modifier_id = self.modifier_node_id;
         let new_position = self.new_position;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
-            let (chain, _, _) = walk_mesh_modifier_chain(nodes, wires, out_id)?;
-            if !chain.contains(&modifier_id) {
-                return None; // not a member of THIS object's chain — refuse.
-            }
-            let prev = (nodes.clone(), wires.clone());
-            detach_modifier(nodes, wires, modifier_id)?;
-            splice_modifier_into_chain(nodes, wires, out_id, modifier_id, Some(new_position))?;
-            Some(prev)
-        });
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
+                let (chain, _, _) = walk_mesh_modifier_chain(nodes, wires, out_id)?;
+                if !chain.contains(&modifier_id) {
+                    return None; // not a member of THIS object's chain — refuse.
+                }
+                let prev = (nodes.clone(), wires.clone());
+                detach_modifier(nodes, wires, modifier_id)?;
+                splice_modifier_into_chain(nodes, wires, out_id, modifier_id, Some(new_position))?;
+                Some(prev)
+            });
         self.prev = result.flatten();
     }
 
@@ -502,15 +541,16 @@ impl Command for MoveMeshModifierCommand {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::super::*;
-    use super::super::test_support::*;
-    use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
-    use manifold_core::effect_graph_def::{GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef};
-    use crate::command::Command;
     use super::super::modifiers::MESH_MODIFIER_TYPE_IDS;
+    use super::super::test_support::*;
+    use super::super::*;
+    use crate::command::Command;
+    use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
+    use manifold_core::effect_graph_def::{
+        GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    };
 
     fn plain_node(id: u32, handle: &str, type_id: &str) -> EffectGraphNode {
         EffectGraphNode {
@@ -553,7 +593,12 @@ mod tests {
         }
         let scene_object_id = 90;
         let scene_object = plain_node(scene_object_id, "Hero", "node.scene_object");
-        body_wires.push(scene_build_wire(prev.0, &prev.1, scene_object_id, "vertices"));
+        body_wires.push(scene_build_wire(
+            prev.0,
+            &prev.1,
+            scene_object_id,
+            "vertices",
+        ));
         body_nodes.push(scene_object);
 
         let mut out_node = plain_node(99, "out", GROUP_OUTPUT_TYPE_ID);
@@ -577,7 +622,10 @@ mod tests {
         }));
 
         let mut render = plain_node(0, "render", "node.render_scene");
-        render.params.insert("objects".to_string(), SerializedParamValue::Float { value: 1.0 });
+        render.params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Float { value: 1.0 },
+        );
 
         EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
@@ -637,7 +685,10 @@ mod tests {
 
         let scene_object = plain_node(90, "Hero", "node.scene_object");
         let mut render = plain_node(0, "render", "node.render_scene");
-        render.params.insert("objects".to_string(), SerializedParamValue::Float { value: 1.0 });
+        render.params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Float { value: 1.0 },
+        );
 
         EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
@@ -660,7 +711,11 @@ mod tests {
     fn wrap_in_outer_group(def: EffectGraphDef, outer_id: u32) -> EffectGraphDef {
         let mut outer = plain_node(outer_id, "Outer", GROUP_TYPE_ID);
         outer.group = Some(Box::new(GroupDef {
-            interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: Vec::new(),
+            },
             nodes: def.nodes,
             wires: def.wires,
             tint: None,
@@ -694,8 +749,15 @@ mod tests {
             nodes = &body.nodes;
             wires = &body.wires;
         }
-        let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().id;
-        let scene_object_id = wires.iter().find(|w| w.to_node == out_id && w.to_port == "object").map(|w| w.from_node);
+        let out_id = nodes
+            .iter()
+            .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+            .unwrap()
+            .id;
+        let scene_object_id = wires
+            .iter()
+            .find(|w| w.to_node == out_id && w.to_port == "object")
+            .map(|w| w.from_node);
         let anchor = scene_object_id.unwrap_or(out_id);
         let mut chain = Vec::new();
         let mut cursor = wires
@@ -736,12 +798,26 @@ mod tests {
         let def = graph_of(&project, &fx);
         let ids = modifier_ids_in_wire_order(def, &[1]);
         assert_eq!(ids.len(), 1);
-        let inserted = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap().nodes.iter().find(|n| n.id == ids[0]).unwrap();
+        let inserted = def
+            .nodes
+            .iter()
+            .find(|n| n.id == 1)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == ids[0])
+            .unwrap();
         assert_eq!(inserted.type_id, "node.bend_mesh");
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair)");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-insert graph exactly (inverse-pair)"
+        );
     }
 
     /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `InsertMeshModifierCommand`
@@ -774,10 +850,24 @@ mod tests {
             let def = graph_of(project, &fx);
             let ids = modifier_ids_in_wire_order(def, &[1]);
             assert_eq!(ids.len(), 1);
-            let inserted = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap().nodes.iter().find(|n| n.id == ids[0]).unwrap();
+            let inserted = def
+                .nodes
+                .iter()
+                .find(|n| n.id == 1)
+                .unwrap()
+                .group
+                .as_deref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.id == ids[0])
+                .unwrap();
             assert_eq!(inserted.type_id, "node.bend_mesh");
 
-            let meta = def.preset_metadata.as_ref().expect("P1 stamped into top-level preset_metadata");
+            let meta = def
+                .preset_metadata
+                .as_ref()
+                .expect("P1 stamped into top-level preset_metadata");
             assert_eq!(meta.params.len(), 1);
             assert_eq!(
                 meta.params[0].section.as_deref(),
@@ -798,7 +888,10 @@ mod tests {
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert!(def.preset_metadata.is_none(), "undo restores the pre-insert (empty) preset_metadata verbatim");
+        assert!(
+            def.preset_metadata.is_none(),
+            "undo restores the pre-insert (empty) preset_metadata verbatim"
+        );
 
         cmd.execute(&mut project); // redo
         assert_stamped(&project);
@@ -828,19 +921,40 @@ mod tests {
 
         let def = graph_of(&project, &fx);
         let ids = modifier_ids_in_wire_order(def, &[1]);
-        assert_eq!(ids.len(), 1, "the migrated shape's group output still gains the modifier");
-        let inserted = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap().nodes.iter().find(|n| n.id == ids[0]).unwrap();
+        assert_eq!(
+            ids.len(),
+            1,
+            "the migrated shape's group output still gains the modifier"
+        );
+        let inserted = def
+            .nodes
+            .iter()
+            .find(|n| n.id == 1)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == ids[0])
+            .unwrap();
         assert_eq!(inserted.type_id, "node.bend_mesh");
         // The root-level scene_object (id 90) is untouched — its own
         // `vertices` wire still comes straight from the group's boundary.
         assert!(
-            def.wires.iter().any(|w| w.from_node == 1 && w.from_port == "vertices" && w.to_node == 90 && w.to_port == "vertices"),
+            def.wires.iter().any(|w| w.from_node == 1
+                && w.from_port == "vertices"
+                && w.to_node == 90
+                && w.to_port == "vertices"),
             "scene_object still wired directly from the group's vertices boundary"
         );
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair), migrated shape");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-insert graph exactly (inverse-pair), migrated shape"
+        );
     }
 
     /// Companion to the insert gate above: Remove/Move on the migrated shape
@@ -848,8 +962,11 @@ mod tests {
     /// scene_object input.
     #[test]
     fn remove_and_move_modifier_on_migrated_shape_splice_at_group_output_and_undo_restores() {
-        let (mut project, fx) =
-            project_with_graph(migrated_object_group_scene(&["node.bend_mesh", "node.twist_mesh", "node.taper_mesh"]));
+        let (mut project, fx) = project_with_graph(migrated_object_group_scene(&[
+            "node.bend_mesh",
+            "node.twist_mesh",
+            "node.taper_mesh",
+        ]));
         let before = graph_of(&project, &fx).clone();
         let ids0 = modifier_ids_in_wire_order(&before, &[1]); // [bend, twist, taper]
 
@@ -862,9 +979,16 @@ mod tests {
         );
         remove_cmd.execute(&mut project);
         let after_remove = graph_of(&project, &fx);
-        assert_eq!(modifier_ids_in_wire_order(after_remove, &[1]), vec![ids0[0], ids0[2]]);
+        assert_eq!(
+            modifier_ids_in_wire_order(after_remove, &[1]),
+            vec![ids0[0], ids0[2]]
+        );
         remove_cmd.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &before, "undo restores after removing the middle, migrated shape");
+        assert_eq!(
+            graph_of(&project, &fx),
+            &before,
+            "undo restores after removing the middle, migrated shape"
+        );
 
         let mut move_cmd = MoveMeshModifierCommand::new(
             GraphTarget::Effect(fx.clone()),
@@ -882,7 +1006,11 @@ mod tests {
             "taper moved to the front, migrated shape"
         );
         move_cmd.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &before, "undo restores after the move, migrated shape");
+        assert_eq!(
+            graph_of(&project, &fx),
+            &before,
+            "undo restores after the move, migrated shape"
+        );
     }
 
     #[test]
@@ -904,20 +1032,37 @@ mod tests {
         let def = graph_of(&project, &fx);
         let ids = modifier_ids_in_wire_order(def, &[1]);
         assert_eq!(ids.len(), 2, "one existing + one inserted");
-        let group = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap();
+        let group = def
+            .nodes
+            .iter()
+            .find(|n| n.id == 1)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
         let first = group.nodes.iter().find(|n| n.id == ids[0]).unwrap();
         let second = group.nodes.iter().find(|n| n.id == ids[1]).unwrap();
-        assert_eq!(first.type_id, "node.bend_mesh", "position 0 = just after the mesh source");
-        assert_eq!(second.type_id, "node.twist_mesh", "the pre-existing modifier now sits second");
+        assert_eq!(
+            first.type_id, "node.bend_mesh",
+            "position 0 = just after the mesh source"
+        );
+        assert_eq!(
+            second.type_id, "node.twist_mesh",
+            "the pre-existing modifier now sits second"
+        );
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair)");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-insert graph exactly (inverse-pair)"
+        );
     }
 
     #[test]
     fn insert_modifier_default_position_appends_at_the_end() {
-        let (mut project, fx) = project_with_graph(object_group_scene(&["node.twist_mesh", "node.taper_mesh"]));
+        let (mut project, fx) =
+            project_with_graph(object_group_scene(&["node.twist_mesh", "node.taper_mesh"]));
         let before = graph_of(&project, &fx).clone();
 
         let mut cmd = InsertMeshModifierCommand::new(
@@ -934,20 +1079,34 @@ mod tests {
         let def = graph_of(&project, &fx);
         let ids = modifier_ids_in_wire_order(def, &[1]);
         assert_eq!(ids.len(), 3);
-        let group = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap();
+        let group = def
+            .nodes
+            .iter()
+            .find(|n| n.id == 1)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
         let last = group.nodes.iter().find(|n| n.id == ids[2]).unwrap();
-        assert_eq!(last.type_id, "node.bend_mesh", "no position = end of stack, just before the group output");
+        assert_eq!(
+            last.type_id, "node.bend_mesh",
+            "no position = end of stack, just before the group output"
+        );
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair)");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-insert graph exactly (inverse-pair)"
+        );
     }
 
     #[test]
     fn insert_modifier_in_nested_group_composes_scope_path() {
         // The object's own group (id 1) now lives at scope_path [50] instead
         // of root — proves `full_modifier_scope` composes two hops.
-        let (mut project, fx) = project_with_graph(wrap_in_outer_group(object_group_scene(&[]), 50));
+        let (mut project, fx) =
+            project_with_graph(wrap_in_outer_group(object_group_scene(&[]), 50));
         let before = graph_of(&project, &fx).clone();
 
         let mut cmd = InsertMeshModifierCommand::new(
@@ -967,7 +1126,10 @@ mod tests {
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair), nested case");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-insert graph exactly (inverse-pair), nested case"
+        );
     }
 
     #[test]
@@ -995,13 +1157,19 @@ mod tests {
         cmd.execute(&mut project);
 
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "an unparseable chain is refused — no node pushed, no wires touched");
+        assert_eq!(
+            def, &before,
+            "an unparseable chain is refused — no node pushed, no wires touched"
+        );
     }
 
     #[test]
     fn remove_modifier_middle_of_stack_rejoins_wire_and_undo_restores() {
-        let (mut project, fx) =
-            project_with_graph(object_group_scene(&["node.bend_mesh", "node.twist_mesh", "node.taper_mesh"]));
+        let (mut project, fx) = project_with_graph(object_group_scene(&[
+            "node.bend_mesh",
+            "node.twist_mesh",
+            "node.taper_mesh",
+        ]));
         let before = graph_of(&project, &fx).clone();
         let middle_id = modifier_ids_in_wire_order(&before, &[1])[1];
 
@@ -1018,8 +1186,18 @@ mod tests {
         let ids = modifier_ids_in_wire_order(def, &[1]);
         assert_eq!(ids.len(), 2, "the middle modifier is gone");
         assert!(!ids.contains(&middle_id));
-        let group = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap();
-        assert!(!group.nodes.iter().any(|n| n.id == middle_id), "the node itself is deleted");
+        let group = def
+            .nodes
+            .iter()
+            .find(|n| n.id == 1)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
+        assert!(
+            !group.nodes.iter().any(|n| n.id == middle_id),
+            "the node itself is deleted"
+        );
         assert_eq!(
             group.nodes.iter().find(|n| n.id == ids[0]).unwrap().type_id,
             "node.bend_mesh"
@@ -1032,12 +1210,16 @@ mod tests {
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-remove graph exactly (inverse-pair)");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-remove graph exactly (inverse-pair)"
+        );
     }
 
     #[test]
     fn remove_modifier_at_first_and_last_positions_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(object_group_scene(&["node.bend_mesh", "node.twist_mesh"]));
+        let (mut project, fx) =
+            project_with_graph(object_group_scene(&["node.bend_mesh", "node.twist_mesh"]));
         let before = graph_of(&project, &fx).clone();
         let ids0 = modifier_ids_in_wire_order(&before, &[1]);
 
@@ -1053,7 +1235,11 @@ mod tests {
         let after_first = graph_of(&project, &fx);
         assert_eq!(modifier_ids_in_wire_order(after_first, &[1]), vec![ids0[1]]);
         cmd_first.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &before, "undo restores after removing the first");
+        assert_eq!(
+            graph_of(&project, &fx),
+            &before,
+            "undo restores after removing the first"
+        );
 
         // Remove the LAST modifier — its predecessor must now feed group_output directly.
         let mut cmd_last = RemoveMeshModifierCommand::new(
@@ -1067,13 +1253,20 @@ mod tests {
         let after_last = graph_of(&project, &fx);
         assert_eq!(modifier_ids_in_wire_order(after_last, &[1]), vec![ids0[0]]);
         cmd_last.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &before, "undo restores after removing the last");
+        assert_eq!(
+            graph_of(&project, &fx),
+            &before,
+            "undo restores after removing the last"
+        );
     }
 
     #[test]
     fn move_modifier_reorders_stack_and_undo_restores() {
-        let (mut project, fx) =
-            project_with_graph(object_group_scene(&["node.bend_mesh", "node.twist_mesh", "node.taper_mesh"]));
+        let (mut project, fx) = project_with_graph(object_group_scene(&[
+            "node.bend_mesh",
+            "node.twist_mesh",
+            "node.taper_mesh",
+        ]));
         let before = graph_of(&project, &fx).clone();
         let ids0 = modifier_ids_in_wire_order(&before, &[1]); // [bend, twist, taper]
 
@@ -1090,16 +1283,24 @@ mod tests {
 
         let def = graph_of(&project, &fx);
         let ids1 = modifier_ids_in_wire_order(def, &[1]);
-        assert_eq!(ids1, vec![ids0[2], ids0[0], ids0[1]], "taper moved to the front, bend/twist shift down");
+        assert_eq!(
+            ids1,
+            vec![ids0[2], ids0[0], ids0[1]],
+            "taper moved to the front, bend/twist shift down"
+        );
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-move graph exactly (inverse-pair)");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-move graph exactly (inverse-pair)"
+        );
     }
 
     #[test]
     fn move_modifier_to_the_end_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(object_group_scene(&["node.bend_mesh", "node.twist_mesh"]));
+        let (mut project, fx) =
+            project_with_graph(object_group_scene(&["node.bend_mesh", "node.twist_mesh"]));
         let before = graph_of(&project, &fx).clone();
         let ids0 = modifier_ids_in_wire_order(&before, &[1]); // [bend, twist]
 
@@ -1115,10 +1316,16 @@ mod tests {
         cmd.execute(&mut project);
 
         let def = graph_of(&project, &fx);
-        assert_eq!(modifier_ids_in_wire_order(def, &[1]), vec![ids0[1], ids0[0]]);
+        assert_eq!(
+            modifier_ids_in_wire_order(def, &[1]),
+            vec![ids0[1], ids0[0]]
+        );
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-move graph exactly (inverse-pair)");
+        assert_eq!(
+            def, &before,
+            "undo restores the pre-move graph exactly (inverse-pair)"
+        );
     }
 }

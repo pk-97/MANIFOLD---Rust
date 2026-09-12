@@ -1,6 +1,6 @@
 //! Local recipe exposure uses the ordinary user-binding metadata and the
 //! owner's existing manifest/modulation storage.
-use super::super::scene_modifier::{InstanceLayerSnapshot, prune_instance_params};
+use super::super::{InstanceLayerSnapshot, prune_instance_params};
 use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
 use manifold_core::effects::{PresetInstance, UserParamBinding};

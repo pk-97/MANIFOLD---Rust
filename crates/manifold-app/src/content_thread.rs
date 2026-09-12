@@ -198,6 +198,9 @@ pub struct ContentThread {
     /// per-tick state construction). Rides the regular per-tick snapshot rather
     /// than a separate out-of-band send — see `UndoRedoEvent`'s doc comment.
     pub pending_undo_redo_event: Option<crate::content_state::UndoRedoEvent>,
+    /// Most recent rejected graph edit, retained until a newer rejection so
+    /// every regular snapshot carries the diagnostic to the UI.
+    pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -1438,6 +1441,7 @@ impl ContentThread {
             export_finished: None,
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
+            graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),
             ableton_session: if self.ableton_bridge.session_changed() {
                 Some(Arc::new(self.ableton_bridge.session().clone()))
             } else {

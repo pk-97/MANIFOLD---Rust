@@ -2,9 +2,11 @@
 
 <!-- index: Shared numeric, migration, UI, GPU and performance gates for scene modifier milestones; planned test names and fixture budgets. -->
 
-**Status:** APPROVED · 2026-09-12 · Codex lead · unified acceptance tests pending. Shipped photoscan evidence is recorded below; it does not qualify the future stack.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead · focused CPU and synthetic migration proofs retained; Peter confirmed Elastic Sculpture renders and LFOs work in the release app. Current completion uses focused CPU checks and static review; automated playback/performance qualification is deferred by explicit request.
 **Prerequisites:** Each tested phase's implementation. This document itself requires only reference/diff checks.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8, with current AGENTS.md bounded-check and reporting rules taking precedence over older broad-sweep instructions.
+
+**Current scope (Peter, September 12):** “4 - do a static analysis and review instead of a full set of system tests”. Complete shared card interactions, honest preset state and the Surface Peel clip-hit catalog variation. Review stable targeting, undo/persistence, event ownership and hot paths; run focused CPU checks/clippy. Do not repeat native journeys, performance probes or full-system sweeps. Peter supplies in-app interaction and visual feedback. The qualification prescriptions below describe future evidence, not additional work authorised for this pass. Prior black automated baselines remain an unisolated harness/runtime issue; they do not override Peter's positive release-app observation. Required landing gates still apply if this branch is merged.
 
 ## 1. Audit
 
@@ -78,6 +80,8 @@ For M1 mesh tests, also use the existing mushroom plus a held-out static scan wi
 Run one bounded prepared sequence of 240 frames per relevant fixture, no optional soak. Report median/p95 CPU and GPU frame duration and modifier delta against the same base scene. Proposed acceptance: total measured CPU content-frame time ≤20 ms for every steady-state frame, p95 total GPU frame ≤16.67 ms on the designated 60 Hz setup, and p95 added GPU cost ≤2 ms for the dense wave fixture. Photoscan results report each modifier and the three-stage stack against the same scan baseline, within the total-frame and memory ceilings; do not infer their cost from the wave. Preparation frames are separate; no hiding first live cold touches as preparation. If the baseline exceeds budget, stop and record an inconclusive base/environment result. Do not lower quality/count invisibly to obtain green.
 
 These budgets deliberately make throughput falsifiable. Failure returns to the lead to reduce published supported scope or change the implementation; changing a budget requires an explicit contract edit with measurement evidence. RT and large photoscans are measured separately; the tetrahedron result does not establish their throughput.
+
+**September 12 admission finding:** the supplied mushroom has 644,504 triangles, above the proposed 250,000-triangle qualification ceiling. Its full-scene Elastic instance needs 247,489,536 additional prepared bytes; two need 494,979,072 and exceed the unchanged 268,435,456-byte cap. Admission now checks the shared pure array-allocation plan before publishing an edit; the oversize rejection preserves project, versions and undo history. Two Surface Peel instances fit the same memory cap as one Elastic. This supported duplicate test does not qualify the three-look stack or change any ceiling. The native baseline output gate failed before modifier performance cases; empty-output timing numbers are not scan throughput evidence. BUG-e3p6.5 retains the release gap.
 
 Use `MANIFOLD_RENDER_TRACE=1` for new content-thread work. Respect current GPU diagnostics and resource retirement; no global waits added merely to make tests pass. Asset preparation compiles/allocates ahead of performance. New runtime fields remain skipped from serialization.
 

@@ -257,11 +257,15 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenRtQualityResDropdown { .. }
             | RootAction::OpenRtQualityDenoiseDropdown { .. }
             | RootAction::SceneSetupAddModifierClicked(..)
+            | RootAction::SceneModifierObjectsClicked(..)
+            | RootAction::SceneModifierCardRightClicked(..)
+            | RootAction::PreviewSceneModifierObject(..)
             | RootAction::SceneSetupSkinSourceClicked { .. }
             | RootAction::SceneSetupSkinTargetMapClicked { .. }
             | RootAction::AudioSendGainBeginTextInput(..)
             | RootAction::CopyOscAddress(_)
             | RootAction::OpenGraphEditor(_)
+            | RootAction::OpenGraphTarget(_)
             | RootAction::OpenCardMapping { .. }
             | RootAction::OpenGeneratorGraphEditor
             | RootAction::SceneSetupOpenGraphEditor(_)

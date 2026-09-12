@@ -422,6 +422,7 @@ pub struct Application {
     /// duplicate `SetGraphPreviewNode` commands each frame. `None` = nothing
     /// previewed (editor closed or multi/zero selection).
     pub(crate) last_preview_node: Option<manifold_core::NodeId>,
+    pub(crate) modifier_preview_object: Option<(manifold_core::GraphTarget, manifold_core::scene_modifier_preset::SceneNodeRef)>,
     pub(crate) last_modifier_preview_context: Option<(Vec<manifold_core::NodeId>, Option<manifold_core::scene_modifier_preset::SceneNodeRef>)>,
     pub(crate) last_modifier_preview_selection: Option<(std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>, Vec<u32>, Option<u32>)>,
     /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
@@ -588,6 +589,7 @@ impl Application {
             internal_clipboard_change_count: None,
             content_pipeline_output: None,
             last_preview_node: None,
+            modifier_preview_object: None,
             last_modifier_preview_context: None,
             last_modifier_preview_selection: None,
             #[cfg(target_os = "macos")]
@@ -2568,6 +2570,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // No project is live at construction, so no forks yet.
                 embedded_presets_fingerprint: 0,
                 pending_undo_redo_event: None,
+                graph_edit_diagnostic: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };

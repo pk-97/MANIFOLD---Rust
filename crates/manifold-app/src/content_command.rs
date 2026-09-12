@@ -19,6 +19,11 @@ pub enum ContentCommand {
 
     // ── Editing (commands cross thread boundary) ───────────────────
     Execute(Box<dyn Command + Send>),
+    /// An unexecuted command; UI snapshots wait for content publication. Unlike
+    /// legacy optimistic Execute producers, headless UI must execute this too.
+    ExecuteOnContent(Box<dyn Command + Send>),
+    SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
+    GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
     Undo,
     Redo,

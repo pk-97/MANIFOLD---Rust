@@ -4,13 +4,15 @@
 //! performs the project transaction and keeps the generator's other live
 //! parameter state reversible.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_edit::{
-    SceneModifierEditError, SceneModifierGraphEdit, delete_scene_modifier, insert_scene_modifier,
-    move_scene_modifier, retarget_scene_modifier, set_scene_modifier_preparation_param,
+    SceneModifierEditError, SceneModifierGraphEdit, delete_scene_modifier,
+    duplicate_scene_modifiers, insert_scene_modifier, move_scene_modifier, remove_scene_modifiers,
+    reorder_scene_modifiers, retarget_scene_modifier, set_scene_modifier_preparation_param,
 };
 use manifold_core::scene_modifier_preset::{
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
@@ -19,7 +21,57 @@ use manifold_core::{GraphTarget, NodeId, PresetTypeId};
 
 use crate::command::Command;
 
-use super::scene_modifier::{InstanceLayerSnapshot, prune_instance_params};
+use super::{InstanceLayerSnapshot, prune_instance_params};
+
+/// Copy every host-side value and modulation entry addressed by a source
+/// modifier macro. The graph candidate has already minted the destination
+/// metadata; this keeps duplication's runtime state in the same transaction.
+fn duplicate_runtime_parameter_state(
+    host: &mut manifold_core::effects::PresetInstance,
+    remaps: &[(String, String)],
+) {
+    let params: Vec<_> = remaps
+        .iter()
+        .filter_map(|(source, destination)| {
+            host.params.get(source).map(|param| {
+                let mut copy = param.clone();
+                copy.spec.id = destination.clone();
+                copy
+            })
+        })
+        .collect();
+    for param in params {
+        if !host.params.contains(param.id()) {
+            host.params.push(param);
+        }
+    }
+
+    macro_rules! duplicate_entries {
+        ($field:ident) => {
+            if let Some(entries) = host.$field.as_mut() {
+                let copies: Vec<_> = remaps
+                    .iter()
+                    .filter_map(|(source, destination)| {
+                        entries
+                            .iter()
+                            .find(|entry| entry.param_id.as_ref() == source)
+                            .map(|entry| {
+                                let mut copy = entry.clone();
+                                copy.param_id = Cow::Owned(destination.clone());
+                                copy
+                            })
+                    })
+                    .collect();
+                entries.extend(copies);
+            }
+        };
+    }
+    duplicate_entries!(drivers);
+    duplicate_entries!(envelopes);
+    duplicate_entries!(ableton_mappings);
+    duplicate_entries!(audio_mods);
+    duplicate_entries!(automation_lanes);
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SceneModifierStackError {
@@ -70,6 +122,7 @@ struct StackTransaction {
     before_resolved: EffectGraphDef,
     candidate: EffectGraphDef,
     removed_param_ids: Vec<String>,
+    parameter_id_remaps: Vec<(String, String)>,
     previous_layer: Option<InstanceLayerSnapshot>,
     applied: bool,
     last_error: Option<SceneModifierStackError>,
@@ -105,6 +158,7 @@ impl StackTransaction {
             before_resolved,
             candidate: result.graph,
             removed_param_ids: result.removed_param_ids,
+            parameter_id_remaps: result.parameter_id_remaps,
             previous_layer: None,
             applied: false,
             last_error: None,
@@ -114,6 +168,26 @@ impl StackTransaction {
 
     fn prepared_graph(&self) -> &EffectGraphDef {
         &self.candidate
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        match self.last_error.as_ref()? {
+            SceneModifierStackError::Noop => None,
+            SceneModifierStackError::UnsupportedOwner => {
+                Some("Scene modifiers require a generator owner")
+            }
+            SceneModifierStackError::MissingOwner => Some("Generator owner is no longer present"),
+            SceneModifierStackError::MissingOwnerGraph => {
+                Some("Generator graph no longer resolves")
+            }
+            SceneModifierStackError::GeneratorTypeChanged => {
+                Some("Generator type changed while preparing this edit")
+            }
+            SceneModifierStackError::StaleOwner => {
+                Some("Generator graph changed while preparing this edit")
+            }
+            SceneModifierStackError::Pure(_) => Some("Scene modifier graph edit is invalid"),
+        }
     }
 
     fn reject(&mut self, error: SceneModifierStackError) {
@@ -141,6 +215,7 @@ impl StackTransaction {
         if self.previous_layer.is_none() {
             self.previous_layer = Some(InstanceLayerSnapshot::capture(host));
         }
+        duplicate_runtime_parameter_state(host, &self.parameter_id_remaps);
         let metadata_changed =
             self.before_resolved.preset_metadata != self.candidate.preset_metadata;
         host.graph = Some(self.candidate.clone());
@@ -219,6 +294,10 @@ impl InsertSceneModifierCommand {
 }
 
 impl Command for InsertSceneModifierCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -230,6 +309,9 @@ impl Command for InsertSceneModifierCommand {
     }
     fn was_applied(&self) -> bool {
         self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
     }
 }
 
@@ -266,6 +348,10 @@ impl DeleteSceneModifierCommand {
 }
 
 impl Command for DeleteSceneModifierCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -277,6 +363,169 @@ impl Command for DeleteSceneModifierCommand {
     }
     fn was_applied(&self) -> bool {
         self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
+    }
+}
+
+/// Replace the complete prepared modifier stack order in one transaction.
+#[derive(Debug)]
+pub struct ReorderSceneModifiersCommand {
+    transaction: StackTransaction,
+}
+
+impl ReorderSceneModifiersCommand {
+    pub fn new(
+        project: &Project,
+        owner: GraphTarget,
+        owner_default: &EffectGraphDef,
+        order: Vec<NodeId>,
+    ) -> Result<Self, SceneModifierStackError> {
+        Ok(Self {
+            transaction: StackTransaction::prepare(
+                project,
+                owner,
+                owner_default,
+                "Reorder Scene Modifiers",
+                move |graph| reorder_scene_modifiers(graph, &order),
+            )?,
+        })
+    }
+
+    pub fn prepared_graph(&self) -> &EffectGraphDef {
+        self.transaction.prepared_graph()
+    }
+    pub fn error(&self) -> Option<&SceneModifierStackError> {
+        self.transaction.error()
+    }
+}
+
+impl Command for ReorderSceneModifiersCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+    fn execute(&mut self, project: &mut Project) {
+        self.transaction.execute(project);
+    }
+    fn undo(&mut self, project: &mut Project) {
+        self.transaction.undo(project);
+    }
+    fn description(&self) -> &str {
+        self.transaction.description
+    }
+    fn was_applied(&self) -> bool {
+        self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
+    }
+}
+
+/// Duplicate a selected block of prepared modifiers with independent host
+/// parameter identities and copied runtime controls.
+#[derive(Debug)]
+pub struct DuplicateSceneModifiersCommand {
+    transaction: StackTransaction,
+}
+
+impl DuplicateSceneModifiersCommand {
+    pub fn new(
+        project: &Project,
+        owner: GraphTarget,
+        owner_default: &EffectGraphDef,
+        selected: Vec<NodeId>,
+    ) -> Result<Self, SceneModifierStackError> {
+        Ok(Self {
+            transaction: StackTransaction::prepare(
+                project,
+                owner,
+                owner_default,
+                "Duplicate Scene Modifiers",
+                move |graph| duplicate_scene_modifiers(graph, &selected),
+            )?,
+        })
+    }
+
+    pub fn prepared_graph(&self) -> &EffectGraphDef {
+        self.transaction.prepared_graph()
+    }
+    pub fn error(&self) -> Option<&SceneModifierStackError> {
+        self.transaction.error()
+    }
+}
+
+impl Command for DuplicateSceneModifiersCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+    fn execute(&mut self, project: &mut Project) {
+        self.transaction.execute(project);
+    }
+    fn undo(&mut self, project: &mut Project) {
+        self.transaction.undo(project);
+    }
+    fn description(&self) -> &str {
+        self.transaction.description
+    }
+    fn was_applied(&self) -> bool {
+        self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
+    }
+}
+
+/// Remove several modifiers as one atomic, undoable graph edit.
+#[derive(Debug)]
+pub struct RemoveSceneModifiersCommand {
+    transaction: StackTransaction,
+}
+
+impl RemoveSceneModifiersCommand {
+    pub fn new(
+        project: &Project,
+        owner: GraphTarget,
+        owner_default: &EffectGraphDef,
+        selected: Vec<NodeId>,
+    ) -> Result<Self, SceneModifierStackError> {
+        Ok(Self {
+            transaction: StackTransaction::prepare(
+                project,
+                owner,
+                owner_default,
+                "Remove Scene Modifiers",
+                move |graph| remove_scene_modifiers(graph, &selected),
+            )?,
+        })
+    }
+
+    pub fn prepared_graph(&self) -> &EffectGraphDef {
+        self.transaction.prepared_graph()
+    }
+    pub fn error(&self) -> Option<&SceneModifierStackError> {
+        self.transaction.error()
+    }
+}
+
+impl Command for RemoveSceneModifiersCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+    fn execute(&mut self, project: &mut Project) {
+        self.transaction.execute(project);
+    }
+    fn undo(&mut self, project: &mut Project) {
+        self.transaction.undo(project);
+    }
+    fn description(&self) -> &str {
+        self.transaction.description
+    }
+    fn was_applied(&self) -> bool {
+        self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
     }
 }
 
@@ -314,6 +563,10 @@ impl MoveSceneModifierCommand {
 }
 
 impl Command for MoveSceneModifierCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -325,6 +578,9 @@ impl Command for MoveSceneModifierCommand {
     }
     fn was_applied(&self) -> bool {
         self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
     }
 }
 
@@ -364,6 +620,10 @@ impl RetargetSceneModifierCommand {
 }
 
 impl Command for RetargetSceneModifierCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -375,6 +635,9 @@ impl Command for RetargetSceneModifierCommand {
     }
     fn was_applied(&self) -> bool {
         self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
     }
 }
 
@@ -416,6 +679,10 @@ impl SetSceneModifierPreparationParamCommand {
 }
 
 impl Command for SetSceneModifierPreparationParamCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.transaction.owner.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -427,6 +694,9 @@ impl Command for SetSceneModifierPreparationParamCommand {
     }
     fn was_applied(&self) -> bool {
         self.transaction.was_applied()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.transaction.rejection_reason()
     }
 }
 
@@ -445,6 +715,7 @@ mod tests {
         AutomationLane, AutomationPoint, ParamEnvelope, ParameterDriver, SegmentShape,
     };
     use manifold_core::layer::Layer;
+    use manifold_core::params::Param;
     use manifold_core::scene_modifier_preset::SceneNodeRef;
     use manifold_core::types::{BeatDivision, DriverWaveform};
     use manifold_core::units::Beats;
@@ -542,6 +813,16 @@ mod tests {
             Cow::Owned("sceneModifier:[\"first\",\"gain\"]".to_string());
         let survivor: manifold_core::effects::ParamId =
             Cow::Owned("sceneModifier:[\"second\",\"gain\"]".to_string());
+        for id in [removed.as_ref(), survivor.as_ref()] {
+            let spec = host
+                .graph
+                .as_ref()
+                .and_then(|graph| graph.preset_metadata.as_ref())
+                .and_then(|metadata| metadata.params.iter().find(|param| param.id == id))
+                .cloned()
+                .expect("mapping fixture metadata has both modifier controls");
+            host.params.push(Param::bundled(spec));
+        }
         host.drivers = Some(vec![
             ParameterDriver {
                 param_id: removed.clone(),
@@ -846,10 +1127,37 @@ mod tests {
             0.8,
         )
         .unwrap();
-        assert_eq!(command.prepared_graph().scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.8);
+        assert_eq!(
+            command.prepared_graph().scene_modifiers[0]
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .params
+                .iter()
+                .find(|p| p.id == "gain")
+                .unwrap()
+                .default_value,
+            0.8
+        );
         command.execute(&mut project);
         assert!(command.was_applied());
-        assert_eq!(project.graph_for_target(&target, Some(&default)).unwrap().scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.8);
+        assert_eq!(
+            project
+                .graph_for_target(&target, Some(&default))
+                .unwrap()
+                .scene_modifiers[0]
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .params
+                .iter()
+                .find(|p| p.id == "gain")
+                .unwrap()
+                .default_value,
+            0.8
+        );
         command.undo(&mut project);
         assert!(!command.was_applied());
         assert_eq!(project.graph_target_owner(&target).unwrap().graph, before);
@@ -1028,5 +1336,144 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["second", "first"]
         );
+    }
+
+    #[test]
+    fn scene_modifier_stack_duplicate_copies_controls_and_remove_roundtrips() {
+        let default = owner_default();
+        let graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+            &manifold_core::scene_modifier_edit::insert_scene_modifier(
+                &default,
+                0,
+                modifier("first"),
+            )
+            .unwrap()
+            .graph,
+            1,
+            modifier("second"),
+        )
+        .unwrap()
+        .graph;
+        let (mut project, target, default) = project_with_graph(Some(graph));
+        mapping_fixture(&mut project, &target);
+        let before = instance_state(project.graph_target_owner(&target).unwrap());
+
+        let mut duplicate = DuplicateSceneModifiersCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            vec![NodeId::new("first")],
+        )
+        .unwrap();
+        duplicate.execute(&mut project);
+        assert!(duplicate.was_applied());
+        let graph = project.graph_for_target(&target, Some(&default)).unwrap();
+        assert_eq!(graph.scene_modifiers.len(), 3);
+        assert_eq!(graph.scene_modifiers[0].id, NodeId::new("first"));
+        assert_eq!(graph.scene_modifiers[2].id, NodeId::new("second"));
+        let copy_id = graph.scene_modifiers[1].id.clone();
+        assert_ne!(copy_id, NodeId::new("first"));
+        let old_id = "sceneModifier:[\"first\",\"gain\"]";
+        let new_id = format!("sceneModifier:[\"{copy_id}\",\"gain\"]");
+        let host = project.graph_target_owner(&target).unwrap();
+        assert_eq!(
+            host.params.get(old_id).unwrap().base,
+            host.params.get(&new_id).unwrap().base
+        );
+        assert_eq!(
+            host.params.get(old_id).unwrap().value,
+            host.params.get(&new_id).unwrap().value
+        );
+        assert!(
+            host.drivers
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|driver| driver.param_id.as_ref() == new_id)
+        );
+        assert!(
+            host.envelopes
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|envelope| envelope.param_id.as_ref() == new_id)
+        );
+        assert!(
+            host.ableton_mappings
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|mapping| mapping.param_id.as_ref() == new_id)
+        );
+        assert!(
+            host.audio_mods
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|audio| audio.param_id.as_ref() == new_id)
+        );
+        assert!(
+            host.automation_lanes
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|lane| lane.param_id.as_ref() == new_id)
+        );
+
+        duplicate.undo(&mut project);
+        assert!(!duplicate.was_applied());
+        assert_eq!(
+            instance_state(project.graph_target_owner(&target).unwrap()),
+            before
+        );
+
+        let mut remove = RemoveSceneModifiersCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            vec![NodeId::new("first"), NodeId::new("second")],
+        )
+        .unwrap();
+        remove.execute(&mut project);
+        assert!(remove.was_applied());
+        assert_eq!(
+            project
+                .graph_for_target(&target, Some(&default))
+                .unwrap()
+                .scene_modifiers
+                .len(),
+            0
+        );
+        remove.undo(&mut project);
+        assert_eq!(
+            project
+                .graph_for_target(&target, Some(&default))
+                .unwrap()
+                .scene_modifiers
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn scene_modifier_stack_reorder_rejects_stale_order_without_mutation() {
+        let default = owner_default();
+        let graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+            &default,
+            0,
+            modifier("first"),
+        )
+        .unwrap()
+        .graph;
+        let (project, target, default) = project_with_graph(Some(graph));
+        let before = project.graph_target_owner(&target).unwrap().graph.clone();
+        let command = ReorderSceneModifiersCommand::new(
+            &project,
+            target.clone(),
+            &default,
+            vec![NodeId::new("missing")],
+        );
+        assert!(matches!(command, Err(SceneModifierStackError::Pure(_))));
+        assert_eq!(project.graph_target_owner(&target).unwrap().graph, before);
     }
 }

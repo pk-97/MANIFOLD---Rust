@@ -1,3 +1,4 @@
+use manifold_core::GraphTarget;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use std::fmt::Debug;
@@ -7,6 +8,15 @@ pub trait Command: Debug + Send {
     fn execute(&mut self, project: &mut Project);
     fn undo(&mut self, project: &mut Project);
     fn description(&self) -> &str;
+    /// Append graph owners whose structural edits require canonical admission.
+    /// Live value writes intentionally leave this empty.
+    fn graph_admission_targets(&self, _targets: &mut Vec<GraphTarget>) {}
+    /// Clip-scoped source edits resolve their generator owner at execution.
+    fn graph_admission_clips(&self, _clips: &mut Vec<manifold_core::ClipId>) {}
+    /// Optional stable diagnostic when execution or admission was rejected.
+    fn rejection_reason(&self) -> Option<&str> {
+        None
+    }
     /// Commands that can reject a stale prepared edit report whether execute
     /// actually changed the project. Existing commands retain their behavior.
     fn was_applied(&self) -> bool {
@@ -29,6 +39,7 @@ pub trait LayerLifecycleCallbacks {
 pub struct CompositeCommand {
     commands: Vec<Box<dyn Command>>,
     desc: String,
+    rejection: Option<String>,
 }
 
 impl CompositeCommand {
@@ -36,18 +47,34 @@ impl CompositeCommand {
         Self {
             commands,
             desc: description,
+            rejection: None,
         }
     }
 }
 
 impl Command for CompositeCommand {
     fn execute(&mut self, project: &mut Project) {
-        for cmd in &mut self.commands {
-            cmd.execute(project);
+        self.rejection = None;
+        for index in 0..self.commands.len() {
+            self.commands[index].execute(project);
+            if let Some(reason) = self.commands[index].rejection_reason() {
+                self.rejection = Some(reason.to_string());
+                for previous in self.commands[..index]
+                    .iter_mut()
+                    .rev()
+                    .filter(|command| command.was_applied())
+                {
+                    previous.undo(project);
+                }
+                return;
+            }
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if self.rejection.is_some() {
+            return;
+        }
         for cmd in self
             .commands
             .iter_mut()
@@ -62,14 +89,58 @@ impl Command for CompositeCommand {
         &self.desc
     }
 
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        for command in &self.commands {
+            command.graph_admission_targets(targets);
+        }
+    }
+
+    fn graph_admission_clips(&self, clips: &mut Vec<manifold_core::ClipId>) {
+        for command in &self.commands {
+            command.graph_admission_clips(clips);
+        }
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
+
     fn was_applied(&self) -> bool {
-        self.commands.iter().any(|command| command.was_applied())
+        self.rejection.is_none() && self.commands.iter().any(|command| command.was_applied())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct TargetCommand(GraphTarget);
+
+    impl Command for TargetCommand {
+        fn execute(&mut self, _project: &mut Project) {}
+        fn undo(&mut self, _project: &mut Project) {}
+        fn description(&self) -> &str {
+            "Target"
+        }
+        fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+            targets.push(self.0.clone());
+        }
+    }
+
+    #[derive(Debug)]
+    struct ReasonCommand(&'static str);
+
+    impl Command for ReasonCommand {
+        fn execute(&mut self, _project: &mut Project) {}
+        fn undo(&mut self, _project: &mut Project) {}
+        fn description(&self) -> &str {
+            "Reason"
+        }
+        fn rejection_reason(&self) -> Option<&str> {
+            Some(self.0)
+        }
+    }
 
     /// Appends `to_append` to `Project::settings.video_library_paths` (a
     /// scratch `Vec<String>` field good enough to observe ordering) on
@@ -156,5 +227,56 @@ mod tests {
         assert!(project.settings.video_library_paths.is_empty());
         cmd.undo(&mut project);
         assert!(project.settings.video_library_paths.is_empty());
+    }
+
+    #[test]
+    fn composite_forwards_graph_admission_targets() {
+        let first = GraphTarget::Generator(manifold_core::LayerId::new("first"));
+        let second = GraphTarget::Generator(manifold_core::LayerId::new("second"));
+        let command = CompositeCommand::new(
+            vec![
+                Box::new(TargetCommand(first.clone())),
+                Box::new(TargetCommand(second.clone())),
+            ],
+            "Targets".into(),
+        );
+        let mut targets = Vec::new();
+        command.graph_admission_targets(&mut targets);
+        assert_eq!(targets, vec![first, second]);
+    }
+
+    #[test]
+    fn composite_rejection_rolls_back_prior_writes_and_skips_later_children() {
+        let mut project = Project::default();
+        let mut command = CompositeCommand::new(
+            vec![
+                Box::new(AppendCommand {
+                    to_append: "before".into(),
+                }),
+                Box::new(ReasonCommand("invalid source")),
+                Box::new(AppendCommand {
+                    to_append: "after".into(),
+                }),
+            ],
+            "Atomic edit".into(),
+        );
+        command.execute(&mut project);
+        assert!(project.settings.video_library_paths.is_empty());
+        assert!(!command.was_applied());
+        command.undo(&mut project);
+        assert!(project.settings.video_library_paths.is_empty());
+    }
+
+    #[test]
+    fn composite_reports_first_child_rejection_reason() {
+        let mut command = CompositeCommand::new(
+            vec![
+                Box::new(ReasonCommand("first")),
+                Box::new(ReasonCommand("second")),
+            ],
+            "Reasons".into(),
+        );
+        command.execute(&mut Project::default());
+        assert_eq!(command.rejection_reason(), Some("first"));
     }
 }

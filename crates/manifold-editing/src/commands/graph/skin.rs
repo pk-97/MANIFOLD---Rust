@@ -125,9 +125,11 @@ fn feeds_map(
     scene_object_id: u32,
     target_map: SkinTargetMap,
 ) -> bool {
-    wires
-        .iter()
-        .any(|w| w.from_node == node_id && w.to_node == scene_object_id && w.to_port == target_map.port_name())
+    wires.iter().any(|w| {
+        w.from_node == node_id
+            && w.to_node == scene_object_id
+            && w.to_port == target_map.port_name()
+    })
 }
 
 /// Locate the existing `node.layer_source` that feeds `scene_object_id`'s
@@ -142,7 +144,9 @@ fn find_layer_source_for_map(
     source_node_id: Option<u32>,
 ) -> Option<u32> {
     if let Some(id) = source_node_id
-        && nodes.iter().any(|n| n.id == id && n.type_id == "node.layer_source")
+        && nodes
+            .iter()
+            .any(|n| n.id == id && n.type_id == "node.layer_source")
         && feeds_map(wires, id, scene_object_id, target_map)
     {
         return Some(id);
@@ -150,7 +154,11 @@ fn find_layer_source_for_map(
     wires
         .iter()
         .find(|w| w.to_node == scene_object_id && w.to_port == target_map.port_name())
-        .and_then(|w| nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.layer_source"))
+        .and_then(|w| {
+            nodes
+                .iter()
+                .find(|n| n.id == w.from_node && n.type_id == "node.layer_source")
+        })
         .map(|n| n.id)
 }
 
@@ -187,7 +195,12 @@ fn displace_other_producers(
 const MATERIAL_TYPE_IDS: [&str; 2] = ["node.pbr_material", "node.unlit_material"];
 
 /// Emission params a skin displaces to make an emissive_map actually emit.
-const EMISSION_PARAMS: [&str; 4] = ["emission_r", "emission_g", "emission_b", "emission_intensity"];
+const EMISSION_PARAMS: [&str; 4] = [
+    "emission_r",
+    "emission_g",
+    "emission_b",
+    "emission_intensity",
+];
 
 /// The pbr/unlit material node wired into `scene_object_id`'s `material` port
 /// in this level — the glTF importer's `node.pbr_material → material` wire
@@ -201,9 +214,9 @@ fn find_material_node<'a>(
         .iter()
         .find(|w| w.to_node == scene_object_id && w.to_port == "material")
         .and_then(|w| {
-            nodes.iter().find(|n| {
-                n.id == w.from_node && MATERIAL_TYPE_IDS.iter().any(|t| *t == n.type_id)
-            })
+            nodes
+                .iter()
+                .find(|n| n.id == w.from_node && MATERIAL_TYPE_IDS.iter().any(|t| *t == n.type_id))
         })
 }
 
@@ -329,13 +342,20 @@ fn restore_skin_displacement(
                     && w.to_port == port_of.port_name()
             });
             if !already {
-                wires.push(scene_build_wire(from_node, &from_port, scene_object_id, port_of.port_name()));
+                wires.push(scene_build_wire(
+                    from_node,
+                    &from_port,
+                    scene_object_id,
+                    port_of.port_name(),
+                ));
             }
         }
     }
 
     if let Some(emit_rec) = displaced_emission {
-        let mut parts = emit_rec.split(',').map(|s| s.trim().parse::<f32>().unwrap_or(0.0));
+        let mut parts = emit_rec
+            .split(',')
+            .map(|s| s.trim().parse::<f32>().unwrap_or(0.0));
         let (r, g, b, intensity) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some(r), Some(g), Some(b), intensity) => (r, g, b, intensity),
             _ => return,
@@ -343,12 +363,18 @@ fn restore_skin_displacement(
         if let Some(mat) = find_material_node(nodes, wires, scene_object_id) {
             let mat_id = mat.id;
             if let Some(mat) = nodes.iter_mut().find(|n| n.id == mat_id) {
-                mat.params
-                    .insert("emission_r".to_string(), SerializedParamValue::Float { value: r });
-                mat.params
-                    .insert("emission_g".to_string(), SerializedParamValue::Float { value: g });
-                mat.params
-                    .insert("emission_b".to_string(), SerializedParamValue::Float { value: b });
+                mat.params.insert(
+                    "emission_r".to_string(),
+                    SerializedParamValue::Float { value: r },
+                );
+                mat.params.insert(
+                    "emission_g".to_string(),
+                    SerializedParamValue::Float { value: g },
+                );
+                mat.params.insert(
+                    "emission_b".to_string(),
+                    SerializedParamValue::Float { value: b },
+                );
                 match intensity {
                     Some(i) => mat.params.insert(
                         "emission_intensity".to_string(),
@@ -382,7 +408,8 @@ fn apply_skin_source(
 ) -> bool {
     prev.replace((nodes.clone(), wires.clone()));
 
-    let existing_id = find_layer_source_for_map(nodes, wires, scene_object_id, target_map, source_node_id);
+    let existing_id =
+        find_layer_source_for_map(nodes, wires, scene_object_id, target_map, source_node_id);
 
     match source {
         None => {
@@ -390,7 +417,8 @@ fn apply_skin_source(
             // skin displaced (the baked producer + material emission).
             // `restore_skin_displacement` re-wires the recorded producer
             // into the port, which the retain below must not then remove.
-            wires.retain(|w| !(w.to_node == scene_object_id && w.to_port == target_map.port_name()));
+            wires
+                .retain(|w| !(w.to_node == scene_object_id && w.to_port == target_map.port_name()));
             if let Some(id) = existing_id {
                 restore_skin_displacement(nodes, wires, scene_object_id, target_map, id);
                 let still_used = wires.iter().any(|w| w.from_node == id);
@@ -408,7 +436,9 @@ fn apply_skin_source(
                 if let Some(node) = nodes.iter_mut().find(|n| n.id == id) {
                     node.params.insert(
                         "layer".to_string(),
-                        SerializedParamValue::String { value: layer_id.clone() },
+                        SerializedParamValue::String {
+                            value: layer_id.clone(),
+                        },
                     );
                 }
                 false
@@ -417,7 +447,9 @@ fn apply_skin_source(
                 // hint id if it still names a layer_source somewhere in this
                 // level, even if currently wired to the other map.
                 let mut reused_id = source_node_id.filter(|&id| {
-                    nodes.iter().any(|n| n.id == id && n.type_id == "node.layer_source")
+                    nodes
+                        .iter()
+                        .any(|n| n.id == id && n.type_id == "node.layer_source")
                 });
 
                 // If the reused node is wired to the other map, adding a second
@@ -428,16 +460,25 @@ fn apply_skin_source(
                     let mut params = BTreeMap::new();
                     params.insert(
                         "layer".to_string(),
-                        SerializedParamValue::String { value: layer_id.clone() },
+                        SerializedParamValue::String {
+                            value: layer_id.clone(),
+                        },
                     );
-                    nodes.push(scene_build_node(new_id, "node.layer_source", Some("Skin".to_string()), params));
+                    nodes.push(scene_build_node(
+                        new_id,
+                        "node.layer_source",
+                        Some("Skin".to_string()),
+                        params,
+                    ));
                     reused_id = Some(new_id);
                 } else if let Some(id) = reused_id {
                     // Update the existing node's layer param too.
                     if let Some(node) = nodes.iter_mut().find(|n| n.id == id) {
                         node.params.insert(
                             "layer".to_string(),
-                            SerializedParamValue::String { value: layer_id.clone() },
+                            SerializedParamValue::String {
+                                value: layer_id.clone(),
+                            },
                         );
                     }
                 }
@@ -447,14 +488,18 @@ fn apply_skin_source(
                 // glTF texture), record it for restoration, then wire the
                 // skin if not already. An emissive skin must also white the
                 // material's emission or it renders black (BUG-pxdu).
-                let displaced =
-                    displace_other_producers(wires, scene_object_id, target_map, id);
+                let displaced = displace_other_producers(wires, scene_object_id, target_map, id);
                 record_displaced_wire(nodes, id, &displaced);
                 if target_map == SkinTargetMap::Emissive {
                     apply_emissive_binding(nodes, wires, scene_object_id, id);
                 }
                 if !feeds_map(wires, id, scene_object_id, target_map) {
-                    wires.push(scene_build_wire(id, "out", scene_object_id, target_map.port_name()));
+                    wires.push(scene_build_wire(
+                        id,
+                        "out",
+                        scene_object_id,
+                        target_map.port_name(),
+                    ));
                 }
                 true
             }
@@ -469,12 +514,8 @@ impl Command for SetSceneObjectSkinSourceCommand {
         let scene_object_id = self.scene_object_id;
         let source_node_id = self.source_node_id;
         let scope = self.scope_path.clone();
-        let structural = with_target_graph_mut(
-            project,
-            &self.target,
-            &self.catalog_default,
-            true,
-            |def| {
+        let structural =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let mut local_prev = None;
                 let topology_changed = apply_skin_source(
@@ -488,10 +529,9 @@ impl Command for SetSceneObjectSkinSourceCommand {
                 );
                 self.prev = local_prev;
                 Some(topology_changed)
-            },
-        )
-        .flatten()
-        .unwrap_or(true);
+            })
+            .flatten()
+            .unwrap_or(true);
         if !structural {
             // Value-only edit: bump only the snapshot version, not structure.
             project.with_preset_graph_mut(&self.target, |host| host.bump_graph_version());
@@ -528,95 +568,109 @@ impl Command for SetSceneObjectSkinTargetMapCommand {
         let scene_object_id = self.scene_object_id;
         let source_node_id = self.source_node_id;
         let scope = self.scope_path.clone();
-        let _ = with_target_graph_mut(
-            project,
-            &self.target,
-            &self.catalog_default,
-            true,
-            |def| {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                self.prev = Some((nodes.clone(), wires.clone()));
+        let _ = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            self.prev = Some((nodes.clone(), wires.clone()));
 
-                let existing_id =
-                    find_layer_source_for_map(nodes, wires, scene_object_id, target_map, source_node_id)
-                        .or_else(|| {
-                            source_node_id.filter(|&id| {
-                                nodes.iter().any(|n| n.id == id && n.type_id == "node.layer_source")
-                            })
-                        })
-                        .or_else(|| {
-                            wires
-                                .iter()
-                                .find(|w| {
-                                    w.to_node == scene_object_id
-                                        && (w.to_port == SkinTargetMap::Emissive.port_name()
-                                            || w.to_port == SkinTargetMap::BaseColor.port_name())
-                                })
-                                .and_then(|w| {
-                                    nodes
-                                        .iter()
-                                        .find(|n| n.id == w.from_node && n.type_id == "node.layer_source")
-                                        .map(|n| n.id)
-                                })
-                        });
+            let existing_id = find_layer_source_for_map(
+                nodes,
+                wires,
+                scene_object_id,
+                target_map,
+                source_node_id,
+            )
+            .or_else(|| {
+                source_node_id.filter(|&id| {
+                    nodes
+                        .iter()
+                        .any(|n| n.id == id && n.type_id == "node.layer_source")
+                })
+            })
+            .or_else(|| {
+                wires
+                    .iter()
+                    .find(|w| {
+                        w.to_node == scene_object_id
+                            && (w.to_port == SkinTargetMap::Emissive.port_name()
+                                || w.to_port == SkinTargetMap::BaseColor.port_name())
+                    })
+                    .and_then(|w| {
+                        nodes
+                            .iter()
+                            .find(|n| n.id == w.from_node && n.type_id == "node.layer_source")
+                            .map(|n| n.id)
+                    })
+            });
 
-                if let Some(id) = existing_id {
-                    // The skin leaves its old port: remove only THIS node's
-                    // wire into the other map (the port's own producers —
-                    // e.g. a baked texture the skin displaced on arrival —
-                    // stay displaced per the ownership rule; anything that
-                    // was never the skin's stays put). Then take the
-                    // requested port as its sole producer.
-                    let other = match target_map {
-                        SkinTargetMap::Emissive => SkinTargetMap::BaseColor,
-                        SkinTargetMap::BaseColor => SkinTargetMap::Emissive,
-                    };
-                    // The skin leaves `other`: restore what it displaced there (the
-                    // port's baked producer and the material's emission), then
-                    // take the requested port as its sole producer,
-                    // displacing and recording that port's own. Only restore
-                    // if the skin actually feeds `other` — a move to the port
-                    // it already holds must not re-wire the other port's
-                    // records.
-                    if feeds_map(wires, id, scene_object_id, other) {
-                        restore_skin_displacement(nodes, wires, scene_object_id, other, id);
-                    }
-                    wires.retain(|w| {
-                        !(w.from_node == id && w.to_node == scene_object_id && w.to_port == other.port_name())
-                    });
-                    let displaced =
-                        displace_other_producers(wires, scene_object_id, target_map, id);
-                    record_displaced_wire(nodes, id, &displaced);
-                    if target_map == SkinTargetMap::Emissive {
-                        apply_emissive_binding(nodes, wires, scene_object_id, id);
-                    }
-                    if !feeds_map(wires, id, scene_object_id, target_map) {
-                        wires.push(scene_build_wire(id, "out", scene_object_id, target_map.port_name()));
-                    }
-                } else {
-                    // No existing skin: create one with an empty source layer
-                    // so the panel shows "None" / missing chip until the user
-                    // picks a source.
-                    let new_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                    let mut params = BTreeMap::new();
-                    params.insert(
-                        "layer".to_string(),
-                        SerializedParamValue::String { value: String::new() },
-                    );
-                    nodes.push(scene_build_node(
-                        new_id,
-                        "node.layer_source",
-                        Some(format!("Skin {}", target_map.label())),
-                        params,
-                    ));
-                    if target_map == SkinTargetMap::Emissive {
-                        apply_emissive_binding(nodes, wires, scene_object_id, new_id);
-                    }
-                    wires.push(scene_build_wire(new_id, "out", scene_object_id, target_map.port_name()));
+            if let Some(id) = existing_id {
+                // The skin leaves its old port: remove only THIS node's
+                // wire into the other map (the port's own producers —
+                // e.g. a baked texture the skin displaced on arrival —
+                // stay displaced per the ownership rule; anything that
+                // was never the skin's stays put). Then take the
+                // requested port as its sole producer.
+                let other = match target_map {
+                    SkinTargetMap::Emissive => SkinTargetMap::BaseColor,
+                    SkinTargetMap::BaseColor => SkinTargetMap::Emissive,
+                };
+                // The skin leaves `other`: restore what it displaced there (the
+                // port's baked producer and the material's emission), then
+                // take the requested port as its sole producer,
+                // displacing and recording that port's own. Only restore
+                // if the skin actually feeds `other` — a move to the port
+                // it already holds must not re-wire the other port's
+                // records.
+                if feeds_map(wires, id, scene_object_id, other) {
+                    restore_skin_displacement(nodes, wires, scene_object_id, other, id);
                 }
-                Some(())
-            },
-        );
+                wires.retain(|w| {
+                    !(w.from_node == id
+                        && w.to_node == scene_object_id
+                        && w.to_port == other.port_name())
+                });
+                let displaced = displace_other_producers(wires, scene_object_id, target_map, id);
+                record_displaced_wire(nodes, id, &displaced);
+                if target_map == SkinTargetMap::Emissive {
+                    apply_emissive_binding(nodes, wires, scene_object_id, id);
+                }
+                if !feeds_map(wires, id, scene_object_id, target_map) {
+                    wires.push(scene_build_wire(
+                        id,
+                        "out",
+                        scene_object_id,
+                        target_map.port_name(),
+                    ));
+                }
+            } else {
+                // No existing skin: create one with an empty source layer
+                // so the panel shows "None" / missing chip until the user
+                // picks a source.
+                let new_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                let mut params = BTreeMap::new();
+                params.insert(
+                    "layer".to_string(),
+                    SerializedParamValue::String {
+                        value: String::new(),
+                    },
+                );
+                nodes.push(scene_build_node(
+                    new_id,
+                    "node.layer_source",
+                    Some(format!("Skin {}", target_map.label())),
+                    params,
+                ));
+                if target_map == SkinTargetMap::Emissive {
+                    apply_emissive_binding(nodes, wires, scene_object_id, new_id);
+                }
+                wires.push(scene_build_wire(
+                    new_id,
+                    "out",
+                    scene_object_id,
+                    target_map.port_name(),
+                ));
+            }
+            Some(())
+        });
         refresh_target_manifest(project, &self.target);
     }
 
@@ -726,7 +780,10 @@ mod tests {
             );
         }
         for w in &def.wires {
-            println!("wire {}:{} -> {}:{}", w.from_node, w.from_port, w.to_node, w.to_port);
+            println!(
+                "wire {}:{} -> {}:{}",
+                w.from_node, w.from_port, w.to_node, w.to_port
+            );
         }
     }
 
@@ -774,18 +831,32 @@ mod tests {
         let skin_wires: Vec<&EffectGraphWire> = def
             .wires
             .iter()
-            .filter(|w| w.to_node == 1 && (w.to_port == "emissive_map" || w.to_port == "base_color_map"))
+            .filter(|w| {
+                w.to_node == 1 && (w.to_port == "emissive_map" || w.to_port == "base_color_map")
+            })
             .collect();
         println!("skin wires: {skin_wires:?}");
         assert_eq!(skin_wires.len(), 1, "exactly one map wire after the move");
         assert_eq!(skin_wires[0].to_port, "base_color_map");
-        let src = def.nodes.iter().find(|n| n.type_id == "node.layer_source").unwrap();
+        let src = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.layer_source")
+            .unwrap();
         assert_eq!(
             src.params.get("layer"),
-            Some(&SerializedParamValue::String { value: "layer-a".to_string() }),
+            Some(&SerializedParamValue::String {
+                value: "layer-a".to_string()
+            }),
             "moving the target map must keep the layer binding"
         );
-        assert_eq!(def.nodes.iter().filter(|n| n.type_id == "node.layer_source").count(), 1);
+        assert_eq!(
+            def.nodes
+                .iter()
+                .filter(|n| n.type_id == "node.layer_source")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -799,11 +870,11 @@ mod tests {
         let mut render_graph = object_graph();
         render_graph.nodes.truncate(1);
         render_graph.wires.clear();
-        render_graph.nodes[0]
-            .params
-            .insert("objects".to_string(), SerializedParamValue::Float { value: 0.0 });
-        with_target_graph_mut(&mut project, &target, &render_graph, true, |_| Some(()))
-            .unwrap();
+        render_graph.nodes[0].params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Float { value: 0.0 },
+        );
+        with_target_graph_mut(&mut project, &target, &render_graph, true, |_| Some(())).unwrap();
         // …then a real AddSceneObjectCommand so the object sits inside a
         // GROUP node's nested level, the topology the panel addresses.
         let mut add = AddSceneObjectCommand::new(
@@ -854,7 +925,14 @@ mod tests {
         );
         set.execute(&mut project);
         let d = def(&project);
-        let inner = d.nodes.iter().find(|n| n.id == group_id).unwrap().group.clone().unwrap();
+        let inner = d
+            .nodes
+            .iter()
+            .find(|n| n.id == group_id)
+            .unwrap()
+            .group
+            .clone()
+            .unwrap();
         let minted = inner
             .nodes
             .iter()
@@ -863,25 +941,40 @@ mod tests {
             .id;
         println!("-- after set source (group scope) --");
         for n in &inner.nodes {
-            println!("node {} type={} layer={:?}", n.id, n.type_id, n.params.get("layer"));
+            println!(
+                "node {} type={} layer={:?}",
+                n.id,
+                n.type_id,
+                n.params.get("layer")
+            );
         }
         for w in &inner.wires {
-            println!("wire {}:{} -> {}:{}", w.from_node, w.from_port, w.to_node, w.to_port);
+            println!(
+                "wire {}:{} -> {}:{}",
+                w.from_node, w.from_port, w.to_node, w.to_port
+            );
         }
 
         // Simulate the glTF import's baked texture on base_color_map (the
         // occupancy the real fixture shows): the move must displace it, not
         // share the port. Root level (no descend): the group node itself is
         // what holds the inner wires.
-        with_target_graph_mut(&mut project, &target, &mirror_catalog_default(), true, |def| {
-            let group = def.nodes.iter_mut().find(|n| n.id == group_id)?;
-            group
-                .group
-                .as_mut()?
-                .wires
-                .push(scene_build_wire(99, "out", object_id, "base_color_map"));
-            Some(())
-        })
+        with_target_graph_mut(
+            &mut project,
+            &target,
+            &mirror_catalog_default(),
+            true,
+            |def| {
+                let group = def.nodes.iter_mut().find(|n| n.id == group_id)?;
+                group.group.as_mut()?.wires.push(scene_build_wire(
+                    99,
+                    "out",
+                    object_id,
+                    "base_color_map",
+                ));
+                Some(())
+            },
+        )
         .unwrap();
 
         let mut map = SetSceneObjectSkinTargetMapCommand::new(
@@ -894,13 +987,28 @@ mod tests {
         );
         map.execute(&mut project);
         let d = def(&project);
-        let inner = d.nodes.iter().find(|n| n.id == group_id).unwrap().group.clone().unwrap();
+        let inner = d
+            .nodes
+            .iter()
+            .find(|n| n.id == group_id)
+            .unwrap()
+            .group
+            .clone()
+            .unwrap();
         println!("-- after set target map (group scope) --");
         for n in &inner.nodes {
-            println!("node {} type={} layer={:?}", n.id, n.type_id, n.params.get("layer"));
+            println!(
+                "node {} type={} layer={:?}",
+                n.id,
+                n.type_id,
+                n.params.get("layer")
+            );
         }
         for w in &inner.wires {
-            println!("wire {}:{} -> {}:{}", w.from_node, w.from_port, w.to_node, w.to_port);
+            println!(
+                "wire {}:{} -> {}:{}",
+                w.from_node, w.from_port, w.to_node, w.to_port
+            );
         }
 
         let map_wires: Vec<&EffectGraphWire> = inner
@@ -925,7 +1033,9 @@ mod tests {
         assert_eq!(sources.len(), 1, "no second layer_source minted");
         assert_eq!(
             sources[0].params.get("layer"),
-            Some(&SerializedParamValue::String { value: "layer-a".to_string() }),
+            Some(&SerializedParamValue::String {
+                value: "layer-a".to_string()
+            }),
             "moving the target map must keep the layer binding"
         );
     }
@@ -971,8 +1081,15 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(
-            def.nodes.iter().find(|n| n.id == 2).unwrap().params.get("layer"),
-            Some(&SerializedParamValue::String { value: "layer-a".to_string() }),
+            def.nodes
+                .iter()
+                .find(|n| n.id == 2)
+                .unwrap()
+                .params
+                .get("layer"),
+            Some(&SerializedParamValue::String {
+                value: "layer-a".to_string()
+            }),
             "undo of a value-only source change restores the previous layer id"
         );
     }
@@ -995,7 +1112,10 @@ mod tests {
                 ("emission_r".to_string(), float_param("emission_r", 0.0)),
                 ("emission_g".to_string(), float_param("emission_g", 0.0)),
                 ("emission_b".to_string(), float_param("emission_b", 0.0)),
-                ("emission_intensity".to_string(), float_param("emission_intensity", 0.0)),
+                (
+                    "emission_intensity".to_string(),
+                    float_param("emission_intensity", 0.0),
+                ),
             ]),
             exposed_params: Default::default(),
             editor_pos: None,
@@ -1034,8 +1154,10 @@ mod tests {
             group: None,
         });
         def.wires.push(scene_build_wire(20, "out", 1, "material"));
-        def.wires.push(scene_build_wire(21, "out", 1, "emissive_map"));
-        def.wires.push(scene_build_wire(22, "out", 1, "base_color_map"));
+        def.wires
+            .push(scene_build_wire(21, "out", 1, "emissive_map"));
+        def.wires
+            .push(scene_build_wire(22, "out", 1, "base_color_map"));
         def
     }
 
@@ -1045,7 +1167,12 @@ mod tests {
             Some(SerializedParamValue::Float { value }) => *value,
             _ => panic!("emission param {n} missing"),
         };
-        (get("emission_r"), get("emission_g"), get("emission_b"), get("emission_intensity"))
+        (
+            get("emission_r"),
+            get("emission_g"),
+            get("emission_b"),
+            get("emission_intensity"),
+        )
     }
 
     /// Emissive skin arrival on an object whose material emission is 0 →
@@ -1055,8 +1182,14 @@ mod tests {
     fn emissive_skin_arrival_whites_material_and_records() {
         let (mut project, lid) = project_with_one_generator_layer();
         let target = GraphTarget::Generator(lid.clone());
-        with_target_graph_mut(&mut project, &target, &object_graph_with_material(), true, |_| Some(()))
-            .unwrap();
+        with_target_graph_mut(
+            &mut project,
+            &target,
+            &object_graph_with_material(),
+            true,
+            |_| Some(()),
+        )
+        .unwrap();
 
         let mut set = SetSceneObjectSkinSourceCommand::new(
             target.clone(),
@@ -1079,20 +1212,34 @@ mod tests {
             .graph
             .as_ref()
             .unwrap();
-        assert_eq!(material_emission(def), (1.0, 1.0, 1.0, 1.0), "emissive skin whites material emission");
-        let skin = def.nodes.iter().find(|n| n.type_id == "node.layer_source").unwrap();
+        assert_eq!(
+            material_emission(def),
+            (1.0, 1.0, 1.0, 1.0),
+            "emissive skin whites material emission"
+        );
+        let skin = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.layer_source")
+            .unwrap();
         assert_eq!(
             skin.params.get("displaced_emission"),
-            Some(&SerializedParamValue::String { value: "0,0,0,0".to_string() }),
+            Some(&SerializedParamValue::String {
+                value: "0,0,0,0".to_string()
+            }),
             "original emission recorded on the skin node"
         );
         assert_eq!(
             skin.params.get("displaced_wire"),
-            Some(&SerializedParamValue::String { value: "21:out".to_string() }),
+            Some(&SerializedParamValue::String {
+                value: "21:out".to_string()
+            }),
             "displaced baked emissive_map producer recorded"
         );
         assert!(
-            !def.wires.iter().any(|w| w.from_node == 21 && w.to_node == 1 && w.to_port == "emissive_map"),
+            !def.wires
+                .iter()
+                .any(|w| w.from_node == 21 && w.to_node == 1 && w.to_port == "emissive_map"),
             "baked wire displaced"
         );
     }
@@ -1125,8 +1272,15 @@ mod tests {
             .graph
             .as_ref()
             .unwrap();
-        let skin = def.nodes.iter().find(|n| n.type_id == "node.layer_source").unwrap();
-        assert!(!skin.params.contains_key("displaced_emission"), "no emission record without a material");
+        let skin = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.layer_source")
+            .unwrap();
+        assert!(
+            !skin.params.contains_key("displaced_emission"),
+            "no emission record without a material"
+        );
     }
 
     /// Removal: baked wire re-appears, emission restored, layer_source node
@@ -1135,8 +1289,14 @@ mod tests {
     fn emissive_skin_removal_restores_displacement_and_deletes_node() {
         let (mut project, lid) = project_with_one_generator_layer();
         let target = GraphTarget::Generator(lid.clone());
-        with_target_graph_mut(&mut project, &target, &object_graph_with_material(), true, |_| Some(()))
-            .unwrap();
+        with_target_graph_mut(
+            &mut project,
+            &target,
+            &object_graph_with_material(),
+            true,
+            |_| Some(()),
+        )
+        .unwrap();
 
         let mut set = SetSceneObjectSkinSourceCommand::new(
             target.clone(),
@@ -1170,9 +1330,15 @@ mod tests {
             .graph
             .as_ref()
             .unwrap();
-        assert_eq!(material_emission(def), (0.0, 0.0, 0.0, 0.0), "emission restored on clear");
+        assert_eq!(
+            material_emission(def),
+            (0.0, 0.0, 0.0, 0.0),
+            "emission restored on clear"
+        );
         assert!(
-            def.wires.iter().any(|w| w.from_node == 21 && w.to_node == 1 && w.to_port == "emissive_map"),
+            def.wires
+                .iter()
+                .any(|w| w.from_node == 21 && w.to_node == 1 && w.to_port == "emissive_map"),
             "baked emissive_map wire re-wired on clear"
         );
         assert!(
@@ -1188,8 +1354,14 @@ mod tests {
     fn emissive_to_base_color_move_restores_old_port_and_displaces_new() {
         let (mut project, lid) = project_with_one_generator_layer();
         let target = GraphTarget::Generator(lid.clone());
-        with_target_graph_mut(&mut project, &target, &object_graph_with_material(), true, |_| Some(()))
-            .unwrap();
+        with_target_graph_mut(
+            &mut project,
+            &target,
+            &object_graph_with_material(),
+            true,
+            |_| Some(()),
+        )
+        .unwrap();
 
         let mut set = SetSceneObjectSkinSourceCommand::new(
             target.clone(),
@@ -1239,21 +1411,38 @@ mod tests {
             .graph
             .as_ref()
             .unwrap();
-        assert_eq!(material_emission(def), (0.0, 0.0, 0.0, 0.0), "emission restored on leave");
+        assert_eq!(
+            material_emission(def),
+            (0.0, 0.0, 0.0, 0.0),
+            "emission restored on leave"
+        );
         assert!(
-            def.wires.iter().any(|w| w.from_node == 21 && w.to_node == 1 && w.to_port == "emissive_map"),
+            def.wires
+                .iter()
+                .any(|w| w.from_node == 21 && w.to_node == 1 && w.to_port == "emissive_map"),
             "emissive baked wire restored on leave"
         );
         assert!(
-            !def.wires.iter().any(|w| w.from_node == 22 && w.to_node == 1 && w.to_port == "base_color_map"),
+            !def.wires
+                .iter()
+                .any(|w| w.from_node == 22 && w.to_node == 1 && w.to_port == "base_color_map"),
             "base_color baked wire displaced on arrival"
         );
-        let skin = def.nodes.iter().find(|n| n.type_id == "node.layer_source").unwrap();
+        let skin = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.layer_source")
+            .unwrap();
         assert_eq!(
             skin.params.get("displaced_wire"),
-            Some(&SerializedParamValue::String { value: "22:out".to_string() }),
+            Some(&SerializedParamValue::String {
+                value: "22:out".to_string()
+            }),
             "base_color displacement recorded"
         );
-        assert!(!skin.params.contains_key("displaced_emission"), "emission record cleared after leave");
+        assert!(
+            !skin.params.contains_key("displaced_emission"),
+            "emission record cleared after leave"
+        );
     }
 }

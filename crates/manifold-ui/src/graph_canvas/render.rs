@@ -865,7 +865,7 @@ impl GraphCanvas {
                         // A group-face row (D6) never draws one at all — it's
                         // already the live mirror of an exposed card param, not
                         // an authoring picker of its own.
-                        if !node.is_group && kind_is_exposable(p.kind) {
+                        if !node.is_group && !p.preparation_only && kind_is_exposable(p.kind) {
                             self.draw_expose_checkbox(
                                 ui, sx, row_y, row_h, p.exposed, !p.wire_driven,
                             );

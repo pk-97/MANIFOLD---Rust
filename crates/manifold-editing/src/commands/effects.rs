@@ -257,6 +257,7 @@ pub struct ChangeGraphParamCommand {
     param_id: ParamId,
     old_value: f32,
     new_value: f32,
+    rejection: Option<&'static str>,
 }
 
 impl ChangeGraphParamCommand {
@@ -271,12 +272,21 @@ impl ChangeGraphParamCommand {
             param_id: param_id.into(),
             old_value,
             new_value,
+            rejection: None,
         }
     }
 }
 
 impl Command for ChangeGraphParamCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.rejection = None;
+        if !matches!(self.target, GraphTarget::SceneModifier { .. })
+            && let Some(graph) = project.graph_for_target(&self.target, None)
+            && let Some(reason) = manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, self.param_id.as_ref())
+        {
+            self.rejection = Some(reason);
+            return;
+        }
         let id = self.param_id.clone();
         let val = self.new_value;
         project.with_preset_graph_mut(&self.target, |host| {
@@ -291,6 +301,9 @@ impl Command for ChangeGraphParamCommand {
             host.set_base_param_by_id(id.as_ref(), val);
         });
     }
+
+    fn was_applied(&self) -> bool { self.rejection.is_none() }
+    fn rejection_reason(&self) -> Option<&str> { self.rejection }
 
     fn description(&self) -> &str {
         "Change Param"

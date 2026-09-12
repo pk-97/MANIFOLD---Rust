@@ -9,6 +9,7 @@ const MAX_UNDO_HISTORY: usize = 200;
 pub struct UndoRedoManager {
     undo_stack: VecDeque<Box<dyn Command>>,
     redo_stack: Vec<Box<dyn Command>>,
+    last_rejection: Option<String>,
 }
 
 impl UndoRedoManager {
@@ -16,13 +17,16 @@ impl UndoRedoManager {
         Self {
             undo_stack: VecDeque::with_capacity(MAX_UNDO_HISTORY),
             redo_stack: Vec::with_capacity(32),
+            last_rejection: None,
         }
     }
 
     /// Execute a command and push to undo stack.
     pub fn execute(&mut self, mut command: Box<dyn Command>, project: &mut Project) -> bool {
+        self.last_rejection = None;
         command.execute(project);
         if !command.was_applied() {
+            self.last_rejection = command.rejection_reason().map(str::to_string);
             return false;
         }
         self.push_undo(command);
@@ -54,9 +58,11 @@ impl UndoRedoManager {
     /// Redo the most recently undone command.
     #[must_use]
     pub fn redo(&mut self, project: &mut Project) -> bool {
+        self.last_rejection = None;
         if let Some(mut cmd) = self.redo_stack.pop() {
             cmd.execute(project);
             if !cmd.was_applied() {
+                self.last_rejection = cmd.rejection_reason().map(str::to_string);
                 self.redo_stack.push(cmd);
                 return false;
             }
@@ -69,6 +75,10 @@ impl UndoRedoManager {
         } else {
             false
         }
+    }
+
+    pub fn take_rejection(&mut self) -> Option<String> {
+        self.last_rejection.take()
     }
 
     pub fn can_undo(&self) -> bool {

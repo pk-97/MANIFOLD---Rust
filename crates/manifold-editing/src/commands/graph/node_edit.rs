@@ -17,11 +17,11 @@ use crate::commands::preset::RevertToLibraryCommand;
 
 mod modifier;
 
+use super::card_owned_write::card_owned_write_warning;
 use super::{
     descend_level, install_target_graph, take_target_graph, with_existing_target_graph_mut,
     with_target_graph_mut,
 };
-use super::card_owned_write::card_owned_write_warning;
 
 /// Add a new node to the per-card graph at the given editor position.
 /// The new node has default parameters and no port wires until a
@@ -78,6 +78,10 @@ impl AddGraphNodeCommand {
 }
 
 impl Command for AddGraphNodeCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let node_type_id = self.node_type_id.clone();
         let pos = self.pos;
@@ -90,27 +94,28 @@ impl Command for AddGraphNodeCommand {
             .clone()
             .unwrap_or_else(|| NodeId::new(manifold_core::short_id()));
         let node_id_for_store = node_id.clone();
-        let minted = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            let id = prev_minted.unwrap_or(next_id);
-            nodes.push(EffectGraphNode {
-                id,
-                node_id,
-                type_id: node_type_id,
-                handle: None,
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: pos,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            });
-            Some(id)
-        })
-        .flatten();
+        let minted =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                let id = prev_minted.unwrap_or(next_id);
+                nodes.push(EffectGraphNode {
+                    id,
+                    node_id,
+                    type_id: node_type_id,
+                    handle: None,
+                    params: BTreeMap::new(),
+                    exposed_params: Default::default(),
+                    editor_pos: pos,
+                    wgsl_source: None,
+                    title: None,
+                    output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
+                    group: None,
+                });
+                Some(id)
+            })
+            .flatten();
         match minted {
             Some(id) => {
                 self.minted_id = Some(id);
@@ -217,6 +222,10 @@ impl RemoveGraphNodeCommand {
 }
 
 impl Command for RemoveGraphNodeCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
@@ -281,7 +290,9 @@ impl Command for RemoveGraphNodeCommand {
         if let Some(state) = self.modifier_removed.as_ref()
             && self.applied
         {
-            if modifier::undo(project, &self.target, state) { self.applied = false; }
+            if modifier::undo(project, &self.target, state) {
+                self.applied = false;
+            }
             return;
         }
         let Some(removed) = self.removed.clone() else {
@@ -291,8 +302,7 @@ impl Command for RemoveGraphNodeCommand {
         let removed_exposures = std::mem::take(&mut self.removed_exposures);
         project.with_preset_graph_mut(&self.target, move |inst| {
             if let Some(def) = inst.graph.as_mut()
-                && let Some((nodes, wires)) =
-                    descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
             {
                 nodes.push(removed.node);
                 wires.extend(removed.wires);
@@ -338,9 +348,16 @@ pub fn exposed_param_labels_for_node(
     };
     meta.bindings
         .iter()
-        .filter(|b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == node_nid))
+        .filter(
+            |b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == node_nid),
+        )
         // Only bindings that surface as a card slider (have a param spec).
-        .filter_map(|b| meta.params.iter().find(|p| p.id == b.id).map(|p| p.name.clone()))
+        .filter_map(|b| {
+            meta.params
+                .iter()
+                .find(|p| p.id == b.id)
+                .map(|p| p.name.clone())
+        })
         .collect()
 }
 
@@ -396,6 +413,10 @@ impl ConnectPortsCommand {
 }
 
 impl Command for ConnectPortsCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let from_node = self.from_node;
         let from_port = self.from_port.clone();
@@ -495,18 +516,23 @@ impl DisconnectPortsCommand {
 }
 
 impl Command for DisconnectPortsCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
         let scope = self.scope_path.clone();
-        let removed = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (_nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            wires
-                .iter()
-                .position(|w| w.to_node == to_node && w.to_port == to_port)
-                .map(|pos| wires.remove(pos))
-        })
-        .flatten();
+        let removed =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (_nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                wires
+                    .iter()
+                    .position(|w| w.to_node == to_node && w.to_port == to_port)
+                    .map(|pos| wires.remove(pos))
+            })
+            .flatten();
         self.removed = removed;
     }
 
@@ -735,6 +761,10 @@ pub struct SetGraphNodeParamCommand {
     /// redirect and its card-owned-write warning, which exist to catch
     /// LONE def writes that the render would stomp — not this.
     force_def_write: bool,
+    /// Stable diagnostic when a calibrated source or raster scene guard
+    /// rejects the write before any graph or card state is touched.
+    rejection: Option<String>,
+    applied: bool,
 }
 
 impl SetGraphNodeParamCommand {
@@ -755,6 +785,8 @@ impl SetGraphNodeParamCommand {
             previous_value: None,
             card_redirect: None,
             force_def_write: false,
+            rejection: None,
+            applied: false,
         }
     }
 
@@ -830,13 +862,55 @@ impl SetGraphNodeParamCommand {
             } else {
                 slot.authored_default
             };
-            inst.set_base_param(&slot.outer_id, card_value).then_some((slot.outer_id, previous))
+            inst.set_base_param(&slot.outer_id, card_value)
+                .then_some((slot.outer_id, previous))
         })?
+    }
+}
+
+fn node_at_scope<'a>(
+    nodes: &'a [EffectGraphNode],
+    scope: &[u32],
+    node_id: u32,
+) -> Option<&'a EffectGraphNode> {
+    let Some(group_id) = scope.first() else {
+        return nodes.iter().find(|node| node.id == node_id);
+    };
+    let group = nodes
+        .iter()
+        .find(|node| node.id == *group_id)?
+        .group
+        .as_ref()?;
+    node_at_scope(&group.nodes, &scope[1..], node_id)
+}
+
+impl SetGraphNodeParamCommand {
+    fn lock_reason(&self, project: &Project) -> Option<&'static str> {
+        // A modifier-local graph has its own stable namespace.  Its node ids
+        // must never be compared with the host graph's calibrated source ids.
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            return None;
+        }
+        let graph = project.graph_for_target(&self.target, Some(&self.catalog_default))?;
+        let node = node_at_scope(&graph.nodes, &self.scope_path, self.node_id)?;
+        let owner = self.target.host_target()?;
+        let owner_graph = project.graph_for_target(owner, Some(&self.catalog_default))?;
+        manifold_core::scene_modifier_preset::scene_modifier_parameter_lock_reason(
+            owner_graph,
+            &node.node_id,
+            &self.param_name,
+        )
     }
 }
 
 impl Command for SetGraphNodeParamCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.rejection = None;
+        self.applied = false;
+        if let Some(reason) = self.lock_reason(project) {
+            self.rejection = Some(reason.to_string());
+            return;
+        }
         // BUG-1l7f redirect: a write to a card-owned def param (authored
         // default) reroutes through the card slot — `apply_bindings` makes
         // the manifest value the sole authority the render sees, so the
@@ -849,6 +923,7 @@ impl Command for SetGraphNodeParamCommand {
             && let Some((outer_id, previous)) = self.write_through_card_slot(project)
         {
             self.card_redirect = Some((outer_id, previous));
+            self.applied = true;
             return;
         }
         let node_id = self.node_id;
@@ -877,23 +952,30 @@ impl Command for SetGraphNodeParamCommand {
                     .map(|node| node.params.insert(param_name, new_value))
             })
             .flatten();
-        if !prev_already_captured && let Some(prev) = captured {
-            // `prev: Option<SerializedParamValue>` — distinguishes
-            // "key was absent" from "key existed with value `v`". Stored
-            // as `Some(prev)` so undo knows we successfully captured.
-            self.previous_value = Some(prev);
+        if let Some(prev) = captured {
+            if !prev_already_captured {
+                // `prev: Option<SerializedParamValue>` — distinguishes
+                // "key was absent" from "key existed with value `v`". Stored
+                // as `Some(prev)` so undo knows we successfully captured.
+                self.previous_value = Some(prev);
+            }
+            self.applied = true;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some((outer_id, previous)) = self.card_redirect.take() {
             let target = self.target.clone();
-            let _ = target.host_target().and_then(|host| project.with_preset_graph_mut(host, |inst| {
-                inst.set_base_param(&outer_id, previous);
-            }));
+            let _ = target.host_target().and_then(|host| {
+                project.with_preset_graph_mut(host, |inst| {
+                    inst.set_base_param(&outer_id, previous);
+                })
+            });
+            self.applied = false;
             return;
         }
         let Some(prev) = self.previous_value.take() else {
+            self.applied = false;
             return;
         };
         let node_id = self.node_id;
@@ -913,10 +995,19 @@ impl Command for SetGraphNodeParamCommand {
                 }
             }
         });
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Set Graph Node Param"
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
     }
 }
 
@@ -968,6 +1059,10 @@ impl SetWgslSourceCommand {
 }
 
 impl Command for SetWgslSourceCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
         // Empty buffer clears the override back to the primitive's built-in
@@ -982,9 +1077,10 @@ impl Command for SetWgslSourceCommand {
         let captured: Option<Option<String>> =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                nodes.iter_mut().find(|n| n.id == node_id).map(|node| {
-                    std::mem::replace(&mut node.wgsl_source, new_source.clone())
-                })
+                nodes
+                    .iter_mut()
+                    .find(|n| n.id == node_id)
+                    .map(|node| std::mem::replace(&mut node.wgsl_source, new_source.clone()))
             })
             .flatten();
         if !prev_already_captured && let Some(prev) = captured {
@@ -1065,15 +1161,18 @@ impl RevertEffectGraphCommand {
     /// modifier reset in the same owner graph and instance-layer transaction.
     pub fn with_resolved_def(mut self, def: EffectGraphDef) -> Self {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            self.modifier_delegate = Some(
-                RevertToLibraryCommand::new(self.target.clone(), true).with_resolved_def(def),
-            );
+            self.modifier_delegate =
+                Some(RevertToLibraryCommand::new(self.target.clone(), true).with_resolved_def(def));
         }
         self
     }
 }
 
 impl Command for RevertEffectGraphCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
             if let Some(delegate) = self.modifier_delegate.as_mut() {
@@ -1108,9 +1207,7 @@ impl Command for RevertEffectGraphCommand {
                     .params
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| {
-                        p.origin == manifold_core::params::ParamOrigin::UserAdded
-                    })
+                    .filter(|(_, p)| p.origin == manifold_core::params::ParamOrigin::UserAdded)
                     .map(|(i, p)| (i, p.id().to_string()))
                     .collect();
                 for (pos, id) in &to_remove {
@@ -1171,13 +1268,15 @@ impl Command for RevertEffectGraphCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::super::test_support::*;
+    use super::super::*;
+    use crate::command::Command;
     use manifold_core::EffectId;
     use manifold_core::PresetTypeId;
-    use manifold_core::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef};
+    use manifold_core::effect_graph_def::{
+        GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    };
     use manifold_core::effects::PresetInstance;
-    use crate::command::Command;
 
     /// A batch layout sets every listed node's `editor_pos` in one command,
     /// and undo restores them all — including the never-positioned `None`.
@@ -1331,46 +1430,61 @@ mod tests {
     fn remove_graph_node_also_removes_incident_wires() {
         let (mut project, id) = project_with_one_master_effect();
         // Pre-populate graph with the catalog default.
-        project.find_effect_by_id_mut(&id).unwrap().graph =
-            Some(mirror_catalog_default());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
-        let mut cmd =
-            RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
+        let mut cmd = RemoveGraphNodeCommand::new(
+            GraphTarget::Effect(id.clone()),
+            1,
+            mirror_catalog_default(),
+        );
         cmd.execute(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         assert_eq!(def.nodes.len(), 3);
         // Wires touching node 1 (src→uv, uv→mix.b) are gone.
         assert!(def.wires.iter().all(|w| w.from_node != 1 && w.to_node != 1));
         // The src→mix.a wire is intact.
-        assert!(def
-            .wires
-            .iter()
-            .any(|w| w.from_node == 0 && w.to_port == "a"));
+        assert!(
+            def.wires
+                .iter()
+                .any(|w| w.from_node == 0 && w.to_port == "a")
+        );
     }
 
     #[test]
     fn remove_graph_node_undo_restores_node_and_wires() {
         let (mut project, id) = project_with_one_master_effect();
-        project.find_effect_by_id_mut(&id).unwrap().graph =
-            Some(mirror_catalog_default());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
-        let mut cmd =
-            RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
+        let mut cmd = RemoveGraphNodeCommand::new(
+            GraphTarget::Effect(id.clone()),
+            1,
+            mirror_catalog_default(),
+        );
         cmd.execute(&mut project);
         cmd.undo(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         assert_eq!(def.nodes.len(), 4);
         assert_eq!(def.wires.len(), 4);
     }
 
     #[test]
     fn remove_graph_node_prunes_bound_card_slider_and_undo_restores() {
+        use manifold_core::NodeId;
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
         };
-        use manifold_core::NodeId;
 
         let (mut project, id) = project_with_one_master_effect();
         // Diverged graph carrying a card slider bound to node 1 (uv_transform).
@@ -1385,7 +1499,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: vec![ParamSpecDef {
                 id: "amount".into(),
                 name: "Amount".into(),
@@ -1428,7 +1542,8 @@ mod tests {
         {
             let fx = project.find_effect_by_id_mut(&id).unwrap();
             fx.graph = Some(def);
-            fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+            fx.params =
+                manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         }
 
         let mut cmd = RemoveGraphNodeCommand::new(
@@ -1472,10 +1587,10 @@ mod tests {
     /// exposure bound to a node at ANY depth inside it.
     #[test]
     fn remove_group_node_prunes_card_slider_bound_to_a_nested_node() {
+        use manifold_core::NodeId;
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
         };
-        use manifold_core::NodeId;
 
         let (mut project, id) = project_with_one_master_effect();
         let mut def = mirror_catalog_default();
@@ -1523,7 +1638,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: vec![ParamSpecDef {
                 id: "amount".into(),
                 name: "Amount".into(),
@@ -1569,7 +1684,8 @@ mod tests {
         {
             let fx = project.find_effect_by_id_mut(&id).unwrap();
             fx.graph = Some(def);
-            fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+            fx.params =
+                manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         }
 
         let mut cmd = RemoveGraphNodeCommand::new(
@@ -1649,8 +1765,7 @@ mod tests {
     #[test]
     fn connect_ports_displaces_existing_wire_and_undo_restores() {
         let (mut project, id) = project_with_one_master_effect();
-        project.find_effect_by_id_mut(&id).unwrap().graph =
-            Some(mirror_catalog_default());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
         // Rewire mix.b from uv_transform → directly from source.
         let mut cmd = ConnectPortsCommand::new(
@@ -1663,7 +1778,12 @@ mod tests {
         );
         cmd.execute(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         // mix.b is now fed from node 0 (source), not node 1 (uv).
         let mix_b = def
             .wires
@@ -1673,7 +1793,12 @@ mod tests {
         assert_eq!(mix_b.from_node, 0);
 
         cmd.undo(&mut project);
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let mix_b = def
             .wires
             .iter()
@@ -1685,8 +1810,7 @@ mod tests {
     #[test]
     fn disconnect_ports_removes_wire_and_undo_restores() {
         let (mut project, id) = project_with_one_master_effect();
-        project.find_effect_by_id_mut(&id).unwrap().graph =
-            Some(mirror_catalog_default());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
         let mut cmd = DisconnectPortsCommand::new(
             GraphTarget::Effect(id.clone()),
@@ -1696,36 +1820,57 @@ mod tests {
         );
         cmd.execute(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
-        assert!(def
-            .wires
-            .iter()
-            .all(|w| !(w.to_node == 2 && w.to_port == "a")));
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
+        assert!(
+            def.wires
+                .iter()
+                .all(|w| !(w.to_node == 2 && w.to_port == "a"))
+        );
 
         cmd.undo(&mut project);
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
-        assert!(def
-            .wires
-            .iter()
-            .any(|w| w.to_node == 2 && w.to_port == "a"));
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
+        assert!(def.wires.iter().any(|w| w.to_node == 2 && w.to_port == "a"));
     }
 
     #[test]
     fn move_graph_node_updates_editor_pos_and_undo_restores() {
         let (mut project, id) = project_with_one_master_effect();
-        project.find_effect_by_id_mut(&id).unwrap().graph =
-            Some(mirror_catalog_default());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
-        let mut cmd =
-            MoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, (100.0, 200.0), mirror_catalog_default());
+        let mut cmd = MoveGraphNodeCommand::new(
+            GraphTarget::Effect(id.clone()),
+            1,
+            (100.0, 200.0),
+            mirror_catalog_default(),
+        );
         cmd.execute(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(node.editor_pos, Some((100.0, 200.0)));
 
         cmd.undo(&mut project);
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(node.editor_pos, None);
     }
@@ -1733,8 +1878,7 @@ mod tests {
     #[test]
     fn set_graph_node_param_inserts_and_undo_restores_absence() {
         let (mut project, id) = project_with_one_master_effect();
-        project.find_effect_by_id_mut(&id).unwrap().graph =
-            Some(mirror_catalog_default());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
         let mut cmd = SetGraphNodeParamCommand::new(
             GraphTarget::Effect(id.clone()),
@@ -1745,7 +1889,12 @@ mod tests {
         );
         cmd.execute(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(
             node.params.get("mode"),
@@ -1753,9 +1902,147 @@ mod tests {
         );
 
         cmd.undo(&mut project);
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
         assert!(!node.params.contains_key("mode"), "undo removes the key");
+    }
+
+    #[test]
+    fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_live() {
+        use manifold_core::NodeId;
+        use manifold_core::scene_modifier_preset::{
+            SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        };
+        let mut def = mirror_catalog_default();
+        def.nodes[1].node_id = NodeId::new("calibrated-source");
+        def.scene_modifiers.push(SceneModifierInstanceDef {
+            id: NodeId::new("modifier"),
+            scene: SceneNodeRef {
+                scope: vec![],
+                node: NodeId::new("scene"),
+            },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: vec![SceneMeshReferenceFrame {
+                target: SceneNodeRef {
+                    scope: vec![],
+                    node: NodeId::new("object"),
+                },
+                source: SceneNodeRef {
+                    scope: vec![],
+                    node: NodeId::new("calibrated-source"),
+                },
+                source_definition_hash: "hash".into(),
+                source_offset: [0.0; 3],
+                scene_radius: 1.0,
+            }],
+            graph: Box::new(mirror_catalog_default()),
+        });
+        let (mut project, id) = project_with_graph(def.clone());
+        let before = serde_json::to_value(&project).unwrap();
+        let mut service = crate::service::EditingService::new();
+        service.execute(
+            Box::new(SetGraphNodeParamCommand::new(
+                GraphTarget::Effect(id.clone()),
+                1,
+                "rotation".into(),
+                SerializedParamValue::Float { value: 0.25 },
+                def.clone(),
+            )),
+            &mut project,
+        );
+        let rejection = service
+            .take_rejection()
+            .expect("calibrated source is locked");
+        assert!(rejection.contains("calibrated"));
+        assert_eq!(service.data_version(), 0);
+        assert!(!service.can_undo());
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+
+        service.execute(
+            Box::new(SetGraphNodeParamCommand::new(
+                GraphTarget::Effect(id),
+                2,
+                "rotation".into(),
+                SerializedParamValue::Float { value: 0.25 },
+                def,
+            )),
+            &mut project,
+        );
+        assert!(service.take_rejection().is_none());
+        assert_eq!(service.data_version(), 1);
+        assert!(service.can_undo());
+    }
+
+    #[test]
+    fn vertices_modifier_locks_host_rt_enabled_before_mutation() {
+        use manifold_core::NodeId;
+        use manifold_core::scene_modifier_preset::{
+            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        };
+        let mut def = mirror_catalog_default();
+        def.nodes.push(EffectGraphNode {
+            id: 99,
+            node_id: NodeId::new("scene"),
+            type_id: "node.render_scene".into(),
+            handle: Some("scene".into()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        });
+        let recipe: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "presetMetadata": {
+                "id": "vertices", "displayName": "Vertices", "category": "Geometry",
+                "oscPrefix": "vertices", "params": [], "bindings": [],
+                "sceneModifier": {
+                    "schemaVersion": 1, "singleton": false, "enabledParam": "enabled",
+                    "stages": [{"group": "deform", "scope": "scene", "outputs":
+                        [{"port": "vertices", "endpoint": "vertices"}]}]
+                }
+            },
+            "nodes": [], "wires": []
+        }))
+        .expect("vertices recipe fixture");
+        def.scene_modifiers.push(SceneModifierInstanceDef {
+            id: NodeId::new("modifier"),
+            scene: SceneNodeRef {
+                scope: vec![],
+                node: NodeId::new("scene"),
+            },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: vec![],
+            graph: Box::new(recipe),
+        });
+        let (mut project, id) = project_with_graph(def.clone());
+        let before = serde_json::to_value(&project).unwrap();
+        let mut service = crate::service::EditingService::new();
+        service.execute(
+            Box::new(SetGraphNodeParamCommand::new(
+                GraphTarget::Effect(id),
+                99,
+                "rt_enabled".into(),
+                SerializedParamValue::Bool { value: true },
+                def,
+            )),
+            &mut project,
+        );
+        let rejection = service
+            .take_rejection()
+            .expect("vertices recipe locks raster mode");
+        assert!(rejection.contains("rt_enabled"));
+        assert_eq!(service.data_version(), 0);
+        assert!(!service.can_undo());
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
     }
 
     #[test]
@@ -1781,7 +2068,12 @@ mod tests {
         cmd.execute(&mut project);
         cmd.undo(&mut project);
 
-        let after = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let after = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = after.nodes.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(
             node.params.get("mode"),
@@ -1802,14 +2094,27 @@ mod tests {
         );
         cmd.execute(&mut project);
 
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(node.wgsl_source.as_deref(), Some("fn main() {}"));
 
         cmd.undo(&mut project);
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
-        assert!(node.wgsl_source.is_none(), "undo restores the absent source");
+        assert!(
+            node.wgsl_source.is_none(),
+            "undo restores the absent source"
+        );
     }
 
     #[test]
@@ -1817,8 +2122,11 @@ mod tests {
         let (mut project, id) = project_with_one_master_effect();
         let mut def = mirror_catalog_default();
         // Pre-seed node 1 with a custom kernel so the clear has something to drop.
-        def.nodes.iter_mut().find(|n| n.id == 1).unwrap().wgsl_source =
-            Some("// custom".to_string());
+        def.nodes
+            .iter_mut()
+            .find(|n| n.id == 1)
+            .unwrap()
+            .wgsl_source = Some("// custom".to_string());
         project.find_effect_by_id_mut(&id).unwrap().graph = Some(def.clone());
 
         // An all-whitespace buffer clears the override rather than compiling empty.
@@ -1826,12 +2134,25 @@ mod tests {
             SetWgslSourceCommand::new(GraphTarget::Effect(id.clone()), 1, "   ".to_string(), def);
         cmd.execute(&mut project);
 
-        let after = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let after = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = after.nodes.iter().find(|n| n.id == 1).unwrap();
-        assert!(node.wgsl_source.is_none(), "blank source clears the override");
+        assert!(
+            node.wgsl_source.is_none(),
+            "blank source clears the override"
+        );
 
         cmd.undo(&mut project);
-        let after = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let after = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         let node = after.nodes.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(node.wgsl_source.as_deref(), Some("// custom"));
     }
@@ -1861,7 +2182,12 @@ mod tests {
             project.find_effect_by_id(&id).unwrap().graph.is_some(),
             "undo restores the per-card override"
         );
-        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let def = project
+            .find_effect_by_id(&id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap();
         assert!(def.nodes.iter().any(|n| n.type_id == "node.blur"));
     }
 
@@ -1898,8 +2224,7 @@ mod tests {
         // path emits per effect.
         let fx = project.find_effect_by_id(&id).unwrap();
         let json = serde_json::to_string(fx).unwrap();
-        let back: manifold_core::effects::PresetInstance =
-            serde_json::from_str(&json).unwrap();
+        let back: manifold_core::effects::PresetInstance = serde_json::from_str(&json).unwrap();
 
         assert!(back.graph.is_some(), "graph field survived round-trip");
         let def = back.graph.as_ref().unwrap();
@@ -2116,7 +2441,8 @@ mod tests {
             .find_layer_by_id_mut(&lid)
             .unwrap()
             .1
-            .gen_params_or_init().graph = Some(mirror_catalog_default());
+            .gen_params_or_init()
+            .graph = Some(mirror_catalog_default());
 
         let mut revert = RevertEffectGraphCommand::new(GraphTarget::Generator(lid.clone()));
         revert.execute(&mut project);
@@ -2164,5 +2490,27 @@ mod tests {
             SerializedParamValue::Float { value } => assert!((value - 45.0).abs() < 1e-6),
             _ => panic!("expected Float param value"),
         }
+    }
+
+    #[test]
+    fn graph_admission_distinguishes_live_param_from_structural_insert() {
+        let target = GraphTarget::Effect(EffectId::new("admission-test"));
+        let catalog = mirror_catalog_default();
+        let live = SetGraphNodeParamCommand::new(
+            target.clone(),
+            1,
+            "rotation".into(),
+            SerializedParamValue::Float { value: 2.0 },
+            catalog.clone(),
+        );
+        let mut live_targets = Vec::new();
+        live.graph_admission_targets(&mut live_targets);
+        assert!(live_targets.is_empty());
+
+        let structural =
+            AddGraphNodeCommand::new(target.clone(), "node.uv_field".into(), None, catalog);
+        let mut structural_targets = Vec::new();
+        structural.graph_admission_targets(&mut structural_targets);
+        assert_eq!(structural_targets, vec![target]);
     }
 }

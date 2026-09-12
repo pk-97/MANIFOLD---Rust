@@ -1108,7 +1108,10 @@ impl Application {
     pub(crate) fn watch_graph_target(&mut self, target: manifold_core::GraphTarget) {
         if target.host_target().is_none() { return; }
         self.close_mapping_on_target_change(&target);
-        self.watched_catalog_default = crate::graph_target::owner_default(&self.local_project, &target);
+        if self.modifier_preview_object.as_ref().is_some_and(|(owner, _)| owner != &target) {
+            self.modifier_preview_object = None;
+        }
+        self.watched_catalog_default = crate::graph_target::catalog_default(&self.local_project, &target);
         // The content thread clears both preview requests when the watched
         // target changes; drop the dedup caches with it so a same-named node
         // in the next graph is sent again rather than leaving stale output.
@@ -1223,8 +1226,12 @@ impl Application {
         let fresh =
             matches!(&self.editor_ui_graph, Some((cached, _)) if std::sync::Arc::ptr_eq(cached, src));
         if !fresh {
-            let ui = std::sync::Arc::new(crate::ui_translate::graph_snapshot_to_ui(src));
-            self.editor_ui_graph = Some((src.clone(), ui));
+            let mut ui = crate::ui_translate::graph_snapshot_to_ui(src);
+            if let Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) = self.watched_graph_target.as_ref()
+                && let Some(local) = crate::graph_target::resolve(&self.local_project, target) {
+                annotate_preparation_controls(&mut ui.nodes, local);
+            }
+            self.editor_ui_graph = Some((src.clone(), std::sync::Arc::new(ui)));
         }
         self.editor_ui_graph.as_ref().map(|(_, ui)| ui.clone())
     }
@@ -1246,6 +1253,9 @@ impl Application {
             self.watched_graph_target.as_ref(),
             Some(manifold_core::GraphTarget::SceneModifier { .. })
         );
+        let preview_object = self.modifier_preview_object.as_ref()
+            .filter(|(target, _)| Some(target) == self.watched_graph_target.as_ref())
+            .map(|(_, object)| object.clone());
         let (preview_node, modifier_context) = match (self.graph_canvas.as_ref(), editor_ui_snap.as_ref()) {
             (Some(canvas), Some(snap)) if scene_modifier_watched => {
                 let selected = canvas.selected_node_id();
@@ -1262,7 +1272,7 @@ impl Application {
                 } else {
                     let (node, scope) = modifier_preview_selection(snap, canvas_scope, selected);
                     self.last_modifier_preview_selection = Some((snap.clone(), canvas_scope.to_vec(), selected));
-                    (node, Some((scope, None)))
+                    (node, Some((scope, preview_object)))
                 }
             }
             (Some(canvas), Some(snap)) => (
@@ -2621,5 +2631,32 @@ mod binding_reroute_tests {
         });
         assert!(node_param_is_wired(&def, &[], 1, "amount"));
         assert!(!node_param_is_wired(&def, &[], 1, "other_param"));
+    }
+}
+
+/// Preparation controls keep the shared numeric editor, with an explicit
+/// setup label and no exposure or mapping affordance.
+fn annotate_preparation_controls(
+    nodes: &mut [manifold_ui::graph_view::NodeSnapshot],
+    local: &manifold_core::effect_graph_def::EffectGraphDef,
+) {
+    let Some(metadata) = local.preset_metadata.as_ref() else { return; };
+    let Some(recipe) = metadata.scene_modifier.as_ref() else { return; };
+    for node in nodes {
+        for param in &mut node.parameters {
+            let preparation = metadata.bindings.iter().any(|binding|
+                recipe.preparation_params.contains(&binding.id)
+                    && matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                        if node_id == &node.node_id && name == &param.name));
+            if preparation {
+                param.preparation_only = true;
+                param.exposed = false;
+                param.label.push_str(" · Setup");
+                param.tooltip = Some("Applies when released and rebuilds the scene. This control cannot be modulated; editing it stores a fixed default.".into());
+            }
+        }
+        if let Some(group) = &mut node.group {
+            annotate_preparation_controls(&mut group.nodes, local);
+        }
     }
 }

@@ -6,6 +6,24 @@
 use manifold_ui::{AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use super::*;
 
+/// One preset menu vocabulary for all card families; addressing is captured by
+/// the caller, independently of the current editor or later selection changes.
+fn preset_menu_items(
+    modified: bool,
+    action: impl Fn(manifold_ui::panels::actions::PresetActionKind) -> ParamsAction,
+) -> Vec<DropdownItem> {
+    use manifold_ui::panels::actions::PresetActionKind::*;
+    let mut entries = vec![("Make Unique", MakeUnique)];
+    if modified {
+        entries.extend([("Revert to Library", RevertToLibrary),
+            ("Push to Library — updates instances tracking this preset", PushToLibrary)]);
+    }
+    entries.extend([("Save to Library…", SaveToLibrary), ("Save to Project…", SaveToProject),
+        ("Export Preset…", Export), ("Import Preset…", Import)]);
+    entries.into_iter().map(|(label, kind)| DropdownItem::new(label)
+        .with_action(PanelAction::Params(action(kind)))).collect()
+}
+
 /// PRESET_BROWSER_AUDITION D8/§3.4 gate: may a preset whose metadata
 /// carries `layer_types` appear on `invoking`? `None` on the preset = every
 /// layer type; `Some(list)` = only the listed types. `None` as the invoking
@@ -21,10 +39,92 @@ fn preset_allowed_on_layer_type(
     }
 }
 
+/// Build the typed target/preview menu for one modifier card. Every mutation
+/// and preview action carries the stable object address; labels are display
+/// text only and may safely collide.
+fn modifier_object_menu_items(
+    layer_id: &manifold_core::LayerId,
+    info: &manifold_ui::param_surface::ModifierCardInfo,
+) -> Vec<DropdownItem> {
+    use manifold_ui::param_surface::ModifierObjectRef;
+
+    let selected_count = info.objects.iter().filter(|object| object.selected).count();
+    let mut items = Vec::with_capacity(info.objects.len() + selected_count + 2);
+    let all_action = PanelAction::Project(ProjectAction::SceneModifierSetTargets(
+        layer_id.clone(),
+        info.instance_id.clone(),
+        None,
+    ));
+    items.push(DropdownItem::new("Apply to all objects")
+        .with_check(info.targets_all)
+        .with_action(all_action));
+
+    for (index, option) in info.objects.iter().enumerate() {
+        let action = if info.targets_all {
+            Some(vec![option.object.clone()])
+        } else if option.selected {
+            if selected_count <= 1 {
+                None
+            } else {
+                let targets: Vec<ModifierObjectRef> = info
+                    .objects
+                    .iter()
+                    .filter(|candidate| candidate.selected && candidate.object != option.object)
+                    .map(|candidate| candidate.object.clone())
+                    .collect();
+                Some(targets)
+            }
+        } else {
+            let mut targets: Vec<ModifierObjectRef> = info
+                .objects
+                .iter()
+                .filter(|candidate| candidate.selected)
+                .map(|candidate| candidate.object.clone())
+                .collect();
+            targets.push(option.object.clone());
+            Some(targets)
+        };
+        let mut item = match action {
+            Some(targets) => DropdownItem::new(&option.label).with_action(
+                PanelAction::Project(ProjectAction::SceneModifierSetTargets(
+                    layer_id.clone(),
+                    info.instance_id.clone(),
+                    Some(targets),
+                )),
+            ),
+            None => DropdownItem::disabled(&option.label),
+        }
+        .with_check(option.selected);
+        if index + 1 == info.objects.len() {
+            item = item.with_separator();
+        }
+        items.push(item);
+    }
+
+    if info.objects.is_empty() {
+        // Keep the target section visually distinct even for a temporarily
+        // empty object snapshot.
+        items[0] = items[0].clone().with_separator();
+    }
+    for option in info.objects.iter().filter(|object| object.selected) {
+        items.push(DropdownItem::new(&format!("Preview {}", option.label)).with_action(
+            PanelAction::Root(RootAction::PreviewSceneModifierObject(
+                layer_id.clone(),
+                info.instance_id.clone(),
+                option.object.clone(),
+            )),
+        ));
+    }
+    items
+}
+
 #[cfg(test)]
 mod tests {
-    use super::preset_allowed_on_layer_type;
+    use super::{modifier_object_menu_items, preset_allowed_on_layer_type};
     use manifold_core::types::LayerType;
+    use manifold_core::{LayerId, NodeId};
+    use manifold_ui::panels::{PanelAction, ProjectAction, RootAction};
+    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption, ModifierObjectRef};
 
     /// LED presets (`layer_types: [Dmx]`) must be unreachable from a video /
     /// generator layer's picker and reachable from a DMX layer (§4
@@ -61,6 +161,75 @@ mod tests {
                 "unscoped preset must appear for invoking {invoking:?}"
             );
         }
+    }
+
+    fn object(id: &str, selected: bool) -> ModifierObjectOption {
+        ModifierObjectOption {
+            object: ModifierObjectRef {
+                scope: vec![NodeId::new("scope")],
+                node: NodeId::new(id),
+            },
+            label: "Duplicate".to_string(),
+            selected,
+        }
+    }
+
+    fn info(targets_all: bool, objects: Vec<ModifierObjectOption>) -> ModifierCardInfo {
+        ModifierCardInfo {
+            instance_id: NodeId::new("modifier"),
+            layer_id: LayerId::new("layer"),
+            enabled_label: "Enabled".to_string(),
+            stack_index: 0,
+            stack_len: 1,
+            targets_all,
+            objects,
+        }
+    }
+
+    #[test]
+    fn modifier_object_menu_keeps_exact_addresses_and_distinct_preview_actions() {
+        let items = modifier_object_menu_items(
+            &LayerId::new("layer"),
+            &info(false, vec![object("a", true), object("b", true)]),
+        );
+        let targets = items
+            .iter()
+            .filter_map(|item| item.action.as_ref())
+            .filter_map(|action| match action {
+                PanelAction::Project(ProjectAction::SceneModifierSetTargets(_, _, Some(targets))) => {
+                    Some(targets)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0][0].node, NodeId::new("b"));
+        assert_eq!(targets[1][0].node, NodeId::new("a"));
+        assert!(items.iter().any(|item| {
+            item.label == "Preview Duplicate"
+                && matches!(
+                    item.action,
+                    Some(PanelAction::Root(RootAction::PreviewSceneModifierObject(_, _, ref object)))
+                        if object.node == NodeId::new("a")
+                )
+        }));
+        assert!(items.iter().any(|item| {
+            item.label == "Preview Duplicate"
+                && matches!(
+                    item.action,
+                    Some(PanelAction::Root(RootAction::PreviewSceneModifierObject(_, _, ref object)))
+                        if object.node == NodeId::new("b")
+                )
+        }));
+    }
+
+    #[test]
+    fn modifier_object_menu_disables_removing_last_explicit_target() {
+        let items = modifier_object_menu_items(&LayerId::new("layer"), &info(false, vec![object("a", true)]));
+        let target = items.iter().find(|item| item.label == "Duplicate").expect("target item");
+        assert!(!target.enabled);
+        assert!(target.checked);
+        assert!(items.iter().any(|item| item.label == "Apply to all objects" && item.enabled));
     }
 }
 
@@ -472,11 +641,22 @@ impl UIRoot {
                         None => DropdownItem::new(&e.label).with_action(
                             PanelAction::Project(ProjectAction::SceneModifierApply(
                                 layer_id.clone(),
-                                e.kind_id.clone(),
+                                e.preset_id.clone(),
                             )),
                         ),
                     })
                     .collect();
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
+            PanelAction::Root(RootAction::SceneModifierObjectsClicked(layer_id, instance_id)) => {
+                // Resolve against the exact card instance that emitted the
+                // click. The card snapshot owns stable object addresses; this
+                // menu never reconstructs them from labels or positions.
+                let Some(info) = self.inspector.modifier_card_info(instance_id).cloned() else {
+                    return true;
+                };
+                let items = modifier_object_menu_items(layer_id, &info);
                 self.open_dropdown_typed(items, trigger);
                 true
             }
@@ -1090,6 +1270,23 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
+            PanelAction::Root(RootAction::SceneModifierCardRightClicked(layer, id)) => {
+                let selected = self.inspector.selected_modifier_ids_for(layer, id);
+                let target = manifold_ui::view::UiGraphTarget::SceneModifier {
+                    owner: Box::new(manifold_ui::view::UiGraphTarget::Generator(layer.clone())),
+                    modifier_id: id.clone(),
+                };
+                let mut items = vec![
+                    DropdownItem::new("Duplicate").with_action(PanelAction::Project(
+                        ProjectAction::SceneModifiersDuplicate(layer.clone(), selected.clone()))),
+                    DropdownItem::new("Remove").with_action(PanelAction::Project(
+                        ProjectAction::SceneModifiersRemove(layer.clone(), selected))).with_separator(),
+                ];
+                items.extend(preset_menu_items(self.inspector.modifier_has_graph_mod(layer, id),
+                    |kind| ParamsAction::PresetAction(target.clone(), kind)));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             PanelAction::Params(ParamsAction::CardRightClicked(gpt)) => {
                 // Generators carry Copy/Paste (their own clipboard); both kinds
                 // share Make Unique / Export / Import. The menu CONTENTS differ
@@ -1110,17 +1307,6 @@ impl UIRoot {
                         );
                     }
                 }
-                items.push(
-                    DropdownItem::new("Make Unique")
-                        .with_action(PanelAction::Params(ParamsAction::MakePresetUnique(gpt.clone()))),
-                );
-                // Divergence actions (PRESET_LIBRARY_DESIGN D3, P4): only
-                // meaningful once the instance has diverged from its library
-                // entry (`graph.is_some()`) — reuse the retained card's own
-                // `has_graph_mod` bit (the exact source the MOD badge reads),
-                // same tab-resolution `is_effect_ableton_mapped` above uses,
-                // so there's one source of truth for "is this card diverged"
-                // rather than a second computation.
                 let has_graph_mod = match gpt {
                     GraphParamTarget::Effect(fx_idx) => {
                         self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), *fx_idx)
@@ -1132,36 +1318,18 @@ impl UIRoot {
                         self.inspector.gen_has_graph_mod()
                     }
                 };
-                if has_graph_mod {
-                    items.push(
-                        DropdownItem::new("Revert to Library")
-                            .with_action(PanelAction::Params(ParamsAction::RevertToLibrary(gpt.clone()))),
-                    );
-                    // Wording states the blast radius WITHOUT computing it
-                    // (PRESET_LIBRARY_DESIGN section 4/section 6: counting how many
-                    // instances track an id is the forbidden machinery this
-                    // design deletes) — "instances", not a computed N.
-                    items.push(
-                        DropdownItem::new("Push to Library — updates instances tracking this preset")
-                            .with_action(PanelAction::Params(ParamsAction::PushToLibrary(gpt.clone()))),
-                    );
-                }
-                // Library doors (PRESET_LIBRARY_DESIGN D4) — explicit "publish a
-                // copy" actions, distinct from Make Unique's divergence/retarget.
-                items.push(
-                    DropdownItem::new("Save to Library…")
-                        .with_action(PanelAction::Params(ParamsAction::SaveToLibrary(gpt.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Save to Project…")
-                        .with_action(PanelAction::Params(ParamsAction::SaveToProject(gpt.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Export Preset…").with_action(PanelAction::Params(ParamsAction::ExportPreset(gpt.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Import Preset…").with_action(PanelAction::Params(ParamsAction::ImportPreset(gpt.clone()))),
-                );
+                items.extend(preset_menu_items(has_graph_mod, |kind| {
+                    use manifold_ui::panels::actions::PresetActionKind::*;
+                    match kind {
+                        MakeUnique => ParamsAction::MakePresetUnique(gpt.clone()),
+                        RevertToLibrary => ParamsAction::RevertToLibrary(gpt.clone()),
+                        PushToLibrary => ParamsAction::PushToLibrary(gpt.clone()),
+                        SaveToLibrary => ParamsAction::SaveToLibrary(gpt.clone()),
+                        SaveToProject => ParamsAction::SaveToProject(gpt.clone()),
+                        Export => ParamsAction::ExportPreset(gpt.clone()),
+                        Import => ParamsAction::ImportPreset(gpt.clone()),
+                    }
+                }));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true

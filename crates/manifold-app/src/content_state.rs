@@ -78,6 +78,15 @@ pub struct UndoRedoEvent {
     pub description: String,
 }
 
+/// A rejected graph edit that should be explained to the user. The sequence
+/// is assigned by the content thread so the UI can edge-trigger a toast even
+/// though rejected edits leave `data_version` unchanged.
+#[derive(Clone, Debug)]
+pub struct GraphEditDiagnostic {
+    pub sequence: u64,
+    pub message: String,
+}
+
 /// State snapshot sent from the content thread to the UI thread.
 /// The UI thread drains these from a bounded channel and uses the latest.
 ///
@@ -220,6 +229,9 @@ pub struct ContentState {
     /// [`UndoRedoEvent`]'s doc comment for why this differs from
     /// `export_finished`'s out-of-band pattern.
     pub undo_redo_event: Option<UndoRedoEvent>,
+    /// Most recent rejected graph-edit diagnostic. Persistent across snapshots
+    /// so the UI can observe it once without relying on `data_version`.
+    pub graph_edit_diagnostic: Option<GraphEditDiagnostic>,
 
     // ── Ableton bridge ──────────────────────────────────────────
     /// Ableton session data for UI dropdown population.
@@ -524,6 +536,7 @@ impl Default for ContentState {
             export_finished: None,
             warmup: None,
             undo_redo_event: None,
+            graph_edit_diagnostic: None,
             ableton_session: None,
             ableton_connected: false,
             ableton_transport_enabled: false,

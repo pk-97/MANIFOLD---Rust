@@ -24,6 +24,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_renderer::node_graph::{PrimitiveRegistry, render_viewport_frame};
+use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_renderer::preset_context::PresetContext;
 
 fn node(
@@ -255,7 +256,7 @@ fn build_red_graph() -> EffectGraphDef {
 
 /// P4 extension: the loop graph with EVERY movement control live — flow
 /// 0.8, sway amp 0.5 cycles 2, look sweep amp 0.5 cycles 1, zoom pulse 0.25,
-/// jitter amount 0.5 seed 7. Shaped like the plan builder builds it (home =
+/// jitter amount 0.5 seed 7. Shaped like the bundled SceneLoop recipe (home =
 /// −cell/2 = mid-gap, pattern_length 1 = uniform jitter, the corridor mint).
 /// All controls phase-periodic (or cell-index-only) by construction; the
 /// exact-seam wrap gate proves it.
@@ -344,12 +345,9 @@ fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
     camera.params.insert("stride".to_string(), SerializedParamValue::Float { value: 1.0 });
     def.wires.retain(|w| !(w.from_node == 3 && w.to_node == 2 && w.to_port == "camera"));
 
-    // The app's load order (ENDLESS_CORRIDOR D7).
-    assert!(
-        manifold_renderer::node_graph::scene_modifier::migrate_fixed_row_scene_loops(&mut def),
-        "the pre-corridor fixture migrates"
-    );
-    let _ = manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(&mut def);
+    // The app's load-only migration seam (ENDLESS_CORRIDOR D7).
+    let report = migrate_legacy_scene_modifiers(&mut def, &PrimitiveRegistry::with_builtin());
+    assert!(report.changed, "the pre-corridor fixture migrates: {:?}", report.diagnostics);
     def
 }
 
@@ -569,8 +567,8 @@ fn wrap_parity_near_seam_measurement() {
 }
 
 /// INV-EC5: a saved pre-corridor loop migrated at load wraps pure — the
-/// migrated graph (corridor params + the D2 camera wire landed by
-/// migrate_fixed_row_scene_loops) renders phase 0 vs phase 1
+/// migrated graph (corridor params + the D2 camera wire landed by the
+/// load-only migration) renders phase 0 vs phase 1
 /// pixel-identical. Unclipped far, same demand as the corridor mint gate.
 #[test]
 fn wrap_parity_migrated_pre_corridor_loop() {

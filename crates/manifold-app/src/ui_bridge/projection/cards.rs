@@ -276,7 +276,10 @@ fn param_surface(
     // filter to drift out of alignment.
     let visible_params: Vec<&manifold_core::params::Param> = match visibility {
         SurfaceVisibility::CuratedCard => {
-            inst.params.iter().filter(|p| p.spec.card_visible).collect()
+            let modifier_bindings = inst.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref());
+            inst.params.iter().filter(|p| p.spec.card_visible && !modifier_bindings.is_some_and(|metadata|
+                metadata.bindings.iter().any(|binding| binding.id == p.id()
+                    && matches!(binding.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. })))).collect()
         }
         SurfaceVisibility::All => inst.params.iter().collect(),
     };
@@ -472,163 +475,125 @@ pub(crate) fn gen_params_to_surface(
     .expect("generator param_surface always yields a config")
 }
 
-// ── SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier card projection ──
-
-/// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" picker model —
-/// one entry per REGISTRY kind in slot order, applied kinds disabled
-/// ("applied"), kinds the descriptor refuses disabled ("not applicable"),
-/// the rest clickable. Applicability is a function of the layer's live
-/// graph, so this is app-side by contract (the UI only renders the model).
+/// The same disk/project catalog supplies picker entries and attached snapshots.
+/// Full applicability is checked transactionally when the user applies a file.
 pub(crate) fn modifier_picker_entries(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
-    use manifold_renderer::node_graph::scene_modifier::descriptors;
+    use manifold_renderer::preset_loader::SCENE_MODIFIER_CATALOG;
     use manifold_ui::param_surface::ModifierPickerEntry;
-    descriptors()
-        .into_iter()
-        .map(|d| {
-            let applied = vm
-                .modifiers
-                .iter()
-                .find(|m| m.kind_id == d.kind_id)
-                .map(|m| m.applied)
-                .unwrap_or(false);
-            let disabled = if applied {
-                Some("applied".to_string())
-            } else if vm.multiple_scenes {
-                Some("multiple scenes in graph".to_string())
-            } else if !(d.applicable)(def, vm.scene_root_node_id) {
-                Some("not applicable".to_string())
-            } else {
-                None
-            };
-            ModifierPickerEntry {
-                kind_id: d.kind_id.to_string(),
-                label: d.display_name.to_string(),
-                disabled,
-            }
-        })
-        .collect()
+    let catalog = SCENE_MODIFIER_CATALOG.load();
+    let mut entries: Vec<_> = catalog.entries().filter_map(|(id, json)| {
+        if !catalog.is_browser_visible(&id) { return None; }
+        let recipe: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&json).ok()?;
+        let metadata = recipe.preset_metadata.as_ref()?;
+        let attachment = metadata.scene_modifier.as_ref()?;
+        let disabled = if vm.multiple_scenes {
+            Some("Select a graph with one scene".to_string())
+        } else if attachment.singleton && def.scene_modifiers.iter().any(|instance|
+            instance.graph.preset_metadata.as_ref().is_some_and(|m| m.id == metadata.id)) {
+            Some("Already applied".to_string())
+        } else { None };
+        Some(ModifierPickerEntry { preset_id: id.to_string(), label: metadata.display_name.clone(), disabled })
+    }).collect();
+    entries.sort_by(|a, b| a.label.cmp(&b.label).then(a.preset_id.cmp(&b.preset_id)));
+    entries
 }
 
-/// SCENE_MODIFIER_FRAMEWORK section 3.7 (the NAMED adapter): one
-/// All-visibility projection of the layer's generator surface → per-kind
-/// SECTION filter → per-row `SceneRowAddr` sidecar resolved from
-/// `preset_metadata.bindings` (`BindingTarget::Node { node_id, param }`)
-/// joined to the trace's `doc_ids`.
-///
-/// TRIPWIRE (P2 generality proof): `node.value` rows are `card_visible:
-/// false` under the default-deny exposure table — the modifier cards surface
-/// rows by SECTION, never by `card_visible`, or Scene Fog's Enabled/Density
-/// rows would vanish. The `All` visibility projection is what guarantees it.
-///
-/// One projection, one row truth: the rows ARE the layer's generator manifest
-/// rows (badges/drawers/modulation work unmodified — D4), filtered to the
-/// kind's stamped section and re-addressed by the trace.
+/// A card owns rows through stable host-to-instance bindings. Titles and
+/// sections are presentation only; modulation still addresses the generator.
 pub(crate) fn modifier_surfaces(
     gp: &manifold_core::effects::PresetInstance,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    _vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
     layer_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     timing: (manifold_core::Bpm, f32),
 ) -> Vec<ParamSurface> {
     use manifold_core::effect_graph_def::BindingTarget;
-    use manifold_renderer::node_graph::scene_modifier::{descriptor_for, EnableDecl, LOOP_KIND_ID};
-    use manifold_ui::param_surface::{ModifierCardInfo, SceneRowAddr};
-
-    let full = gen_params_to_surface(
-        gp,
-        layer_id,
-        None,
-        automation_latched,
-        SurfaceVisibility::All,
-        timing,
-    );
-    let bindings = def
-        .preset_metadata
-        .as_ref()
-        .map(|m| m.bindings.as_slice())
-        .unwrap_or(&[]);
-
-    let mut out = Vec::new();
-    for m in vm.modifiers.iter().filter(|m| m.applied) {
-        let Some(descriptor) = descriptor_for(m.kind_id) else { continue };
-        // Section filter per kind: the stamped section string IS the display
-        // name (D6 byte-identical for the loop; the fog kind stamps "Scene
-        // Fog").
-        let mut rows: Vec<ParamRow> = full
-            .rows
-            .iter()
-            .filter(|r| r.spec.section.as_deref() == Some(descriptor.display_name))
-            .cloned()
-            .collect();
-        if rows.is_empty() {
-            continue;
-        }
-        // The section string IS the card title (the filter above matches the
-        // display name), so a section header inside the body would repeat the
-        // title — effect card bodies don't re-title themselves. Strip it; the
-        // rows render as one unsectioned run.
-        for r in &mut rows {
-            r.spec.section = None;
-        }
-        // ParamAddr sidecar per row: the row id IS its binding id; the
-        // binding names the inner (node_id, param); the trace resolves the
-        // node_id to the live doc id. Rows whose binding doesn't resolve
-        // (a hand-stripped binding) keep a None sidecar and ride the plain
-        // manifest wires.
-        for r in &mut rows {
-            let Some(b) = bindings.iter().find(|b| b.id == r.id.as_ref()) else {
-                continue;
-            };
-            let BindingTarget::Node { node_id, param } = &b.target else {
-                continue;
-            };
-            let Some(&doc_id) = m.doc_ids.get(node_id.as_str()) else {
-                continue;
-            };
-            r.scene_addr = Some(SceneRowAddr {
-                scope_path: Vec::new(),
-                node_doc_id: doc_id,
-                param_id: param.clone(),
-            });
-        }
-        // Wrap-debug (loop kinds): the beat_ramp's `bars` write address — the
-        // card chrome's DBG button parks/resumes through it.
-        let wrap_debug = (m.kind_id == LOOP_KIND_ID)
-            .then(|| m.doc_ids.get("loop_phase").map(|&doc_id| SceneRowAddr {
-                scope_path: Vec::new(),
-                node_doc_id: doc_id,
-                param_id: "bars".to_string(),
-            }))
-            .flatten();
-        out.push(ParamSurface {
+    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption, ModifierObjectRef};
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
+    let full = gen_params_to_surface(gp, layer_id, None, automation_latched,
+        SurfaceVisibility::All, timing);
+    let bindings = def.preset_metadata.as_ref().map(|m| m.bindings.as_slice()).unwrap_or(&[]);
+    def.scene_modifiers.iter().enumerate().filter_map(|(index, instance)| {
+        let metadata = instance.graph.preset_metadata.as_ref()?;
+        let recipe = metadata.scene_modifier.as_ref()?;
+        let local_id = |host_id: &str| bindings.iter().find_map(|binding| {
+            if binding.id != host_id { return None; }
+            match &binding.target {
+                BindingTarget::SceneModifier { modifier_id, param_id } if modifier_id == &instance.id => Some(param_id.as_str()),
+                _ => None,
+            }
+        });
+        let enabled_row = full.rows.iter().find(|row| local_id(row.id.as_ref()) == Some(recipe.enabled_param.as_str()));
+        let enabled = enabled_row.and_then(|row| {
+            let param = gp.params.get(row.id.as_ref())?;
+            let binding = bindings.iter().find(|binding| binding.id == row.id.as_ref())?;
+            Some(manifold_core::effects::apply_card_reshape(param.base, param.spec.min, param.spec.max,
+                param.spec.invert, param.spec.curve, binding.scale, binding.offset) > 0.5)
+        }).unwrap_or(false);
+        let mut rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
+            id != recipe.enabled_param && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
+        for row in &mut rows { row.scene_addr = None; }
+        Some(ParamSurface {
             kind: ParamCardKind::Effect,
-            title: descriptor.display_name.to_string(),
+            title: metadata.display_name.clone(),
             rows,
             string_params: vec![],
-            // Modifier rows are the generator's own manifest rows — the same
-            // audio-mod/send surface the generator card syncs from.
             audio: full.audio.clone(),
             modifier: Some(ModifierCardInfo {
-                kind_id: m.kind_id.to_string(),
+                instance_id: instance.id.clone(),
                 layer_id: manifold_core::LayerId::new(layer_id),
-                show_enable_toggle: matches!(descriptor.enable, EnableDecl::Switch { .. }),
-                wrap_debug,
+                enabled_label: enabled_row.map(|row| row.spec.name.clone()).unwrap_or_else(|| "Enabled".into()),
+                stack_index: index,
+                stack_len: def.scene_modifiers.len(),
+                targets_all: matches!(instance.targets, SceneTargetSelection::AllObjects),
+                objects: manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(def, &instance.scene)
+                    .unwrap_or_else(|error| {
+                        log::error!("scene modifier {} object selection unavailable: {error}", instance.id);
+                        Vec::new()
+                    }).into_iter().map(|object| {
+                        let selected = match &instance.targets {
+                            SceneTargetSelection::AllObjects => true,
+                            SceneTargetSelection::Explicit { objects } => objects.contains(&object),
+                        };
+                        ModifierObjectOption {
+                            label: modifier_object_label(def, &object),
+                            object: ModifierObjectRef { scope: object.scope, node: object.node },
+                            selected,
+                        }
+                    }).collect(),
             }),
             effect_index: 0,
-            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{}", m.kind_id)),
-            enabled: m.enabled.unwrap_or(true),
+            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{}", instance.id)),
+            enabled,
             collapsed: false,
             supports_envelopes: true,
-            has_graph_mod: false,
+            has_graph_mod: crate::modifier_preset::has_graph_mod(def, &instance.graph),
             layer_id: None,
             relight: crate::ui_translate::relight_card_config_from(gp),
-        });
+        })
+    }).collect()
+}
+
+fn modifier_object_label(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    object: &manifold_core::scene_modifier_preset::SceneNodeRef,
+) -> String {
+    let mut nodes = def.nodes.as_slice();
+    let mut labels = Vec::new();
+    for id in &object.scope {
+        let Some(node) = nodes.iter().find(|node| &node.node_id == id) else { return object.node.to_string(); };
+        labels.push(node.handle.clone().unwrap_or_else(|| id.to_string()));
+        let Some(group) = node.group.as_ref() else { return object.node.to_string(); };
+        nodes = &group.nodes;
     }
-    out
+    let label = nodes.iter().find(|node| node.node_id == object.node)
+        .and_then(|node| node.handle.clone()).unwrap_or_else(|| object.node.to_string());
+    labels.push(label);
+    labels.join(" / ")
 }
 
 /// Build a human-readable description for a macro mapping target.

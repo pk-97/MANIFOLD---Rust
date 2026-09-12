@@ -47,6 +47,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         // timeline content; the panel itself is pre-opened in script.rs.
         "rtquality" => Some(timeline_scene()),
         "gltfscene" => Some(gltf_scene()),
+        "mushroomscene" => Some(mushroom_scene()),
         "gltfanimscene" => Some(gltf_anim_scene()),
         "heldoutmerge" => Some(heldout_merge_scene()),
         "empty" => Some(empty_scene()),
@@ -96,22 +97,35 @@ fn project_scene(path: &str) -> Option<SceneData> {
 /// card carries genuine importer-seeded `section`s (D9/D5), not a hand-built
 /// stand-in. Selects the imported layer so its card renders immediately.
 pub(super) fn gltf_scene() -> SceneData {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+    imported_gltf_scene(&path, "gltfscene", "Azalea")
+}
+
+/// `mushroomscene`: the compact production photoscan fixture used by the
+/// scene-modifier authoring flow. Keep this separate from `gltfscene`, whose
+/// azalea asset is also used by the broader scene setup flows.
+pub(super) fn mushroom_scene() -> SceneData {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0___mushroom.glb");
+    imported_gltf_scene(&path, "mushroomscene", "Mushroom")
+}
+
+fn imported_gltf_scene(path: &std::path::Path, scene_name: &str, fallback_name: &str) -> SceneData {
     use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
-    let (def, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
-        .unwrap_or_else(|e| panic!("ui-snap gltfscene: assemble_import_graph({}) failed: {e}", path.display()));
-    eprintln!("ui-snap gltfscene: import report: {report:?}");
+    let (def, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(path)
+        .unwrap_or_else(|e| panic!("ui-snap {scene_name}: assemble_import_graph({}) failed: {e}", path.display()));
+    eprintln!("ui-snap {scene_name}: import report: {report:?}");
 
     let display_name = def
         .preset_metadata
         .as_ref()
         .map(|m| m.display_name.clone())
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "Azalea".to_string());
+        .unwrap_or_else(|| fallback_name.to_string());
     let embedded = EmbeddedPreset {
         kind: manifold_core::preset_def::PresetKind::Generator,
         def,
@@ -1181,7 +1195,7 @@ fn dmxcard_scene() -> SceneData {
     // would eat them) so the PNG pins the orientation: LED 0 at the bottom,
     // strip 0 at the left.
     let mut pixels = vec![0u8; 8 * 120 * 4];
-    let mut set = |pixels: &mut [u8], led: usize, strip: usize, rgb: [u8; 3]| {
+    let set = |pixels: &mut [u8], led: usize, strip: usize, rgb: [u8; 3]| {
         let o = (led * 8 + strip) * 4;
         pixels[o] = rgb[0];
         pixels[o + 1] = rgb[1];

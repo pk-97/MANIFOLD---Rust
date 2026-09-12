@@ -17,7 +17,7 @@ use crate::types::{
     PresetTypeId, TonemapCurve,
 };
 use crate::view::UiGraphTarget;
-use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, ParamId};
+use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, NodeId, ParamId};
 
 #[derive(Debug, Clone)]
 pub enum TransportAction {
@@ -283,20 +283,30 @@ pub enum ProjectAction {
     /// RT Quality settings: replace entire RtQualitySettings struct.
     /// Dispatches `ChangeRtQualityCommand`. One undo unit covers all changes.
     ChangeRtQuality(manifold_foundation::settings::RtQualitySettings),
-    /// SCENE_MODIFIER_FRAMEWORK P1/D1: apply a scene modifier kind to the
-    /// layer's scene. Dispatches the generic `ApplySceneModifierCommand` with
-    /// the kind descriptor's plan built against the layer's current graph.
-    /// `(layer_id, kind_id)`.
+    /// Attach a catalog recipe to the owning scene through content-side admission.
+    /// `(layer_id, preset_id)`.
     SceneModifierApply(LayerId, String),
-    /// SCENE_MODIFIER_FRAMEWORK P1/D1: remove an applied kind — the generic
-    /// remove command re-derives the plan it inverts. `(layer_id, kind_id)`.
-    SceneModifierRemove(LayerId, String),
-    /// SCENE_MODIFIER_FRAMEWORK D5/P3: the modifier card's enable toggle.
-    /// ONE param write on the kind's enable target (switch kinds: the camera
-    /// switch's `select`; gate kinds: the enabled value atom's `value`),
-    /// resolved app-side from the descriptor + trace — undoable, no
-    /// structural change (INV-M7). `(layer_id, kind_id)`.
-    SceneModifierToggleEnabled(LayerId, String),
+    /// Remove the exact applied snapshot. `(layer_id, instance_id)`.
+    SceneModifierRemove(LayerId, NodeId),
+    /// Toggle the declared Enabled macro through its existing host mapping.
+    /// `(layer_id, instance_id)`.
+    SceneModifierToggleEnabled(LayerId, NodeId),
+    /// Move one applied modifier to `target_index` in its layer stack.
+    SceneModifierMove(LayerId, NodeId, usize),
+    /// Set the modifier's object targets. `None` means all objects.
+    SceneModifierSetTargets(
+        LayerId,
+        NodeId,
+        Option<Vec<crate::param_surface::ModifierObjectRef>>,
+    ),
+    /// Replace the complete ordered scene-modifier stack for one layer.
+    /// Stable modifier node ids are the domain address; card positions are UI only.
+    SceneModifiersReorder(LayerId, Vec<NodeId>),
+    /// Duplicate the selected scene modifiers, preserving their stable ids in
+    /// the command's captured selection.
+    SceneModifiersDuplicate(LayerId, Vec<NodeId>),
+    /// Remove the selected scene modifiers as one undoable operation.
+    SceneModifiersRemove(LayerId, Vec<NodeId>),
 }
 
 #[derive(Debug, Clone)]
@@ -352,6 +362,19 @@ pub enum ClipAction {
     ClipLoopToggle,
 }
 
+/// Context-menu operation for any preset-backed card. The target is carried
+/// separately so modifier cards and ordinary cards share one dispatch path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetActionKind {
+    MakeUnique,
+    Export,
+    Import,
+    SaveToLibrary,
+    SaveToProject,
+    RevertToLibrary,
+    PushToLibrary,
+}
+
 #[derive(Debug, Clone)]
 pub enum ParamsAction {
     // Audio-layer Gain scrub trio migrated to `PanelAction::Scrub`
@@ -391,6 +414,9 @@ pub enum ParamsAction {
     /// structural rebuild so every card's drawers hide/show. No model mutation.
     ModsCompactToggled,
     EffectCardClicked(usize),
+    /// A scene-modifier card was selected. The stable instance id is the UI
+    /// selection address; it is never converted to an effect position.
+    ModifierCardClicked(NodeId),
     /// one atomic enum write (a dropdown pick). Dispatch runs the
     /// generic `Scrub(ValueRef::Param, …)` gesture (Begin/Move/Commit) in
     /// sequence, so the scene id_map interception and the one-undo-unit
@@ -467,6 +493,8 @@ pub enum ParamsAction {
     /// the dispatch falls back to Save to Library (as new) instead. Shown
     /// only when diverged, same gate as `RevertToLibrary`.
     PushToLibrary(GraphParamTarget),
+    /// Shared preset context-menu action with a target captured at click time.
+    PresetAction(crate::view::UiGraphTarget, PresetActionKind),
     MacrosCollapseToggle,
     // Macro scrub trio migrated to `PanelAction::Scrub` (`ValueRef::Macro`,
     // P-I / D4).
@@ -728,6 +756,16 @@ pub enum RootAction {
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
     SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
+    /// Open the object-target and preview menu for a scene modifier card.
+    SceneModifierObjectsClicked(LayerId, NodeId),
+    /// Open the shared preset menu for one exact scene modifier card.
+    SceneModifierCardRightClicked(LayerId, NodeId),
+    /// Preview one exact scene object through a scene modifier instance.
+    PreviewSceneModifierObject(
+        LayerId,
+        NodeId,
+        crate::param_surface::ModifierObjectRef,
+    ),
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write
     /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the
@@ -770,6 +808,9 @@ pub enum RootAction {
     /// Currently shows a hardcoded test graph regardless of which effect
     /// triggered it; live data sync lands in a future phase.
     OpenGraphEditor(usize),
+    /// Open any graph target, including a modifier instance nested in its
+    /// owning generator graph.
+    OpenGraphTarget(UiGraphTarget),
     /// Open the mapping drawer from an Author-context card. Carries its target,
     /// parameter id, and clicked node so selection and duplicate names cannot
     /// redirect the drawer or its anchor. Editor-only:

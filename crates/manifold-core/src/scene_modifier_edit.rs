@@ -20,6 +20,9 @@ use crate::scene_modifier_preset::{
 pub struct SceneModifierGraphEdit {
     pub graph: EffectGraphDef,
     pub removed_param_ids: Vec<String>,
+    /// Host parameter ids whose runtime state should be copied to a duplicated
+    /// modifier. Each pair is `(source_id, duplicate_id)`.
+    pub parameter_id_remaps: Vec<(String, String)>,
 }
 
 /// Rejections from pure scene-modifier graph edits.
@@ -39,6 +42,13 @@ pub enum SceneModifierEditError {
     ParameterIdCollision {
         id: String,
     },
+    AmbiguousSharedMacro {
+        id: String,
+    },
+    InvalidModifierOrder {
+        detail: String,
+    },
+    EmptyModifierSelection,
     RetargetChangedSavedFrame {
         target: String,
     },
@@ -67,6 +77,16 @@ impl fmt::Display for SceneModifierEditError {
                     "scene modifier parameter id `{id}` collides with host metadata"
                 )
             }
+            Self::AmbiguousSharedMacro { id } => write!(
+                f,
+                "scene modifier macro `{id}` is shared with an unrelated host binding"
+            ),
+            Self::InvalidModifierOrder { detail } => {
+                write!(f, "invalid scene modifier order: {detail}")
+            }
+            Self::EmptyModifierSelection => {
+                write!(f, "at least one scene modifier must be selected")
+            }
             Self::RetargetChangedSavedFrame { target } => {
                 write!(f, "retarget changed the saved frame for `{target}`")
             }
@@ -85,6 +105,19 @@ fn macro_id(instance: &SceneModifierInstanceDef, local_id: &str) -> String {
     let tuple = serde_json::to_string(&(instance.id.as_str(), local_id))
         .expect("NodeId and str are serializable");
     format!("sceneModifier:{tuple}")
+}
+
+fn fresh_macro_id(base: String, used: &mut HashSet<String>) -> String {
+    if used.insert(base.clone()) {
+        return base;
+    }
+    for suffix in 2.. {
+        let candidate = format!("{base}#{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("finite host metadata cannot exhaust macro id suffixes")
 }
 
 fn metadata_id_in_use(metadata: &crate::effect_graph_def::PresetMetadata, id: &str) -> bool {
@@ -148,6 +181,7 @@ pub fn insert_scene_modifier(
     Ok(SceneModifierGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
     })
 }
 
@@ -215,12 +249,14 @@ pub fn delete_scene_modifier(
         return Ok(SceneModifierGraphEdit {
             graph,
             removed_param_ids,
+            parameter_id_remaps: Vec::new(),
         });
     }
     validate(&graph)?;
     Ok(SceneModifierGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
     })
 }
 
@@ -353,6 +389,7 @@ pub fn reconcile_scene_modifier_parameters(
     Ok(SceneModifierGraphEdit {
         graph,
         removed_param_ids,
+        parameter_id_remaps: Vec::new(),
     })
 }
 
@@ -374,19 +411,27 @@ pub fn set_scene_modifier_preparation_param(
         return Err(SceneModifierEditError::DuplicateModifierId { id: id.to_string() });
     }
     let local = local_metadata(instance)?;
-    let recipe = local
-        .scene_modifier
-        .as_ref()
-        .ok_or_else(|| SceneModifierEditError::InvalidSchema {
-            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
-                path: format!("{}.graph.presetMetadata", id),
-                detail: "preparation parameter requires scene modifier recipe metadata".into(),
-            },
-        })?;
-    if !recipe.preparation_params.iter().any(|param| param == param_id) {
+    let recipe =
+        local
+            .scene_modifier
+            .as_ref()
+            .ok_or_else(|| SceneModifierEditError::InvalidSchema {
+                error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                    path: format!("{}.graph.presetMetadata", id),
+                    detail: "preparation parameter requires scene modifier recipe metadata".into(),
+                },
+            })?;
+    if !recipe
+        .preparation_params
+        .iter()
+        .any(|param| param == param_id)
+    {
         return Err(SceneModifierEditError::InvalidSchema {
             error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
-                path: format!("{}.graph.presetMetadata.sceneModifier.preparationParams", id),
+                path: format!(
+                    "{}.graph.presetMetadata.sceneModifier.preparationParams",
+                    id
+                ),
                 detail: format!("parameter `{param_id}` is not declared as preparation-only"),
             },
         });
@@ -401,13 +446,19 @@ pub fn set_scene_modifier_preparation_param(
                 detail: format!("preparation parameter `{param_id}` is not numeric"),
             },
         })?;
-    if !value.is_finite() || !spec.min.is_finite() || !spec.max.is_finite()
-        || value < spec.min || value > spec.max
+    if !value.is_finite()
+        || !spec.min.is_finite()
+        || !spec.max.is_finite()
+        || value < spec.min
+        || value > spec.max
     {
         return Err(SceneModifierEditError::InvalidSchema {
             error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
                 path: format!("{}.graph.presetMetadata.params.{param_id}", id),
-                detail: format!("value {value} must be finite and within [{}, {}]", spec.min, spec.max),
+                detail: format!(
+                    "value {value} must be finite and within [{}, {}]",
+                    spec.min, spec.max
+                ),
             },
         });
     }
@@ -424,7 +475,9 @@ pub fn set_scene_modifier_preparation_param(
         return Err(SceneModifierEditError::InvalidSchema {
             error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
                 path: format!("{}.graph.presetMetadata.bindings", id),
-                detail: format!("preparation parameter `{param_id}` requires a direct node binding"),
+                detail: format!(
+                    "preparation parameter `{param_id}` requires a direct node binding"
+                ),
             },
         });
     }
@@ -446,12 +499,18 @@ pub fn set_scene_modifier_preparation_param(
         .find(|param| param.id == param_id)
         .expect("numeric preparation parameter was found above")
         .default_value = value;
-    for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == param_id) {
+    for binding in metadata
+        .bindings
+        .iter_mut()
+        .filter(|binding| binding.id == param_id)
+    {
         binding.default_value = value;
         binding.default_mirrors_node_param = false;
     }
     if let Some(recipe) = metadata.scene_modifier.as_mut() {
-        recipe.calibrations.retain(|calibration| calibration.param_id != param_id);
+        recipe
+            .calibrations
+            .retain(|calibration| calibration.param_id != param_id);
         recipe.initializers.retain(|initializer| {
             !leaf_targets.iter().any(|(node_id, param)| {
                 initializer.target.node == *node_id && initializer.param == *param
@@ -459,7 +518,11 @@ pub fn set_scene_modifier_preparation_param(
         });
     }
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit { graph, removed_param_ids: Vec::new() })
+    Ok(SceneModifierGraphEdit {
+        graph,
+        removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
+    })
 }
 
 /// Move a modifier to its final post-removal index. `index == len - 1`
@@ -489,6 +552,351 @@ pub fn move_scene_modifier(
     Ok(SceneModifierGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
+    })
+}
+
+/// Replace the complete authored modifier order in one validated operation.
+/// The submitted ids must be a permutation of the current stack, so a stale
+/// card order cannot silently drop or duplicate an instance.
+pub fn reorder_scene_modifiers(
+    owner: &EffectGraphDef,
+    order: &[NodeId],
+) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+    if order.len() != owner.scene_modifiers.len() {
+        return Err(SceneModifierEditError::InvalidModifierOrder {
+            detail: format!(
+                "received {} ids for a stack containing {} modifiers",
+                order.len(),
+                owner.scene_modifiers.len()
+            ),
+        });
+    }
+    let mut seen = HashSet::new();
+    let mut reordered = Vec::with_capacity(order.len());
+    for id in order {
+        if !seen.insert(id.clone()) {
+            return Err(SceneModifierEditError::InvalidModifierOrder {
+                detail: format!("modifier `{id}` appears more than once"),
+            });
+        }
+        let instance = owner
+            .scene_modifiers
+            .iter()
+            .find(|item| &item.id == id)
+            .ok_or_else(|| SceneModifierEditError::InvalidModifierOrder {
+                detail: format!("modifier `{id}` is not present in the current stack"),
+            })?;
+        reordered.push(instance.clone());
+    }
+    let mut graph = owner.clone();
+    graph.scene_modifiers = reordered;
+    validate(&graph)?;
+    Ok(SceneModifierGraphEdit {
+        graph,
+        removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
+    })
+}
+
+/// Remove a selected set of modifiers and the host metadata owned exclusively
+/// by those instances. Selection validation happens before cloning or editing
+/// anything, keeping malformed multi-remove requests atomic.
+pub fn remove_scene_modifiers(
+    owner: &EffectGraphDef,
+    selected: &[NodeId],
+) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+    if selected.is_empty() {
+        return Err(SceneModifierEditError::EmptyModifierSelection);
+    }
+    let mut ids = HashSet::new();
+    for id in selected {
+        if !ids.insert(id.clone()) {
+            return Err(SceneModifierEditError::InvalidModifierOrder {
+                detail: format!("modifier `{id}` appears more than once in the selection"),
+            });
+        }
+        if !owner.scene_modifiers.iter().any(|item| &item.id == id) {
+            return Err(SceneModifierEditError::MissingModifier { id: id.to_string() });
+        }
+    }
+
+    let mut graph = owner.clone();
+    graph.scene_modifiers.retain(|item| !ids.contains(&item.id));
+    let mut removed_binding_ids = HashSet::new();
+    if let Some(metadata) = graph.preset_metadata.as_mut() {
+        metadata.bindings.retain(|binding| {
+            let remove = matches!(
+                &binding.target,
+                BindingTarget::SceneModifier { modifier_id, .. } if ids.contains(modifier_id)
+            );
+            if remove {
+                removed_binding_ids.insert(binding.id.clone());
+            }
+            !remove
+        });
+        metadata.string_bindings.retain(|binding| {
+            let remove = matches!(
+                &binding.target,
+                BindingTarget::SceneModifier { modifier_id, .. } if ids.contains(modifier_id)
+            );
+            if remove {
+                removed_binding_ids.insert(binding.id.clone());
+            }
+            !remove
+        });
+        let still_used: HashSet<_> = metadata
+            .bindings
+            .iter()
+            .map(|binding| binding.id.as_str())
+            .chain(
+                metadata
+                    .string_bindings
+                    .iter()
+                    .map(|binding| binding.id.as_str()),
+            )
+            .collect();
+        let mut removed_param_ids = Vec::new();
+        metadata.params.retain(|param| {
+            let remove =
+                removed_binding_ids.contains(&param.id) && !still_used.contains(param.id.as_str());
+            if remove {
+                removed_param_ids.push(param.id.clone());
+            }
+            !remove
+        });
+        metadata.string_params.retain(|param| {
+            let remove =
+                removed_binding_ids.contains(&param.id) && !still_used.contains(param.id.as_str());
+            if remove && !removed_param_ids.contains(&param.id) {
+                removed_param_ids.push(param.id.clone());
+            }
+            !remove
+        });
+        validate(&graph)?;
+        return Ok(SceneModifierGraphEdit {
+            graph,
+            removed_param_ids,
+            parameter_id_remaps: Vec::new(),
+        });
+    }
+    validate(&graph)?;
+    Ok(SceneModifierGraphEdit {
+        graph,
+        removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
+    })
+}
+
+/// Duplicate selected modifiers as one block immediately after the selected
+/// source block. Local graph definitions are cloned, while each instance and
+/// host-facing macro address receives a fresh identity.
+pub fn duplicate_scene_modifiers(
+    owner: &EffectGraphDef,
+    selected: &[NodeId],
+) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+    if selected.is_empty() {
+        return Err(SceneModifierEditError::EmptyModifierSelection);
+    }
+    let mut selected_set = HashSet::new();
+    for id in selected {
+        if !selected_set.insert(id.clone()) {
+            return Err(SceneModifierEditError::InvalidModifierOrder {
+                detail: format!("modifier `{id}` appears more than once in the selection"),
+            });
+        }
+        if !owner.scene_modifiers.iter().any(|item| &item.id == id) {
+            return Err(SceneModifierEditError::MissingModifier { id: id.to_string() });
+        }
+    }
+
+    let selected_instances: Vec<_> = owner
+        .scene_modifiers
+        .iter()
+        .filter(|instance| selected_set.contains(&instance.id))
+        .cloned()
+        .collect();
+    let insert_at = owner
+        .scene_modifiers
+        .iter()
+        .rposition(|instance| selected_set.contains(&instance.id))
+        .expect("validated selection is non-empty")
+        + 1;
+    let mut used_ids: HashSet<NodeId> = owner
+        .scene_modifiers
+        .iter()
+        .map(|instance| instance.id.clone())
+        .collect();
+    let mut copies = Vec::with_capacity(selected_instances.len());
+    let mut remaps = Vec::new();
+    let mut numeric_specs: Vec<crate::effect_graph_def::ParamSpecDef> = Vec::new();
+    let mut numeric_bindings: Vec<BindingDef> = Vec::new();
+    let mut string_specs: Vec<crate::effect_graph_def::StringParamSpecDef> = Vec::new();
+    let mut string_bindings: Vec<StringBindingDef> = Vec::new();
+    let mut used_macro_ids: HashSet<String> = owner
+        .preset_metadata
+        .as_ref()
+        .map(|metadata| {
+            metadata
+                .params
+                .iter()
+                .map(|param| param.id.clone())
+                .chain(metadata.string_params.iter().map(|param| param.id.clone()))
+                .chain(metadata.bindings.iter().map(|binding| binding.id.clone()))
+                .chain(
+                    metadata
+                        .string_bindings
+                        .iter()
+                        .map(|binding| binding.id.clone()),
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+    for source in selected_instances {
+        let mut copy = source.clone();
+        let new_id = loop {
+            let candidate = NodeId::new(crate::short_id());
+            if used_ids.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
+        copy.id = new_id;
+        if let Some(metadata) = owner.preset_metadata.as_ref() {
+            let mut source_numeric_ids = HashMap::new();
+            for binding in metadata.bindings.iter().filter(|binding| {
+                matches!(
+                    &binding.target,
+                    BindingTarget::SceneModifier { modifier_id, .. } if modifier_id == &source.id
+                )
+            }) {
+                let source_id = binding.id.clone();
+                if metadata.bindings.iter().any(|other| {
+                    other.id == source_id
+                        && !matches!(
+                            &other.target,
+                            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id == &source.id
+                        )
+                }) {
+                    return Err(SceneModifierEditError::AmbiguousSharedMacro { id: source_id });
+                }
+                let destination = source_numeric_ids
+                    .entry(source_id.clone())
+                    .or_insert_with(|| {
+                        let local_id = match &binding.target {
+                            BindingTarget::SceneModifier { param_id, .. } => param_id,
+                            _ => unreachable!(),
+                        };
+                        let base = macro_id(&copy, local_id);
+                        fresh_macro_id(base, &mut used_macro_ids)
+                    })
+                    .clone();
+                if !remaps.iter().any(|(old, _)| old == &source_id) {
+                    remaps.push((source_id.clone(), destination.clone()));
+                }
+                if !numeric_specs.iter().any(|spec| spec.id == destination) {
+                    let spec = metadata
+                        .params
+                        .iter()
+                        .find(|param| param.id == source_id)
+                        .ok_or_else(|| SceneModifierEditError::InvalidSchema {
+                            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                                path: format!("host.presetMetadata.params.{source_id}"),
+                                detail: "scene modifier binding has no parameter spec".into(),
+                            },
+                        })?;
+                    let mut spec = spec.clone();
+                    spec.id = destination.clone();
+                    numeric_specs.push(spec);
+                }
+                let mut clone = binding.clone();
+                clone.id = destination.clone();
+                clone.target = BindingTarget::SceneModifier {
+                    modifier_id: copy.id.clone(),
+                    param_id: match &binding.target {
+                        BindingTarget::SceneModifier { param_id, .. } => param_id.clone(),
+                        _ => unreachable!(),
+                    },
+                };
+                numeric_bindings.push(clone);
+            }
+
+            let mut source_string_ids = HashMap::new();
+            for binding in metadata.string_bindings.iter().filter(|binding| {
+                matches!(
+                    &binding.target,
+                    BindingTarget::SceneModifier { modifier_id, .. } if modifier_id == &source.id
+                )
+            }) {
+                let source_id = binding.id.clone();
+                if metadata.string_bindings.iter().any(|other| {
+                    other.id == source_id
+                        && !matches!(
+                            &other.target,
+                            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id == &source.id
+                        )
+                }) {
+                    return Err(SceneModifierEditError::AmbiguousSharedMacro { id: source_id });
+                }
+                let destination = source_string_ids
+                    .entry(source_id.clone())
+                    .or_insert_with(|| {
+                        let local_id = match &binding.target {
+                            BindingTarget::SceneModifier { param_id, .. } => param_id,
+                            _ => unreachable!(),
+                        };
+                        let base = macro_id(&copy, local_id);
+                        fresh_macro_id(base, &mut used_macro_ids)
+                    })
+                    .clone();
+                if !remaps.iter().any(|(old, _)| old == &source_id) {
+                    remaps.push((source_id.clone(), destination.clone()));
+                }
+                if !string_specs.iter().any(|spec| spec.id == destination) {
+                    let spec = metadata
+                        .string_params
+                        .iter()
+                        .find(|param| param.id == source_id)
+                        .ok_or_else(|| SceneModifierEditError::InvalidSchema {
+                            error: crate::scene_modifier_preset::SceneModifierSchemaError::InvalidBinding {
+                                path: format!("host.presetMetadata.stringParams.{source_id}"),
+                                detail: "scene modifier string binding has no parameter spec".into(),
+                            },
+                        })?;
+                    let mut spec = spec.clone();
+                    spec.id = destination.clone();
+                    string_specs.push(spec);
+                }
+                let mut clone = binding.clone();
+                clone.id = destination.clone();
+                clone.target = BindingTarget::SceneModifier {
+                    modifier_id: copy.id.clone(),
+                    param_id: match &binding.target {
+                        BindingTarget::SceneModifier { param_id, .. } => param_id.clone(),
+                        _ => unreachable!(),
+                    },
+                };
+                string_bindings.push(clone);
+            }
+        }
+        copies.push(copy);
+    }
+    let new_ids: Vec<_> = copies.iter().map(|copy| copy.id.clone()).collect();
+    let mut graph = owner.clone();
+    graph.scene_modifiers.splice(insert_at..insert_at, copies);
+    if let Some(metadata) = graph.preset_metadata.as_mut() {
+        metadata.params.extend(numeric_specs);
+        metadata.bindings.extend(numeric_bindings);
+        metadata.string_params.extend(string_specs);
+        metadata.string_bindings.extend(string_bindings);
+    }
+    for id in &new_ids {
+        graph = reconcile_scene_modifier_parameters(&graph, id)?.graph;
+    }
+    validate(&graph)?;
+    Ok(SceneModifierGraphEdit {
+        graph,
+        removed_param_ids: Vec::new(),
+        parameter_id_remaps: remaps,
     })
 }
 
@@ -531,6 +939,7 @@ pub fn retarget_scene_modifier(
     Ok(SceneModifierGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
+        parameter_id_remaps: Vec::new(),
     })
 }
 
@@ -722,7 +1131,9 @@ mod tests {
 
     fn preparation_owner() -> EffectGraphDef {
         use crate::effect_graph_def::{EffectGraphNode, SerializedParamValue};
-        use crate::scene_modifier_preset::{SceneNodeInitializer, SceneParamCalibration, SceneScalarExpr};
+        use crate::scene_modifier_preset::{
+            SceneNodeInitializer, SceneParamCalibration, SceneScalarExpr,
+        };
         let mut instance = recipe("preparation");
         let metadata = instance.graph.preset_metadata.as_mut().unwrap();
         metadata
@@ -751,7 +1162,10 @@ mod tests {
             .unwrap()
             .initializers
             .push(SceneNodeInitializer {
-                target: SceneNodeRef { scope: vec![], node: NodeId::new("leaf") },
+                target: SceneNodeRef {
+                    scope: vec![],
+                    node: NodeId::new("leaf"),
+                },
                 param: "gain".into(),
                 value: SceneScalarExpr::Constant { value: 0.8 },
             });
@@ -771,11 +1185,9 @@ mod tests {
             node_id: NodeId::new("leaf"),
             type_id: "node.value".into(),
             handle: None,
-            params: [
-                ("gain".into(), SerializedParamValue::Float { value: 0.3 }),
-            ]
-            .into_iter()
-            .collect(),
+            params: [("gain".into(), SerializedParamValue::Float { value: 0.3 })]
+                .into_iter()
+                .collect(),
             exposed_params: Default::default(),
             editor_pos: None,
             wgsl_source: None,
@@ -792,24 +1204,48 @@ mod tests {
     #[test]
     fn scene_modifier_preparation_sets_fixed_default_and_removes_dynamic_seeders() {
         let owner = preparation_owner();
-        let edited = set_scene_modifier_preparation_param(
-            &owner,
-            &NodeId::new("preparation"),
-            "gain",
-            0.75,
-        )
-        .expect("declared preparation parameter edits");
+        let edited =
+            set_scene_modifier_preparation_param(&owner, &NodeId::new("preparation"), "gain", 0.75)
+                .expect("declared preparation parameter edits");
         let local = &edited.graph.scene_modifiers[0].graph;
         let metadata = local.preset_metadata.as_ref().unwrap();
-        assert_eq!(metadata.params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.75);
+        assert_eq!(
+            metadata
+                .params
+                .iter()
+                .find(|p| p.id == "gain")
+                .unwrap()
+                .default_value,
+            0.75
+        );
         let binding = metadata.bindings.iter().find(|b| b.id == "gain").unwrap();
         assert_eq!(binding.default_value, 0.75);
         assert!(!binding.default_mirrors_node_param);
         let recipe = metadata.scene_modifier.as_ref().unwrap();
         assert!(recipe.calibrations.iter().all(|c| c.param_id != "gain"));
         assert!(recipe.initializers.iter().all(|i| i.param != "gain"));
-        assert_eq!(metadata.params.iter().find(|p| p.id == "enabled").unwrap().default_value, 1.0);
-        assert_eq!(owner.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "gain").unwrap().default_value, 0.3);
+        assert_eq!(
+            metadata
+                .params
+                .iter()
+                .find(|p| p.id == "enabled")
+                .unwrap()
+                .default_value,
+            1.0
+        );
+        assert_eq!(
+            owner.scene_modifiers[0]
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .params
+                .iter()
+                .find(|p| p.id == "gain")
+                .unwrap()
+                .default_value,
+            0.3
+        );
         assert!(edited.removed_param_ids.is_empty());
     }
 
@@ -900,4 +1336,105 @@ mod tests {
         );
         assert_eq!(removed.graph.preset_metadata, graph.preset_metadata);
     }
+
+    #[test]
+    fn scene_modifier_edit_reorder_requires_a_current_permutation() {
+        let graph = insert_scene_modifier(
+            &insert_scene_modifier(&owner(), 0, recipe("a"))
+                .unwrap()
+                .graph,
+            1,
+            recipe("b"),
+        )
+        .unwrap()
+        .graph;
+        let before = graph.clone();
+        for order in [
+            vec![NodeId::new("a")],
+            vec![NodeId::new("a"), NodeId::new("a")],
+            vec![NodeId::new("a"), NodeId::new("missing")],
+        ] {
+            assert!(matches!(
+                reorder_scene_modifiers(&graph, &order),
+                Err(SceneModifierEditError::InvalidModifierOrder { .. })
+            ));
+        }
+        assert_eq!(graph, before);
+        let reordered =
+            reorder_scene_modifiers(&graph, &[NodeId::new("b"), NodeId::new("a")]).unwrap();
+        assert_eq!(
+            reordered
+                .graph
+                .scene_modifiers
+                .iter()
+                .map(|instance| instance.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+    }
+
+    #[test]
+    fn scene_modifier_edit_duplicate_remints_macros_and_remove_is_atomic() {
+        let graph = insert_scene_modifier(&owner(), 0, recipe("source"))
+            .unwrap()
+            .graph;
+        let duplicate = duplicate_scene_modifiers(&graph, &[NodeId::new("source")]).unwrap();
+        assert_eq!(duplicate.graph.scene_modifiers.len(), 2);
+        let duplicate_id = duplicate
+            .graph
+            .scene_modifiers
+            .iter()
+            .find(|instance| instance.id != NodeId::new("source"))
+            .unwrap()
+            .id
+            .clone();
+        assert_ne!(duplicate_id, NodeId::new("source"));
+        assert!(duplicate.parameter_id_remaps.iter().any(|(source, copy)| {
+            source == "sceneModifier:[\"source\",\"gain\"]"
+                && copy == &format!("sceneModifier:[\"{}\",\"gain\"]", duplicate_id)
+        }));
+        let removed = remove_scene_modifiers(
+            &duplicate.graph,
+            &[NodeId::new("source"), NodeId::new("missing")],
+        );
+        assert!(matches!(
+            removed,
+            Err(SceneModifierEditError::MissingModifier { .. })
+        ));
+        let removed = remove_scene_modifiers(&duplicate.graph, &[NodeId::new("source")]).unwrap();
+        assert_eq!(removed.graph.scene_modifiers.len(), 1);
+        assert!(
+            removed
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .params
+                .iter()
+                .all(|param| !param.id.contains("source"))
+        );
+    }
+    #[test]
+    fn scene_modifier_edit_duplicate_preserves_migrated_macro_calibration() {
+        let mut graph = insert_scene_modifier(&owner(), 0, recipe("source")).unwrap().graph;
+        let metadata = graph.preset_metadata.as_mut().unwrap();
+        let old = "sceneModifier:[\"source\",\"gain\"]";
+        let spec = metadata.params.iter_mut().find(|spec| spec.id == old).unwrap();
+        spec.id = "migratedGain".into();
+        spec.min = -2.0;
+        spec.max = 4.0;
+        for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == old) {
+            binding.id = "migratedGain".into();
+            binding.scale = 0.25;
+            binding.offset = 0.3;
+        }
+        let copy = duplicate_scene_modifiers(&graph, &[NodeId::new("source")]).unwrap();
+        let (_, destination) = copy.parameter_id_remaps.iter().find(|(source, _)| source == "migratedGain").unwrap();
+        let metadata = copy.graph.preset_metadata.as_ref().unwrap();
+        let spec = metadata.params.iter().find(|spec| &spec.id == destination).unwrap();
+        assert_eq!((spec.min, spec.max), (-2.0, 4.0));
+        let binding = metadata.bindings.iter().find(|binding| &binding.id == destination).unwrap();
+        assert_eq!((binding.scale, binding.offset), (0.25, 0.3));
+    }
+
 }

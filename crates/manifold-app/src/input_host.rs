@@ -178,7 +178,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
 
     fn handle_effect_select_all(&mut self) -> bool {
-        let selected = self.ui_root.inspector.select_all_effects();
+        let selected = if self.ui_root.inspector.has_modifier_selection() {
+            self.ui_root.inspector.select_all_modifiers()
+        } else { self.ui_root.inspector.select_all_effects() };
         if selected {
             self.ui_root
                 .inspector
@@ -294,6 +296,16 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_delete(&mut self) -> bool {
+        if self.ui_root.inspector.has_modifier_selection() {
+            if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
+                let ids = self.ui_root.inspector.selected_modifier_ids();
+                ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids)));
+                *self.needs_structural_sync = true;
+                *self.needs_rebuild = true;
+            }
+            return true;
+        }
         if !self.ui_root.inspector.has_effect_selection() {
             return false;
         }

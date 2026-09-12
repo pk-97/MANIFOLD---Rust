@@ -70,8 +70,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value",
-          "node_type": "Label"
+          "under_text": "Bars",
+          "type": "Label"
         }
       },
       "check": {
@@ -83,8 +83,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.39_bars.slider",
-          "node_type": "Button"
+          "under_text": "Bars",
+          "type": "Button"
         }
       },
       "gesture": {
@@ -106,8 +106,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value",
-          "node_type": "Label"
+          "under_text": "Bars",
+          "type": "Label"
         }
       },
       "check": {
@@ -139,7 +139,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.40_pattern_length.value"
+          "under_text": "Pattern",
+          "type": "Label"
         }
       },
       "check": {
@@ -151,7 +152,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.41_patterns_per_loop.value"
+          "under_text": "Stride",
+          "type": "Label"
         }
       },
       "check": {
@@ -163,7 +165,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.40_pattern_length.slider"
+          "under_text": "Pattern",
+          "type": "Button"
         }
       },
       "gesture": {
@@ -183,7 +186,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.41_patterns_per_loop.slider"
+          "under_text": "Stride",
+          "type": "Button"
         }
       },
       "gesture": {
@@ -223,7 +227,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value"
+          "under_text": "Bars",
+          "type": "Label"
         }
       },
       "check": {
@@ -249,7 +254,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value"
+          "under_text": "Bars",
+          "type": "Label"
         }
       },
       "check": {

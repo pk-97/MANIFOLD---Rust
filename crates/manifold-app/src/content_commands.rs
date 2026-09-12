@@ -525,6 +525,12 @@ impl ContentThread {
         manifold_core::cold_touch::reset_cold_touch_counts();
     }
 
+    fn report_graph_edit_rejection(&mut self, message: String) {
+        log::warn!("{message}");
+        let sequence = self.graph_edit_diagnostic.as_ref().map_or(1, |event| event.sequence.wrapping_add(1));
+        self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+    }
+
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
         match cmd {
@@ -724,10 +730,21 @@ impl ContentThread {
             }
 
             // ── Editing ────────────────────────────────────────────
-            ContentCommand::Execute(cmd) => {
+            ContentCommand::GraphEditRejected(message) => self.report_graph_edit_rejection(message),
+            ContentCommand::SceneModifier(action) => {
+                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::scene_modifier_edit::build_action(project, action));
+                match result {
+                    Ok(command) => { self.handle_command(ContentCommand::Execute(command)); },
+                    Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
+            ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
+                let cmd = crate::scene_modifier_edit::with_admission(cmd);
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute(cmd, p);
                 }
+                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 // Refresh the compositor even while paused: a blend-mode change,
                 // effect edit, or reorder that doesn't alter clip membership
                 // won't be picked up by the sync path alone.
@@ -743,8 +760,10 @@ impl ContentThread {
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
                 if let Some(p) = self.engine.project_mut() {
-                    self.editing_service.execute_batch(cmds, desc, p);
+                    let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
+                    self.editing_service.execute(crate::scene_modifier_edit::with_admission(command), p);
                 }
+                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 self.engine.mark_compositor_dirty_now();
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
@@ -832,6 +851,7 @@ impl ContentThread {
                         });
                     }
                 }
+                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 self.engine.mark_compositor_dirty_now();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {

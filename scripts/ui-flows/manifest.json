@@ -1,5 +1,5 @@
 {
-  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py.",
+  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flow-name filters (same substring semantics as positional filters). A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
@@ -89,6 +89,9 @@
     ],
     "crates/manifold-ui/src/panels/rt_quality_panel.rs": [
       "rt-quality"
+    ],
+    "crates/manifold-app/src/scene_modifier_edit": [
+      "scene-modifier-preset"
     ]
   },
   "flows": {
@@ -139,7 +142,8 @@
     "effect-browser-open": "inspector",
     "scene-setup-ux-p2-demo": "gltfscene",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
-    "rt-quality-panel-demo": "rtquality"
+    "rt-quality-panel-demo": "rtquality",
+    "scene-modifier-preset": "mushroomscene"
   },
   "expected_fail": {
     "scene-panel-card-convergence-c-p1b-object-scrub": {
@@ -150,7 +154,7 @@
     "scene-setup-add-fog-drag": {
       "scene": "gltfscene",
       "bug": "BUG-vqlm",
-      "reason": "Red on main @ c03d7865 (2026-08-15): the add-fog click lands on the button but no fog is added; the panel rebuilds mid-flow with selection reverted from World to the default first object. Trunk bug, not a branch regression — verified identical at base. REMOVE from xfail when BUG-vqlm closes."
+      "reason": "Red on main @ c03d7865 (2026-08-15): the add-fog click lands on the button but no fog is added; the panel rebuilds mid-flow with selection reverted from World to the default first object. Trunk bug, not a branch regression \u2014 verified identical at base. REMOVE from xfail when BUG-vqlm closes."
     },
     "scene-setup-fog-density-card-row": {
       "scene": "gltfscene",

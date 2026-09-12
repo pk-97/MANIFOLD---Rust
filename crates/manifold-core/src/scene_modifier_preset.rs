@@ -75,6 +75,56 @@ pub struct SceneMeshReferenceFrame {
     pub scene_radius: f64,
 }
 
+/// Return the admission diagnostic for an authored parameter that is part of
+/// a calibrated scene-modifier contract.  Stable node identities are the
+/// source of truth; document ids and display handles can change when a graph
+/// is grouped or flattened.  Calibration statistics are deliberately left
+/// writable because they are import provenance rather than selectors.
+pub fn scene_modifier_parameter_lock_reason(
+    owner: &EffectGraphDef,
+    node: &NodeId,
+    param: &str,
+) -> Option<&'static str> {
+    if !matches!(param, "source_vertex_count" | "source_bbox_radius")
+        && owner
+            .scene_modifiers
+            .iter()
+            .any(|modifier| modifier.mesh_frames.iter().any(|frame| &frame.source.node == node))
+    {
+        return Some("Source settings are locked by a calibrated modifier; remove it before changing the source.");
+    }
+
+    if param == "rt_enabled"
+        && owner.scene_modifiers.iter().any(|modifier| {
+            modifier.scene.node == *node
+                && modifier
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.scene_modifier.as_ref())
+                    .is_some_and(|recipe| {
+                        recipe.stages.iter().any(|stage| {
+                            stage.outputs.iter().any(|output| output.endpoint == SceneEndpoint::Vertices)
+                        })
+                    })
+        })
+    {
+        return Some("rt_enabled is locked by a vertex modifier; remove it before enabling ray tracing.");
+    }
+
+    None
+}
+
+/// A host control is locked if any binding addresses captured source data or
+/// the required render mode. Modifier controls use a distinct namespace.
+pub fn scene_modifier_macro_lock_reason(owner: &EffectGraphDef, param: &str) -> Option<&'static str> {
+    owner.preset_metadata.as_ref()?.bindings.iter().filter(|binding| binding.id == param)
+        .find_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, param } => scene_modifier_parameter_lock_reason(owner, node_id, param),
+            _ => None,
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneModifierRecipe {
@@ -1505,5 +1555,108 @@ mod tests {
             .expect("metadata present");
         already_v3.version = 3;
         assert_eq!(already_v3.with_preset_metadata(metadata).version, 3);
+    }
+
+    fn owner_with_calibrated_source(source: &str) -> EffectGraphDef {
+        let local = graph_json(None, json!([]));
+        let raw = json!({
+            "version": 3,
+            "nodes": [{
+                "id": 1, "nodeId": source, "typeId": "node.gltf_mesh_source"
+            }],
+            "wires": [],
+            "sceneModifiers": [{
+                "id": "modifier",
+                "scene": {"scope": [], "node": "scene"},
+                "targets": "allObjects",
+                "meshFrames": [{
+                    "target": {"scope": ["nested-group"], "node": "object"},
+                    "source": {"scope": ["nested-group"], "node": source},
+                    "sourceDefinitionHash": "hash",
+                    "sourceOffset": [0.0, 0.0, 0.0],
+                    "sceneRadius": 1.0
+                }],
+                "graph": local
+            }]
+        });
+        serde_json::from_value(raw).expect("calibrated source fixture parses")
+    }
+
+    #[test]
+    fn calibrated_source_lock_uses_stable_nested_identity_and_exempts_provenance() {
+        let owner = owner_with_calibrated_source("nested-source");
+        assert!(scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("nested-source"),
+            "path",
+        )
+        .is_some());
+        assert!(scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("nested-source"),
+            "max_capacity",
+        )
+        .is_some());
+        assert!(scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("nested-source"),
+            "source_vertex_count",
+        )
+        .is_none());
+        assert!(scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("same-text-different-node"),
+            "path",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn vertices_recipe_locks_only_its_host_scene_rt_enabled() {
+        let mut owner: EffectGraphDef = serde_json::from_value(json!({
+            "version": 3,
+            "nodes": [{
+                "id": 1, "nodeId": "scene", "typeId": "node.render_scene"
+            }],
+            "wires": [],
+            "sceneModifiers": [{
+                "id": "modifier",
+                "scene": {"scope": [], "node": "scene"},
+                "targets": "allObjects",
+                "graph": {
+                    "version": 3,
+                    "presetMetadata": {
+                        "id": "vertices", "displayName": "Vertices", "category": "Geometry",
+                        "oscPrefix": "vertices", "params": [], "bindings": [],
+                        "sceneModifier": {
+                            "schemaVersion": 1, "singleton": false, "enabledParam": "enabled",
+                            "stages": [{"group": "deform", "scope": "scene", "outputs":
+                                [{"port": "vertices", "endpoint": "vertices"}]}]
+                        }
+                    },
+                    "nodes": [], "wires": []
+                }
+            }]
+        }))
+        .expect("vertices recipe fixture parses");
+        assert!(scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("scene"),
+            "rt_enabled",
+        )
+        .is_some());
+        assert!(scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("other-scene"),
+            "rt_enabled",
+        )
+        .is_none());
+        // Keep the fixture mutable so this test also guards that the helper is
+        // read-only and does not consume the authored owner graph.
+        owner.nodes[0].params.insert(
+            "rt_enabled".into(),
+            SerializedParamValue::Bool { value: true },
+        );
+        assert!(owner.nodes[0].params.contains_key("rt_enabled"));
     }
 }

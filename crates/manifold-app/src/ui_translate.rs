@@ -622,6 +622,7 @@ fn graph_param_to_ui(type_id: &str, p: &rg::ParamSnapshot) -> gv::ParamSnapshot 
         range: p.range,
         enum_labels: p.enum_labels.clone(),
         exposed: p.exposed,
+        preparation_only: false,
         summary: p.summary.clone(),
         vec_value: p.vec_value,
         string_value: p.string_value.clone(),

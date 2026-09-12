@@ -868,6 +868,7 @@ impl SetClipStringParamCommand {
 }
 
 impl Command for SetClipStringParamCommand {
+    fn graph_admission_clips(&self, clips: &mut Vec<ClipId>) { clips.push(self.clip_id.clone()); }
     fn execute(&mut self, project: &mut Project) {
         self.apply(project, &self.new_value.clone());
     }

@@ -68,21 +68,12 @@ fn load_migrated(path: &Path) -> manifold_core::project::Project {
             .unwrap_or_else(|e| {
                 panic!("{} must load through the real loader: {e}", path.display())
             });
-    for layer in &mut project.timeline.layers {
-        if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
-            manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
-            manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
-            manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
-            manifold_renderer::node_graph::scene_modifier::migrate_fixed_row_scene_loops(graph);
-            manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(graph);
-        }
-    }
+    crate::project_io::migrate_project_scene_graphs(&mut project);
     project
 }
 
-/// The layer graph carrying the loop, its layer index, and the loop-phase
-/// period in beats. beat_ramp runs 1/bars cycles per beat (SCENE_LOOP_DESIGN
-/// D6), so the wrap period IS `bars` beats, despite the name.
+/// The host graph carrying the loop modifier, its layer index, and the
+/// loop-phase period in beats. beat_ramp runs 1/bars cycles per beat.
 fn loop_graph_and_period(
     project: &manifold_core::project::Project,
 ) -> (usize, &EffectGraphDef, f64) {
@@ -90,11 +81,12 @@ fn loop_graph_and_period(
         let Some(graph) = layer.gen_params().and_then(|gp| gp.graph.as_ref()) else {
             continue;
         };
-        let Some(phase) = graph
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.beat_ramp" && n.node_id.as_str() == "loop_phase")
-        else {
+        let Some(instance) = graph.scene_modifiers.iter().find(|instance| {
+            instance.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+                metadata.id.as_str() == "SceneLoop"
+            })
+        }) else { continue; };
+        let Some(phase) = find_authored_node(&instance.graph.nodes, "loop_phase") else {
             continue;
         };
         let bars = phase
@@ -114,14 +106,34 @@ fn loop_graph_and_period(
 }
 
 fn param_f32(def: &EffectGraphDef, node_id: &str, param: &str) -> Option<f32> {
-    def.nodes
-        .iter()
-        .find(|n| n.node_id.as_str() == node_id)
+    find_authored_node(&def.nodes, node_id)
         .and_then(|n| n.params.get(param))
-        .and_then(|v| match v {
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
-            _ => None,
-        })
+        .and_then(manifold_core::effects::serialized_value_as_f32)
+}
+
+fn find_authored_node<'a>(
+    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    node_id: &str,
+) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
+    for node in nodes {
+        if node.node_id.as_str() == node_id {
+            return Some(node);
+        }
+        if let Some(group) = node.group.as_deref()
+            && let Some(found) = find_authored_node(&group.nodes, node_id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn local_binding_id(def: &EffectGraphDef, node_id: &str, param: &str) -> Option<String> {
+    def.preset_metadata.as_ref()?.bindings.iter().find_map(|binding| {
+        matches!(&binding.target, BindingTarget::Node { node_id: id, param: key }
+            if id.as_str() == node_id && key == param)
+            .then(|| binding.id.clone())
+    })
 }
 
 // ─── Gate 1: migration smoke on the real projects ─────────────────────
@@ -137,23 +149,18 @@ fn corridor_acceptance_migration_smoke() {
         let path = stone_path(file);
         assert!(path.exists(), "held-out input missing: {}", path.display());
         let project = load_migrated(&path);
-        let (layer_idx, def, _) = loop_graph_and_period(&project);
-
-        // All three loop atoms trace (the descriptor requires loop_phase,
-        // scene_array, loop_camera).
-        let traced = manifold_renderer::node_graph::scene_modifier::trace_modifier(
-            &manifold_renderer::node_graph::scene_modifier::SCENE_LOOP_DESCRIPTOR,
-            &def.nodes,
-        );
-        assert!(
-            traced.applied(&manifold_renderer::node_graph::scene_modifier::SCENE_LOOP_DESCRIPTOR),
-            "{file}: the loop atoms must all trace after migration"
-        );
+        let (_, def, _) = loop_graph_and_period(&project);
+        let local = def
+            .scene_modifiers
+            .iter()
+            .find(|instance| instance.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.id.as_str() == "SceneLoop"))
+            .map(|instance| instance.graph.as_ref())
+            .expect("migrated SceneLoop instance");
 
         // Negative gate: zero count/jitter_period/stride hits anywhere in
         // the migrated def — node params, exposed sets, and every exposure
         // target (INV-EC5).
-        for node in &def.nodes {
+        for node in local.nodes.iter().chain(def.nodes.iter()) {
             for dead in ["count", "jitter_period", "stride"] {
                 assert!(
                     !node.params.contains_key(dead),
@@ -167,7 +174,7 @@ fn corridor_acceptance_migration_smoke() {
                 );
             }
         }
-        if let Some(meta) = def.preset_metadata.as_ref() {
+        if let Some(meta) = local.preset_metadata.as_ref() {
             for binding in &meta.bindings {
                 if let BindingTarget::Node { node_id, param } = &binding.target {
                     for dead in ["count", "jitter_period", "stride"] {
@@ -191,58 +198,39 @@ fn corridor_acceptance_migration_smoke() {
         // = 0 -> clamped to 1: travel 7 cells/loop either way — the same
         // shape the recorded stride-7/J=7 state would migrate to.
         assert_eq!(
-            param_f32(def, "scene_array", "pattern_length"),
+            param_f32(local, "scene_array", "pattern_length"),
             Some(want_j),
             "{file}: scene_array.pattern_length"
         );
         assert_eq!(
-            param_f32(def, "loop_camera", "patterns_per_loop"),
+            param_f32(local, "loop_camera", "patterns_per_loop"),
             Some(want_k),
             "{file}: loop_camera.patterns_per_loop"
         );
         // Both period consumers must bind to the SAME preserved card slot;
         // comparing def defaults misses stored values and modulation.
-        let gp = project.timeline.layers[layer_idx].gen_params().unwrap();
-        let array = def
-            .nodes
-            .iter()
-            .find(|node| node.node_id.as_str() == "scene_array")
-            .unwrap();
-        let camera = def
-            .nodes
-            .iter()
-            .find(|node| node.node_id.as_str() == "loop_camera")
-            .unwrap();
-        let pattern_slot = gp
-            .binding_id_for_node_param(array.id, "pattern_length")
-            .unwrap();
-        assert_eq!(
-            gp.binding_id_for_node_param(camera.id, "pattern_length"),
-            Some(pattern_slot)
-        );
-        let spacing_slot = gp
-            .binding_id_for_node_param(camera.id, "cell_size")
-            .unwrap();
-        assert_eq!(
-            gp.binding_id_for_node_param(array.id, "cell_size"),
-            Some(spacing_slot)
-        );
+        let local_meta = local.preset_metadata.as_ref().expect("local metadata");
+        let binding_for = |node: &str, param: &str| {
+            local_meta.bindings.iter().find_map(|binding| {
+                matches!(&binding.target, BindingTarget::Node { node_id, param: target }
+                    if node_id.as_str() == node && target == param)
+                    .then_some(binding.id.as_str())
+            })
+        };
+        let pattern_slot = binding_for("scene_array", "pattern_length").expect("Pattern binding");
+        assert_eq!(binding_for("loop_camera", "pattern_length"), Some(pattern_slot));
+        let spacing_slot = binding_for("loop_camera", "cell_size").expect("Spacing binding");
+        assert_eq!(binding_for("scene_array", "cell_size"), Some(spacing_slot));
 
         // D2 wire: the loop camera feeds the corridor window.
-        let array_doc = def
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "scene_array")
+        let array_doc = find_authored_node(&local.nodes, "scene_array")
             .map(|n| n.id)
             .expect("scene_array present");
-        let camera_doc = def
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "loop_camera")
+        let camera_doc = find_authored_node(&local.nodes, "loop_camera")
             .map(|n| n.id)
             .expect("loop_camera present");
         assert!(
-            def.wires.iter().any(|w| {
+            local.wires.iter().any(|w| {
                 w.from_node == camera_doc && w.to_node == array_doc && w.to_port == "camera"
             }),
             "{file}: loop_camera.out -> scene_array.camera must exist post-migration"
@@ -250,7 +238,7 @@ fn corridor_acceptance_migration_smoke() {
 
         // Exposures: Pattern + Stride rows visible, ids preserved (the
         // binding rewrite ruling — saved mappings stay alive).
-        let meta = def
+        let meta = local
             .preset_metadata
             .as_ref()
             .expect("exposure metadata present");
@@ -635,15 +623,15 @@ fn corridor_acceptance_stone_effects_wrap_metric() {
             output.from_port = if source == "render" { "color" } else { "out" }.into();
         }
         let (_, def, _) = loop_graph_and_period(&project);
+        let local = def
+            .scene_modifiers
+            .iter()
+            .find(|instance| instance.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.id.as_str() == "SceneLoop"))
+            .map(|instance| instance.graph.as_ref())
+            .expect("migrated SceneLoop instance");
         // The saved instance value overrides the graph default (v2: 4 vs 8).
         let gp = project.timeline.layers[layer_idx].gen_params().unwrap();
-        let phase_node = def
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "loop_phase")
-            .unwrap();
-        let phase_binding = gp
-            .binding_id_for_node_param(phase_node.id, "bars")
+        let phase_binding = local_binding_id(local, "loop_phase", "bars")
             .expect("loop bars binding");
         let loop_beats = gp.get_base_param(&phase_binding) as f64;
         eprintln!("[corridor-probe] variant={variant} actual bars={loop_beats}");
@@ -715,7 +703,7 @@ fn corridor_acceptance_stone_effects_wrap_metric() {
 
 /// Minimal corridor graph at the fastest crossing shape: one beat per loop,
 /// 8 cells of travel per loop -> a cell-boundary crossing every 3.75 ticks.
-/// RT on (the corridor's descriptor refit cost is part of the gate).
+/// RT on (the corridor's scene-modifier preparation cost is part of the gate).
 fn spike_corridor_def() -> EffectGraphDef {
     use manifold_core::effect_graph_def::{
         EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
@@ -905,22 +893,14 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
         let layer_id = local.timeline.layers[layer_idx].layer_id.clone();
         let gp = local.timeline.layers[layer_idx].gen_params().unwrap();
         let graph = gp.graph.as_ref().unwrap();
-        let cam_id = graph
-            .nodes
+        let instance_graph = graph
+            .scene_modifiers
             .iter()
-            .find(|n| n.node_id.as_str() == "loop_camera")
-            .unwrap()
-            .id;
-        let array_id = graph
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "scene_array")
-            .unwrap()
-            .id;
-        let spacing_id = gp.binding_id_for_node_param(cam_id, "cell_size").unwrap();
-        let pattern_id = gp
-            .binding_id_for_node_param(array_id, "pattern_length")
-            .unwrap();
+            .find(|instance| instance.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.id.as_str() == "SceneLoop"))
+            .map(|instance| instance.graph.as_ref())
+            .expect("migrated SceneLoop instance");
+        let spacing_id = local_binding_id(instance_graph, "loop_camera", "cell_size").unwrap();
+        let pattern_id = local_binding_id(instance_graph, "scene_array", "pattern_length").unwrap();
         let mut ct = headless_content_thread(local.clone(), 320, 180);
         let (state_tx, _state_rx) = crossbeam_channel::unbounded();
         ct.timer.set_frame_clocked(true);

@@ -113,13 +113,6 @@ pub struct SceneVm {
     pub camera: CameraVm,
     pub environment: EnvironmentVm,
     pub atmosphere: AtmosphereVm,
-    /// SCENE_MODIFIER_FRAMEWORK D2/D3: one entry per registry kind, in
-    /// canonical slot order — presence, order, and identity all DERIVED
-    /// from the generic structural trace, never stored. The loop is kind
-    /// #1 (`scene_loop`); kind fields for the UI's existing surfaces come
-    /// from here (e.g. the panel's Scene Loop section reads the applied
-    /// `scene_loop` entry).
-    pub modifiers: Vec<SceneModifierVm>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when the graph stores import-time bounds (populated by the glTF importer
     /// from `GltfImportSummary`), read at VM-build time to compute scene-relative
@@ -376,30 +369,6 @@ pub struct LoopCameraRow {
     pub lens: Option<LensRow>,
 }
 
-/// SCENE_MODIFIER_FRAMEWORK section 3.4: one modifier kind's VM entry —
-/// applied or not, never filtered out (D2: the list is derived, and "not
-/// applied" is the picker's information, not a dead card).
-#[derive(Debug, Clone, PartialEq)]
-pub struct SceneModifierVm {
-    pub kind_id: &'static str,
-    pub display_name: &'static str,
-    /// All REQUIRED trace nodes resolved (D3 all-or-nothing); a partial
-    /// hand-edit reads as not applied.
-    pub applied: bool,
-    /// Doc id per trace node_id (applied kinds only; includes optional
-    /// trace nodes like the loop's camera switch when present).
-    pub doc_ids: std::collections::HashMap<&'static str, u32>,
-    /// The enable toggle's current state, read off the graph at VM build
-    /// (the state is the graph's, never a UI flag — the wrap-debug lesson).
-    /// `None` when the kind carries no enable wiring or the wiring node is
-    /// absent (e.g. a hand-deleted camera switch).
-    pub enabled: Option<bool>,
-    /// `true` when the graph carries more than one live render_scene —
-    /// the kind's apply refuses (INV-M6), and surfaces that offer the
-    /// modifier show it blocked.
-    pub multiple_scenes_blocked: bool,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum CameraVm {
     None,
@@ -544,50 +513,6 @@ impl SceneVm {
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
-        // D2: the modifier list is derived, one VM entry per registry kind
-        // in canonical slot order — never stored, never filtered.
-        let modifiers = crate::node_graph::scene_modifier::descriptors()
-            .into_iter()
-            .map(|descriptor| {
-                let result =
-                    crate::node_graph::scene_modifier::trace_modifier(descriptor, root.nodes);
-                let applied = result.applied(descriptor);
-                let enabled = match descriptor.enable {
-                    crate::node_graph::scene_modifier::EnableDecl::Switch { node_id } => result
-                        .doc_ids
-                        .get(node_id)
-                        .and_then(|&doc| root.node(doc))
-                        .and_then(|n| n.params.get("select"))
-                        .map(|v| matches!(v, SerializedParamValue::Enum { value } if *value == 1)),
-                    // Gate kinds (P2's scene_fog): the enabled value atom's
-                    // `value` param is the toggle (P3 ships this arm — P1 had
-                    // no gate kind to read).
-                    crate::node_graph::scene_modifier::EnableDecl::Gate { enabled_node, .. } => {
-                        result
-                            .doc_ids
-                            .get(enabled_node)
-                            .and_then(|&doc| root.node(doc))
-                            .and_then(|n| n.params.get("value"))
-                            .map(|v| matches!(v, SerializedParamValue::Float { value } if *value > 0.5))
-                    }
-                    crate::node_graph::scene_modifier::EnableDecl::Value { node_id } => result
-                        .doc_ids
-                        .get(node_id)
-                        .and_then(|&doc| root.node(doc))
-                        .and_then(|n| n.params.get("value"))
-                        .map(|v| matches!(v, SerializedParamValue::Float { value } if *value > 0.5)),
-                };
-                SceneModifierVm {
-                    kind_id: descriptor.kind_id,
-                    display_name: descriptor.display_name,
-                    applied,
-                    doc_ids: result.doc_ids.into_iter().collect(),
-                    enabled,
-                    multiple_scenes_blocked: multiple_scenes,
-                }
-            })
-            .collect();
-
         let object_count = objects.len();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
@@ -646,7 +571,6 @@ impl SceneVm {
             camera,
             environment,
             atmosphere,
-            modifiers,
             scene_bounds,
         })
     }

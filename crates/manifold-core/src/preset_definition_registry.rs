@@ -1,5 +1,5 @@
-//! The unified preset definition registry — one module for effects and
-//! generators.
+//! The unified preset definition registry — one module for effects,
+//! generators, and scene modifiers.
 //!
 //! Step 9 of the preset unification (`docs/PRESET_UNIFICATION_PLAN.md`):
 //! the two parallel modules `effect_definition_registry` and
@@ -96,6 +96,7 @@ static PRESET_DEFINITIONS: LazyLock<ArcSwap<PresetMap>> = LazyLock::new(|| {
     ArcSwap::from_pointee(build_preset_definitions(
         effect::loaded_preset_metadata(),
         generator::loaded_preset_metadata(),
+        scene_modifier::loaded_preset_metadata(),
     ))
 });
 
@@ -112,12 +113,20 @@ static PRESET_DEFINITIONS: LazyLock<ArcSwap<PresetMap>> = LazyLock::new(|| {
 fn build_preset_definitions(
     effect_json: &[PresetMetadata],
     generator_json: &[PresetMetadata],
+    scene_modifier_json: &[PresetMetadata],
 ) -> PresetMap {
     let mut m = build_effect_kind_map(effect_json);
     for (id, def) in build_generator_kind_map(generator_json) {
         assert!(
             !m.contains_key(&id),
-            "duplicate preset id across effect+generator kinds: '{id}' — effect and generator ids must be globally unique"
+            "duplicate preset id across effect+generator kinds: '{id}' — preset ids must be globally unique"
+        );
+        m.insert(id, def);
+    }
+    for (id, def) in build_scene_modifier_kind_map(scene_modifier_json) {
+        assert!(
+            !m.contains_key(&id),
+            "duplicate preset id across effect+generator+scene modifier kinds: '{id}' — preset ids must be globally unique"
         );
         m.insert(id, def);
     }
@@ -214,6 +223,20 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
     m
 }
 
+/// Build the scene modifier half. Scene modifier recipes are JSON-defined
+/// records and intentionally have no Rust factory or picker registration.
+fn build_scene_modifier_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
+    json_presets
+        .iter()
+        .map(|preset| {
+            (
+                PresetTypeId::from_string(preset.id.as_str().to_string()),
+                Arc::new(preset_metadata_to_def(preset, PresetKind::SceneModifier)),
+            )
+        })
+        .collect()
+}
+
 /// Hot-reload (step 10): rebuild the unified definition map from
 /// freshly-reloaded JSON metadata for both kinds and swap it in with ONE
 /// atomic `ArcSwap::store`. Called by the watcher thread after the
@@ -226,8 +249,13 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
 pub fn rebuild_preset_definitions(
     effect_json: &[PresetMetadata],
     generator_json: &[PresetMetadata],
+    scene_modifier_json: &[PresetMetadata],
 ) {
-    PRESET_DEFINITIONS.store(Arc::new(build_preset_definitions(effect_json, generator_json)));
+    PRESET_DEFINITIONS.store(Arc::new(build_preset_definitions(
+        effect_json,
+        generator_json,
+        scene_modifier_json,
+    )));
 }
 
 // ─── Display-name interner ───
@@ -488,6 +516,27 @@ pub mod generator {
     }
 
     inventory::collect!(PresetSource);
+}
+
+// ─── Scene modifier disk-source bucket ───
+
+pub mod scene_modifier {
+    use super::*;
+
+    /// JSON-loaded scene modifier metadata, sourced through the dedicated
+    /// inventory bucket in [`crate::effect_registration`].
+    pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
+        static CACHE: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
+        CACHE.get_or_init(|| {
+            let mut all = Vec::new();
+            for source in inventory::iter::<
+                crate::effect_registration::LoadedSceneModifierPresetSource,
+            > {
+                all.extend((source.load)());
+            }
+            all
+        })
+    }
 }
 
 // ─── Format helper (shared) ───
@@ -987,6 +1036,60 @@ mod tests {
         // registry doesn't accidentally start consuming something.
         assert!(super::effect::loaded_preset_metadata().is_empty());
         assert!(super::generator::loaded_preset_metadata().is_empty());
+        assert!(super::scene_modifier::loaded_preset_metadata().is_empty());
+    }
+
+    #[test]
+    fn scene_modifier_metadata_builds_scene_modifier_definitions() {
+        let metadata = PresetMetadata {
+            id: PresetTypeId::from_string("TestSceneModifier".to_string()),
+            display_name: "Test Scene Modifier".to_string(),
+            category: "Geometry".to_string(),
+            osc_prefix: "test_scene_modifier".to_string(),
+            legacy_discriminant: None,
+            available: false,
+            is_line_based: false,
+            layer_types: None,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+            scene_bounds: None,
+            scene_modifier: None,
+        };
+        let map = build_preset_definitions(&[], &[], &[metadata]);
+        assert_eq!(
+            map.get(&PresetTypeId::from_string("TestSceneModifier".to_string()))
+                .expect("scene modifier metadata should be registered")
+                .kind,
+            PresetKind::SceneModifier
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate preset id")]
+    fn duplicate_id_across_scene_modifier_and_effect_kinds_panics() {
+        let metadata = PresetMetadata {
+            id: PresetTypeId::from_string("DuplicateAcrossKinds".to_string()),
+            display_name: "Duplicate".to_string(),
+            category: "Test".to_string(),
+            osc_prefix: "duplicate".to_string(),
+            legacy_discriminant: None,
+            available: false,
+            is_line_based: false,
+            layer_types: None,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+            scene_bounds: None,
+            scene_modifier: None,
+        };
+        let _ = build_preset_definitions(std::slice::from_ref(&metadata), &[], std::slice::from_ref(&metadata));
     }
 
     // ── Generator-side tests ───────────────────────────────────────

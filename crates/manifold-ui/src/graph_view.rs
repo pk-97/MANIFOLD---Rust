@@ -130,6 +130,9 @@ pub struct ParamSnapshot {
     pub enum_labels: Option<Vec<String>>,
     /// Whether this param is currently exposed on the outer card.
     pub exposed: bool,
+    /// Preparation-only params remain editable in the graph but cannot be
+    /// exposed or mapped onto the outer performance card.
+    pub preparation_only: bool,
     /// Free-form summary for non-numeric params (e.g. a `Table`'s `"6×5"`).
     pub summary: Option<String>,
     /// Live multi-component value for `Color` / `Vec2` / `Vec3` / `Vec4`, in

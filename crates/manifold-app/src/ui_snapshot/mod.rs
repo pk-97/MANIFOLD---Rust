@@ -302,6 +302,7 @@ fn render_ui_scene(
         || scene == "bug060"
         || scene == "paramsteps"
         || scene == "gltfscene"
+        || scene == "mushroomscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "dmxcard"
@@ -782,6 +783,7 @@ fn group_demo_snapshot() -> manifold_ui::graph_view::GraphSnapshot {
             range: Some((0.0, 1.0)),
             enum_labels: None,
             exposed: true,
+            preparation_only: false,
             summary: None,
             vec_value: None,
             string_value: None,

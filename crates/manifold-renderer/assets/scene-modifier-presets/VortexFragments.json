@@ -1,12 +1,12 @@
 {
-  "version": 2,
+  "version": 3,
   "name": "Vortex Fragments",
   "presetMetadata": {
     "id": "VortexFragments",
     "displayName": "Vortex Fragments",
     "category": "Geometry",
     "oscPrefix": "vortex_fragments",
-    "available": false,
+    "available": true,
     "params": [
       {
         "id": "orbit",
@@ -152,7 +152,25 @@
           "param": "enabled"
         }
       }
-    ]
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [{
+        "group": "vortex_stage",
+        "scope": "eachObject",
+        "inputs": [
+          {"port":"current","source":{"previous":{"endpoint":"vertices"}}},
+          {"port":"reference","source":{"reference":{"endpoint":"vertices"}}},
+          {"port":"sourceRadius","source":{"context":{"value":"sceneRadius"}}},
+          {"port":"sourceOffsetX","source":{"context":{"value":"sourceOffsetX"}}},
+          {"port":"sourceOffsetY","source":{"context":{"value":"sourceOffsetY"}}},
+          {"port":"sourceOffsetZ","source":{"context":{"value":"sourceOffsetZ"}}}
+        ],
+        "outputs": [{"port":"vertices","endpoint":"vertices"}]
+      }]
+    }
   },
   "nodes": [
     {
@@ -170,6 +188,22 @@
             {
               "name": "reference",
               "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "sourceRadius",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetZ",
+              "portType": "Scalar(F32)"
             }
           ],
           "outputs": [
@@ -191,6 +225,30 @@
             "nodeId": "group_reference",
             "typeId": "system.group_input",
             "handle": "reference"
+          },
+          {
+            "id": 6,
+            "nodeId": "group_source_radius",
+            "typeId": "system.group_input",
+            "handle": "sourceRadius"
+          },
+          {
+            "id": 7,
+            "nodeId": "group_source_offset_x",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetX"
+          },
+          {
+            "id": 8,
+            "nodeId": "group_source_offset_y",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetY"
+          },
+          {
+            "id": 9,
+            "nodeId": "group_source_offset_z",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetZ"
           },
           {
             "id": 3,
@@ -275,6 +333,30 @@
             "fromPort": "reference",
             "toNode": 3,
             "toPort": "reference"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "sourceRadius",
+            "toNode": 3,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "sourceOffsetX",
+            "toNode": 3,
+            "toPort": "source_offset_x"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "sourceOffsetY",
+            "toNode": 3,
+            "toPort": "source_offset_y"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "sourceOffsetZ",
+            "toNode": 3,
+            "toPort": "source_offset_z"
           },
           {
             "fromNode": 3,

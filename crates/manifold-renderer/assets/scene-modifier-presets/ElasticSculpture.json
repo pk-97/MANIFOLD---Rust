@@ -1,12 +1,12 @@
 {
-  "version": 2,
+  "version": 3,
   "name": "Elastic Sculpture",
   "presetMetadata": {
     "id": "ElasticSculpture",
     "displayName": "Elastic Sculpture",
     "category": "Geometry",
     "oscPrefix": "elastic_sculpture",
-    "available": false,
+    "available": true,
     "params": [
       {"id":"bend","name":"Bend","min":-0.7,"max":0.7,"defaultValue":0.18},
       {"id":"cross_bend","name":"Cross Bend","min":-0.7,"max":0.7,"defaultValue":0.12},
@@ -29,21 +29,57 @@
       {"id":"pitch","label":"Pitch","defaultValue":0.0,"target":{"kind":"node","nodeId":"shear_z","param":"pitch"}},
       {"id":"enabled","label":"Enabled","defaultValue":1.0,"target":{"kind":"node","nodeId":"shear_x","param":"enabled"}},
       {"id":"enabled","label":"Enabled","defaultValue":1.0,"target":{"kind":"node","nodeId":"shear_z","param":"enabled"}}
-    ]
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [{
+        "group": "elastic_stage",
+        "scope": "eachObject",
+        "inputs": [
+          {"port":"current","source":{"previous":{"endpoint":"vertices"}}},
+          {"port":"reference","source":{"reference":{"endpoint":"vertices"}}},
+          {"port":"sourceRadius","source":{"context":{"value":"sceneRadius"}}},
+          {"port":"sourceOffsetX","source":{"context":{"value":"sourceOffsetX"}}},
+          {"port":"sourceOffsetY","source":{"context":{"value":"sourceOffsetY"}}},
+          {"port":"sourceOffsetZ","source":{"context":{"value":"sourceOffsetZ"}}}
+        ],
+        "outputs": [{"port":"vertices","endpoint":"vertices"}]
+      }]
+    }
   },
   "nodes": [{
     "id": 1, "nodeId": "elastic_stage", "typeId": "group", "handle": "ElasticStage",
     "group": {
-      "interface": {"inputs":[{"name":"current","portType":"Array(MeshVertex)"},{"name":"reference","portType":"Array(MeshVertex)"}],"outputs":[{"name":"vertices","portType":"Array(MeshVertex)"}]},
+      "interface": {"inputs":[{"name":"current","portType":"Array(MeshVertex)"},{"name":"reference","portType":"Array(MeshVertex)"},{"name":"sourceRadius","portType":"Scalar(F32)"},{"name":"sourceOffsetX","portType":"Scalar(F32)"},{"name":"sourceOffsetY","portType":"Scalar(F32)"},{"name":"sourceOffsetZ","portType":"Scalar(F32)"}],"outputs":[{"name":"vertices","portType":"Array(MeshVertex)"}]},
       "nodes": [
         {"id":1,"nodeId":"group_current","typeId":"system.group_input","handle":"current"},
         {"id":2,"nodeId":"group_reference","typeId":"system.group_input","handle":"reference"},
+        {"id":6,"nodeId":"group_source_radius","typeId":"system.group_input","handle":"sourceRadius"},
+        {"id":7,"nodeId":"group_source_offset_x","typeId":"system.group_input","handle":"sourceOffsetX"},
+        {"id":8,"nodeId":"group_source_offset_y","typeId":"system.group_input","handle":"sourceOffsetY"},
+        {"id":9,"nodeId":"group_source_offset_z","typeId":"system.group_input","handle":"sourceOffsetZ"},
         {"id":3,"nodeId":"shear_x","typeId":"node.wave_shear_mesh","handle":"shear_x","params":{"axis":{"type":"Enum","value":0},"phase_offset":{"type":"Float","value":0.0}}},
         {"id":4,"nodeId":"shear_z","typeId":"node.wave_shear_mesh","handle":"shear_z","params":{"axis":{"type":"Enum","value":1},"phase_offset":{"type":"Float","value":0.25}}},
+        {"id":10,"nodeId":"origin_x_neg","typeId":"node.math","handle":"origin_x_neg","params":{"a":{"type":"Float","value":0.0},"op":{"type":"Enum","value":1}}},
+        {"id":11,"nodeId":"origin_y_neg","typeId":"node.math","handle":"origin_y_neg","params":{"a":{"type":"Float","value":0.0},"op":{"type":"Enum","value":1}}},
+        {"id":12,"nodeId":"origin_z_neg","typeId":"node.math","handle":"origin_z_neg","params":{"a":{"type":"Float","value":0.0},"op":{"type":"Enum","value":1}}},
         {"id":5,"nodeId":"group_output","typeId":"system.group_output","handle":"output"}
       ],
       "wires": [
         {"fromNode":1,"fromPort":"current","toNode":3,"toPort":"in"},
+        {"fromNode":6,"fromPort":"sourceRadius","toNode":3,"toPort":"scale"},
+        {"fromNode":6,"fromPort":"sourceRadius","toNode":4,"toPort":"scale"},
+        {"fromNode":7,"fromPort":"sourceOffsetX","toNode":10,"toPort":"b"},
+        {"fromNode":8,"fromPort":"sourceOffsetY","toNode":11,"toPort":"b"},
+        {"fromNode":9,"fromPort":"sourceOffsetZ","toNode":12,"toPort":"b"},
+        {"fromNode":10,"fromPort":"out","toNode":3,"toPort":"origin_x"},
+        {"fromNode":10,"fromPort":"out","toNode":4,"toPort":"origin_x"},
+        {"fromNode":11,"fromPort":"out","toNode":3,"toPort":"origin_y"},
+        {"fromNode":11,"fromPort":"out","toNode":4,"toPort":"origin_y"},
+        {"fromNode":12,"fromPort":"out","toNode":3,"toPort":"origin_z"},
+        {"fromNode":12,"fromPort":"out","toNode":4,"toPort":"origin_z"},
         {"fromNode":3,"fromPort":"out","toNode":4,"toPort":"in"},
         {"fromNode":4,"fromPort":"out","toNode":5,"toPort":"vertices"}
       ]

@@ -38,6 +38,7 @@ pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
 mod graph_target;
+mod scene_modifier_edit;
 mod modifier_preset;
 // Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md
 // P1) — used by the `journey-proofs` test harness (only compiled in test
@@ -137,6 +138,10 @@ mod gap_start_probe;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
 mod corridor_acceptance;
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
+mod scene_modifier_journey;
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
+mod scene_modifier_performance;
 mod window_registry;
 mod workspace;
 

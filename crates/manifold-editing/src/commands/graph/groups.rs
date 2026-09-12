@@ -54,32 +54,37 @@ impl GroupNodesCommand {
 }
 
 impl Command for GroupNodesCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let selected: std::collections::BTreeSet<u32> = self.selected.iter().copied().collect();
         let handle = self.handle.clone();
         let centroid = self.centroid;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
-            match manifold_core::group_edit::group_selection(
-                nodes.clone(),
-                wires.clone(),
-                &selected,
-                &handle,
-                centroid,
-            ) {
-                Ok((nn, nw)) => {
-                    *nodes = nn;
-                    *wires = nw;
-                    Some(prev)
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
+                match manifold_core::group_edit::group_selection(
+                    nodes.clone(),
+                    wires.clone(),
+                    &selected,
+                    &handle,
+                    centroid,
+                ) {
+                    Ok((nn, nw)) => {
+                        *nodes = nn;
+                        *wires = nw;
+                        Some(prev)
+                    }
+                    Err(e) => {
+                        eprintln!("[manifold-editing] GroupNodes: {e:?}");
+                        None
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[manifold-editing] GroupNodes: {e:?}");
-                    None
-                }
-            }
-        });
+            });
         self.prev = result.flatten();
     }
 
@@ -130,24 +135,33 @@ impl UngroupNodeCommand {
 }
 
 impl Command for UngroupNodeCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let group_node_id = self.group_node_id;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
-            match manifold_core::group_edit::ungroup(nodes.clone(), wires.clone(), group_node_id) {
-                Ok((nn, nw)) => {
-                    *nodes = nn;
-                    *wires = nw;
-                    Some(prev)
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
+                match manifold_core::group_edit::ungroup(
+                    nodes.clone(),
+                    wires.clone(),
+                    group_node_id,
+                ) {
+                    Ok((nn, nw)) => {
+                        *nodes = nn;
+                        *wires = nw;
+                        Some(prev)
+                    }
+                    Err(e) => {
+                        eprintln!("[manifold-editing] UngroupNode: {e:?}");
+                        None
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[manifold-editing] UngroupNode: {e:?}");
-                    None
-                }
-            }
-        });
+            });
         self.prev = result.flatten();
     }
 
@@ -357,7 +371,12 @@ impl Command for RenameGroupCommand {
         let Some(inst) = resolve_target_instance(&self.target, project) else {
             if matches!(self.target, GraphTarget::SceneModifier { .. }) {
                 self.swept = super::param_sections::rename_modifier_sections(
-                    project, &self.target, &inside, &old_name, &self.new_handle);
+                    project,
+                    &self.target,
+                    &inside,
+                    &old_name,
+                    &self.new_handle,
+                );
             }
             return;
         };
@@ -369,11 +388,13 @@ impl Command for RenameGroupCommand {
                 m.bindings
                     .iter()
                     .filter(|b| match &b.target {
-                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
-                            inside.contains(node_id)
-                        }
+                        manifold_core::effect_graph_def::BindingTarget::Node {
+                            node_id, ..
+                        } => inside.contains(node_id),
                         manifold_core::effect_graph_def::BindingTarget::Composite { .. } => false,
-                        manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => false,
+                        manifold_core::effect_graph_def::BindingTarget::SceneModifier {
+                            ..
+                        } => false,
                     })
                     .map(|b| b.id.clone())
                     .collect()
@@ -426,13 +447,12 @@ impl Command for RenameGroupCommand {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::super::test_support::*;
-    use manifold_core::EffectId;
+    use super::super::*;
     use crate::command::Command;
+    use manifold_core::EffectId;
 
     #[test]
     fn group_nodes_command_collapses_and_undo_restores() {
@@ -625,7 +645,11 @@ mod tests {
             .iter()
             .find(|n| n.id == gid)
             .unwrap();
-        assert_eq!(g.group.as_ref().unwrap().tint, None, "tint restored to default");
+        assert_eq!(
+            g.group.as_ref().unwrap().tint,
+            None,
+            "tint restored to default"
+        );
     }
 
     #[test]
@@ -717,7 +741,15 @@ mod tests {
             .id
             .clone();
         assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            project
+                .find_effect_by_id(&fx)
+                .unwrap()
+                .params
+                .get(&ub_id)
+                .unwrap()
+                .spec
+                .section
+                .as_deref(),
             Some("g"),
             "setup: expose seeded the section from the group name"
         );
@@ -737,14 +769,30 @@ mod tests {
         );
         rn.execute(&mut project);
         assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            project
+                .find_effect_by_id(&fx)
+                .unwrap()
+                .params
+                .get(&ub_id)
+                .unwrap()
+                .spec
+                .section
+                .as_deref(),
             Some("leaf"),
             "section follows the rename"
         );
 
         rn.undo(&mut project);
         assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            project
+                .find_effect_by_id(&fx)
+                .unwrap()
+                .params
+                .get(&ub_id)
+                .unwrap()
+                .spec
+                .section
+                .as_deref(),
             Some("g"),
             "undo restores the pre-rename section"
         );
@@ -774,7 +822,15 @@ mod tests {
         );
         rn.execute(&mut project);
         assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            project
+                .find_effect_by_id(&fx)
+                .unwrap()
+                .params
+                .get(&ub_id)
+                .unwrap()
+                .spec
+                .section
+                .as_deref(),
             Some("Custom"),
             "a hand-edited section (no longer matching the old group name) survives the rename sweep"
         );
