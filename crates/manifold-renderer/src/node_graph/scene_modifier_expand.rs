@@ -4,12 +4,19 @@
 //! ordinary graph bindings; no per-frame attachment work belongs here.
 
 mod bindings;
+pub use bindings::SceneModifierBindingSource;
 mod compiler;
 mod frames;
 mod index;
 mod namespace;
+mod routes;
+mod value_sources;
+mod value_writes;
+pub use value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
+pub use value_writes::PreparedGraphValueWrites;
 
-pub use compiler::{expand_scene_modifiers, validate_modifier_attachment};
+pub use compiler::{expand_scene_modifiers, prepare_scene_modifiers, validate_modifier_attachment};
+pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
 pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
 

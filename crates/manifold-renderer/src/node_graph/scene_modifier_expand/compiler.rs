@@ -14,7 +14,12 @@ use sha2::{Digest, Sha256};
 
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 
-use super::{SceneModifierExpandError, bindings, frames, index::FlatSceneIndex, namespace};
+use super::{
+    SceneModifierExpandError, bindings, frames,
+    index::FlatSceneIndex,
+    namespace,
+    routes::{self, PreparedSceneModifierGraph},
+};
 
 type PortAddress = (u32, String);
 type EndpointKey = (SceneNodeRef, &'static str);
@@ -77,6 +82,15 @@ pub fn expand_scene_modifiers(
     owner: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Result<EffectGraphDef, SceneModifierExpandError> {
+    prepare_scene_modifiers(owner, registry).map(|prepared| prepared.def)
+}
+
+/// Prepare the derived graph and explicit editor routes together. Routes are
+/// retained by the runtime across value edits and never serialized.
+pub fn prepare_scene_modifiers(
+    owner: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
     if owner.scene_modifiers.len() > 16 {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "sceneModifiers".into(),
@@ -96,7 +110,11 @@ pub fn expand_scene_modifiers(
         });
     }
     if owner.scene_modifiers.is_empty() {
-        return Ok(owner.clone());
+        return Ok(PreparedSceneModifierGraph {
+            def: owner.clone(),
+            routes: Vec::new(),
+            binding_sources: Vec::new(),
+        });
     }
     let index = FlatSceneIndex::build(owner)?;
     preflight_expansion(owner, &index)?;
@@ -118,6 +136,7 @@ pub fn expand_scene_modifiers(
         contexts: BTreeMap::new(),
     };
     let mut leaf_maps = BTreeMap::new();
+    let mut target_maps = BTreeMap::new();
     let mut singletons = BTreeSet::new();
     for instance in &owner.scene_modifiers {
         let recipe = instance
@@ -144,6 +163,7 @@ pub fn expand_scene_modifiers(
         let targets = frames::selected_objects(&index, instance)?;
         let leaves = builder.append_instance(owner, instance, &targets)?;
         leaf_maps.insert(instance.id.to_string(), leaves);
+        target_maps.insert(instance.id.to_string(), targets);
     }
     for key in &builder.written {
         let target = *index
@@ -168,7 +188,8 @@ pub fn expand_scene_modifiers(
     }
     builder.derived.name = owner.name.clone();
     builder.derived.description = owner.description.clone();
-    builder.derived.preset_metadata = bindings::expand_bindings(owner, &leaf_maps)?;
+    let (metadata, binding_sources) = bindings::expand_bindings_with_sources(owner, &leaf_maps)?;
+    builder.derived.preset_metadata = metadata;
     // Host leaves have already crossed their group boundaries. Temporarily
     // remove their flattened display handles so the group flattener does not
     // mistake its own '/' separators for newly authored invalid handles.
@@ -207,7 +228,12 @@ pub fn expand_scene_modifiers(
     validate_binding_leaves(&prepared, &graph)?;
     crate::node_graph::validation::validate(&graph)
         .map_err(|error| invalid("expandedGraph", error.to_string()))?;
-    Ok(prepared)
+    let routes = routes::build_routes(owner, &prepared, &leaf_maps, &target_maps)?;
+    Ok(PreparedSceneModifierGraph {
+        def: prepared,
+        routes,
+        binding_sources,
+    })
 }
 
 fn validate_binding_leaves(

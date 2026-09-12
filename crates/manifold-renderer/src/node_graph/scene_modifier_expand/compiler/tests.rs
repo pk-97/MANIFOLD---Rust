@@ -54,6 +54,148 @@ pub(super) fn fixture() -> EffectGraphDef {
 }
 
 #[test]
+fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
+    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+    let mut owner = fixture();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
+    let route = prepared
+        .routes
+        .iter()
+        .find(|route| route.local.node.as_str() == "shear_x")
+        .unwrap();
+    assert_eq!(route.copies.len(), 2);
+    let mut graph = prepared.def.clone().into_graph(&registry).unwrap();
+    let writes = PreparedGraphValueWrites::prepare(
+        &owner,
+        &prepared.routes,
+        &graph,
+        &ahash::AHashMap::default(),
+    )
+    .unwrap();
+    let baseline: Vec<_> = route
+        .copies
+        .iter()
+        .map(|copy| {
+            let id = graph.instance_by_node_id(&copy.node_id).unwrap();
+            (
+                id,
+                graph
+                    .get_node(id)
+                    .unwrap()
+                    .params
+                    .get("amplitude")
+                    .unwrap()
+                    .clone(),
+            )
+        })
+        .collect();
+    let leaf = owner.scene_modifiers[0].graph.nodes[0]
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id.as_str() == "shear_x")
+        .unwrap();
+    assert!(!leaf.params.contains_key("amplitude"));
+    leaf.params.insert(
+        "amplitude".into(),
+        SerializedParamValue::Float { value: 0.37 },
+    );
+    writes.apply(&owner, &mut graph).unwrap();
+    for (id, _) in &baseline {
+        assert_eq!(
+            graph.get_node(*id).unwrap().params.get("amplitude"),
+            Some(&ParamValue::Float(0.37))
+        );
+    }
+    owner.scene_modifiers[0].graph.nodes[0]
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id.as_str() == "shear_x")
+        .unwrap()
+        .params
+        .remove("amplitude");
+    writes.apply(&owner, &mut graph).unwrap();
+    for (id, value) in &baseline {
+        assert_eq!(
+            graph.get_node(*id).unwrap().params.get("amplitude"),
+            Some(value)
+        );
+    }
+    // A stale structural path is refused before any leaf can be changed.
+    owner.scene_modifiers[0].graph.nodes[0]
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id.as_str() == "shear_x")
+        .unwrap()
+        .node_id = NodeId::new("replacement");
+    assert!(writes.apply(&owner, &mut graph).is_err());
+    for (id, value) in &baseline {
+        assert_eq!(
+            graph.get_node(*id).unwrap().params.get("amplitude"),
+            Some(value)
+        );
+    }
+}
+
+#[test]
+fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
+    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+    let mut owner = fixture();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
+    let fused = crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def)
+        .expect("existing elastic mesh atoms fuse");
+    let mut graph = (*fused.def).clone().into_graph(&registry).unwrap();
+    let writes =
+        PreparedGraphValueWrites::prepare(&owner, &prepared.routes, &graph, &fused.retarget)
+            .unwrap();
+    let leaf = owner.scene_modifiers[0].graph.nodes[0]
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id.as_str() == "shear_x")
+        .unwrap();
+    leaf.params.insert(
+        "amplitude".into(),
+        SerializedParamValue::Float { value: 0.41 },
+    );
+    leaf.params
+        .insert("axis".into(), SerializedParamValue::Enum { value: 1 });
+    writes.apply(&owner, &mut graph).unwrap();
+    let route = prepared
+        .routes
+        .iter()
+        .find(|route| route.local.node.as_str() == "shear_x")
+        .unwrap();
+    for copy in &route.copies {
+        for (param, value) in [("amplitude", 0.41), ("axis", 1.0)] {
+            let (target, field) = fused
+                .retarget
+                .get(&(copy.node_id.to_string(), param.into()))
+                .expect("mesh parameter has a fused uniform route");
+            let id = graph.instance_by_node_id(target).unwrap();
+            assert_eq!(
+                graph.get_node(id).unwrap().params.get(field.as_str()),
+                Some(&ParamValue::Float(value))
+            );
+        }
+    }
+}
+
+#[test]
 fn scene_modifier_expand_compiler_attaches_preserves_host_and_is_idempotent() {
     let owner = fixture();
     let canonical = owner.clone();
@@ -200,7 +342,9 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
         .unwrap()
         .bindings
         .push(binding);
-    let expanded = expand_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
+    let expanded = &prepared.def;
     let bindings = &expanded.preset_metadata.as_ref().unwrap().bindings;
     assert_eq!(bindings.len(), 2);
     for binding in bindings {
@@ -215,6 +359,76 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
         assert_eq!(
             node.params[param],
             SerializedParamValue::Float { value: 0.3 }
+        );
+    }
+    use crate::node_graph::bound_graph::BoundGraph;
+    use crate::node_graph::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
+    use crate::node_graph::parameters::ParamValue;
+    use manifold_core::params::{Param, ParamManifest};
+    let mut graph = expanded.clone().into_graph(&registry).unwrap();
+    let resolved = bindings
+        .iter()
+        .map(|binding| {
+            let BindingTarget::Node { node_id, param } = &binding.target else {
+                panic!("leaf binding")
+            };
+            ResolvedBinding::assemble(
+                binding.id.clone().into(),
+                binding.label.clone().into(),
+                binding.default_value,
+                ResolvedTarget::Node {
+                    node: graph.instance_by_node_id(node_id).unwrap(),
+                    param: param.clone().into(),
+                },
+                binding.convert,
+                BindingSource::Static,
+                binding.id.clone().into(),
+                None,
+                false,
+                false,
+            )
+        })
+        .collect();
+    let mut bound = BoundGraph::new(resolved, &mut graph, Some(expanded));
+    let writes = crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites::prepare(
+        &owner,
+        &prepared.routes,
+        &graph,
+        &ahash::AHashMap::default(),
+    )
+    .unwrap();
+    bound
+        .install_prepared_routes(writes, prepared.binding_sources)
+        .unwrap();
+    let mut parameter = Param::bundled(owner.preset_metadata.as_ref().unwrap().params[0].clone());
+    parameter.value = 0.25;
+    let manifest = ParamManifest::from_params(vec![parameter]);
+    owner.preset_metadata.as_mut().unwrap().bindings[0].scale = 0.5;
+    owner.preset_metadata.as_mut().unwrap().bindings[0].offset = 0.125;
+    let local = owner.scene_modifiers[0]
+        .graph
+        .preset_metadata
+        .as_mut()
+        .unwrap()
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.id == "bend")
+        .unwrap();
+    local.scale = 2.0;
+    local.offset = 0.25;
+    bound.rebake_reshapes(&manifest, Some(&owner));
+    bound.apply(&mut graph, &manifest);
+    // The cached inner-edit path resets leaf values, then unchanged live
+    // controls must reassert their composed mapping on the next apply.
+    bound.apply_inner_overrides(&mut graph, &[], Some(&owner));
+    bound.apply(&mut graph, &manifest);
+    for binding in &bound.bindings {
+        let ResolvedTarget::Node { node, param } = &binding.target else {
+            panic!("leaf binding")
+        };
+        assert_eq!(
+            graph.get_node(*node).unwrap().params.get(param.as_ref()),
+            Some(&ParamValue::Float(0.75))
         );
     }
 }

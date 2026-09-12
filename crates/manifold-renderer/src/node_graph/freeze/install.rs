@@ -360,7 +360,7 @@ thread_local! {
     static FUSED_EFFECT_CACHE: std::cell::RefCell<LruCache<Option<Arc<LoadedPresetView>>>> =
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Generator twin — values are fused defs (generators compile via `from_def`).
-    static FUSED_GENERATOR_CACHE: std::cell::RefCell<LruCache<Option<Arc<EffectGraphDef>>>> =
+    static FUSED_GENERATOR_CACHE: std::cell::RefCell<LruCache<Option<Arc<FusedGeneratorView>>>> =
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Effect-view keys compiling on the worker right now (BUG-j8gy) — the
     /// segment `SEGMENT_PENDING` analog: dedupes enqueues across the rebuilds
@@ -414,12 +414,23 @@ fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
 /// bindings from the cached def — they flow through `ResolvedBinding::from_static`
 /// at slot-build time — so effects use `effect_def_content_key`.
 pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDef>> {
+    fused_generator_view_for(def).map(|view| Arc::clone(&view.def))
+}
+
+/// The render definition and authored-leaf uniform routes are one cached
+/// result. Runtime value edits need these routes after members fuse away.
+pub struct FusedGeneratorView {
+    pub def: Arc<EffectGraphDef>,
+    pub retarget: AHashMap<(String, String), (NodeId, String)>,
+}
+
+pub fn fused_generator_view_for(def: &EffectGraphDef) -> Option<Arc<FusedGeneratorView>> {
     let key = def_content_key(def);
     if let Some(cached) = FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
     }
     let registry = PrimitiveRegistry::with_builtin();
-    let compiled = fuse_generator_def(def, &registry).map(Arc::new);
+    let compiled = fuse_generator_view_masked(def, &registry, None).map(Arc::new);
     FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
     compiled
 }
@@ -1176,6 +1187,14 @@ pub(crate) fn fuse_generator_def_masked(
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
 ) -> Option<EffectGraphDef> {
+    fuse_generator_view_masked(def, registry, region_mask).map(|view| Arc::unwrap_or_clone(view.def))
+}
+
+fn fuse_generator_view_masked(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    region_mask: Option<&[bool]>,
+) -> Option<FusedGeneratorView> {
     let fused = fuse_canonical_def_masked(def, registry, region_mask)?;
     // Node ids that survive (boundaries + fused nodes) — a binding targeting one
     // is left as-is; one targeting a fused-away member is retargeted; anything
@@ -1196,7 +1215,7 @@ pub(crate) fn fuse_generator_def_masked(
     if !fused_def_builds(&out_def, registry, &expected_spaces) {
         return None;
     }
-    Some(out_def)
+    Some(FusedGeneratorView { def: Arc::new(out_def), retarget: fused.retarget })
 }
 
 /// Rewrite each `preset_metadata` `BindingDef` so it lands right after fusion: a
@@ -3011,6 +3030,7 @@ mod tests {
     /// member 1), so the generator's modulation surface keeps driving the kernel.
     #[test]
     fn generator_binding_def_retargets_onto_fused() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
         use manifold_core::effect_graph_def::BindingTarget;
         let json = r#"{
             "version": 1, "name": "FuseGen",
@@ -3034,7 +3054,17 @@ mod tests {
             ]
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-        let fused = fuse_generator_def(&def, &registry()).expect("the generator fuses");
+        let view = fused_generator_view_for(&def).expect("the generator fuses");
+        let cached = fused_generator_view_for(&def).expect("cached view");
+        assert!(Arc::ptr_eq(&view, &cached));
+        let fused = fused_generator_def_for(&def).expect("legacy def accessor");
+        assert!(Arc::ptr_eq(&fused, &view.def));
+        let (target, field) = view.retarget.get(&("gain".into(), "gain".into()))
+            .expect("value edit route survives caching");
+        let mut graph = (*fused).clone().into_graph(&registry()).unwrap();
+        let runtime_id = graph.instance_by_node_id(target).unwrap();
+        graph.set_param(runtime_id, field, ParamValue::Float(0.375)).unwrap();
+        assert_eq!(graph.get_node(runtime_id).unwrap().params.get(field.as_str()), Some(&ParamValue::Float(0.375)));
         let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
         assert_eq!(meta.bindings.len(), 1);
         match &meta.bindings[0].target {

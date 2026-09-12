@@ -9,22 +9,111 @@ use manifold_core::effects::ParamConvert;
 
 use super::SceneModifierExpandError;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneModifierBindingSource {
+    modifier_id: NodeId,
+    host_binding_index: usize,
+    host_binding_id: String,
+    host_target: BindingTarget,
+    local_binding_index: usize,
+    local_binding_id: String,
+    local_target: BindingTarget,
+}
+
+impl SceneModifierBindingSource {
+    pub fn scale_offset(
+        &self,
+        owner: &EffectGraphDef,
+    ) -> Result<(f32, f32), SceneModifierExpandError> {
+        let metadata = owner.preset_metadata.as_ref().ok_or_else(|| {
+            invalid_binding(
+                &self.host_binding_id,
+                "owner has no metadata for a scene-modifier binding source",
+            )
+        })?;
+        let host = metadata
+            .bindings
+            .get(self.host_binding_index)
+            .ok_or_else(|| {
+                invalid_binding(
+                    &self.host_binding_id,
+                    "cached host binding index is no longer present",
+                )
+            })?;
+        if host.id != self.host_binding_id || host.target != self.host_target {
+            return Err(invalid_binding(
+                &self.host_binding_id,
+                "cached host binding identity no longer matches",
+            ));
+        }
+
+        let instance = find_instance(owner, &self.modifier_id)?;
+        let local_metadata = instance.graph.preset_metadata.as_ref().ok_or_else(|| {
+            invalid_binding(
+                &self.local_binding_id,
+                "modifier instance has no metadata for a binding source",
+            )
+        })?;
+        let local = local_metadata
+            .bindings
+            .get(self.local_binding_index)
+            .ok_or_else(|| {
+                invalid_binding(
+                    &self.local_binding_id,
+                    "cached local binding index is no longer present",
+                )
+            })?;
+        if local.id != self.local_binding_id || local.target != self.local_target {
+            return Err(invalid_binding(
+                &self.local_binding_id,
+                "cached local binding identity no longer matches",
+            ));
+        }
+
+        let scale = host.scale * local.scale;
+        let offset = host.offset * local.scale + local.offset;
+        if !scale.is_finite() || !offset.is_finite() {
+            return Err(invalid_binding(
+                &self.host_binding_id,
+                "live composed binding scale and offset must be finite",
+            ));
+        }
+        Ok((scale, offset))
+    }
+}
+
+#[cfg(test)]
 pub(super) fn expand_bindings(
     owner: &EffectGraphDef,
     leaf_maps: &BTreeMap<String, BTreeMap<String, Vec<NodeId>>>,
 ) -> Result<Option<PresetMetadata>, SceneModifierExpandError> {
+    expand_bindings_with_sources(owner, leaf_maps).map(|(metadata, _)| metadata)
+}
+
+pub(super) fn expand_bindings_with_sources(
+    owner: &EffectGraphDef,
+    leaf_maps: &BTreeMap<String, BTreeMap<String, Vec<NodeId>>>,
+) -> Result<
+    (
+        Option<PresetMetadata>,
+        Vec<Option<SceneModifierBindingSource>>,
+    ),
+    SceneModifierExpandError,
+> {
     let Some(metadata) = owner.preset_metadata.as_ref() else {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     };
     let mut expanded = metadata.clone();
     let mut bindings = Vec::new();
-    for binding in &metadata.bindings {
+    let mut sources = Vec::new();
+    for (host_binding_index, binding) in metadata.bindings.iter().enumerate() {
         let BindingTarget::SceneModifier {
             modifier_id,
             param_id,
         } = &binding.target
         else {
             bindings.push(binding.clone());
+            sources.push(None);
             continue;
         };
         let instance = find_instance(owner, modifier_id)?;
@@ -33,10 +122,11 @@ pub(super) fn expand_bindings(
             .preset_metadata
             .as_ref()
             .ok_or_else(|| invalid_binding(&binding.id, "modifier instance has no metadata"))?;
-        let local_bindings: Vec<&BindingDef> = local_metadata
+        let local_bindings: Vec<(usize, &BindingDef)> = local_metadata
             .bindings
             .iter()
-            .filter(|local| local.id == *param_id)
+            .enumerate()
+            .filter(|(_, local)| local.id == *param_id)
             .collect();
         if local_bindings.is_empty() {
             return Err(invalid_binding(
@@ -53,7 +143,7 @@ pub(super) fn expand_bindings(
         let copies = leaf_maps
             .get(modifier_id.as_str())
             .ok_or_else(|| missing_target(modifier_id, "modifier has no generated leaf map"))?;
-        for local in local_bindings {
+        for (local_binding_index, local) in local_bindings {
             let target = local_node_target(local, &binding.id)?;
             let generated = copies
                 .get(target.as_str())
@@ -87,6 +177,15 @@ pub(super) fn expand_bindings(
                     offset,
                     default_mirrors_node_param: binding.default_mirrors_node_param,
                 });
+                sources.push(Some(SceneModifierBindingSource {
+                    modifier_id: modifier_id.clone(),
+                    host_binding_index,
+                    host_binding_id: binding.id.clone(),
+                    host_target: binding.target.clone(),
+                    local_binding_index,
+                    local_binding_id: local.id.clone(),
+                    local_target: local.target.clone(),
+                }));
             }
         }
     }
@@ -147,7 +246,7 @@ pub(super) fn expand_bindings(
         }
     }
     expanded.string_bindings = string_bindings;
-    Ok(Some(expanded))
+    Ok((Some(expanded), sources))
 }
 
 pub(super) fn seed_local_defaults(
@@ -478,6 +577,70 @@ mod tests {
             applied,
             crate::node_graph::parameters::ParamValue::Float(10.0)
         );
+    }
+
+    #[test]
+    fn scene_modifier_expand_bindings_sources_track_fanout_and_live_reshape() {
+        let (expanded, sources) = expand_bindings_with_sources(&owner(), &leaf_maps())
+            .expect("binding expansion with sources succeeds");
+        let expanded = expanded.expect("metadata present");
+        assert_eq!(sources.len(), expanded.bindings.len());
+        assert!(sources[0].is_none(), "ordinary host binding has no source");
+        assert!(sources[1].is_some());
+        assert!(sources[2].is_some());
+
+        let mut live = owner();
+        live.preset_metadata
+            .as_mut()
+            .expect("owner metadata")
+            .bindings[1]
+            .scale = 5.0;
+        live.preset_metadata
+            .as_mut()
+            .expect("owner metadata")
+            .bindings[1]
+            .offset = 7.0;
+        live.scene_modifiers[0]
+            .graph
+            .preset_metadata
+            .as_mut()
+            .expect("local metadata")
+            .bindings[0]
+            .scale = 4.0;
+        live.scene_modifiers[0]
+            .graph
+            .preset_metadata
+            .as_mut()
+            .expect("local metadata")
+            .bindings[0]
+            .offset = 1.0;
+        assert_eq!(
+            sources[1].as_ref().unwrap().scale_offset(&live),
+            Ok((20.0, 29.0))
+        );
+
+        let mut reordered = live.clone();
+        let mut other = reordered.scene_modifiers[0].clone();
+        other.id = NodeId::new("other");
+        reordered.scene_modifiers.insert(0, other);
+        assert_eq!(
+            sources[1].as_ref().unwrap().scale_offset(&reordered),
+            Ok((20.0, 29.0))
+        );
+
+        reordered
+            .preset_metadata
+            .as_mut()
+            .expect("owner metadata")
+            .bindings[1]
+            .target = BindingTarget::SceneModifier {
+            modifier_id: NodeId::new("other"),
+            param_id: "inner".into(),
+        };
+        assert!(matches!(
+            sources[1].as_ref().unwrap().scale_offset(&reordered),
+            Err(SceneModifierExpandError::InvalidBinding { .. })
+        ));
     }
 
     #[test]
