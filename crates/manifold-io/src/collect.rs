@@ -22,7 +22,7 @@ use manifold_core::file_loader::{file_loader_kind, AssetFamily, NodeFileLoad};
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Which media family an asset belongs to — the `Media/` subfolder it collects
@@ -54,6 +54,15 @@ pub enum AssetTarget {
     /// per-clip (`TimelineClip.string_params`) with a fallback to the
     /// preset-def default.
     StringParam { layer_id: LayerId, key: String },
+    /// A string param stored in an authored scene-modifier snapshot on a
+    /// generator layer. The local default is the source of truth; host
+    /// bindings are collected through `StringParam` and take precedence.
+    SceneModifierStringParam {
+        layer_id: LayerId,
+        modifier_id: manifold_core::NodeId,
+        key: String,
+        load: NodeFileLoad,
+    },
 }
 
 /// One external asset a project references.
@@ -180,6 +189,45 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                 });
             }
         }
+
+        // Unexposed modifier-local string defaults are stored in the
+        // canonical scene-modifier snapshot rather than in clip overrides.
+        // Host SceneModifier bindings already enumerate through StringParam,
+        // so skip those local keys to preserve host precedence.
+        if let Some(host) = resolve_graph_def(project, inst) {
+            let exposed: HashSet<(manifold_core::NodeId, String)> = host
+                .preset_metadata
+                .as_ref()
+                .map(|meta| {
+                    meta.string_bindings
+                        .iter()
+                        .filter_map(|binding| match &binding.target {
+                            BindingTarget::SceneModifier { modifier_id, param_id } => {
+                                Some((modifier_id.clone(), param_id.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for modifier in &host.scene_modifiers {
+                for (key, default, load) in defs_from_meta(&modifier.graph) {
+                    if exposed.contains(&(modifier.id.clone(), key.clone())) || default.is_empty() {
+                        continue;
+                    }
+                    out.push(AssetRef {
+                        kind: kind_of(load),
+                        path: PathBuf::from(default),
+                        target: AssetTarget::SceneModifierStringParam {
+                            layer_id: layer.layer_id.clone(),
+                            modifier_id: modifier.id.clone(),
+                            key,
+                            load,
+                        },
+                    });
+                }
+            }
+        }
     }
 
     // Dedupe exact triples — N clips carrying the identical override would
@@ -243,6 +291,16 @@ fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String,
     })
 }
 
+fn resolve_graph_def<'a>(
+    project: &'a Project,
+    inst: &'a PresetInstance,
+) -> Option<&'a EffectGraphDef> {
+    if let Some(graph) = inst_graph(inst) {
+        return Some(graph);
+    }
+    project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
+}
+
 /// The `StringParamSpecDef`s of a graph that carry a file-loading binding.
 /// Each def is paired with the `NodeFileLoad` its binding's target node reads,
 /// resolved through the graph's node table. Defs whose bindings are all absent,
@@ -263,17 +321,27 @@ fn defs_from_meta(graph: &EffectGraphDef) -> Vec<(String, String, NodeFileLoad)>
             .string_bindings
             .iter()
             .filter(|b| b.id == sp.id)
-            .find_map(|b| match &b.target {
-                BindingTarget::Node { node_id, .. } => {
-                    find_node_type(&graph.nodes, node_id).and_then(file_loader_kind)
-                }
-                _ => None,
-            });
+            .find_map(|b| binding_file_loader(graph, &b.target));
         if let Some(load) = load {
             out.push((sp.id.clone(), sp.default_value.clone(), load));
         }
     }
     out
+}
+
+fn binding_file_loader(graph: &EffectGraphDef, target: &BindingTarget) -> Option<NodeFileLoad> {
+    match target {
+        BindingTarget::Node { node_id, .. } => {
+            find_node_type(&graph.nodes, node_id).and_then(file_loader_kind)
+        }
+        BindingTarget::SceneModifier { modifier_id, param_id } => {
+            let local = &graph.scene_modifiers.iter().find(|m| &m.id == modifier_id)?.graph;
+            local.preset_metadata.as_ref()?.string_bindings.iter()
+                .filter(|binding| &binding.id == param_id)
+                .find_map(|binding| binding_file_loader(local, &binding.target))
+        }
+        BindingTarget::Composite { .. } => None,
+    }
 }
 
 /// Depth-first search for a node's `type_id` by `node_id`, descending into
@@ -371,6 +439,8 @@ pub fn collect_all_and_save(
     project: &mut Project,
     project_path: &Path,
 ) -> Result<CollectReport, CollectError> {
+    crate::graph_schema::validate_project_graphs(project)
+        .map_err(|e| CollectError::Save(crate::saver::SaveError::Serialize(e.to_string())))?;
     // Raw `project_path.parent()`, NOT canonicalized: the save path
     // (`saver::save_project` → `store_relative_paths`) derives its base from
     // the same raw parent, so a canonicalized dir here would make
@@ -603,11 +673,100 @@ fn re_point(
         AssetTarget::StringParam { layer_id, key } => {
             re_point_string_param(project, layer_id, key, &old_str, &new_str)
         }
+        AssetTarget::SceneModifierStringParam { .. } => {
+            re_point_scene_modifier_asset(project, target, &old_str, &new_str)
+        }
     };
 
     if changed {
         report.re_pointed += 1;
     }
+}
+
+pub(crate) fn re_point_scene_modifier_asset(
+    project: &mut Project,
+    target: &AssetTarget,
+    old: &str,
+    new: &str,
+) -> bool {
+    if old == new {
+        return false;
+    }
+    let AssetTarget::SceneModifierStringParam { layer_id, modifier_id, key, .. } = target else {
+        return false;
+    };
+    let valid = project
+        .timeline
+        .find_layer_by_id(layer_id.as_str())
+        .and_then(|(_, layer)| layer.gen_params())
+        .and_then(|inst| {
+            inst.graph.as_ref().or_else(|| {
+                project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
+            })
+        })
+        .and_then(|graph| graph.scene_modifiers.iter().find(|m| &m.id == modifier_id))
+        .map(|modifier| {
+            let Some(meta) = modifier.graph.preset_metadata.as_ref() else {
+                return false;
+            };
+            let spec_matches = meta
+                .string_params
+                .iter()
+                .any(|spec| spec.id == *key && spec.default_value == old);
+            let binding_routes_to_file = meta
+                .string_bindings
+                .iter()
+                .filter(|binding| binding.id == *key)
+                .find_map(|binding| binding_file_loader(&modifier.graph, &binding.target))
+                .is_some();
+            spec_matches && binding_routes_to_file
+        })
+        .unwrap_or(false);
+    if !valid {
+        return false;
+    }
+    let fallback = project
+        .timeline
+        .find_layer_by_id(layer_id.as_str())
+        .and_then(|(_, layer)| layer.gen_params())
+        .filter(|inst| inst.graph.is_none())
+        .and_then(|inst| project.embedded_preset(inst.generator_type()))
+        .map(|preset| preset.def.clone());
+    let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
+        return false;
+    };
+    let Some(inst) = layer.gen_params_mut() else {
+        return false;
+    };
+    if inst.graph.is_none() {
+        inst.graph = fallback;
+    }
+    let Some(graph) = inst.graph.as_mut() else {
+        return false;
+    };
+    let Some(modifier) = graph.scene_modifiers.iter_mut().find(|m| &m.id == modifier_id) else {
+        return false;
+    };
+    let Some(meta) = modifier.graph.preset_metadata.as_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for spec in &mut meta.string_params {
+        if spec.id == *key && spec.default_value == old {
+            spec.default_value = new.to_string();
+            changed = true;
+        }
+    }
+    for binding in &mut meta.string_bindings {
+        if binding.id == *key && binding.default_value == old {
+            binding.default_value = new.to_string();
+            changed = true;
+        }
+    }
+    if changed {
+        inst.bump_graph_structure_version();
+    }
+    changed
 }
 
 /// Re-point a file-loading string param (D5a). Clips whose effective value equals
@@ -708,6 +867,203 @@ mod tests {
         }
     }
 
+    #[test]
+    fn scene_modifier_v3_asset_binding_follows_the_local_snapshot() {
+        use manifold_core::scene_modifier_preset::{
+            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        };
+        let local = path_preset(
+            "Local", vec![sp("model", "scan.glb", false)],
+            vec![StringBindingDef {
+                id: "model".into(), label: "Model".into(), default_value: "scan.glb".into(),
+                target: BindingTarget::Node { node_id: NodeId::new("asset"), param: "path".into() },
+            }],
+            vec![node("asset", "node.gltf_mesh_source")],
+        );
+        let mut host = path_preset(
+            "Host", vec![sp("modifier_model", "scan.glb", false)],
+            vec![StringBindingDef {
+                id: "modifier_model".into(), label: "Model".into(), default_value: "scan.glb".into(),
+                target: BindingTarget::SceneModifier {
+                    modifier_id: NodeId::new("modifier/a:b"), param_id: "model".into(),
+                },
+            }],
+            // The same local ID in the host must not change the resolved family.
+            vec![node("asset", "node.hdri_source")],
+        );
+        host.def.scene_modifiers.push(SceneModifierInstanceDef {
+            id: NodeId::new("modifier/a:b"),
+            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            graph: Box::new(local.def),
+        });
+        assert_eq!(defs_from_meta(&host.def), vec![(
+            "modifier_model".into(), "scan.glb".into(), NodeFileLoad::File(AssetFamily::Mesh),
+        )]);
+    }
+
+    fn scene_modifier_asset_project(host_exposes: bool) -> (Project, LayerId, String) {
+        use manifold_core::effect_graph_def::{GroupDef, GroupInterface};
+        use manifold_core::scene_modifier_preset::{
+            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        };
+
+        // Parse the checked-in authored recipe first so these tests exercise
+        // the same valid v3 local snapshot shape as project IO.
+        let mut local = crate::preset_file::deserialize_preset(include_str!(
+            "../tests/fixtures/scene_modifier_recipe_v3.json"
+        ))
+        .expect("v3 recipe fixture");
+        let local_path = "/missing/local-images".to_string();
+        let local_key = "local_images".to_string();
+        let local_meta = local.preset_metadata.as_mut().expect("fixture metadata");
+        local_meta.string_params.push(sp(&local_key, &local_path, false));
+        local_meta.string_bindings.push(StringBindingDef {
+            id: local_key.clone(),
+            label: "Local Images".into(),
+            default_value: local_path.clone(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new("nested/image-folder"),
+                param: "path".into(),
+            },
+        });
+        let mut group = node("nested", "group");
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![node("nested/image-folder", "node.image_folder")],
+            wires: vec![],
+            tint: None,
+        }));
+        local.nodes = vec![group];
+
+        let host_key = "host_local_images".to_string();
+        let host_path = "/missing/host-images".to_string();
+        let host_binding = if host_exposes {
+            vec![StringBindingDef {
+                id: host_key.clone(),
+                label: "Host Local Images".into(),
+                default_value: host_path.clone(),
+                target: BindingTarget::SceneModifier {
+                    modifier_id: NodeId::new("modifier/a:b"),
+                    param_id: local_key.clone(),
+                },
+            }]
+        } else {
+            vec![]
+        };
+        let host = path_preset(
+            "scene-modifier-host",
+            if host_exposes { vec![sp(&host_key, &host_path, false)] } else { vec![] },
+            host_binding,
+            vec![],
+        );
+        let modifier_id = NodeId::new("modifier/a:b");
+        let mut host = host;
+        host.def.version = 3;
+        host.def.scene_modifiers.push(SceneModifierInstanceDef {
+            id: modifier_id.clone(),
+            scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: vec![],
+            graph: Box::new(local),
+        });
+        let mut project = Project::default();
+        project.upsert_embedded_preset(host);
+        let mut layer = Layer::new_generator(
+            "Scene Modifier Host".into(),
+            PresetTypeId::new("scene-modifier-host"),
+            0,
+        );
+        layer
+            .clips
+            .push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(4.0)));
+        let layer_id = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+        (project, layer_id, modifier_id.as_str().to_string())
+    }
+
+    #[test]
+    fn scene_modifier_v3_collects_unexposed_nested_local_folder() {
+        let (project, layer_id, modifier_id) = scene_modifier_asset_project(false);
+        let refs = collect_asset_paths(&project);
+        assert!(refs.iter().any(|asset| {
+            asset.kind == AssetKind::Images
+                && asset.path == Path::new("/missing/local-images")
+                && matches!(
+                    &asset.target,
+                    AssetTarget::SceneModifierStringParam { layer_id: id, key, .. }
+                        if id == &layer_id && key == "local_images"
+                )
+        }), "unexposed local ref missing: {refs:?}");
+        assert!(!modifier_id.is_empty());
+    }
+
+    #[test]
+    fn scene_modifier_v3_invalid_collection_is_atomic() {
+        let (mut project, _, _) = scene_modifier_asset_project(false);
+        project.embedded_presets[0].def.version = 999;
+        let before = serde_json::to_value(&project).unwrap();
+        let root = std::env::temp_dir().join(format!("manifold-invalid-local-collect-{}", std::process::id()));
+        assert!(!root.exists());
+        assert!(collect_all_and_save(&mut project, &root.join("show.manifold")).is_err());
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert!(!root.exists(), "invalid schema must not create output directories");
+    }
+
+    #[test]
+    fn scene_modifier_v3_host_binding_takes_precedence_over_local_default() {
+        let (project, layer_id, _) = scene_modifier_asset_project(true);
+        let refs = collect_asset_paths(&project);
+        assert!(refs.iter().any(|asset| {
+            matches!(&asset.target, AssetTarget::StringParam { layer_id: id, key } if id == &layer_id && key == "host_local_images")
+        }));
+        assert!(!refs.iter().any(|asset| {
+            matches!(&asset.target, AssetTarget::SceneModifierStringParam { .. })
+        }), "host-exposed local default must not be separately collected");
+    }
+
+    #[test]
+    fn scene_modifier_v3_resolve_moved_local_folder_clones_and_updates_snapshot() {
+        let (mut project, layer_id, _) = scene_modifier_asset_project(false);
+        let root = std::env::temp_dir().join(format!("manifold-local-asset-{}", std::process::id()));
+        let moved = root.join("local-images");
+        std::fs::create_dir_all(&moved).expect("create moved folder");
+        let project_path = root.join("show").join("show.manifold");
+        let result = PathResolver::resolve_all(&mut project, &project_path.to_string_lossy());
+        assert_eq!(result.resolved_count, 1, "local folder should resolve: {result:?}");
+        let layer = project.timeline.find_layer_by_id(layer_id.as_str()).unwrap().1;
+        let graph = layer.generator_graph().expect("fallback host cloned on repoint");
+        let local = &graph.scene_modifiers[0].graph;
+        let meta = local.preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.string_params.iter().find(|p| p.id == "local_images").unwrap().default_value, moved.to_string_lossy());
+        assert_eq!(meta.string_bindings[0].default_value, moved.to_string_lossy());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scene_modifier_v3_collect_save_reload_repoints_local_snapshot() {
+        let (mut project, layer_id, _) = scene_modifier_asset_project(false);
+        let root = std::env::temp_dir().join(format!("manifold-local-collect-{}", std::process::id()));
+        let source = root.join("source").join("local-images");
+        std::fs::create_dir_all(&source).expect("create source folder");
+        std::fs::write(source.join("frame.png"), b"frame").expect("write source asset");
+        let source_path = source.to_string_lossy().to_string();
+        let embedded = project.embedded_presets.first_mut().unwrap();
+        let meta = embedded.def.scene_modifiers[0].graph.preset_metadata.as_mut().unwrap();
+        meta.string_params.iter_mut().find(|p| p.id == "local_images").unwrap().default_value = source_path.clone();
+        meta.string_bindings[0].default_value = source_path;
+        let project_path = root.join("show").join("show.manifold");
+        let report = collect_all_and_save(&mut project, &project_path).expect("collect and save");
+        assert_eq!(report.re_pointed, 1);
+        let loaded = crate::loader::load_project(&project_path).expect("reload collected project");
+        let layer = loaded.timeline.find_layer_by_id(layer_id.as_str()).unwrap().1;
+        let graph = layer.generator_graph().expect("local snapshot persisted on layer");
+        let value = &graph.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().string_params.iter().find(|p| p.id == "local_images").unwrap().default_value;
+        assert!(value.ends_with("Media/Images/local-images") || value.ends_with("Media\\Images\\local-images"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn path_preset(
         name: &str,
         sps: Vec<StringParamSpecDef>,
@@ -715,6 +1071,7 @@ mod tests {
         nodes: Vec<EffectGraphNode>,
     ) -> manifold_core::project::EmbeddedPreset {
         let meta = PresetMetadata {
+            scene_modifier: None,
             id: PresetTypeId::from_string(name.to_string()),
             display_name: name.to_string(),
             category: "Geometry".to_string(),
@@ -734,6 +1091,7 @@ mod tests {
         manifold_core::project::EmbeddedPreset {
             kind: manifold_core::preset_def::PresetKind::Generator,
             def: EffectGraphDef {
+                scene_modifiers: Vec::new(),
                 version: 1,
                 name: Some(name.to_string()),
                 description: None,

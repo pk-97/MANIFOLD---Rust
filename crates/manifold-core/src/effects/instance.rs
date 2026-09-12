@@ -676,7 +676,7 @@ impl PresetInstance {
     /// the per-frame hot path, so the allocation is acceptable.
     pub fn user_param_bindings(&self) -> Vec<UserParamBinding> {
         self.user_added_bindings()
-            .map(|b| self.synth_user_binding(b))
+            .filter_map(|b| self.synth_user_binding(b))
             .collect()
     }
 
@@ -703,13 +703,16 @@ impl PresetInstance {
     /// Build one [`UserParamBinding`] from a `user_added` [`BindingDef`]
     /// plus its matching `ParamSpecDef` reshape. Shared by
     /// [`Self::user_param_bindings`] and the single-binding lookups.
-    fn synth_user_binding(&self, b: &crate::effect_graph_def::BindingDef) -> UserParamBinding {
+    fn synth_user_binding(&self, b: &crate::effect_graph_def::BindingDef) -> Option<UserParamBinding> {
         use crate::effect_graph_def::BindingTarget;
         let (node_id, inner_param) = match &b.target {
             BindingTarget::Node { node_id, param } => (node_id.clone(), param.clone()),
             BindingTarget::Composite { outer_name } => {
                 (NodeId::default(), outer_name.clone())
             }
+            // This legacy view addresses a node, not a modifier-local macro.
+            // Keep the authored binding intact; expansion resolves its leaves.
+            BindingTarget::SceneModifier { .. } => return None,
         };
         // The full slider surface (range + curve + invert + label) is the
         // manifest entry's live `spec` — so a recalibrated user param's range
@@ -717,7 +720,7 @@ impl PresetInstance {
         // from the binding recipe. Identity fallback when no manifest entry.
         let param = self.params.get(&b.id);
         let spec = param.map(|p| &p.spec);
-        UserParamBinding {
+        Some(UserParamBinding {
             id: b.id.clone(),
             label: spec.map(|s| s.name.clone()).unwrap_or_else(|| b.label.clone()),
             node_id,
@@ -734,7 +737,7 @@ impl PresetInstance {
             offset: b.offset,
             value_labels: spec.map(|s| s.value_labels.clone()).unwrap_or_default(),
             section: spec.and_then(|s| s.section.clone()),
-        }
+        })
     }
 
     /// Position of a user binding by stable id within the user-added tail, or
@@ -824,6 +827,7 @@ impl PresetInstance {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         });
@@ -842,6 +846,7 @@ impl PresetInstance {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         });
         meta.params.push(spec.clone());
@@ -881,7 +886,7 @@ impl PresetInstance {
         // the binding + the manifest spec).
         let removed = {
             let b = self.user_added_bindings().nth(j)?;
-            self.synth_user_binding(b)
+            self.synth_user_binding(b)?
         };
 
         // Pull the binding + shadow spec from the graph metadata.
@@ -924,6 +929,7 @@ impl PresetInstance {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         });
@@ -942,6 +948,7 @@ impl PresetInstance {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         });
 
@@ -1746,6 +1753,7 @@ mod tests {
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -1789,6 +1797,7 @@ mod tests {
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
             }),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         });

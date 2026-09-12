@@ -57,6 +57,8 @@ const VALIDATE_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 pub enum ValidateKind {
     Effect,
     Generator,
+    /// Scene-modifier recipes require a loaded host scene before GPU work.
+    SceneModifier,
 }
 
 impl From<PresetKind> for ValidateKind {
@@ -64,6 +66,7 @@ impl From<PresetKind> for ValidateKind {
         match kind {
             PresetKind::Effect => ValidateKind::Effect,
             PresetKind::Generator => ValidateKind::Generator,
+            PresetKind::SceneModifier => ValidateKind::SceneModifier,
         }
     }
 }
@@ -236,6 +239,17 @@ pub fn validate_def(
     device: &std::sync::Arc<GpuDevice>,
 ) -> ValidationReport {
     let mut report = ValidationReport::default();
+
+    if kind == ValidateKind::SceneModifier {
+        report.errors.push(ValidationIssue {
+            node_id: None,
+            type_id: None,
+            port: None,
+            message: "scene modifier validation requires an attached host scene before GPU work"
+                .to_string(),
+        });
+        return report;
+    }
 
     report.errors.extend(check_bindings_resolve(def));
 

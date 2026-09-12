@@ -2265,6 +2265,7 @@ fn merge_into_a_def_without_render_scene_errors() {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: Vec::new(),
         wires: Vec::new(),
     };
@@ -3790,6 +3791,7 @@ fn render_scene_with_three_objects_loads_object_port() {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: vec![render, scene_object_2],
         wires: vec![wire(1, "object", 0, "object_2")],
     };
@@ -5979,7 +5981,7 @@ fn duplicate_demo_pair_renders_original_then_original_plus_offset_copy() {
                             param: param.clone(),
                         },
                     }),
-                manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
+                manifold_core::effect_graph_def::BindingTarget::Composite { .. } | manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
         meta.string_bindings.extend(new_entries);

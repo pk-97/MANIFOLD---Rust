@@ -3561,6 +3561,7 @@ mod unbound_node_param_drag_tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![],
             wires: vec![],
         }

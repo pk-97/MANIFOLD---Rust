@@ -103,8 +103,10 @@ fn scene_def() -> EffectGraphDef {
             value_aliases: vec![],
             string_params: vec![],
             string_bindings: vec![],
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "render_scene", "node.render_scene"),
             object,

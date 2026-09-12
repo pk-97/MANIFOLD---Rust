@@ -1160,6 +1160,7 @@ impl Application {
                     name: None,
                     description: None,
                     preset_metadata: None,
+                    scene_modifiers: Vec::new(),
                     nodes: Vec::new(),
                     wires: Vec::new(),
                 },

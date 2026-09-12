@@ -397,6 +397,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
                 id: 7,
                 node_id: NodeId::new("scene_root"),
@@ -502,6 +503,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![lens(1000.0, 3, "lens_legacy"), lens(2.8, 4, "lens_dialed"), bokeh],
             wires: vec![],
         };
@@ -617,6 +619,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
                 id: 1,
                 node_id: NodeId::new("sun"),

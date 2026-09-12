@@ -53,6 +53,9 @@ pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::Embedd
         match p.kind {
             PresetKind::Effect => effect.push((id.as_str().to_string(), json, p.origin)),
             PresetKind::Generator => generator.push((id.as_str().to_string(), json, p.origin)),
+            PresetKind::SceneModifier => {
+                log::warn!("[ProjectIO] scene modifier preset `{id}` is preserved in the project; its catalog requires the scene modifier activation upgrade");
+            }
         }
     }
     manifold_renderer::preset_loader::set_project_presets(effect, generator);
@@ -1297,6 +1300,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None, // pre-P1 shape: no exposures stamped at all
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 1,
                 node_id: manifold_core::NodeId::new("sun"),

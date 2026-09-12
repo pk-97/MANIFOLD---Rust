@@ -193,7 +193,7 @@ fn binding_for_node_param(
         BindingTarget::Node { node_id: nid, param } => {
             *nid == node.node_id && param == param_name
         }
-        BindingTarget::Composite { .. } => false,
+        BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
     })?;
     let spec = &params.get(&binding.id)?.spec;
     Some((
@@ -2090,6 +2090,7 @@ mod binding_reroute_tests {
                 category: "Test".into(),
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -2133,6 +2134,7 @@ mod binding_reroute_tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![node(1, "blur1")],
             wires: vec![],
         }

@@ -767,6 +767,7 @@ fn change_generator_type_clears_and_restores_graph_override() {
         name: Some("stale-plasma".into()),
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: Vec::new(),
         wires: Vec::new(),
     };

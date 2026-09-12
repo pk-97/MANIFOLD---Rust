@@ -12,6 +12,9 @@
 use std::path::Path;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::scene_modifier_preset::{
+    SceneModifierSchemaError, validate_scene_modifier_schema,
+};
 
 /// Canonical extension for a standalone preset file.
 pub const PRESET_FILE_EXTENSION: &str = "manifoldpreset";
@@ -19,6 +22,8 @@ pub const PRESET_FILE_EXTENSION: &str = "manifoldpreset";
 /// Failure modes for reading/writing a standalone preset file.
 #[derive(Debug)]
 pub enum PresetFileError {
+    /// A parsed graph uses an unsupported or invalid authoring schema.
+    Schema(SceneModifierSchemaError),
     /// The file could not be read or written.
     Io(std::io::Error),
     /// The bytes on disk were not a valid [`EffectGraphDef`] JSON document.
@@ -30,6 +35,7 @@ pub enum PresetFileError {
 impl std::fmt::Display for PresetFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Schema(e) => write!(f, "invalid preset schema: {e}"),
             Self::Io(e) => write!(f, "preset file I/O error: {e}"),
             Self::Parse(e) => write!(f, "preset file is not a valid preset graph: {e}"),
             Self::Serialize(e) => write!(f, "failed to serialize preset: {e}"),
@@ -42,12 +48,15 @@ impl std::error::Error for PresetFileError {}
 /// Serialize a preset graph to pretty JSON (so a shared file is human-readable
 /// and diff-friendly, matching the on-disk bundled presets).
 pub fn serialize_preset(def: &EffectGraphDef) -> Result<String, PresetFileError> {
+    validate_scene_modifier_schema(def).map_err(PresetFileError::Schema)?;
     serde_json::to_string_pretty(def).map_err(PresetFileError::Serialize)
 }
 
 /// Parse a preset graph from a JSON string.
 pub fn deserialize_preset(json: &str) -> Result<EffectGraphDef, PresetFileError> {
-    serde_json::from_str(json).map_err(PresetFileError::Parse)
+    let def = serde_json::from_str(json).map_err(PresetFileError::Parse)?;
+    validate_scene_modifier_schema(&def).map_err(PresetFileError::Schema)?;
+    Ok(def)
 }
 
 /// Write a preset graph to `path` as a standalone JSON document.
@@ -77,10 +86,12 @@ mod tests {
     /// the fork model produces and a shared file must round-trip exactly.
     fn sample_def() -> EffectGraphDef {
         EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 2,
             name: Some("My Oily Fluid".to_string()),
             description: None,
             preset_metadata: Some(PresetMetadata {
+                scene_modifier: None,
                 id: PresetTypeId::new("project.OilyFluid.variant1"),
                 display_name: "My Oily Fluid".to_string(),
                 category: "Generator".to_string(),

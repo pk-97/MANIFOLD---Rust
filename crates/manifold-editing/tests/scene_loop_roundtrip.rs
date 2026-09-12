@@ -139,8 +139,10 @@ fn minimal_scene_def() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![node(0, "render", "node.render_scene", BTreeMap::new())],
         wires: vec![],
     }
@@ -152,6 +154,7 @@ fn empty_def() -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: vec![],
         wires: vec![],
     }
@@ -252,6 +255,7 @@ fn scene_loop_apply_rejects_multi_scene() {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 node(0, "render_a", "node.render_scene", BTreeMap::new()),
                 node(1, "render_b", "node.render_scene", BTreeMap::new()),
@@ -319,8 +323,10 @@ fn grouped_scene_def() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: Some(([0.0, 0.0, 0.0], [1.0, 1.0, 10.0])),
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "camera", "node.orbit_camera", BTreeMap::new()),
             node(1, "lens", "node.camera_lens", BTreeMap::new()),

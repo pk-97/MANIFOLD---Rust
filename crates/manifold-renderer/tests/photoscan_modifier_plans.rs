@@ -134,6 +134,7 @@ fn nested_scene(template: &EffectGraphDef) -> EffectGraphDef {
         name: Some("Synthetic Photo Scan".into()),
         description: None,
         preset_metadata: template.preset_metadata.clone().map(|mut metadata| { metadata.scene_bounds = Some(([-2.0; 3], [2.0; 3])); metadata }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(1, "render", RENDER_SCENE_TYPE_ID, &[]),
             object_group(10, "left_object"),
@@ -152,7 +153,7 @@ fn project_with_graph(def: EffectGraphDef) -> (Project, usize, manifold_core::La
 }
 
 fn empty_catalog() -> EffectGraphDef {
-    EffectGraphDef { version: 1, name: None, description: None, preset_metadata: None, nodes: Vec::new(), wires: Vec::new() }
+    EffectGraphDef { version: 1, name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(), nodes: Vec::new(), wires: Vec::new() }
 }
 
 #[test]
@@ -200,6 +201,7 @@ fn photoscan_modifier_real_import() {
                 name: None,
                 description: None,
                 preset_metadata: None,
+                scene_modifiers: Vec::new(),
                 nodes: Vec::new(),
                 wires: Vec::new(),
             },
@@ -259,7 +261,7 @@ fn photoscan_modifier_direct_root_object_fixture() {
         let layer_id = project.timeline.layers[layer_index].layer_id.clone();
         let mut apply = ApplySceneModifierCommand::new(
             manifold_core::GraphTarget::Generator(layer_id), Vec::new(), plan,
-            EffectGraphDef { version: 1, name: None, description: None, preset_metadata: None, nodes: Vec::new(), wires: Vec::new() },
+            EffectGraphDef { version: 1, name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(), nodes: Vec::new(), wires: Vec::new() },
         );
         apply.execute(&mut project);
         let applied = project.timeline.layers[layer_index].generator_graph().expect("direct-root apply");

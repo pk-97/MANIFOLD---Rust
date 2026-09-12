@@ -156,6 +156,7 @@ fn empty_scene_preset_metadata() -> PresetMetadata {
         value_aliases: Vec::new(),
         string_params: Vec::new(),
         string_bindings: Vec::new(),
+        scene_modifier: None,
         scene_bounds: None,
     }
 }
@@ -672,6 +673,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(7, "node.light")],
             wires: vec![],
         };
@@ -701,6 +703,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(7, "node.light")],
             wires: vec![],
         };
@@ -730,6 +733,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(5, "node.value"), make_node(7, "node.light")],
             wires: vec![],
         };
@@ -813,6 +817,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(7, "node.light")],
             wires: vec![],
         }
@@ -919,6 +924,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![group_node],
             wires: vec![],
         };
@@ -966,6 +972,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![node],
             wires: vec![],
         };
@@ -1000,6 +1007,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![node],
             wires: vec![],
         };
@@ -1090,6 +1098,7 @@ mod tests {
         };
 
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1170,6 +1179,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(7, "node.transform_3d")],
             wires: vec![],
         };
@@ -1200,6 +1210,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(3, "node.pbr_material")],
             wires: vec![],
         };
@@ -1271,6 +1282,7 @@ mod tests {
         };
 
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1366,6 +1378,7 @@ mod tests {
         };
 
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1444,6 +1457,7 @@ mod tests {
         };
 
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1596,6 +1610,7 @@ mod tests {
         // scene_bounds: [-5, -5, -5]..[5, 5, 5] → radius = sqrt(75) ≈ 8.66
         // scene-scaled distance band: 0.01..6·radius ≈ 0.01..51.96
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1687,6 +1702,7 @@ mod tests {
 
         // scene_bounds: [-2, -2, -2]..[2, 2, 2] → radius = sqrt(12) ≈ 3.464
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1768,6 +1784,7 @@ mod tests {
         };
 
         let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,

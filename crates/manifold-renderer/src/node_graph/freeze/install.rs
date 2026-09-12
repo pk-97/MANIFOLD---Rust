@@ -2183,6 +2183,7 @@ pub(crate) fn fuse_canonical_def_masked(
         // Keep the outer-card surface (params / skip / aliases) byte-identical so
         // the chain builder's outer_param_index + skip logic are unchanged.
         preset_metadata: def.preset_metadata.clone(),
+        scene_modifiers: def.scene_modifiers.clone(),
         nodes: new_nodes,
         wires: new_wires,
     };

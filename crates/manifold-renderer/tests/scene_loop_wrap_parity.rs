@@ -110,8 +110,10 @@ fn build_loop_graph() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "input", "system.generator_input", BTreeMap::new()),
             node(1, "loop_phase", "node.beat_ramp", params_phase),
@@ -228,8 +230,10 @@ fn build_red_graph() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "input", "system.generator_input", BTreeMap::new()),
             node(3, "cam", "node.orbit_camera", params_orbit_cam),
@@ -657,4 +661,3 @@ fn fog_density_swings_over_loop() {
          (max diff = 0) — fog density driver is not affecting the render"
     );
 }
-

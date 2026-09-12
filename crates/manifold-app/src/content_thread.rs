@@ -1584,7 +1584,7 @@ impl ContentThread {
                                         source: OuterParamSource::Static,
                                     })
                                 }
-                                BindingTarget::Composite { .. } => None,
+                                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
                             })
                             .collect();
                     }

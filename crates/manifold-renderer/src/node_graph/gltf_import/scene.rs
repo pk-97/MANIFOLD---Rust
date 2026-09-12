@@ -882,6 +882,7 @@ pub(super) fn build_import_graph(
         ],
         string_bindings,
         // Import AABB; the scene panel's VM-build reads it for scene-relative translate slider ranges.
+        scene_modifier: None,
         scene_bounds: Some((summary.bbox_min, summary.bbox_max)),
     };
 
@@ -890,6 +891,7 @@ pub(super) fn build_import_graph(
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes,
         wires,
     }

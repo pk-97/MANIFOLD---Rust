@@ -93,6 +93,7 @@ impl UserLibrary {
         self.root.join(match kind {
             PresetKind::Effect => "effects",
             PresetKind::Generator => "generators",
+            PresetKind::SceneModifier => "scene-modifiers",
         })
     }
 
@@ -130,6 +131,9 @@ impl UserLibrary {
             PresetKind::Generator => {
                 manifold_renderer::preset_loader::GENERATOR_CATALOG.load().json(id).is_some()
             }
+            PresetKind::SceneModifier => manifold_core::preset_definition_registry::try_get(
+                &PresetTypeId::from_string(id.to_owned()),
+            ).is_some_and(|preset| preset.kind == PresetKind::SceneModifier),
         }
     }
 
@@ -340,6 +344,7 @@ mod tests {
                 category: "Test".to_string(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -351,6 +356,7 @@ mod tests {
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
             }),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         }

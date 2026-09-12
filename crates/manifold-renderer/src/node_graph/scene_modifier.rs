@@ -1383,6 +1383,7 @@ pub mod scene_modifier_fog {
                 name: None,
                 description: None,
                 preset_metadata: None,
+                scene_modifiers: Vec::new(),
                 nodes: vec![mint_node(1, "render", RENDER_SCENE_TYPE_ID, Default::default())],
                 wires: vec![],
             }

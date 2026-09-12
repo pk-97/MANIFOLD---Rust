@@ -321,6 +321,7 @@ impl Command for InsertMeshModifierCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_modifier: None,
                 scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
@@ -583,6 +584,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![group_node, render],
             wires: vec![scene_build_wire(1, "object", 0, "object_0")],
         }
@@ -642,6 +644,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![group_node, scene_object, render],
             wires: vec![
                 scene_build_wire(1, "vertices", 90, "vertices"),
@@ -667,6 +670,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![outer],
             wires: Vec::new(),
         }

@@ -69,6 +69,7 @@ pub(super) fn abc_graph() -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: vec![
             mk(0, "a", "system.source"),
             mk(1, "b", "node.transform"),
@@ -106,6 +107,7 @@ pub(super) fn mirror_catalog_default() -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: vec![
             EffectGraphNode {
                 id: 0,

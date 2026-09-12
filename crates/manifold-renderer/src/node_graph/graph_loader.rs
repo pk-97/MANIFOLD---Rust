@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use ahash::AHashMap;
 
 use manifold_core::effect_graph_def::{
-    EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, InterfacePortDef, SerializedParamValue,
 };
 use manifold_gpu::{
@@ -692,11 +692,19 @@ pub fn instantiate_def(
     handle_scope: HandleScope,
     boundary: BoundaryHandling,
 ) -> Result<NodeInstantiation, GraphBuildError> {
-    if def.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
+    if def.version == 0 || def.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
         return Err(GraphBuildError::UnsupportedVersion {
             found: def.version,
-            max: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            max: EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
         });
+    }
+
+    // Authored recipes need host attachment expansion before any nodes are
+    // installed, including flat graphs that skip group flattening.
+    if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+        return Err(GraphBuildError::Flatten(
+            manifold_core::flatten::FlattenError::UnexpandedSceneModifiers,
+        ));
     }
 
     // Migrate legacy node type_ids before anything else runs, including
@@ -1747,6 +1755,34 @@ fn audit_array_resource_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_modifier_v3_runtime_requires_attachment_before_node_installation() {
+        let mut doc: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3, "nodes": [], "wires": [],
+            "sceneModifiers": [{
+                "id": "modifier", "scene": {"node": "scene"},
+                "targets": "allObjects",
+                "graph": {"version": 3, "nodes": [], "wires": []}
+            }]
+        })).unwrap();
+        let mut graph = Graph::new();
+        let registry = PrimitiveRegistry::new();
+        let result = instantiate_def(
+            &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
+        );
+        assert!(matches!(result, Err(GraphBuildError::Flatten(
+            manifold_core::flatten::FlattenError::UnexpandedSceneModifiers
+        ))));
+        assert_eq!(graph.nodes().count(), 0);
+
+        // The version itself is supported; only unexpanded authored data is
+        // refused. An ordinary v3 graph takes the existing runtime path.
+        doc.scene_modifiers.clear();
+        assert!(instantiate_def(
+            &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
+        ).is_ok());
+    }
     use crate::node_graph::boundary_nodes::{FinalOutput, Source};
 
     fn registry() -> PrimitiveRegistry {
@@ -2157,6 +2193,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 bare_node(0, "__vocab_migration_test_old__"),
                 grouped_node(1, "__vocab_migration_test_old__"),
@@ -2168,6 +2205,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 bare_node(0, "__vocab_migration_test_new__"),
                 grouped_node(1, "__vocab_migration_test_new__"),
@@ -2198,6 +2236,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 bare_node(0, "node.rotate_vec2_90"),
                 grouped_node(1, "node.rotate_vec2_90"),
@@ -2243,6 +2282,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![node],
             wires: vec![],
         };
@@ -2269,6 +2309,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![bare_node(0, "node.fluid_project_scatter_2d")],
             wires: vec![],
         };
@@ -2296,6 +2337,7 @@ mod tests {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }
     }
@@ -2349,6 +2391,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: vec![group],
             wires: vec![],
         };
@@ -2390,6 +2433,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(minimal_preset_metadata()),
+            scene_modifiers: Vec::new(),
             nodes: vec![anim],
             wires: vec![],
         };
@@ -2464,6 +2508,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render_scene, ao_group],
             wires: vec![
                 EffectGraphWire { from_node: 1, from_port: "depth".to_string(), to_node: 2, to_port: "depth".to_string() },

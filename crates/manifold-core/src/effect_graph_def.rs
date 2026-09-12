@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
+use crate::scene_modifier_preset::SceneModifierInstanceDef;
 
 /// Schema version for graph-topology-only documents (no preset
 /// metadata). Default for per-instance graph overrides and the 25
@@ -52,6 +53,9 @@ pub const EFFECT_GRAPH_VERSION: u32 = 1;
 /// Bundled presets after the section 11 migration, user-saved presets, and
 /// AI-authored presets all live at this version.
 pub const EFFECT_GRAPH_VERSION_WITH_METADATA: u32 = 2;
+
+/// Schema version for documents carrying an authored scene-modifier stack.
+pub const EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS: u32 = 3;
 
 /// Type-id sentinel for `system.group_input` — the inward boundary of a node
 /// group. Its declared output ports mirror the group's
@@ -96,6 +100,10 @@ pub struct EffectGraphDef {
     /// promotes the document to [`EFFECT_GRAPH_VERSION_WITH_METADATA`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset_metadata: Option<PresetMetadata>,
+    /// Ordered authored scene-modifier instances. Expanded nodes are derived
+    /// during preparation and are never persisted beside this stack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scene_modifiers: Vec<SceneModifierInstanceDef>,
     pub nodes: Vec<EffectGraphNode>,
     pub wires: Vec<EffectGraphWire>,
 }
@@ -320,12 +328,18 @@ impl EffectGraphDef {
     }
 
     /// Attach preset metadata and promote the document to
-    /// [`EFFECT_GRAPH_VERSION_WITH_METADATA`]. The presence of metadata
-    /// is what distinguishes a preset definition from a per-instance
-    /// graph override.
+    /// [`EFFECT_GRAPH_VERSION_WITH_METADATA`]. Scene-modifier metadata
+    /// promotes to [`EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS`]. The
+    /// presence of metadata is what distinguishes a preset definition from a
+    /// per-instance graph override.
     pub fn with_preset_metadata(mut self, metadata: PresetMetadata) -> Self {
-        self.version = EFFECT_GRAPH_VERSION_WITH_METADATA;
         self.preset_metadata = Some(metadata);
+        let required_version = if crate::scene_modifier_preset::has_scene_modifier_data(&self) {
+            EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS
+        } else {
+            EFFECT_GRAPH_VERSION_WITH_METADATA
+        };
+        self.version = self.version.max(required_version);
         self
     }
 
@@ -448,6 +462,10 @@ pub struct PresetMetadata {
     /// defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
+    /// Declarative attachment and stage recipe for a scene-modifier preset.
+    /// Its presence requires graph schema v3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_modifier: Option<crate::scene_modifier_preset::SceneModifierRecipe>,
 }
 
 fn default_available() -> bool {
@@ -727,6 +745,8 @@ pub enum BindingTarget {
     /// composite-shaped effects where one outer slider fans out to
     /// multiple inner-node parameters.
     Composite { outer_name: String },
+    /// Route through an authored scene-modifier instance in the owning graph.
+    SceneModifier { modifier_id: NodeId, param_id: String },
 }
 
 impl<'de> Deserialize<'de> for BindingTarget {
@@ -737,8 +757,8 @@ impl<'de> Deserialize<'de> for BindingTarget {
     /// stamp and the load-time node-id normalization use, so a
     /// handle-targeted binding lands on exactly the node that normalizes
     /// to the same id. A one-shot read migration, not a runtime fallback:
-    /// the resolver only ever sees `Node`/`Composite`, and serialization
-    /// only ever emits `node`/`composite`.
+    /// legacy bindings reach the resolver as `Node`/`Composite`. Modifier
+    /// addresses retain the `sceneModifier` form until attachment expansion.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -748,11 +768,19 @@ impl<'de> Deserialize<'de> for BindingTarget {
         enum Wire {
             Node { node_id: NodeId, param: String },
             Composite { outer_name: String },
+            SceneModifier { modifier_id: NodeId, param_id: String },
             HandleNode { handle: String, param: String },
         }
         Ok(match Wire::deserialize(deserializer)? {
             Wire::Node { node_id, param } => BindingTarget::Node { node_id, param },
             Wire::Composite { outer_name } => BindingTarget::Composite { outer_name },
+            Wire::SceneModifier {
+                modifier_id,
+                param_id,
+            } => BindingTarget::SceneModifier {
+                modifier_id,
+                param_id,
+            },
             Wire::HandleNode { handle, param } => BindingTarget::Node {
                 node_id: NodeId::from(handle),
                 param,
@@ -897,6 +925,7 @@ mod tests {
     #[test]
     fn empty_graph_round_trips() {
         let def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
@@ -937,6 +966,7 @@ mod tests {
     #[test]
     fn name_and_description_skipped_when_none() {
         let def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
@@ -958,6 +988,7 @@ mod tests {
             SerializedParamValue::Float { value: 0.8 },
         );
         let def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: Some("Custom Threshold".to_string()),
             description: None,
@@ -1070,6 +1101,7 @@ mod tests {
             tint: None,
         };
         let def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: Some("With Group".to_string()),
             description: None,
@@ -1105,6 +1137,7 @@ mod tests {
         // The backward-compat guarantee: an ordinary node emits no `group`
         // key, so every existing flat document re-serializes byte-identically.
         let def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
@@ -1152,6 +1185,7 @@ mod tests {
     #[test]
     fn v2_document_with_preset_metadata_round_trips() {
         let meta = PresetMetadata {
+            scene_modifier: None,
             id: PresetTypeId::new("EdgeStretchByColor"),
             display_name: "Edge Stretch By Colour".to_string(),
             category: "Stylize".to_string(),
@@ -1201,6 +1235,7 @@ mod tests {
             string_bindings: Vec::new(),
         };
         let def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
@@ -1313,6 +1348,7 @@ mod tests {
             }
         }
         let def = |n: EffectGraphNode| EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
@@ -1380,6 +1416,7 @@ mod tests {
             })),
         };
         let def = |n: EffectGraphNode| EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,

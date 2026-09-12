@@ -2,7 +2,7 @@
 
 <!-- index: Baseline qualification and eight phases for unified photoscan presets, coordinates, migration, catalog, file-only authoring and release proof. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F0 baseline capture underway; F1–F8 pending. The shipped photoscan slice supplies working inputs; it does not implement the unified foundation.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F0 immutable baselines captured; F1 data support implemented and under integration verification; F2–F8 pending. The shipped photoscan slice supplies working inputs; it does not implement the unified foundation.
 **Prerequisites:** [Preset Architecture](SCENE_MODIFIER_PRESET_ARCHITECTURE.md); existing graph/preset/editor infrastructure.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Architecture decisions A/D references below refer to the companion architecture; test policy is [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
 
@@ -76,7 +76,7 @@ Replacement authoring address in core `graph_target.rs`:
 SceneModifier { owner: Box<GraphTarget>, modifier_id: NodeId }
 ```
 
-Only `owner = Generator(layer_id)` is accepted in v1. Nested SceneModifier owners and Effect owners fail target resolution. `preset_kind()` returns SceneModifier for this variant. Existing Effect/Generator variants retain their on-disk representation. Resolve the modifier snapshot in one shared graph-target resolver, not independent implementations in editor/export/fork.
+Only `owner = Generator(layer_id)` is accepted in v1. Nested SceneModifier owners and Effect owners fail target resolution. `preset_kind()` returns SceneModifier for this variant. The existing internally tagged GraphTarget derive cannot serialize its transparent string-ID newtypes; no working historical JSON representation was found. F3 establishes explicit `{kind: effect|generator, id}` objects and `{kind: sceneModifier, owner, modifierId}` while retaining the Rust enum API. This is an editor address, not a new persisted project owner. Add the variant with its working resolver in F3; F1 introduces the persisted data without temporary editor dispatch branches. Resolve the modifier snapshot in one shared graph-target resolver, not independent implementations in editor/export/fork.
 
 New editing commands in `commands/graph/scene_modifier.rs` use existing Command/EditingService and graph snapshot undo:
 
@@ -127,11 +127,13 @@ Commands below run from the phase worktree with an explicit absolute `--manifest
 
 **Entry:** baseline audit commands; read architecture sections 2–4, core graph/preset/project types, `preset_file.rs` and version validation. No dependency on F2.
 
-**Deliverables:** architecture structs including preparationParams and typed coordinate contexts; graph v3 support; SceneModifier preset kind and metadata; BindingTarget variant; GraphTarget variant with typed errors at unresolved new targets. Update constructors compiler-first. File/project embedding preserves v3 and rejects recursive/unknown recipe versions. Add `scene_modifier_v3_roundtrip` and invalid-schema fixtures, including a held-out authored JSON preset. Validate unique preparation parameter names and their declared types. New enum paths may return explicit unsupported-execution errors until F2/F3; never masquerade as Generator. Reuse existing asset dependency traversal for nested local snapshots.
+**Deliverables:** architecture structs including preparationParams and typed coordinate contexts; graph v3 support; SceneModifier preset kind and metadata; BindingTarget variant. GraphTarget joins its working resolver in F3. Update constructors compiler-first. File/project embedding preserves v3 and rejects recursive/unknown recipe versions. Add `scene_modifier_v3_roundtrip` and invalid-schema fixtures, including a held-out authored JSON preset. Validate unique preparation parameter names and their declared types. New enum paths may return explicit unsupported-execution errors until F2/F3; never masquerade as Generator. Reuse existing asset dependency traversal for nested local snapshots.
 
 Include authored meshFrames roundtrip and validation. Calibration survives save/reopen and is excluded from exported bare preset recipes. The format distinguishes absent fresh-instance frames (creation resolver input) from an incomplete saved instance (load diagnostic); saved validation requires frames for every selected mesh target needing context.
 
 **Gate:** `cargo test -p manifold-core -p manifold-io scene_modifier_v3` and focused clippy for core/io with `--tests -- -D warnings`; serialize → reload → equal canonical definition. Negative: no new `Arc<Mutex`/`Arc<RwLock` in touched code. A1/A7 tests are deliverables. **Demo:** none — L1. **Scope fence:** data/file support only; no picker or GPU work.
+
+F1 verification in the leased branch: 20 focused core/IO tests cover schema rejection, standalone recipe roundtrip, local snapshots and mesh frames, collection/reload, path relocation and failure before file mutation. Core and downstream application clippy pass with test targets. The runtime test confirms attachment refusal before node installation and accepts ordinary v3 graphs. The required landing gate remains outstanding; no unified runtime, migration activation or new clip-edge behaviour is claimed here.
 
 ## 5. F2 — typed expansion
 

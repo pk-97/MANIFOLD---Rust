@@ -369,6 +369,7 @@ impl Command for RenameGroupCommand {
                             inside.contains(node_id)
                         }
                         manifold_core::effect_graph_def::BindingTarget::Composite { .. } => false,
+                        manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => false,
                     })
                     .map(|b| b.id.clone())
                     .collect()

@@ -87,6 +87,7 @@ fn scene_loop_apply_import_renders_copies() {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: Vec::new(),
         wires: Vec::new(),
     };

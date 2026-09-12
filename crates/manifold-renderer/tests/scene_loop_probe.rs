@@ -221,8 +221,10 @@ fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes,
         wires,
     }

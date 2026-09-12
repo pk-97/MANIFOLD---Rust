@@ -298,6 +298,7 @@ impl Command for AddSceneLayerPlaneCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_modifier: None,
                 scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
@@ -392,6 +393,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render],
             wires: vec![],
         }

@@ -235,6 +235,7 @@ impl Command for AddSceneObjectCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_modifier: None,
                 scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
@@ -425,6 +426,7 @@ impl Command for AddSceneLightCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_modifier: None,
                 scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
@@ -957,6 +959,7 @@ impl Command for DuplicateSceneObjectCommand {
                             },
                         }),
                     manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
+                    manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => None,
                 })
                 .collect();
             meta.string_bindings.extend(new_entries);
@@ -1103,6 +1106,7 @@ impl Command for AddSceneEnvironmentCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_modifier: None,
                 scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
@@ -1238,6 +1242,7 @@ impl Command for AddSceneFogCommand {
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
+                scene_modifier: None,
                 scene_bounds: None,
             });
             stamp_scene_node_exposures_into(
@@ -1530,6 +1535,7 @@ impl Command for ImportModelIntoSceneCommand {
                         value_aliases: Vec::new(),
                         string_params: Vec::new(),
                         string_bindings: Vec::new(),
+                        scene_modifier: None,
                         scene_bounds: None,
                     }
                 });
@@ -1704,6 +1710,7 @@ impl Command for RenameSceneObjectCommand {
                             inside.contains(node_id)
                         }
                         manifold_core::effect_graph_def::BindingTarget::Composite { .. } => false,
+                        manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. } => false,
                     })
                     .map(|b| b.id.clone())
                     .collect()
@@ -1872,6 +1879,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render],
             wires: vec![],
         }
@@ -2440,6 +2448,7 @@ mod tests {
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -2884,6 +2893,7 @@ mod tests {
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
                 // bbox diagonal = sqrt(20^2+20^2+20^2) = 34.64 -> radius = 17.32
+                scene_modifier: None,
                 scene_bounds: Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])),
             });
             def
@@ -3090,6 +3100,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, object],
             wires: vec![EffectGraphWire {
                 from_node: 1,
@@ -3257,6 +3268,7 @@ mod tests {
             category: "Geometry".to_string(),
             osc_prefix: "existing".to_string(),
             legacy_discriminant: None,
+            scene_modifier: None,
             scene_bounds: None,
             available: true,
             is_line_based: false,

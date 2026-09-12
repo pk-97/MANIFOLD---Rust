@@ -223,6 +223,10 @@ fn param_surface(
     let reg_def = manifold_core::preset_definition_registry::try_get(preset_type);
 
     match kind {
+        PresetKind::SceneModifier => {
+            log::error!("scene modifier cards require an attached host and the scene modifier parameter resolver");
+            return None;
+        }
         PresetKind::Effect => {
             reg_def.as_deref()?; // skip cards for def-less effects
         }
@@ -382,9 +386,11 @@ fn param_surface(
             })
             .unwrap_or_default(),
         PresetKind::Effect => Vec::new(),
+        PresetKind::SceneModifier => return None,
     };
 
     let (card_kind, effect_id, enabled, collapsed, has_graph_mod) = match kind {
+        PresetKind::SceneModifier => return None,
         PresetKind::Effect => (
             ParamCardKind::Effect,
             inst.id.clone(),

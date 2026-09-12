@@ -174,6 +174,7 @@ mod tests {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         };
         EffectGraphDef {
@@ -181,6 +182,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         }

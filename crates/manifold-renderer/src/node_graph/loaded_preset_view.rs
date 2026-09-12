@@ -139,6 +139,10 @@ fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
 
 fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     let def = bundled_preset_def(type_id)?;
+    if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+        log::error!("preset `{type_id}` requires scene modifier attachment expansion before runtime view creation");
+        return None;
+    }
     let metadata = def.preset_metadata.as_ref()?;
     Some(LoadedPresetView {
         type_id: type_id.clone(),
@@ -146,14 +150,14 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
         // out of D5's scope) — one clone into the view's own `Arc`, at
         // startup, per shipped preset. Bounded, not a per-edit leak.
         canonical_def: Arc::new(def.clone()),
-        bindings: owned_bindings(metadata),
+        bindings: owned_bindings(metadata)?,
         // Unfused view — no retargeting; user bindings resolve directly
         // against the canonical inner nodes.
         fused_retarget: AHashMap::default(),
     })
 }
 
-fn owned_bindings(meta: &PresetMetadata) -> Vec<ParamBinding> {
+fn owned_bindings(meta: &PresetMetadata) -> Option<Vec<ParamBinding>> {
     meta.bindings
         .iter()
         .map(|b| binding_def_to_runtime(b, meta.params.iter().find(|p| p.id == b.id)))
@@ -163,7 +167,8 @@ fn owned_bindings(meta: &PresetMetadata) -> Vec<ParamBinding> {
 fn binding_def_to_runtime(
     def: &BindingDef,
     param: Option<&manifold_core::effect_graph_def::ParamSpecDef>,
-) -> ParamBinding {
+) -> Option<ParamBinding> {
+    let target = target_def_to_runtime(&def.target)?;
     let label: &'static str = Box::leak(def.label.clone().into_boxed_str());
     // Slider response + range come from the owning card param (Phase 2's
     // `ParamSpecDef.curve`/`.invert` + min/max). Composite/fan-out bindings with
@@ -171,11 +176,11 @@ fn binding_def_to_runtime(
     let (min, max, curve, invert) = param
         .map(|p| (p.min, p.max, p.curve, p.invert))
         .unwrap_or((0.0, 1.0, Default::default(), false));
-    ParamBinding {
+    Some(ParamBinding {
         id: ParamId::Owned(def.id.clone()),
         label,
         default_value: def.default_value,
-        target: target_def_to_runtime(&def.target),
+        target,
         convert: def.convert,
         scale: def.scale,
         offset: def.offset,
@@ -184,11 +189,11 @@ fn binding_def_to_runtime(
         curve,
         invert,
         default_mirrors_node_param: def.default_mirrors_node_param,
-    }
+    })
 }
 
-fn target_def_to_runtime(def: &BindingTarget) -> ParamTarget {
-    match def {
+fn target_def_to_runtime(def: &BindingTarget) -> Option<ParamTarget> {
+    Some(match def {
         BindingTarget::Node { node_id, param } => ParamTarget::Node {
             node_id: node_id.clone(),
             // Owned, not leaked: `ParamTarget::Node::param` is `Cow` now
@@ -199,7 +204,11 @@ fn target_def_to_runtime(def: &BindingTarget) -> ParamTarget {
         BindingTarget::Composite { outer_name } => ParamTarget::Composite {
             outer_name: Cow::Owned(outer_name.clone()),
         },
-    }
+        BindingTarget::SceneModifier { .. } => {
+            log::error!("scene modifier bindings require host attachment expansion before runtime view creation");
+            return None;
+        }
+    })
 }
 
 /// Build the editor-canvas snapshot for a loaded preset. Reconstructs
@@ -331,7 +340,7 @@ mod tests {
         let view = LoadedPresetView {
             type_id: PresetTypeId::from_string("test.gltf_import".to_string()),
             canonical_def: Arc::new(def),
-            bindings: owned_bindings(&meta),
+            bindings: owned_bindings(&meta).expect("ordinary graph bindings"),
             fused_retarget: AHashMap::default(),
         };
 

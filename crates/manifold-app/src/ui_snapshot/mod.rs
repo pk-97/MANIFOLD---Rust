@@ -733,7 +733,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
                         source: OuterParamSource::Static,
                     })
                 }
-                BindingTarget::Composite { .. } => None,
+                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
     }

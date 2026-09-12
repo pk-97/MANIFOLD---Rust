@@ -1036,6 +1036,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 mk(0, "system.source", Some("source")),
                 group_node,
@@ -1345,6 +1346,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 EffectGraphNode {
                     id: 10,
@@ -1400,6 +1402,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::default(),

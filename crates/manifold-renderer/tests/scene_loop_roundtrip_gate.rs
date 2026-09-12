@@ -102,8 +102,10 @@ fn grouped_scene_def() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: Some(([0.0, 0.0, 0.0], [1.0, 1.0, 5.0])),
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "camera", "node.orbit_camera", BTreeMap::new()),
             node(1, "lens", "node.camera_lens", BTreeMap::new()),
@@ -150,6 +152,7 @@ fn apply_loop(project: &mut Project, def: EffectGraphDef) -> (manifold_foundatio
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: Vec::new(),
         wires: Vec::new(),
     };

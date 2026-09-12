@@ -314,10 +314,10 @@ impl PresetRuntime {
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        if doc.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
+        if doc.version == 0 || doc.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
             return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
                 found: doc.version,
-                max: EFFECT_GRAPH_VERSION_WITH_METADATA,
+                max: EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
             }));
         }
 
@@ -522,7 +522,7 @@ impl PresetRuntime {
                         b.default_mirrors_node_param,
                     ))
                 }
-                BindingTarget::Composite { .. } => None,
+                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
 
@@ -606,7 +606,7 @@ impl PresetRuntime {
                             .and_then(|flat| def_string_param_value(flat, node_id, param)),
                     })
                 }
-                BindingTarget::Composite { .. } => None,
+                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
 

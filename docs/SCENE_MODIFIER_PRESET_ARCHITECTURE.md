@@ -137,6 +137,8 @@ pub struct SceneModifierStageDef {
 }
 ```
 
+Wire encoding follows the core types: `SceneStageSource` and `SceneScalarExpr` use external camelCase variant tags, for example `{"context":{"value":"beat"}}` and `{"constant":{"value":0.5}}`. Target selection is `"allObjects"` or `{"explicit":{"objects":[...]}}`. `BindingTarget` retains its existing internal `kind` tag, including `{"kind":"sceneModifier","modifierId":"...","paramId":"..."}`. The F1 authored JSON fixture pins these shapes; it is a schema fixture, not a runnable modifier.
+
 Stage groups use existing `system.group_input`/`system.group_output` and `GroupInterface`. Modifier-owned scalar control producers may live at preset root and feed groups using ordinary wires. This includes event state owned by existing trigger primitives: evaluate it once per modifier instance and broadcast its output to the selected meshes. Never duplicate a trigger envelope per material target or share it between modifier instances. The modifier preset has no `render_scene` or `final_output`. The recipe is the boundary contract instead of the effect texture/generator output contract. Existing graph nodes and internal groups remain editor-visible.
 
 A control-only Scene stage may have an empty endpoint `outputs` list while exporting typed scalar group outputs. Later EachObject stages consume those through `StageOutput` or ordinary shared wires. Its inputs may use TriggerCount and the existing timing context; it must not fabricate a scene endpoint solely to receive events. Normal stage ordering, type validation, state ownership and liveness still apply.

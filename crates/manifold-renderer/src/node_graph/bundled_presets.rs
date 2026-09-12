@@ -126,6 +126,7 @@ pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetT
     let catalog = match kind {
         PresetKind::Effect => &EFFECT_CATALOG,
         PresetKind::Generator => &GENERATOR_CATALOG,
+        PresetKind::SceneModifier => return Vec::new().into_iter(),
     };
     catalog
         .load()
@@ -330,6 +331,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
                 id: 1,
                 node_id: NodeId::new("render"),

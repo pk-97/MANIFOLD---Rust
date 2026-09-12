@@ -688,6 +688,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, object],
             wires: vec![EffectGraphWire {
                 from_node: 1,

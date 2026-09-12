@@ -329,7 +329,7 @@ pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance 
     let def = get(type_id);
     match def.kind {
         PresetKind::Generator => crate::effects::PresetInstance::new_generator(type_id.clone()),
-        PresetKind::Effect => {
+        PresetKind::Effect | PresetKind::SceneModifier => {
             let mut inst = crate::effects::PresetInstance::new(type_id.clone());
             // Seed the manifest whole from the registry template (D2).
             inst.params = crate::params::ParamManifest::from_params(
@@ -538,6 +538,7 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
         // Generators may be line-based; they carry no value-alias table yet
         // (capability gap, see PRESET_UNIFICATION_PLAN Step 9 follow-ups).
         PresetKind::Generator => (meta.is_line_based, &[]),
+        PresetKind::SceneModifier => (false, &[]),
     };
     PresetDef {
         kind,
@@ -834,6 +835,7 @@ mod tests {
             category: "Filmic".to_string(),
             osc_prefix: "bloom_from_json".to_string(),
             legacy_discriminant: Some(12),
+            scene_modifier: None,
             scene_bounds: None,
             available: true,
             is_line_based: false,
@@ -929,6 +931,7 @@ mod tests {
             category: "Filmic".to_string(),
             osc_prefix: "parity_check".to_string(),
             legacy_discriminant: None,
+            scene_modifier: None,
             scene_bounds: None,
             available: true,
             is_line_based: false,

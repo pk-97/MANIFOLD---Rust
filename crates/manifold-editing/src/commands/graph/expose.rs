@@ -249,6 +249,7 @@ fn materialize_binding_exposures(def: &mut EffectGraphDef) {
                 Some((node_id.clone(), param.clone()))
             }
             BindingTarget::Composite { .. } => None,
+            BindingTarget::SceneModifier { .. } => None,
         })
         .collect();
     for (node_id, param) in pairs {
@@ -300,6 +301,7 @@ fn static_slot_for(
                 nid == node_id && param == inner_param
             }
             BindingTarget::Composite { .. } => false,
+            BindingTarget::SceneModifier { .. } => false,
         }
     })?;
     // Static-block slots are positional against `metadata.params` —
@@ -1082,6 +1084,7 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -1163,6 +1166,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("render"),
@@ -1351,6 +1355,7 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -1432,6 +1437,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("render"),
@@ -1808,6 +1814,7 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -1851,6 +1858,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("gen"),

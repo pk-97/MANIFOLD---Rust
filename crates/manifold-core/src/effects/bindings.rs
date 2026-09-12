@@ -247,7 +247,7 @@ pub fn binding_id_for_node_param_in(
         .iter()
         .find(|b| match &b.target {
             BindingTarget::Node { node_id, param } => *node_id == identity && param == param_key,
-            BindingTarget::Composite { .. } => false,
+            BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
         })
         .map(|b| b.id.clone())
 }

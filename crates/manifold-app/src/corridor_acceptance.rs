@@ -801,8 +801,10 @@ fn spike_corridor_def() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "input", "system.generator_input", BTreeMap::new()),
             node(1, "loop_phase", "node.beat_ramp", params_phase),

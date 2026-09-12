@@ -47,6 +47,8 @@ pub enum WireSide {
 /// message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlattenError {
+    /// Authored scene recipes/stacks must pass through attachment expansion.
+    UnexpandedSceneModifiers,
     /// A wire references a group port that the group's interface doesn't declare.
     UnknownGroupPort {
         group_handle: String,
@@ -98,6 +100,7 @@ pub enum FlattenError {
 impl std::fmt::Display for FlattenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            FlattenError::UnexpandedSceneModifiers => write!(f, "scene modifiers require attachment expansion before group flattening"),
             FlattenError::UnknownGroupPort {
                 group_handle,
                 port,
@@ -165,6 +168,9 @@ impl std::error::Error for FlattenError {}
 /// returned clone-equal (ids preserved); documents containing groups are
 /// renumbered with fresh, unique node ids.
 pub fn flatten_groups(def: &EffectGraphDef) -> Result<EffectGraphDef, FlattenError> {
+    if crate::scene_modifier_preset::has_scene_modifier_data(def) {
+        return Err(FlattenError::UnexpandedSceneModifiers);
+    }
     // Fast path: nothing to do. Preserves the document byte-for-byte (ids and
     // all), so every existing flat preset is provably untouched.
     if !def.nodes.iter().any(|n| n.group.is_some()) {
@@ -181,6 +187,7 @@ pub fn flatten_groups(def: &EffectGraphDef) -> Result<EffectGraphDef, FlattenErr
         name: def.name.clone(),
         description: def.description.clone(),
         preset_metadata: def.preset_metadata.clone(),
+        scene_modifiers: def.scene_modifiers.clone(),
         nodes: frag.nodes,
         wires: frag.wires,
     })
@@ -681,6 +688,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes,
             wires,
         }

@@ -213,6 +213,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 node(0, "cam", "node.orbit_camera"),
                 node(1, "scene", "node.render_scene"),

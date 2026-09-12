@@ -100,6 +100,7 @@ fn card_owned_def(mirror: bool) -> EffectGraphDef {
             category: "Stylize".to_string(),
             osc_prefix: "card_owned".to_string(),
             legacy_discriminant: None,
+            scene_modifier: None,
             scene_bounds: None,
             available: true,
             is_line_based: false,
@@ -124,6 +125,7 @@ fn card_owned_def(mirror: bool) -> EffectGraphDef {
             string_params: Vec::new(),
             string_bindings: Vec::new(),
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![EffectGraphNode {
             id: 1,
             node_id: NodeId::new("n_a"),
@@ -339,6 +341,7 @@ fn pruned_card_slot_refuses_redirect() {
                 category: "Stylize".to_string(),
                 osc_prefix: "warn_test".to_string(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -353,6 +356,7 @@ fn pruned_card_slot_refuses_redirect() {
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 EffectGraphNode {
                     id: 1,

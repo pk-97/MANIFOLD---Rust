@@ -77,6 +77,7 @@ fn def_with_fog(fog_density: f32) -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: vec![fog, scene, output],
         wires: vec![
             wire(1, "atmosphere", 2, "atmosphere"),
@@ -180,6 +181,7 @@ fn def_with_mesh_source_object(source_vertex_count: i32) -> EffectGraphDef {
         name: None,
         description: None,
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes: vec![group, scene, output],
         wires: vec![
             wire(10, "vertices", 20, "mesh_0"),

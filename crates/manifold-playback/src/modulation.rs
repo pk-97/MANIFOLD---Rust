@@ -2734,6 +2734,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![node],
             wires: vec![],
         };
@@ -2851,6 +2852,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![node],
             wires: vec![],
         };
