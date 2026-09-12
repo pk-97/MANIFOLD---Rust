@@ -486,3 +486,69 @@ fn invalid_mesh_stage_batch_is_atomic() {
     command.execute(&mut project);
     assert_eq!(graph(&project, index), before);
 }
+
+#[test]
+fn nested_multimaterial_v2_fixture_preserves_material_and_uv_routes() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json");
+    let source: EffectGraphDef = serde_json::from_str(
+        &std::fs::read_to_string(&fixture_path).expect("nested v2 fixture must be readable"),
+    )
+    .expect("nested v2 fixture must parse");
+    assert_eq!(source.version, 2);
+    let mut project = Project::default();
+    let index = project.timeline.add_layer(
+        "Photoscan Fixture",
+        LayerType::Generator,
+        PresetTypeId::from_string("PhotoscanBaseline".to_string()),
+    );
+    project.timeline.layers[index].gen_params_or_init().graph = Some(source.clone());
+    let target = target(&project, index);
+    let mut splice = stage_splice_at(
+        "scan_left_group",
+        "left_object",
+        "left_mesh",
+        50,
+        "fixture_stage",
+    );
+    splice.reference_source.1 = "vertices".to_string();
+    let plan = plan(vec![splice]);
+    let mut apply =
+        ApplySceneModifierCommand::new(target.clone(), vec![], plan.clone(), source.clone());
+    apply.execute(&mut project);
+    let applied = graph(&project, index);
+    let left = applied
+        .nodes
+        .iter()
+        .find(|node| node.node_id.as_str() == "scan_left_group")
+        .and_then(|node| node.group.as_deref())
+        .expect("left group after apply");
+    assert!(
+        left.nodes
+            .iter()
+            .any(|node| node.node_id.as_str() == "left_pbr")
+    );
+    assert!(
+        left.nodes
+            .iter()
+            .any(|node| node.node_id.as_str() == "left_uv_map")
+    );
+    assert!(left.wires.iter().any(|wire| {
+        wire.from_node == 15 && wire.from_port == "out" && wire.to_port == "base_color_map"
+    }));
+    let left_object_id = left
+        .nodes
+        .iter()
+        .find(|node| node.node_id.as_str() == "left_object")
+        .expect("left object")
+        .id;
+    assert!(left.wires.iter().any(|wire| {
+        wire.from_node == 50
+            && wire.from_port == "vertices"
+            && wire.to_node == left_object_id
+            && wire.to_port == "vertices"
+    }));
+    let mut remove = RemoveSceneModifierCommand::new(target, vec![], plan);
+    remove.execute(&mut project);
+    assert_eq!(graph(&project, index), source);
+}

@@ -25,6 +25,28 @@ const MUSHROOM_FIXTURE: &str = concat!(
     "/../../tests/fixtures/gltf/cc0___mushroom.glb"
 );
 const KINDS: &[&str] = &["elastic_sculpture", "surface_peel", "vortex_fragments"];
+// Immutable pre-v3 production Apply output. These synthetic topology fixtures
+// pin migration inputs; the real mushroom import above supplies photoscan coverage.
+const NESTED_MULTIMATERIAL_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+));
+const ELASTIC_APPLIED_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/scene-modifiers/elastic_sculpture_applied_v2.json"
+));
+const SURFACE_APPLIED_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/scene-modifiers/surface_peel_applied_v2.json"
+));
+const VORTEX_APPLIED_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/scene-modifiers/vortex_fragments_applied_v2.json"
+));
+const STACK_APPLIED_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/scene-modifiers/photoscan_stack_applied_v2.json"
+));
 
 fn render_scene_id(def: &EffectGraphDef) -> u32 {
     def.nodes
@@ -357,4 +379,156 @@ fn photoscan_modifier_remove_survives_deleted_object_and_bounds() {
     let restored = project.timeline.layers[index].generator_graph().expect("removed graph");
     assert!(restored.nodes.iter().all(|node| !node.node_id.as_str().starts_with("photoscan/surface_peel/")), "all owned stage/control nodes must be removed");
     assert!(restored.preset_metadata.as_ref().is_some_and(|metadata| metadata.scene_bounds.is_none()), "removed graph must retain deleted bounds state");
+}
+
+fn fixture_graph() -> EffectGraphDef {
+    serde_json::from_str(NESTED_MULTIMATERIAL_V2)
+        .expect("nested multi-material v2 fixture must parse")
+}
+
+fn set_control_value(def: &mut EffectGraphDef, node_id: &str, value: f32) {
+    fn visit(nodes: &mut [EffectGraphNode], node_id: &str, value: f32) -> bool {
+        for node in nodes {
+            if node.node_id.as_str() == node_id {
+                node.params.insert("value".into(), SerializedParamValue::Float { value });
+                return true;
+            }
+            if let Some(group) = node.group.as_mut()
+                && visit(&mut group.nodes, node_id, value)
+            {
+                return true;
+            }
+        }
+        false
+    }
+    assert!(visit(&mut def.nodes, node_id, value), "control {node_id} must exist");
+}
+
+fn has_binding(def: &EffectGraphDef, node_id: &str, param: &str) -> bool {
+    def.preset_metadata.as_ref().is_some_and(|metadata| {
+        metadata.bindings.iter().any(|binding| {
+            matches!(
+                &binding.target,
+                manifold_core::effect_graph_def::BindingTarget::Node {
+                    node_id: target,
+                    param: target_param,
+                } if target.as_str() == node_id && target_param == param
+            )
+        })
+    })
+}
+
+fn first_control(kind: &str) -> &'static str {
+    match kind {
+        "elastic_sculpture" => "bend",
+        "surface_peel" => "lift",
+        "vortex_fragments" => "orbit",
+        _ => unreachable!("fixture kind is registered above"),
+    }
+}
+
+fn capture_or_compare(name: &str, expected_json: &str, actual: &EffectGraphDef) {
+    if let Some(dir) = std::env::var_os("MANIFOLD_PHOTOSCAN_BASELINE_CAPTURE_DIR") {
+        let path = std::path::PathBuf::from(dir).join(name);
+        std::fs::create_dir_all(path.parent().expect("capture parent")).expect("capture directory");
+        std::fs::write(&path, serde_json::to_string_pretty(actual).expect("snapshot serializes"))
+            .expect("snapshot writes");
+        return;
+    }
+    let expected: EffectGraphDef = serde_json::from_str(expected_json)
+        .unwrap_or_else(|error| panic!("{name} must parse: {error}"));
+    assert_eq!(actual, &expected, "{name} must match current production apply output");
+}
+
+#[test]
+fn photoscan_v2_fixture_baseline_matches_current_apply_output() {
+    let baseline = fixture_graph();
+    assert_eq!(baseline.version, 2);
+    let scene_id = render_scene_id(&baseline);
+    let cases = [
+        ("elastic_sculpture", "elastic_sculpture_applied_v2.json", 0.37, 0.0, ELASTIC_APPLIED_V2),
+        ("surface_peel", "surface_peel_applied_v2.json", 0.29, 0.0, SURFACE_APPLIED_V2),
+        ("vortex_fragments", "vortex_fragments_applied_v2.json", 1.7, 0.0, VORTEX_APPLIED_V2),
+    ];
+
+    for (kind, snapshot_name, value, enabled, expected_json) in cases {
+        let mut project = Project::default();
+        let layer_index = project.timeline.add_layer(
+            "Photoscan Baseline",
+            LayerType::Generator,
+            PresetTypeId::from_string("PhotoscanBaseline".into()),
+        );
+        project.timeline.layers[layer_index].gen_params_or_init().graph = Some(baseline.clone());
+        let target = manifold_core::GraphTarget::Generator(
+            project.timeline.layers[layer_index].layer_id.clone(),
+        );
+        let plan = build_plan(kind, &baseline, scene_id).expect("baseline plan");
+        let mut apply = ApplySceneModifierCommand::new(target.clone(), Vec::new(), plan, empty_catalog());
+        apply.execute(&mut project);
+        let mut actual = project.timeline.layers[layer_index].generator_graph().expect("applied graph").clone();
+        set_control_value(&mut actual, &format!("photoscan/{kind}/{}", first_control(kind)), value);
+        set_control_value(&mut actual, &format!("photoscan/{kind}/enabled"), enabled);
+        assert!(has_binding(&actual, &format!("photoscan/{kind}/enabled"), "value"));
+        capture_or_compare(snapshot_name, expected_json, &actual);
+        manifold_renderer::preset_runtime::PresetRuntime::from_def(
+            actual.clone(),
+            &manifold_renderer::node_graph::PrimitiveRegistry::with_builtin(),
+            None,
+        )
+        .unwrap_or_else(|error| panic!("{kind} applied fixture must compile: {error}"));
+        project.timeline.layers[layer_index].gen_params_or_init().graph = Some(actual.clone());
+
+        let reloaded: EffectGraphDef = serde_json::from_str(
+            &serde_json::to_string(&actual).expect("applied graph serializes"),
+        ).expect("applied graph reloads");
+        project.timeline.layers[layer_index].gen_params_or_init().graph = Some(reloaded.clone());
+        let remove_plan = build_plan(kind, &reloaded, scene_id).expect("remove plan");
+        let mut remove = RemoveSceneModifierCommand::new(target, Vec::new(), remove_plan);
+        remove.execute(&mut project);
+        assert_eq!(
+            project.timeline.layers[layer_index].generator_graph().expect("restored graph"),
+            &baseline,
+            "{kind} apply/remove restores the source fixture"
+        );
+    }
+
+    let mut project = Project::default();
+    let layer_index = project.timeline.add_layer(
+        "Photoscan Stack Baseline",
+        LayerType::Generator,
+        PresetTypeId::from_string("PhotoscanBaseline".into()),
+    );
+    project.timeline.layers[layer_index].gen_params_or_init().graph = Some(baseline.clone());
+    let target = manifold_core::GraphTarget::Generator(
+        project.timeline.layers[layer_index].layer_id.clone(),
+    );
+    for (kind, value, enabled) in [
+        ("elastic_sculpture", 0.41, 1.0),
+        ("surface_peel", 0.22, 0.0),
+        ("vortex_fragments", 1.7, 1.0),
+    ] {
+        let current = project.timeline.layers[layer_index].generator_graph().expect("stack source").clone();
+        let plan = build_plan(kind, &current, scene_id).expect("stack plan");
+        let mut apply = ApplySceneModifierCommand::new(target.clone(), Vec::new(), plan, empty_catalog());
+        apply.execute(&mut project);
+        let mut changed = project.timeline.layers[layer_index].generator_graph().expect("stack graph").clone();
+        set_control_value(&mut changed, &format!("photoscan/{kind}/{}", first_control(kind)), value);
+        set_control_value(&mut changed, &format!("photoscan/{kind}/enabled"), enabled);
+        project.timeline.layers[layer_index].gen_params_or_init().graph = Some(changed);
+    }
+    let stacked = project.timeline.layers[layer_index].generator_graph().expect("stacked graph").clone();
+    capture_or_compare("photoscan_stack_applied_v2.json", STACK_APPLIED_V2, &stacked);
+    manifold_renderer::preset_runtime::PresetRuntime::from_def(
+        stacked.clone(),
+        &manifold_renderer::node_graph::PrimitiveRegistry::with_builtin(),
+        None,
+    )
+    .expect("three-stage applied fixture must compile");
+    for kind in ["surface_peel", "elastic_sculpture", "vortex_fragments"] {
+        let current = project.timeline.layers[layer_index].generator_graph().expect("stack remove source").clone();
+        let plan = build_plan(kind, &current, scene_id).expect("stack remove plan");
+        let mut remove = RemoveSceneModifierCommand::new(target.clone(), Vec::new(), plan);
+        remove.execute(&mut project);
+    }
+    assert_eq!(project.timeline.layers[layer_index].generator_graph().expect("stack restore"), &baseline);
 }
