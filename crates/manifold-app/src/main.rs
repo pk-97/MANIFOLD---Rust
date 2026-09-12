@@ -37,6 +37,8 @@ mod frame_timer;
 pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
+mod graph_target;
+mod modifier_preset;
 // Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md
 // P1) — used by the `journey-proofs` test harness (only compiled in test
 // mode) AND the `perf-soak` xtask binary path (a real, non-test caller), so

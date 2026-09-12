@@ -113,6 +113,8 @@ use core::assert_manifest_gate;
 use core::GRAPH_FORMAT;
 
 mod instrumentation;
+mod modifier_preview;
+pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/multi_segment.rs"]

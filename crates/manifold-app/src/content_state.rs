@@ -21,6 +21,8 @@ pub struct NodePreviewInfo {
     /// True if the node produced a Texture2D output (the image pane is shown);
     /// false → the UI shows the value inspector built from `inputs`/`outputs`.
     pub has_image: bool,
+    /// Explicit unavailable/ambiguous modifier preview, shown in the inspector.
+    pub diagnostic: Option<&'static str>,
     /// Live scalar input port values this frame (`port_name`, value).
     pub inputs: Vec<(String, f32)>,
     /// Live scalar output port values — the signal the node is producing.

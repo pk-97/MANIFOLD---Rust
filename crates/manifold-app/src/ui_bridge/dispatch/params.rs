@@ -25,7 +25,7 @@ use manifold_ui::{InspectorTab, ParamsAction};
 
 use super::super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read};
-use super::resolve::{preset_source_def, resolve_graph_target};
+use super::resolve::{preset_source_def, resolve_graph_target, resolve_preset_target};
 
 pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
@@ -526,15 +526,21 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // (diverged per-instance graph else catalog canonical), fork via
             // the shared command keyed off `target.preset_kind()`.
             use manifold_editing::commands::preset::ForkPresetCommand;
-            if let Some(target) = resolve_graph_target(
+            if let Some(target) = resolve_preset_target(
                 gpt,
                 ctx.editor_target,
                 effective_tab,
                 active_layer,
                 ctx.selection,
                 ctx.project,
-            ) && let Some((source_def, _)) = preset_source_def(&target, ctx.project)
-            {
+            ) {
+                let source_def = if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
+                    let Some(local) = crate::graph_target::resolve(ctx.project, &target) else { return DispatchResult::handled(); };
+                    local.clone()
+                } else {
+                    let Some((def, _)) = preset_source_def(&target, ctx.project) else { return DispatchResult::handled(); };
+                    def
+                };
                 let cmd = ForkPresetCommand::new(target.clone(), target.preset_kind(), source_def);
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(ctx.project);
@@ -546,7 +552,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // Export the targeted preset's graph to a .json via a native save
             // dialog. Source def is the diverged per-instance graph else the
             // catalog canonical; the preset id is the filename stem.
-            if let Some(target) = resolve_graph_target(
+            if let Some(target) = resolve_preset_target(
                 gpt,
                 ctx.editor_target,
                 effective_tab,
@@ -569,7 +575,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // (registered as a project-embedded preset via the shared fork
             // command, so it rides undo + the overlay refresh).
             use manifold_editing::commands::preset::ForkPresetCommand;
-            if let Some(target) = resolve_graph_target(
+            if let Some(target) = resolve_preset_target(
                 gpt,
                 ctx.editor_target,
                 effective_tab,
@@ -603,7 +609,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // UI-thread overlay state, not routed here), so the prompt itself
             // opens one level up.
             let mut result = DispatchResult::handled();
-            if let Some(target) = resolve_graph_target(
+            if let Some(target) = resolve_preset_target(
                 gpt,
                 ctx.editor_target,
                 effective_tab,
@@ -634,7 +640,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // `ForkPresetCommand` is handed an already-resolved `source_def`
             // rather than looking the catalog up inside `Command::execute`.
             use manifold_editing::commands::preset::RevertToLibraryCommand;
-            if let Some(target) = resolve_graph_target(
+            if let Some(target) = resolve_preset_target(
                 gpt,
                 ctx.editor_target,
                 effective_tab,
@@ -643,9 +649,12 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 ctx.project,
             ) && let Some(preset_id) = ctx.project.instance_preset_id(&target)
             {
-                let resolves = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
-                    .is_some();
-                let cmd = RevertToLibraryCommand::new(target, resolves);
+                let resolved = manifold_renderer::node_graph::bundled_preset_def(&preset_id);
+                let mut cmd = RevertToLibraryCommand::new(target.clone(), resolved.is_some());
+                if matches!(target, manifold_core::GraphTarget::SceneModifier { .. })
+                    && let Some(def) = resolved {
+                    cmd = cmd.with_resolved_def(def.clone());
+                }
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(ctx.project);
                 ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
@@ -662,7 +671,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // function has no `TextInputState` access — see the comment on
             // the `SaveToLibrary`/`SaveToProject` arm above).
             let mut result = DispatchResult::handled();
-            if let Some(target) = resolve_graph_target(
+            if let Some(target) = resolve_preset_target(
                 gpt,
                 ctx.editor_target,
                 effective_tab,

@@ -422,6 +422,8 @@ pub struct Application {
     /// duplicate `SetGraphPreviewNode` commands each frame. `None` = nothing
     /// previewed (editor closed or multi/zero selection).
     pub(crate) last_preview_node: Option<manifold_core::NodeId>,
+    pub(crate) last_modifier_preview_context: Option<(Vec<manifold_core::NodeId>, Option<manifold_core::scene_modifier_preset::SceneNodeRef>)>,
+    pub(crate) last_modifier_preview_selection: Option<(std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>, Vec<u32>, Option<u32>)>,
     /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
     /// (Effect target) or `OpenGeneratorGraphEditor` (Generator target);
     /// cleared when the editor closes. Every graph mutation command
@@ -586,6 +588,8 @@ impl Application {
             internal_clipboard_change_count: None,
             content_pipeline_output: None,
             last_preview_node: None,
+            last_modifier_preview_context: None,
+            last_modifier_preview_selection: None,
             #[cfg(target_os = "macos")]
             #[cfg(target_os = "macos")]
             preview_texture_bridge: None,
@@ -1682,6 +1686,9 @@ impl Application {
                                     manifold_core::GraphTarget::Generator(_) => {
                                         manifold_ui::panels::GraphParamTarget::Generator
                                     }
+                                    manifold_core::GraphTarget::SceneModifier { .. } => {
+                                        manifold_ui::panels::GraphParamTarget::Generator
+                                    }
                                 };
                                 let action = PanelAction::Scrub(
                                     ValueRef::Param(
@@ -2549,6 +2556,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_project_snapshot: None,
                 watched_graph_target: None,
                 preview_graph_node: None,
+                modifier_preview_context: None,
                 node_preview_normalize: false,
                 cached_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),

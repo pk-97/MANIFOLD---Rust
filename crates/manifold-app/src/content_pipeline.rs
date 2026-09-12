@@ -778,6 +778,8 @@ pub struct ContentPipeline {
     /// per-node capture on the layer's generator `PresetRuntime`. `None` = no
     /// generator preview.
     node_preview_generator: Option<(LayerId, Option<NodeId>)>,
+    node_preview_modifier: Option<Arc<manifold_renderer::preset_runtime::ModifierPreviewContext>>,
+    modifier_editor_watched: bool,
     /// One-shot "dump every output of this effect to disk" request `(effect,
     /// target dir)`. Consumed on the next render: the compositor captures the
     /// effect's node outputs, then they're read back and written as PNGs.
@@ -1097,6 +1099,8 @@ impl ContentPipeline {
             preview_generation: 0,
             node_preview_request: None,
             node_preview_generator: None,
+            node_preview_modifier: None,
+            modifier_editor_watched: false,
             last_node_preview_info: None,
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
@@ -1847,6 +1851,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.node_preview_generator = request;
     }
 
+    pub fn set_modifier_preview_context(
+        &mut self,
+        watched: bool,
+        context: Option<Arc<manifold_renderer::preset_runtime::ModifierPreviewContext>>,
+    ) {
+        self.modifier_editor_watched = watched;
+        self.node_preview_modifier = context;
+    }
+
     /// Get a clone of the shared output handle. The UI thread holds this
     /// to read the front buffer view and dimensions.
     pub fn shared_output(&self) -> Arc<SharedOutputView> {
@@ -2174,6 +2187,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         {
+            let mut modifier_preview_error = None;
             let mut gen_enc = native_device.create_encoder("Generators");
             // PERF_BUDGET_GATE_DESIGN P2 / D6: attach the dispatch sampler to
             // this command buffer when a --profile run is active. Every
@@ -2203,8 +2217,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         // effect compositor's dump).
                         match &self.node_preview_generator {
                             Some((layer_id, node_id)) => {
-                                gen_renderer.set_preview_node(layer_id, node_id.as_ref());
-                                gen_renderer.set_dump_visible(layer_id, &self.node_atlas_visible);
+                                if self.modifier_editor_watched {
+                                    modifier_preview_error = gen_renderer.set_modifier_preview_node(
+                                        layer_id, self.node_preview_modifier.as_deref(), node_id.as_ref());
+                                    gen_renderer.set_modifier_dump_visible(layer_id,
+                                        self.node_preview_modifier.as_deref(), &self.node_atlas_visible);
+                                } else {
+                                    gen_renderer.set_preview_node(layer_id, node_id.as_ref());
+                                    gen_renderer.set_dump_visible(layer_id, &self.node_atlas_visible);
+                                }
                             }
                             None => gen_renderer.clear_preview(),
                         }
@@ -2242,6 +2263,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
                         node_id: node_id.clone(),
                         has_image: node_tex.is_some(),
+                        diagnostic: modifier_preview_error.map(|error| error.message()),
                         inputs,
                         outputs,
                     });
@@ -2291,6 +2313,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         for (i, (name, _port, _type_id, tex)) in
                             dump.iter().enumerate().take(ATLAS_CELLS)
                         {
+                            let authored_id = if self.modifier_editor_watched {
+                                let Some(context) = self.node_preview_modifier.as_deref() else { continue; };
+                                let Some(local) = gr.modifier_preview_local_node(&layer_id, context, name) else { continue; };
+                                local.clone()
+                            } else { NodeId::new(name.as_str()) };
                             // A render-target-only node output can't be sampled —
                             // binding it crashes AGX. Skip its cell.
                             if !thumb_source_shader_readable(name.as_str(), tex) {
@@ -2313,7 +2340,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 manifold_gpu::GpuLoadAction::Load,
                                 "Node Thumbnail Atlas Cell (Generator)",
                             );
-                            new_layout.push((NodeId::new(name.as_str()), i as u32));
+                            new_layout.push((authored_id, i as u32));
                         }
                         gen_layout = Some(new_layout);
                         atlas_filled_this_frame = true;
@@ -2345,6 +2372,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
         {
             self.last_live_node_params = gen_r.live_node_params(&layer_id);
+            if self.modifier_editor_watched {
+                self.last_live_node_params.retain_mut(|(node, _)| {
+                    let Some(context) = self.node_preview_modifier.as_deref() else { return false; };
+                    let Some(local) = gen_r.modifier_preview_local_node(&layer_id, context, node.as_str()) else { return false; };
+                    *node = local.clone();
+                    true
+                });
+            }
         }
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
         rtrace.mark("generators");
@@ -2989,6 +3024,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
                     node_id: node_id.clone(),
                     has_image: self.compositor.preview_texture().is_some(),
+                    diagnostic: None,
                     inputs,
                     outputs,
                 });

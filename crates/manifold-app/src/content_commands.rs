@@ -535,10 +535,26 @@ impl ContentThread {
                 self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
                 // Switching what's watched invalidates any node preview.
                 self.preview_graph_node = None;
+                self.modifier_preview_context = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
                 self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
                 self.preview_graph_node = None;
+                self.modifier_preview_context = None;
+            }
+            ContentCommand::WatchGraphTarget(target) => {
+                self.watched_graph_target = target.filter(|target|target.host_target().is_some());
+                self.preview_graph_node = None;
+                self.modifier_preview_context = None;
+            }
+            ContentCommand::SetModifierPreviewContext { scope, object } => {
+                self.modifier_preview_context = match &self.watched_graph_target {
+                    Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
+                        Some(std::sync::Arc::new(manifold_renderer::preset_runtime::ModifierPreviewContext {
+                            modifier_id: modifier_id.clone(), scope, object,
+                        })),
+                    _ => None,
+                };
             }
             ContentCommand::SetGraphPreviewNode(node_id) => {
                 self.preview_graph_node = node_id;

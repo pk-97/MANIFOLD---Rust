@@ -7,6 +7,7 @@
 mod context;
 mod dispatch;
 pub(crate) use dispatch::resolve::resolve_graph_target;
+pub(crate) use dispatch::resolve::preset_source_def;
 mod editing;
 mod inspector;
 mod layer;
@@ -647,7 +648,7 @@ pub(crate) fn editor_dispatch_context(
     inspector_tab: InspectorTab,
     active_layer: &Option<LayerId>,
 ) -> (InspectorTab, Option<LayerId>) {
-    match editor_target {
+    match editor_target.and_then(manifold_core::GraphTarget::host_target) {
         Some(manifold_core::GraphTarget::Generator(lid)) => {
             (InspectorTab::Layer, Some(lid.clone()))
         }
@@ -666,6 +667,8 @@ pub(crate) fn editor_dispatch_context(
                 (InspectorTab::Clip, active_layer.clone())
             }
         }
+        Some(manifold_core::GraphTarget::SceneModifier { .. }) => (InspectorTab::Layer, None),
+        None if editor_target.is_some() => (InspectorTab::Layer, None),
         None => (inspector_tab, active_layer.clone()),
     }
 }

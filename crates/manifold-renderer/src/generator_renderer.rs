@@ -290,6 +290,21 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Keep local modifier addresses out of the host's node namespace.
+    pub fn set_modifier_preview_node(
+        &mut self,
+        layer_id: &LayerId,
+        context: Option<&crate::preset_runtime::ModifierPreviewContext>,
+        node: Option<&NodeId>,
+    ) -> Option<crate::preset_runtime::ModifierPreviewError> {
+        self.set_preview_node(layer_id, None);
+        let runtime = &mut self.layer_generators.get_mut(layer_id)?.generator;
+        match context {
+            Some(context) => runtime.set_modifier_preview_node(context, node).err(),
+            None => node.map(|_| crate::preset_runtime::ModifierPreviewError::MissingNode),
+        }
+    }
+
     /// SCENE_FX P4a — set the borrowed layer-skin registry for this frame.
     /// The registry must outlive `render_all` (content thread guarantee).
     /// `None` clears the pointer.
@@ -314,6 +329,26 @@ impl GeneratorRenderer {
                 state.generator.clear_dump_set();
             }
         }
+    }
+
+    pub fn set_modifier_dump_visible(
+        &mut self, layer_id: &LayerId,
+        context: Option<&crate::preset_runtime::ModifierPreviewContext>, visible: &[NodeId],
+    ) {
+        for (lid, state) in &mut self.layer_generators {
+            if lid == layer_id && let Some(context) = context {
+                state.generator.set_dump_visible_with_context(None, visible, Some(context));
+            } else {
+                state.generator.clear_dump_set();
+            }
+        }
+    }
+
+    pub fn modifier_preview_local_node(
+        &self, layer_id: &LayerId, context: &crate::preset_runtime::ModifierPreviewContext,
+        generated: &str,
+    ) -> Option<&NodeId> {
+        self.layer_generators.get(layer_id)?.generator.modifier_preview_local_node(context, generated)
     }
 
     /// section 8 D1: bump `layer_id`'s audio-trigger counter by one fire. Called by

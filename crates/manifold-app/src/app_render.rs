@@ -413,6 +413,11 @@ impl Application {
                         .timeline
                         .find_layer_by_id(lid)
                         .and_then(|(_, l)| l.generator_graph()),
+                    manifold_core::GraphTarget::SceneModifier { .. } => self
+                        .local_project
+                        .graph_target_owner(target)
+                        .and_then(|owner| owner.graph.as_ref())
+                        .and_then(|graph| target.graph_in(graph)),
                 };
                 match (instance_graph, self.watched_catalog_default.as_ref()) {
                     // Diverged from the bundled preset beyond mere layout.
@@ -1902,10 +1907,18 @@ impl Application {
                 }
                 manifold_ui::GraphEditCommand::RevertEffectGraph => {
                     if let Some(eid) = self.watched_graph_target.as_ref() {
-                        let cmd =
+                        let mut cmd =
                             manifold_editing::commands::graph::RevertEffectGraphCommand::new(
                                 eid.clone(),
                             );
+                        if matches!(eid, manifold_core::GraphTarget::SceneModifier { .. }) {
+                            let Some(id) = self.local_project.instance_preset_id(eid) else { continue; };
+                            let Some(def) = manifold_renderer::node_graph::bundled_preset_def(&id) else {
+                                log::error!("[preset] local modifier preset {id} is unavailable for revert");
+                                continue;
+                            };
+                            cmd = cmd.with_resolved_def(def.clone());
+                        }
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -1925,13 +1938,8 @@ impl Application {
                         crate::text_input::SavePresetDestination::Project
                     };
                     if let Some(target) = self.watched_graph_target.clone()
-                        && let Some(inst) = self.local_project.preset_instance(&target)
-                        && let Some(mut def) = inst
-                            .graph
-                            .clone()
-                            .or_else(|| self.watched_catalog_default.clone())
+                        && let Some((def, _)) = crate::ui_bridge::preset_source_def(&target, &self.local_project)
                     {
-                        inst.snapshot_values_into_def(&mut def);
                         let kind = target.preset_kind();
                         self.text_input.begin(
                             crate::text_input::TextInputField::SavePresetName,
@@ -1954,11 +1962,8 @@ impl Application {
                     // diverged graph — no catalog-default fallback (there
                     // would be nothing meaningful to push).
                     if let Some(target) = self.watched_graph_target.clone()
-                        && let Some(inst) = self.local_project.preset_instance(&target)
-                        && let Some(mut def) = inst.graph.clone()
+                        && let Some((def, preset_id)) = crate::ui_bridge::preset_source_def(&target, &self.local_project)
                     {
-                        let preset_id = inst.effect_type().clone();
-                        inst.snapshot_values_into_def(&mut def);
                         let kind = target.preset_kind();
                         let lib = crate::user_library::UserLibrary::new();
                         if lib.is_user_entry(kind, &preset_id) {
@@ -2317,6 +2322,9 @@ impl Application {
                                 manifold_ui::panels::GraphParamTarget::Effect(0)
                             }
                             manifold_core::GraphTarget::Generator(_) => {
+                                manifold_ui::panels::GraphParamTarget::Generator
+                            }
+                            manifold_core::GraphTarget::SceneModifier { .. } => {
                                 manifold_ui::panels::GraphParamTarget::Generator
                             }
                         };

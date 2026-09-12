@@ -1626,11 +1626,11 @@ mod editor_window_harness {
         // exactly the topology `present_graph_editor_window` and (post-P3)
         // `render_graph_editor_to_png` both build.
         let mut ui_root = UIRoot::new();
-        let active_idx = match &target {
-            manifold_core::GraphTarget::Generator(lid) => {
+        let active_idx = match target.host_target() {
+            Some(manifold_core::GraphTarget::Generator(lid)) => {
                 project.timeline.layers.iter().position(|l| &l.layer_id == lid)
             }
-            manifold_core::GraphTarget::Effect(_) => None,
+            _ => None,
         };
         sync_project_data(&mut ui_root, &project, active_idx, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);

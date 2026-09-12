@@ -6,7 +6,7 @@
 
 use manifold_core::effects::{ParamEnvelope, ParameterDriver, PresetInstance};
 use manifold_core::project::Project;
-use manifold_core::LayerId;
+use manifold_core::{GraphTarget, LayerId};
 use manifold_ui::{GraphParamTarget, InspectorTab};
 
 use super::super::DispatchResult;
@@ -194,6 +194,13 @@ pub(crate) fn resolve_graph_target(
                 .map(manifold_core::GraphTarget::Effect)
         }
         GraphParamTarget::Generator => {
+            if let Some(editor_target) = editor_target
+                && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
+            {
+                let owner = editor_target.host_target()?;
+                project.graph_for_target(editor_target, None)?;
+                return Some(owner.clone());
+            }
             let layer_idx = super::resolve_active_layer_index(active_layer, project)?;
             let lid = project.timeline.layers.get(layer_idx)?.layer_id.clone();
             Some(manifold_core::GraphTarget::Generator(lid))
@@ -202,6 +209,14 @@ pub(crate) fn resolve_graph_target(
         // the scene panel's rows must land on the panel's own bound layer
         // even when it isn't the app's active layer.
         GraphParamTarget::GeneratorOf(lid) => {
+            if let Some(editor_target) = editor_target
+                && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
+            {
+                let owner = editor_target.host_target()?;
+                project.graph_for_target(editor_target, None)?;
+                return (owner == &manifold_core::GraphTarget::Generator(lid.clone()))
+                    .then(|| owner.clone());
+            }
             project.timeline.find_layer_index_by_id(lid.as_str())?;
             Some(manifold_core::GraphTarget::Generator(lid.clone()))
         }
@@ -233,6 +248,11 @@ pub(crate) fn resolve_mod_target(
     _materialize: bool,
 ) -> Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)> {
     let target = resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
+    if let Some(editor_target) = editor_target
+        && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
+    {
+        crate::graph_target::modifier_host_binding(project, editor_target, param_id.as_ref())?;
+    }
     Some((target, param_id.clone()))
 }
 
@@ -249,6 +269,7 @@ pub(crate) fn ableton_mapping_target(
     param_id: &manifold_core::effects::ParamId,
 ) -> Option<manifold_core::ableton_mapping::AbletonMappingTarget> {
     use manifold_core::ableton_mapping::AbletonMappingTarget as T;
+    let target = target.host_target()?;
     match target {
         manifold_core::GraphTarget::Effect(eid) => {
             let effect_type = project.find_effect_by_id(eid)?.effect_type().clone();
@@ -269,6 +290,7 @@ pub(crate) fn ableton_mapping_target(
             layer_id: lid.clone(),
             param_id: param_id.clone(),
         }),
+        manifold_core::GraphTarget::SceneModifier { .. } => None,
     }
 }
 
@@ -281,6 +303,7 @@ pub(crate) fn macro_mapping_target(
     param_id: &manifold_core::effects::ParamId,
 ) -> Option<manifold_core::MacroMappingTarget> {
     use manifold_core::MacroMappingTarget as T;
+    let target = target.host_target()?;
     match target {
         manifold_core::GraphTarget::Effect(eid) => Some(T::Effect {
             effect_id: eid.clone(),
@@ -290,6 +313,7 @@ pub(crate) fn macro_mapping_target(
             layer_id: lid.clone(),
             param_id: param_id.clone(),
         }),
+        manifold_core::GraphTarget::SceneModifier { .. } => None,
     }
 }
 
@@ -321,6 +345,10 @@ pub(crate) fn preset_source_def(
     manifold_core::effect_graph_def::EffectGraphDef,
     manifold_core::PresetTypeId,
 )> {
+    if matches!(target, GraphTarget::SceneModifier { .. }) {
+        return Some((crate::modifier_preset::export_def(project, target)?,
+            project.instance_preset_id(target)?));
+    }
     let inst = project.preset_instance(target)?;
     let preset_id = inst.effect_type().clone();
     let mut def = inst.graph.clone().or_else(|| {
@@ -333,6 +361,21 @@ pub(crate) fn preset_source_def(
     // makes the def reproduce them on a later add/import/load.
     inst.snapshot_values_into_def(&mut def);
     Some((def, preset_id))
+}
+
+/// Preset actions retain the local authored target; parameter actions address
+/// its host controls. An explicitly carried different layer still rejects.
+pub(crate) fn resolve_preset_target(
+    gpt: &GraphParamTarget, editor_target: Option<&GraphTarget>, tab: InspectorTab,
+    active_layer: &Option<LayerId>, selection: &SelectionState, project: &Project,
+) -> Option<GraphTarget> {
+    let host = resolve_graph_target(gpt, editor_target, tab, active_layer, selection, project)?;
+    if let Some(local @ GraphTarget::SceneModifier { .. }) = editor_target
+        && local.host_target() == Some(&host)
+    {
+        return Some(local.clone());
+    }
+    Some(host)
 }
 
 /// Apply a project-level audio-setup command locally and forward it to the
@@ -349,4 +392,146 @@ pub(crate) fn audio_setup_command(
         crate::content_command::ContentCommand::Execute(cmd),
     );
     DispatchResult::structural()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui_root::UIRoot;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::layer::Layer;
+    use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::{LayerId, PresetTypeId};
+    use manifold_ui::GraphParamTarget;
+
+    fn local_graph() -> EffectGraphDef {
+        serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "presetMetadata": {
+                "id":"local-a", "displayName":"Same Label", "category":"", "oscPrefix":"",
+                "params": [
+                    {"id":"enabled","name":"Enabled","min":0.0,"max":1.0,"defaultValue":1.0,"isToggle":true},
+                    {"id":"gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2}
+                ],
+                "bindings": [{"id":"gain","label":"Gain","defaultValue":0.2,"target":{"kind":"node","nodeId":"gain-value","param":"value"}}],
+                "sceneModifier": {"schemaVersion":1,"singleton":true,"enabledParam":"enabled"}
+            },
+            "nodes": [{"id":1,"nodeId":"gain-value","typeId":"node.value","params":{"value":{"type":"Float","value":0.2}}}], "wires": []
+        }))
+        .unwrap()
+    }
+
+    fn project_with_modifier() -> (Project, GraphTarget, LayerId, LayerId) {
+        let mut project = Project::default();
+        let mut layer_a = Layer::new_generator("A".into(), PresetTypeId::NONE, 0);
+        let layer_a_id = layer_a.layer_id.clone();
+        let layer_b = Layer::new_generator("B".into(), PresetTypeId::NONE, 1);
+        let layer_b_id = layer_b.layer_id.clone();
+        let owner_graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "presetMetadata": {
+                "id":"owner", "displayName":"Owner", "category":"", "oscPrefix":"",
+                "params": [{"id":"a_gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2}],
+                "bindings": [{"id":"a_gain","label":"Gain","defaultValue":0.2,"target":{"kind":"sceneModifier","modifierId":"a","paramId":"gain"}}]
+            },
+            "sceneModifiers": [{"id":"a","scene":{"node":"scene"},"targets":"allObjects","graph": serde_json::to_value(local_graph()).unwrap()}],
+            "nodes": [], "wires": []
+        }))
+        .unwrap();
+        let spec = serde_json::from_value(serde_json::json!({
+            "id":"a_gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2
+        }))
+        .unwrap();
+        let owner = layer_a.gen_params_or_init();
+        owner.graph = Some(owner_graph);
+        owner.params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        project.timeline.layers.push(layer_a);
+        project.timeline.layers.push(layer_b);
+        let target = GraphTarget::SceneModifier {
+            owner: Box::new(GraphTarget::Generator(layer_a_id.clone())),
+            modifier_id: "a".into(),
+        };
+        (project, target, layer_a_id, layer_b_id)
+    }
+
+    #[test]
+    fn scene_modifier_editor_owner_resolves_exact_generator() {
+        let (project, target, layer_a, layer_b) = project_with_modifier();
+        let selection = SelectionState::default();
+        let resolved = resolve_graph_target(
+            &GraphParamTarget::Generator,
+            Some(&target),
+            InspectorTab::Layer,
+            &Some(layer_b.clone()),
+            &selection,
+            &project,
+        );
+        assert_eq!(resolved, Some(GraphTarget::Generator(layer_a.clone())));
+        assert_eq!(resolve_graph_target(
+            &GraphParamTarget::GeneratorOf(layer_b.clone()), Some(&target),
+            InspectorTab::Layer, &Some(layer_a.clone()), &selection, &project), None);
+        assert_eq!(resolve_graph_target(
+            &GraphParamTarget::GeneratorOf(layer_a.clone()), Some(&target),
+            InspectorTab::Layer, &Some(layer_b.clone()), &selection, &project),
+            Some(GraphTarget::Generator(layer_a.clone())));
+        assert_eq!(
+            super::super::editor_dispatch_context(
+                Some(&target),
+                &project,
+                InspectorTab::Master,
+                &Some(layer_b),
+            ),
+            (InspectorTab::Layer, Some(layer_a))
+        );
+    }
+
+    #[test]
+    fn scene_modifier_editor_owner_rejects_invalid_and_dangling_controls() {
+        let (mut project, target, _, layer_b) = project_with_modifier();
+        let selection = SelectionState::default();
+        let invalid = GraphTarget::SceneModifier {
+            owner: Box::new(target.host_target().unwrap().clone()),
+            modifier_id: "missing".into(),
+        };
+        assert!(resolve_graph_target(
+            &GraphParamTarget::Generator,
+            Some(&invalid),
+            InspectorTab::Layer,
+            &Some(layer_b.clone()),
+            &selection,
+            &project,
+        )
+        .is_none());
+
+        let (tx, _) = crossbeam_channel::unbounded();
+        let ui = UIRoot::new();
+        let param = manifold_core::effects::ParamId::from("a_gain");
+        assert!(resolve_mod_target(
+            &ui,
+            &mut project,
+            &tx,
+            &GraphParamTarget::Generator,
+            &param,
+            Some(&target),
+            InspectorTab::Layer,
+            &Some(layer_b.clone()),
+            &selection,
+            false,
+        )
+        .is_some());
+        let prep_only = manifold_core::effects::ParamId::from("enabled");
+        assert!(resolve_mod_target(
+            &ui,
+            &mut project,
+            &tx,
+            &GraphParamTarget::Generator,
+            &prep_only,
+            Some(&target),
+            InspectorTab::Layer,
+            &Some(layer_b),
+            &selection,
+            false,
+        )
+        .is_none());
+    }
 }

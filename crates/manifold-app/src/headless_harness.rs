@@ -106,6 +106,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         cached_project_snapshot: None,
         watched_graph_target: None,
         preview_graph_node: None,
+        modifier_preview_context: None,
         node_preview_normalize: false,
         cached_graph_snapshot: None,
         mod_scratch: crate::content_state::ModulationSnapshot::empty(),
