@@ -2,7 +2,7 @@
 
 <!-- index: Shared spatial fields and object/instance responses for travelling waves, interference, formation transitions and selective transformation. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Surface Waves is the approved bounded mesh-wave slice; the wider W1–W4 field programme remains proposed.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Surface Waves and shared mesh band/sphere masks are implemented in the worktree; the wider W1–W4 field programme remains proposed.
 **Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment: the shipped atoms and their semantics are fixed; re-verify channel projections at implementation and extend exact equivalents instead of duplicating them. Foundation F7 is a file-only authorship proof using those atoms, not another travelling-wave implementation.
 
@@ -74,6 +74,10 @@ Instance elevation is `currentPosition + amount * w * responseDirection`. Zero A
 **Choreography:** reference object/copy identity selects a parameter u in [0,1). Sample a ring `r*(cos 2πu, 0, sin 2πu)` or a helix with authored height/winding. Transition from reference anchor a to formation anchor b using `a + ease(progress)*(b-a)`; apply as an offset to Current so earlier stages survive. The graph chooses easing from reusable math. Phase spread offsets each element's progress; endpoints force exact reference/formation arrival independently of delay. Card: Progress, Spread, Radius, Winding (helix preset only).
 
 **Moving boundary:** plane distance or sphere distance → smooth weight → multiply another response's weight. Both sides and feather have explicit scene-unit meanings. No whole-image `masked_mix` masquerading as a geometry mask. Material/light changes can consume the same weights after those endpoints receive their own extension; v1 demonstrates position/scale responses.
+
+The bounded mesh implementation uses `node.mesh_spatial_mask` over reference vertices plus source offsets. Center, band half-width/sphere radius, and feather use scene-radius units. Amount zero returns full weights; one applies the mask. Triangle-centroid sampling keeps each face's weight coherent. Five existing mesh recipes blend Current with their modified result through `node.morph_mesh` with opt-in frame interpolation; partial normals/tangents are approximate, while zero/one weights preserve endpoint geometry. Masks and stagger envelopes remain explicit GPU gather dispatches, not new fusion compiler exceptions.
+
+`OrderedReconHit` shares live Attack/Hold/Return/Stagger bindings between `node.envelope_beats` and `node.mesh_stagger_envelope`. The scene envelope owns trigger state and exposes elapsed beats through a tail equal to Stagger; per-face spatial ordering delays the response. Idle elapsed is -1, so the incoming mesh passes through. Seeking before the active trigger cancels it; completed events do not restart on a seek. Existing trigger baseline and modulation infrastructure remain authoritative. Saved modifier graphs retain their snapshots; re-add the factory recipe to obtain newly exposed mask controls.
 
 ## 5. Identity and capacity
 

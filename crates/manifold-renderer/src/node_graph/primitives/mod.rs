@@ -25,6 +25,8 @@ mod wave_shear_mesh;
 mod transform_mesh_patches;
 mod ordered_recon_mesh;
 mod normal_wave_mesh;
+mod mesh_spatial_mask;
+mod mesh_stagger_envelope;
 mod analytic_echo_instances;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod analytic_echo_instances_gpu_tests;
@@ -332,6 +334,8 @@ pub use wave_shear_mesh::WaveShearMesh;
 pub use transform_mesh_patches::TransformMeshPatches;
 pub use ordered_recon_mesh::OrderedReconMesh;
 pub use normal_wave_mesh::NormalWaveMesh;
+pub use mesh_spatial_mask::MeshSpatialMask;
+pub use mesh_stagger_envelope::MeshStaggerEnvelope;
 pub use analytic_echo_instances::AnalyticEchoInstances;
 pub use compressor_envelope::{COMPRESSOR_ENVELOPE_TYPE_ID, CompressorEnvelope};
 pub use consecutive_edges::{CONSECUTIVE_EDGES_MAX_CAPACITY, ConsecutiveEdges};

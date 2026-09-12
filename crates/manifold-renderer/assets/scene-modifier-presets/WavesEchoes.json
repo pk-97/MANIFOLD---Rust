@@ -1,11 +1,11 @@
 {
   "version": 3,
-  "name": "Surface Waves",
+  "name": "Waves + Echoes",
   "presetMetadata": {
-    "id": "SurfaceWaves",
-    "displayName": "Surface Waves",
+    "id": "WavesEchoes",
+    "displayName": "Waves + Echoes",
     "category": "Geometry",
-    "oscPrefix": "surface_waves",
+    "oscPrefix": "waves_echoes",
     "available": true,
     "params": [
       {
@@ -134,6 +134,56 @@
         "defaultValue": 0.0,
         "isAngle": true,
         "wraps": true
+      },
+      {
+        "id": "echo_count",
+        "name": "Echo Count",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 3.0
+      },
+      {
+        "id": "echo_radius",
+        "name": "Echo Radius",
+        "min": 0.0,
+        "max": 100.0,
+        "defaultValue": 0.75
+      },
+      {
+        "id": "echo_rise",
+        "name": "Echo Rise",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 0.25
+      },
+      {
+        "id": "echo_phase",
+        "name": "Echo Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "echo_arc",
+        "name": "Echo Arc",
+        "min": -4.0,
+        "max": 4.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "echo_taper",
+        "name": "Echo Taper",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "echo_enabled",
+        "name": "Echo Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
       }
     ],
     "bindings": [
@@ -299,6 +349,76 @@
           "nodeId": "mask",
           "param": "pitch"
         }
+      },
+      {
+        "id": "echo_count",
+        "label": "Echo Count",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "count"
+        }
+      },
+      {
+        "id": "echo_radius",
+        "label": "Echo Radius",
+        "defaultValue": 0.75,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "radius"
+        }
+      },
+      {
+        "id": "echo_rise",
+        "label": "Echo Rise",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "rise"
+        }
+      },
+      {
+        "id": "echo_phase",
+        "label": "Echo Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "phase"
+        }
+      },
+      {
+        "id": "echo_arc",
+        "label": "Echo Arc",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "arc"
+        }
+      },
+      {
+        "id": "echo_taper",
+        "label": "Echo Taper",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "taper"
+        }
+      },
+      {
+        "id": "echo_enabled",
+        "label": "Echo Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "analytic_echo",
+          "param": "enabled"
+        }
       }
     ],
     "sceneModifier": {
@@ -363,6 +483,58 @@
             {
               "port": "vertices",
               "endpoint": "vertices"
+            }
+          ]
+        },
+        {
+          "group": "spatial_echo_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "instances",
+              "source": {
+                "previous": {
+                  "endpoint": "instances"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetX",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetX"
+                }
+              }
+            },
+            {
+              "port": "sceneRadius",
+              "source": {
+                "context": {
+                  "value": "sceneRadius"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetY",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetY"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetZ",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetZ"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "instances",
+              "endpoint": "instances"
             }
           ]
         }
@@ -670,6 +842,126 @@
             "fromPort": "out",
             "toNode": 10,
             "toPort": "vertices"
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "spatial_echo_stage",
+      "typeId": "group",
+      "handle": "SpatialEchoStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "sourceOffsetX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sceneRadius",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetZ",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_instances",
+            "typeId": "system.group_input",
+            "handle": "instances"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_source_offset_x",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetX"
+          },
+          {
+            "id": 3,
+            "nodeId": "group_source_offset_y",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetY"
+          },
+          {
+            "id": 4,
+            "nodeId": "group_scene_radius",
+            "typeId": "system.group_input",
+            "handle": "sceneRadius"
+          },
+          {
+            "id": 5,
+            "nodeId": "group_source_offset_z",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetZ"
+          },
+          {
+            "id": 6,
+            "nodeId": "analytic_echo",
+            "typeId": "node.analytic_echo_instances",
+            "handle": "analytic_echo"
+          },
+          {
+            "id": 7,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "instances",
+            "toNode": 6,
+            "toPort": "instances"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "sourceOffsetX",
+            "toNode": 6,
+            "toPort": "source_offset_x"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceOffsetY",
+            "toNode": 6,
+            "toPort": "source_offset_y"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "sceneRadius",
+            "toNode": 6,
+            "toPort": "scene_radius"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "sourceOffsetZ",
+            "toNode": 6,
+            "toPort": "source_offset_z"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "instances",
+            "toNode": 7,
+            "toPort": "instances"
           }
         ]
       }

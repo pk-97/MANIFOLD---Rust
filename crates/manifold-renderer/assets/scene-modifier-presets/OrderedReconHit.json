@@ -1,66 +1,69 @@
 {
   "version": 3,
-  "name": "Vortex Fragments",
+  "name": "Ordered Recon \u2014 Clip Gesture",
   "presetMetadata": {
-    "id": "VortexFragments",
-    "displayName": "Vortex Fragments",
+    "id": "OrderedReconHit",
+    "displayName": "Ordered Recon \u2014 Clip Gesture",
     "category": "Geometry",
-    "oscPrefix": "vortex_fragments",
+    "oscPrefix": "ordered_recon_hit",
     "available": true,
     "params": [
       {
-        "id": "orbit",
-        "name": "Orbit",
-        "min": -6.2831855,
-        "max": 6.2831855,
-        "defaultValue": 2.2,
-        "isAngle": true
+        "id": "progress",
+        "name": "Progress",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.2
       },
       {
-        "id": "rise",
-        "name": "Rise",
-        "min": -1.0,
-        "max": 1.0,
-        "defaultValue": 0.16
+        "id": "bands",
+        "name": "Bands",
+        "min": 1.0,
+        "max": 64.0,
+        "defaultValue": 8.0
       },
       {
         "id": "separation",
         "name": "Separation",
         "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.12
+        "max": 0.8,
+        "defaultValue": 0.22
       },
       {
-        "id": "phase",
-        "name": "Phase",
-        "min": 0.0,
+        "id": "rotation",
+        "name": "Rotation",
+        "min": -1.5707964,
+        "max": 1.5707964,
+        "defaultValue": 0.45,
+        "isAngle": true
+      },
+      {
+        "id": "spread",
+        "name": "Spread",
+        "min": -0.4,
+        "max": 0.4,
+        "defaultValue": 0.08
+      },
+      {
+        "id": "direction_x",
+        "name": "Direction X",
+        "min": -1.0,
         "max": 1.0,
         "defaultValue": 0.0
       },
       {
-        "id": "detail",
-        "name": "Detail",
-        "min": 0.0,
-        "max": 6.0,
+        "id": "direction_y",
+        "name": "Direction Y",
+        "min": -1.0,
+        "max": 1.0,
         "defaultValue": 1.0
       },
       {
-        "id": "yaw",
-        "name": "Yaw",
-        "min": -3.1415927,
-        "max": 3.1415927,
-        "defaultValue": 0.0,
-        "isAngle": true,
-        "wraps": true
-      },
-      {
-        "id": "pitch",
-        "name": "Pitch",
-        "min": -3.1415927,
-        "max": 3.1415927,
-        "defaultValue": 0.0,
-        "isAngle": true,
-        "wraps": true
+        "id": "direction_z",
+        "name": "Direction Z",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0
       },
       {
         "id": "enabled",
@@ -69,6 +72,61 @@
         "max": 1.0,
         "defaultValue": 1.0,
         "isToggle": true
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true,
+        "isTriggerGate": true
+      },
+      {
+        "id": "attack_beats",
+        "name": "Attack",
+        "min": 0.0,
+        "max": 16.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "hold_beats",
+        "name": "Hold",
+        "min": 0.0,
+        "max": 16.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "return_beats",
+        "name": "Return",
+        "min": 0.0,
+        "max": 16.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "stagger_beats",
+        "name": "Stagger",
+        "min": 0.0,
+        "max": 16.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "stagger_yaw",
+        "name": "Stagger Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "stagger_pitch",
+        "name": "Stagger Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
       },
       {
         "id": "mask_amount",
@@ -153,73 +211,83 @@
     ],
     "bindings": [
       {
-        "id": "orbit",
-        "label": "Orbit",
-        "defaultValue": 2.2,
+        "id": "progress",
+        "label": "Progress",
+        "defaultValue": 0.2,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "orbit"
+          "nodeId": "recon",
+          "param": "progress"
         }
       },
       {
-        "id": "rise",
-        "label": "Rise",
-        "defaultValue": 0.16,
+        "id": "bands",
+        "label": "Bands",
+        "defaultValue": 8.0,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "spread"
+          "nodeId": "recon",
+          "param": "bands"
         }
       },
       {
         "id": "separation",
         "label": "Separation",
-        "defaultValue": 0.12,
+        "defaultValue": 0.22,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
+          "nodeId": "recon",
           "param": "separation"
         }
       },
       {
-        "id": "phase",
-        "label": "Phase",
-        "defaultValue": 0.0,
+        "id": "rotation",
+        "label": "Rotation",
+        "defaultValue": 0.45,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "phase"
+          "nodeId": "recon",
+          "param": "rotation"
         }
       },
       {
-        "id": "detail",
-        "label": "Detail",
+        "id": "spread",
+        "label": "Spread",
+        "defaultValue": 0.08,
+        "target": {
+          "kind": "node",
+          "nodeId": "recon",
+          "param": "spread"
+        }
+      },
+      {
+        "id": "direction_x",
+        "label": "Direction X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "recon",
+          "param": "direction_x"
+        }
+      },
+      {
+        "id": "direction_y",
+        "label": "Direction Y",
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "frequency"
+          "nodeId": "recon",
+          "param": "direction_y"
         }
       },
       {
-        "id": "yaw",
-        "label": "Yaw",
+        "id": "direction_z",
+        "label": "Direction Z",
         "defaultValue": 0.0,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "yaw"
-        }
-      },
-      {
-        "id": "pitch",
-        "label": "Pitch",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "patch",
-          "param": "pitch"
+          "nodeId": "recon",
+          "param": "direction_z"
         }
       },
       {
@@ -228,8 +296,81 @@
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
+          "nodeId": "recon",
           "param": "enabled"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_gate",
+          "param": "enable"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "attack_beats",
+        "label": "Attack",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_envelope",
+          "param": "attack_beats"
+        }
+      },
+      {
+        "id": "hold_beats",
+        "label": "Hold",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_envelope",
+          "param": "hold_beats"
+        }
+      },
+      {
+        "id": "return_beats",
+        "label": "Return",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_envelope",
+          "param": "window_beats"
+        }
+      },
+      {
+        "id": "stagger_beats",
+        "label": "Stagger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_envelope",
+          "param": "tail_beats"
+        }
+      },
+      {
+        "id": "stagger_yaw",
+        "label": "Stagger Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stagger",
+          "param": "yaw"
+        }
+      },
+      {
+        "id": "stagger_pitch",
+        "label": "Stagger Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stagger",
+          "param": "pitch"
         }
       },
       {
@@ -334,6 +475,46 @@
           "nodeId": "mask",
           "param": "pitch"
         }
+      },
+      {
+        "id": "attack_beats",
+        "label": "Attack",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stagger",
+          "param": "attack_beats"
+        }
+      },
+      {
+        "id": "hold_beats",
+        "label": "Hold",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stagger",
+          "param": "hold_beats"
+        }
+      },
+      {
+        "id": "return_beats",
+        "label": "Return",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stagger",
+          "param": "release_beats"
+        }
+      },
+      {
+        "id": "stagger_beats",
+        "label": "Stagger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "stagger",
+          "param": "stagger_beats"
+        }
       }
     ],
     "sceneModifier": {
@@ -342,7 +523,30 @@
       "enabledParam": "enabled",
       "stages": [
         {
-          "group": "vortex_stage",
+          "group": "hit_control_stage",
+          "scope": "scene",
+          "inputs": [
+            {
+              "port": "trigger_count",
+              "source": {
+                "context": {
+                  "value": "triggerCount"
+                }
+              }
+            },
+            {
+              "port": "trigger_baseline",
+              "source": {
+                "context": {
+                  "value": "triggerBaseline"
+                }
+              }
+            }
+          ],
+          "outputs": []
+        },
+        {
+          "group": "peel_stage",
           "scope": "eachObject",
           "inputs": [
             {
@@ -392,6 +596,15 @@
                   "value": "sourceOffsetZ"
                 }
               }
+            },
+            {
+              "port": "elapsed_beats",
+              "source": {
+                "stageOutput": {
+                  "stage": "hit_control_stage",
+                  "port": "elapsed_beats"
+                }
+              }
             }
           ],
           "outputs": [
@@ -406,10 +619,131 @@
   },
   "nodes": [
     {
-      "id": 1,
-      "nodeId": "vortex_stage",
+      "id": 2,
+      "nodeId": "hit_control_stage",
       "typeId": "group",
-      "handle": "VortexFragmentsStage",
+      "handle": "SurfacePeelHitControl",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "trigger_count",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "trigger_baseline",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "elapsed_beats",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 10,
+            "nodeId": "group_trigger",
+            "typeId": "system.group_input",
+            "handle": "trigger_count"
+          },
+          {
+            "id": 11,
+            "nodeId": "group_initial_count",
+            "typeId": "system.group_input",
+            "handle": "trigger_baseline"
+          },
+          {
+            "id": 12,
+            "nodeId": "hit_gate",
+            "typeId": "node.trigger_gate",
+            "handle": "hitGate"
+          },
+          {
+            "id": 13,
+            "nodeId": "hit_envelope",
+            "typeId": "node.envelope_beats",
+            "handle": "hitEnvelope",
+            "params": {
+              "attack_beats": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "hold_beats": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "window_beats": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "tail_beats": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 16,
+            "nodeId": "hit_zero_baseline",
+            "typeId": "node.value",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 22,
+            "nodeId": "hit_elapsed_output",
+            "typeId": "system.group_output",
+            "handle": "elapsed_beats"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 10,
+            "fromPort": "trigger_count",
+            "toNode": 12,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "trigger_baseline",
+            "toNode": 12,
+            "toPort": "initial_count"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "trigger"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "initial_count"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "elapsed_beats",
+            "toNode": 22,
+            "toPort": "elapsed_beats"
+          }
+        ],
+        "tint": null
+      }
+    },
+    {
+      "id": 1,
+      "nodeId": "peel_stage",
+      "typeId": "group",
+      "handle": "SurfacePeelStage",
       "group": {
         "interface": {
           "inputs": [
@@ -435,6 +769,10 @@
             },
             {
               "name": "sourceOffsetZ",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "elapsed_beats",
               "portType": "Scalar(F32)"
             }
           ],
@@ -483,52 +821,50 @@
             "handle": "sourceOffsetZ"
           },
           {
-            "id": 3,
-            "nodeId": "patch",
-            "typeId": "node.transform_mesh_patches",
-            "handle": "patch",
+            "id": 10,
+            "nodeId": "group_elapsed_beats",
+            "typeId": "system.group_input",
+            "handle": "elapsed_beats"
+          },
+          {
+            "id": 11,
+            "nodeId": "recon",
+            "typeId": "node.ordered_recon_mesh",
+            "handle": "recon",
             "params": {
-              "orbit": {
+              "progress": {
                 "type": "Float",
-                "value": 2.2
+                "value": 0.2
+              },
+              "bands": {
+                "type": "Int",
+                "value": 8
               },
               "separation": {
                 "type": "Float",
-                "value": 0.12
+                "value": 0.22
               },
               "rotation": {
                 "type": "Float",
-                "value": 0.25
+                "value": 0.45
               },
               "spread": {
                 "type": "Float",
-                "value": 0.16
+                "value": 0.08
               },
-              "phase": {
+              "direction_x": {
                 "type": "Float",
                 "value": 0.0
               },
-              "frequency": {
+              "direction_y": {
                 "type": "Float",
                 "value": 1.0
               },
-              "yaw": {
+              "direction_z": {
                 "type": "Float",
                 "value": 0.0
-              },
-              "pitch": {
-                "type": "Float",
-                "value": 0.0
-              },
-              "cell_size": {
-                "type": "Float",
-                "value": 0.15
               },
               "scale": {
-                "type": "Float",
-                "value": 1.0
-              },
-              "enabled": {
                 "type": "Float",
                 "value": 1.0
               },
@@ -543,17 +879,15 @@
               "source_offset_z": {
                 "type": "Float",
                 "value": 0.0
+              },
+              "enabled": {
+                "type": "Float",
+                "value": 1.0
               }
             }
           },
           {
-            "id": 4,
-            "nodeId": "group_output",
-            "typeId": "system.group_output",
-            "handle": "output"
-          },
-          {
-            "id": 10,
+            "id": 12,
             "nodeId": "mask",
             "typeId": "node.mesh_spatial_mask",
             "handle": "mask",
@@ -621,7 +955,63 @@
             }
           },
           {
-            "id": 11,
+            "id": 13,
+            "nodeId": "stagger",
+            "typeId": "node.mesh_stagger_envelope",
+            "handle": "stagger",
+            "params": {
+              "sample_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "elapsed_beats": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "attack_beats": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "hold_beats": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "release_beats": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "stagger_beats": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "yaw": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "pitch": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "source_offset_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "source_offset_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "source_offset_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 14,
             "nodeId": "mask_morph",
             "typeId": "node.morph_mesh",
             "handle": "maskMorph",
@@ -635,97 +1025,145 @@
                 "value": true
               }
             }
+          },
+          {
+            "id": 15,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
           }
         ],
         "wires": [
           {
             "fromNode": 1,
             "fromPort": "current",
-            "toNode": 3,
+            "toNode": 11,
             "toPort": "in"
           },
           {
             "fromNode": 2,
             "fromPort": "reference",
-            "toNode": 3,
+            "toNode": 11,
             "toPort": "reference"
           },
           {
             "fromNode": 6,
             "fromPort": "sourceRadius",
-            "toNode": 3,
+            "toNode": 11,
             "toPort": "scale"
           },
           {
             "fromNode": 7,
             "fromPort": "sourceOffsetX",
-            "toNode": 3,
+            "toNode": 11,
             "toPort": "source_offset_x"
           },
           {
             "fromNode": 8,
             "fromPort": "sourceOffsetY",
-            "toNode": 3,
+            "toNode": 11,
             "toPort": "source_offset_y"
           },
           {
             "fromNode": 9,
             "fromPort": "sourceOffsetZ",
-            "toNode": 3,
-            "toPort": "source_offset_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "current",
             "toNode": 11,
-            "toPort": "in"
+            "toPort": "source_offset_z"
           },
           {
             "fromNode": 2,
             "fromPort": "reference",
-            "toNode": 10,
+            "toNode": 12,
             "toPort": "in"
           },
           {
             "fromNode": 6,
             "fromPort": "sourceRadius",
-            "toNode": 10,
+            "toNode": 12,
             "toPort": "scale"
           },
           {
             "fromNode": 7,
             "fromPort": "sourceOffsetX",
-            "toNode": 10,
+            "toNode": 12,
             "toPort": "source_offset_x"
           },
           {
             "fromNode": 8,
             "fromPort": "sourceOffsetY",
-            "toNode": 10,
+            "toNode": 12,
             "toPort": "source_offset_y"
           },
           {
             "fromNode": 9,
             "fromPort": "sourceOffsetZ",
-            "toNode": 10,
+            "toNode": 12,
             "toPort": "source_offset_z"
           },
           {
-            "fromNode": 10,
+            "fromNode": 2,
+            "fromPort": "reference",
+            "toNode": 13,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 12,
             "fromPort": "weights",
-            "toNode": 11,
+            "toNode": 13,
             "toPort": "weights"
           },
           {
-            "fromNode": 3,
-            "fromPort": "out",
-            "toNode": 11,
-            "toPort": "b"
+            "fromNode": 10,
+            "fromPort": "elapsed_beats",
+            "toNode": 13,
+            "toPort": "elapsed_beats"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "sourceRadius",
+            "toNode": 13,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "sourceOffsetX",
+            "toNode": 13,
+            "toPort": "source_offset_x"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "sourceOffsetY",
+            "toNode": 13,
+            "toPort": "source_offset_y"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "sourceOffsetZ",
+            "toNode": 13,
+            "toPort": "source_offset_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "current",
+            "toNode": 14,
+            "toPort": "in"
           },
           {
             "fromNode": 11,
             "fromPort": "out",
-            "toNode": 4,
+            "toNode": 14,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "weights",
+            "toNode": 14,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
             "toPort": "vertices"
           }
         ]

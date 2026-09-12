@@ -251,7 +251,7 @@ mod tests {
             .collect();
         assert!(ids.iter().any(|id| id == "ElasticSculpture"));
         assert!(ids.iter().any(|id| id == "SceneFog"));
-        for expected in ["SurfaceWaves", "OrderedRecon", "SpatialEchoes"] {
+        for expected in ["SurfaceWaves", "OrderedRecon", "SpatialEchoes", "MaskedPeel", "OrderedReconHit", "WavesEchoes"] {
             assert!(ids.iter().any(|id| id == expected), "missing {expected}");
         }
         let metadata = loaded_scene_modifier_presets_from_bundled();

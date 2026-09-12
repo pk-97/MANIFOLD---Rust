@@ -56,6 +56,7 @@ fn photoscan_stock_recipes_capture_real_mesh_frames_and_prepare() {
     for preset in [
         "ElasticSculpture", "SurfacePeel", "VortexFragments",
         "SurfaceWaves", "OrderedRecon", "SpatialEchoes",
+        "MaskedPeel", "OrderedReconHit", "WavesEchoes",
     ] {
         let instance = prepare_new_scene_modifier(
             &host,
@@ -79,6 +80,8 @@ fn photoscan_stock_recipes_capture_real_mesh_frames_and_prepare() {
             .nodes
             .iter()
             .any(|node| node.type_id == "node.render_scene"));
+        manifold_renderer::preset_runtime::PresetRuntime::from_def(attached, &registry, None)
+            .unwrap_or_else(|error| panic!("{preset} runtime preparation failed: {error}"));
     }
 }
 
@@ -88,6 +91,7 @@ fn photoscan_structured_stack_roundtrips_and_prepares_in_both_orders() {
     for names in [
         ["SurfaceWaves", "OrderedRecon", "SpatialEchoes"],
         ["SpatialEchoes", "OrderedRecon", "SurfaceWaves"],
+        ["MaskedPeel", "OrderedReconHit", "WavesEchoes"],
     ] {
         let mut host = imported_host();
         for name in names {
@@ -101,6 +105,21 @@ fn photoscan_structured_stack_roundtrips_and_prepares_in_both_orders() {
         assert!(prepared.def.scene_modifiers.is_empty());
         manifold_renderer::preset_runtime::PresetRuntime::from_def(reopened, &registry, None)
             .unwrap_or_else(|error| panic!("{names:?} runtime preparation failed: {error}"));
+    }
+}
+
+#[test]
+fn overnight_modifier_stock_masks_default_to_full_effect() {
+    for name in ["ElasticSculpture", "SurfacePeel", "VortexFragments", "SurfaceWaves", "OrderedRecon"] {
+        let recipe = common::stock_recipe(name);
+        let value = serde_json::to_value(recipe).unwrap();
+        let metadata = &value["presetMetadata"];
+        let amount = metadata["params"].as_array().unwrap().iter()
+            .find(|param| param["id"] == "mask_amount").expect("mask control");
+        assert_eq!(amount["defaultValue"], 0.0, "{name} keeps its original full effect");
+        let binding = metadata["bindings"].as_array().unwrap().iter()
+            .find(|binding| binding["id"] == "mask_amount").expect("mask binding");
+        assert_eq!(binding["defaultValue"], 0.0, "{name} binding agrees with the control");
     }
 }
 
