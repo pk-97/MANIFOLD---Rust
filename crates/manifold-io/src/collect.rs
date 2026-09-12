@@ -772,14 +772,31 @@ pub(crate) fn re_point_scene_modifier_asset(
 /// Re-point a file-loading string param (D5a). Clips whose effective value equals
 /// `old` are rewritten to `new`: an existing per-clip override is updated in
 /// place; a value that came only from the preset-def default is materialized
-/// as a per-clip override. The def's `default_value` is never touched.
-fn re_point_string_param(
+/// as a per-clip override. A calibrated scene source additionally rewrites its
+/// owned graph snapshot and source hash together; ordinary preset defaults
+/// retain their existing ownership.
+pub(crate) fn re_point_string_param(
     project: &mut Project,
     layer_id: &LayerId,
     key: &str,
     old: &str,
     new: &str,
 ) -> bool {
+    let relocated_graph = if has_calibrated_scene_asset(project, layer_id, key) {
+        let graph = project.timeline.find_layer_by_id(layer_id.as_str())
+            .and_then(|(_, layer)| layer.gen_params())
+            .and_then(|inst| inst.graph.as_ref().or_else(|| {
+                project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
+            }));
+        match graph.map(|graph| manifold_core::scene_source_identity::relocate_scene_source_asset(graph, old, new)) {
+            Some(Ok(graph)) => graph,
+            Some(Err(error)) => {
+                log::warn!("asset relocation rejected for calibrated scene on {layer_id}: {error}");
+                return false;
+            }
+            None => return false,
+        }
+    } else { None };
     // Resolve the def default via the same chain collect_asset_paths uses, so
     // "is this the def-default value" is answered by the same source that
     // enumerated it. Owned so the immutable borrow ends before the mutation.
@@ -800,6 +817,13 @@ fn re_point_string_param(
         return false;
     };
     let mut changed = false;
+    if let Some(graph) = relocated_graph
+        && let Some(inst) = layer.gen_params_mut()
+    {
+        inst.graph = Some(graph);
+        inst.bump_graph_structure_version();
+        changed = true;
+    }
     for clip in &mut layer.clips {
         match clip.string_params.as_ref().and_then(|m| m.get(key)) {
             Some(ov) if ov == old => {
@@ -825,9 +849,29 @@ fn re_point_string_param(
     changed
 }
 
+/// Only source bindings referenced by saved mesh calibration need a graph
+/// rewrite when an asset is explicitly relocated. Ordinary clip strings keep
+/// their existing per-clip ownership and collection behavior.
+pub(crate) fn has_calibrated_scene_asset(project: &Project, layer_id: &LayerId, key: &str) -> bool {
+    let Some(graph) = project.timeline.find_layer_by_id(layer_id.as_str())
+        .and_then(|(_, layer)| layer.gen_params())
+        .and_then(|inst| inst.graph.as_ref().or_else(|| {
+            project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
+        })) else { return false };
+    graph.preset_metadata.as_ref().is_some_and(|meta| {
+        meta.string_bindings.iter().any(|binding| binding.id == key &&
+            matches!(&binding.target, BindingTarget::Node { node_id, param }
+                if param == "path" && graph.scene_modifiers.iter().any(|modifier|
+                    modifier.mesh_frames.iter().any(|frame| &frame.source.node == node_id))))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod scene_modifier_relocation_tests {
+        include!("collect/scene_modifier_relocation_tests.rs");
+    }
     use manifold_core::clip::TimelineClip;
     use manifold_core::effect_graph_def::{
         BindingTarget, EffectGraphDef, EffectGraphNode, PresetMetadata, StringBindingDef,

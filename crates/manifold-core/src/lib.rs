@@ -37,6 +37,7 @@ pub mod recording;
 pub mod scene_exposure;
 pub mod scene_modifier;
 pub mod scene_modifier_preset;
+pub mod scene_source_identity;
 pub mod scene_object_migration;
 pub mod selection;
 pub mod session;

@@ -1,4 +1,4 @@
-use crate::collect::{collect_asset_paths, re_point_scene_modifier_asset, AssetTarget};
+use crate::collect::{collect_asset_paths, has_calibrated_scene_asset, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
 use manifold_core::file_loader::NodeFileLoad;
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
@@ -359,10 +359,6 @@ impl PathResolver {
             return;
         }
 
-        let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
-            return;
-        };
-
         let resolved = Self::try_resolve(&path_str, None, -1, project_dir, search_dirs);
         let Some(resolved_path) = resolved else {
             result.unresolved_count += 1;
@@ -370,6 +366,18 @@ impl PathResolver {
             return;
         };
 
+        if has_calibrated_scene_asset(project, layer_id, key) {
+            if re_point_string_param(project, layer_id, key, &path_str, &resolved_path) {
+                result.resolved_count += 1;
+            } else {
+                result.unresolved_count += 1;
+                result.unresolved.push(path_str);
+            }
+            return;
+        }
+        let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
+            return;
+        };
         let mut written = 0;
         for clip in &mut layer.clips {
             let Some(params) = clip.string_params.as_mut() else {
