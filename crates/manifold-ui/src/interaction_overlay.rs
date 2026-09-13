@@ -3735,12 +3735,13 @@ mod p1_4_gesture_integrity_tests {
         let mut host = GestureTestHost::new(&["layer-0"]);
         let mut state = UIState::new();
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
-        let pos = Vec2::new(panel.beat_to_pixel(Beats(12.13)), lane.y_at_norm(0.1));
+        let pos = Vec2::new(lane.curve_rect().x + 33.7, lane.y_at_norm(0.1));
+        assert!(panel.tracks_rect().contains(pos));
         overlay.refresh_automation_feedback(pos, &lanes, &mut state, &panel);
         let feedback = state.automation_feedback.clone().unwrap();
         assert_eq!(feedback.operation, AutomationOperation::Insert);
         assert!(feedback.hint.starts_with("Double-click"));
-        assert_eq!(feedback.beat, panel.snap_to_grid(Beats(12.13)));
+        assert_eq!(feedback.beat, panel.snap_to_grid(panel.pixel_to_beat(pos.x)));
         overlay.handle_automation_click(pos, 1, &mut host, &mut state, &panel);
         assert!(host.automation_added.is_empty());
         overlay.handle_automation_click(pos, 2, &mut host, &mut state, &panel);
