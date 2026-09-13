@@ -491,6 +491,49 @@ mod scene_card_convergence_tests {
             layer.gen_params().expect("generator instance materialized")
         }
 
+        #[test]
+        fn show_automation_selects_bound_parameter_without_editing_project() {
+            let (mut project, layer_a, layer_b) = two_scene_layer_project();
+            let mut h = Harness::new(Some(layer_b));
+            let pid = materialized_param(&mut h, &mut project, &layer_a);
+            project.timeline.find_layer_by_id_mut(&layer_a).unwrap().1.is_collapsed = false;
+            let before = serde_json::to_value(&project).unwrap();
+            h.dispatch(&PanelAction::Params(ParamsAction::ShowAutomation(
+                manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone()), pid.clone(),
+            )), &mut project);
+            assert!(h.selection.automation_mode_visible);
+            assert_eq!(h.selection.chosen_automation_params.get(&layer_a), Some(&(
+                manifold_ui::view::UiGraphTarget::Generator(layer_a), pid,
+            )));
+            assert_eq!(serde_json::to_value(&project).unwrap(), before);
+            assert!(h.drain().is_empty(), "revealing an expanded lane must not emit a project edit");
+            assert!(h.scrub.active.is_none(), "choosing must not begin a parameter touch");
+        }
+
+        #[test]
+        fn show_automation_expands_through_content_without_creating_an_envelope() {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            project.timeline.find_layer_by_id_mut(&layer_id).unwrap().1.is_collapsed = true;
+            let before = gen_inst(&project, &layer_id).get_base_param(pid.as_ref());
+            h.dispatch(&PanelAction::Params(ParamsAction::ShowAutomation(
+                manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()), pid.clone(),
+            )), &mut project);
+            assert!(project.timeline.find_layer_by_id(&layer_id).unwrap().1.is_collapsed);
+            let commands = h.drain();
+            assert_eq!(commands.len(), 1);
+            for command in commands {
+                match command {
+                    ContentCommand::MutateProject(apply) => apply(&mut project),
+                    _ => panic!("show automation must only send a view-state expansion"),
+                }
+            }
+            assert!(!project.timeline.find_layer_by_id(&layer_id).unwrap().1.is_collapsed);
+            assert_eq!(gen_inst(&project, &layer_id).get_base_param(pid.as_ref()), before);
+            assert!(gen_inst(&project, &layer_id).automation_lanes.is_none());
+        }
+
         fn with_send(project: &mut Project) -> manifold_core::AudioSendId {
             let send = manifold_core::audio_setup::AudioSend::new("Kick");
             let id = send.id.clone();

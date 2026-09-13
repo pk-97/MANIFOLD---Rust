@@ -174,6 +174,7 @@ pub enum DragMode {
     /// a lane strip, overriding dot/segment/marquee routing entirely. State
     /// in `TimelineDrag::AutomationDraw`.
     AutomationDraw,
+    AutomationLaneResize,
 }
 
 // ── AutomationDragState ─────────────────────────────────────────
@@ -297,6 +298,14 @@ struct AutomationDrawState {
     working: Vec<(Beats, f32, UiSegmentShape)>,
 }
 
+#[derive(Debug, Clone)]
+struct AutomationLaneResize {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    start_y: f32,
+    start_height: f32,
+}
+
 /// Insert-or-overwrite `(beat, value, shape)` into a sorted-by-beat working
 /// point list — the pencil's per-grid-step write. Matches an existing beat
 /// exactly (grid-snapped beats are stable across frames within the same
@@ -418,6 +427,7 @@ enum TimelineDrag {
     AutomationMarquee,
     AutomationGroupMove(AutomationGroupDragState),
     AutomationDraw(AutomationDrawState),
+    AutomationLaneResize(AutomationLaneResize),
 }
 
 impl TimelineDrag {
@@ -435,6 +445,7 @@ impl TimelineDrag {
             TimelineDrag::AutomationMarquee => DragMode::AutomationMarquee,
             TimelineDrag::AutomationGroupMove(_) => DragMode::AutomationGroupMove,
             TimelineDrag::AutomationDraw(_) => DragMode::AutomationDraw,
+            TimelineDrag::AutomationLaneResize(_) => DragMode::AutomationLaneResize,
         }
     }
 }
@@ -1506,6 +1517,10 @@ impl InteractionOverlay {
 
         // Unity lines 248-256: cursor feedback (only when not dragging)
         if !self.drag.is_active() {
+            if viewport.automation_lane_screens(&[]).iter().any(|lane| lane.resize_rect().contains(pos)) {
+                host.set_cursor(TimelineCursor::ResizeVertical);
+                return;
+            }
             if let Some(ref hit) = hit {
                 match hit.region {
                     HitRegion::TrimLeft | HitRegion::TrimRight => {
@@ -1559,6 +1574,18 @@ impl InteractionOverlay {
         // needs to persist across the whole gesture for the rising-edge
         // shake detector in `handle_move_drag`).
         self.was_layer_blocked = false;
+
+        if let Some(lane) = viewport.automation_lane_screens(&[]).into_iter().find(|lane| lane.resize_rect().contains(press_pos)) {
+            let height = lane.strip_rect.height;
+            self.drag.start(TimelineDrag::AutomationLaneResize(AutomationLaneResize {
+                target: lane.target,
+                param_id: lane.param_id,
+                start_y: press_pos.y,
+                start_height: height,
+            }), press_pos);
+            host.set_cursor(TimelineCursor::ResizeVertical);
+            return;
+        }
 
         // P4 Unit A: grabbing an existing automation dot starts a point
         // drag instead of clip/region logic — see `begin_automation_drag`'s
@@ -1682,6 +1709,13 @@ impl InteractionOverlay {
             DragMode::AutomationDraw => {
                 self.write_automation_draw_step(pos, host, viewport);
             }
+            DragMode::AutomationLaneResize => {
+                if let Some(TimelineDrag::AutomationLaneResize(state)) = self.drag.payload() {
+                    let height = (state.start_height + pos.y - state.start_y).clamp(28.0, 240.0);
+                    ui_state.set_automation_lane_height(state.target.clone(), state.param_id.clone(), height);
+                    host.mark_dirty();
+                }
+            }
             DragMode::None => {}
         }
     }
@@ -1729,6 +1763,11 @@ impl InteractionOverlay {
             }
             Some(TimelineDrag::AutomationSegmentDrag(state)) => {
                 self.commit_automation_segment_value_drag(state, host);
+                host.mark_dirty();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            Some(TimelineDrag::AutomationLaneResize(_)) => {
                 host.mark_dirty();
                 host.set_cursor(TimelineCursor::Default);
                 return;
@@ -3358,6 +3397,31 @@ mod p1_4_gesture_integrity_tests {
     // enough geometry for point/segment/marquee/group/draw gestures to all
     // have real targets. Built through the REAL `Panel::build` +
     // `set_automation_lanes` so strip/dot screen geometry matches production.
+    #[test]
+    fn automation_resize_changes_only_view_height_and_clamps() {
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let lane = &panel.automation_lane_screens(&[])[0];
+        let rect = lane.resize_rect();
+        let target = lane.target.clone();
+        let param = lane.param_id.clone();
+        let press = Vec2::new(rect.x + 20.0, rect.y + 2.5);
+        overlay.on_begin_drag(press, &mut host, &mut state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationLaneResize);
+        overlay.on_drag(press + Vec2::new(0.0, 72.0), &mut host, &mut state, &mut panel);
+        assert_eq!(state.automation_lane_height(&target, &param), 100.0);
+        overlay.on_drag(press + Vec2::new(0.0, 1000.0), &mut host, &mut state, &mut panel);
+        assert_eq!(state.automation_lane_height(&target, &param), 240.0);
+        overlay.on_drag(press - Vec2::new(0.0, 1000.0), &mut host, &mut state, &mut panel);
+        assert_eq!(state.automation_lane_height(&target, &param), 28.0);
+        overlay.on_end_drag(&mut host);
+        assert!(host.automation_point_moves.is_empty());
+        assert!(host.automation_lane_preview.is_empty());
+        assert!(host.automation_draw_commits.is_empty());
+    }
+
     fn build_viewport_with_automation() -> TimelineViewportPanel {
         use crate::panels::viewport::ViewportAutomationLane;
         use crate::view::{UiAutomationLane, UiAutomationPoint};

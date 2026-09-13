@@ -234,7 +234,7 @@ pub struct UiAutomationPoint {
 /// `manifold_core::GraphTarget` — both variants wrap the identical
 /// `EffectId`/`LayerId` types re-exported from `manifold-foundation`, so the
 /// conversion is a plain clone, never a lookup).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UiGraphTarget {
     Effect(EffectId),
     Generator(LayerId),

@@ -96,6 +96,7 @@ pub struct TimelineViewportPanel {
     // translator gates it); empty otherwise, so this panel never needs to
     // know the mode flag itself.
     automation_lanes_by_layer: Vec<Vec<UiAutomationLane>>,
+    automation_lane_heights: Vec<Vec<f32>>,
 
     // Per-layer bitmap renderers (None for group layers)
     bitmap_renderers: Vec<Option<crate::bitmap_renderer::LayerBitmapRenderer>>,
@@ -327,6 +328,7 @@ impl TimelineViewportPanel {
             track_zebra_even: Vec::new(),
             clips_by_layer: Vec::new(),
             automation_lanes_by_layer: Vec::new(),
+            automation_lane_heights: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: Beats::ZERO,
@@ -568,6 +570,17 @@ impl TimelineViewportPanel {
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
+    }
+
+    /// Cache the resolved per-lane geometry once per structural sync. The
+    /// mapper totals and individual strips derive from these same heights.
+    pub fn set_automation_lane_layout(&mut self, heights: &[Vec<f32>]) {
+        self.automation_lane_heights.resize_with(heights.len(), Vec::new);
+        for (cached, resolved) in self.automation_lane_heights.iter_mut().zip(heights) {
+            cached.clone_from(resolved);
+        }
+        let totals: Vec<f32> = heights.iter().map(|lanes| lanes.iter().sum()).collect();
+        self.mapper.set_automation_lane_heights(&totals);
     }
 
     /// Get a reference to the shared CoordinateMapper.
@@ -932,10 +945,14 @@ impl TimelineViewportPanel {
             // `CoordinateMapper::layer_height` reserved for them — the same
             // constant both sides use, so they cannot disagree.
             let base_h = color::TRACK_HEIGHT;
-            for (idx, lane) in lanes.iter().enumerate() {
-                let strip_y = track_y + base_h + idx as f32 * color::AUTOMATION_LANE_STRIP_HEIGHT;
+            let mut strip_y = track_y + base_h;
+            for (lane_index, lane) in lanes.iter().enumerate() {
+                let lane_h = self.automation_lane_heights.get(i)
+                    .and_then(|heights| heights.get(lane_index)).copied()
+                    .unwrap_or(color::AUTOMATION_LANE_STRIP_HEIGHT);
                 let strip_rect =
-                    Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), color::AUTOMATION_LANE_STRIP_HEIGHT);
+                    Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), lane_h);
+                strip_y += lane_h;
                 let overridden = latched
                     .iter()
                     .any(|(eid, pid)| *eid == lane.effect_id && *pid == lane.param_id);

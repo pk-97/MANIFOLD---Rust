@@ -8,14 +8,12 @@
 //! drivers, envelopes, audio mods) is untouched, no new phase, no fifth
 //! silo. See `docs/AUTOMATION_LANES_DESIGN.md`.
 //!
-//! Walk shape is a copy of `modulation::evaluate_all_audio_mods`: master
+//! The playback walk follows `modulation::evaluate_all_audio_mods`: master
 //! effects + layer effects + generator params, skip disabled instances,
-//! resolve via `resolve_param_in`, two-pass resolve-then-write. Note: that
-//! precedent itself allocates a small per-instance `Vec` each frame via
-//! `.collect()` (not truly zero-alloc despite this module's own top-level
-//! signature having no room for an externally-threaded scratch buffer) —
-//! this module matches that existing, already-shipping allocation profile
-//! rather than inventing a new one.
+//! resolve via `resolve_param_in`, two-pass resolve-then-write. Its recording
+//! path uses the same small per-instance scratch vectors as that existing
+//! evaluator. Stopped/paused inspection uses a separate direct walk so the
+//! steady-state preview path remains allocation-free.
 //!
 //! Override latch: a param whose slot was `touched` since this evaluator
 //! last looked (any hand funneling through `PresetInstance::set_base_param`)
@@ -109,6 +107,17 @@ pub struct GestureState {
 /// Owned by `PlaybackEngine`.
 pub type AutomationGestures = AHashMap<(EffectId, ParamId), GestureState>;
 
+/// Controls whether automation sampling may mutate recording state.
+///
+/// Stopped and paused ticks still need the arrangement curve for inspection,
+/// but moving the playhead must not record a touch or close an in-flight
+/// gesture. `Playback` preserves the normal armed-recording behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomationSamplingMode {
+    Playback,
+    Inspection,
+}
+
 /// Sample every enabled automation lane at `current_beat` and write the
 /// result onto each param's `base`. Call this BEFORE
 /// `modulation::evaluate_modulation` each tick — automation is a hand, not a
@@ -128,6 +137,29 @@ pub fn evaluate_all_automation(
     armed: bool,
     gestures: &mut AutomationGestures,
 ) -> (bool, Vec<Box<dyn Command>>) {
+    evaluate_all_automation_with_mode(
+        project,
+        current_beat,
+        latches,
+        armed,
+        gestures,
+        AutomationSamplingMode::Playback,
+    )
+}
+
+/// Evaluate automation with an explicit transport sampling mode.
+pub fn evaluate_all_automation_with_mode(
+    project: &mut Project,
+    current_beat: Beats,
+    latches: &mut AutomationLatches,
+    armed: bool,
+    gestures: &mut AutomationGestures,
+    mode: AutomationSamplingMode,
+) -> (bool, Vec<Box<dyn Command>>) {
+    if mode == AutomationSamplingMode::Inspection {
+        return evaluate_all_automation_inspection(project, current_beat, latches, gestures);
+    }
+
     let mut any_wrote = false;
 
     for fx in project.settings.master_effects.iter_mut() {
@@ -160,10 +192,112 @@ pub fn evaluate_all_automation(
     // frame and `GESTURE_INACTIVITY_BEATS` have passed since the last frame
     // that did. Runs unconditionally (not gated on `armed`): a disarm or a
     // transport stop-then-resume must still punch a lingering gesture out
-    // via the beat-gap rule, never leave it dangling.
+    // via the beat-gap rule, never leave it dangling. Inspection mode is the
+    // deliberate exception: stopped/paused seeks must not close gestures.
     let commits = close_expired_gestures(gestures, current_beat);
 
     (any_wrote, commits)
+}
+
+/// Allocation-free inspection walk used by stopped and paused ticks. This is
+/// deliberately separate from the recording walk: recording needs a
+/// two-pass scratch area and owned gesture keys, while inspection only needs
+/// to sample lanes and update an occasional manual latch.
+fn evaluate_all_automation_inspection(
+    project: &mut Project,
+    current_beat: Beats,
+    latches: &mut AutomationLatches,
+    gestures: &AutomationGestures,
+) -> (bool, Vec<Box<dyn Command>>) {
+    let mut any_wrote = false;
+
+    for fx in project.settings.master_effects.iter_mut() {
+        any_wrote |= evaluate_instance_automation_inspection(fx, current_beat, latches, gestures);
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                any_wrote |=
+                    evaluate_instance_automation_inspection(fx, current_beat, latches, gestures);
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut() {
+            any_wrote |=
+                evaluate_instance_automation_inspection(gp, current_beat, latches, gestures);
+        }
+    }
+
+    // `Vec::new` has no backing allocation. Inspection never creates command
+    // objects because it cannot close a recording gesture.
+    (any_wrote, Vec::new())
+}
+
+/// Sample one instance without scratch vectors, cloned lane keys, recording,
+/// or gesture closure. The only owned key operation is on a live touch, which
+/// is an authoring event rather than the steady-state tick path.
+fn evaluate_instance_automation_inspection(
+    fx: &mut PresetInstance,
+    current_beat: Beats,
+    latches: &mut AutomationLatches,
+    gestures: &AutomationGestures,
+) -> bool {
+    if !fx.enabled {
+        return false;
+    }
+    fx.ensure_base_values();
+    let Some(lanes) = fx.automation_lanes.as_ref() else {
+        return false;
+    };
+    let fx_id = &fx.id;
+    let mut any_wrote = false;
+
+    for lane in lanes.iter().filter(|lane| lane.enabled) {
+        let Some(param) = fx.params.get(lane.param_id.as_ref()) else {
+            continue;
+        };
+        if param.touched {
+            // Inspection treats a touch as the same manual override as an
+            // unarmed playback tick. This preserves the hand's value while
+            // the playhead is parked or being scrubbed, even when Arm is on.
+            let param_id = lane.param_id.clone();
+            if let Some(param) = fx.params.get_mut(param_id.as_ref()) {
+                param.touched = false;
+            }
+            latches.insert((fx_id.clone(), param_id), ());
+            continue;
+        }
+        if contains_automation_key(latches, fx_id, &lane.param_id)
+            || contains_automation_key(gestures, fx_id, &lane.param_id)
+        {
+            continue;
+        }
+
+        let raw = lane.value_at(current_beat);
+        let value = manifold_core::params::constrain_to_range(
+            raw,
+            param.spec.min,
+            param.spec.max,
+            param.spec.wraps,
+        );
+        let Some(param) = fx.params.get_mut(lane.param_id.as_ref()) else {
+            continue;
+        };
+        any_wrote |= param.base != value || param.value != value;
+        param.base = value;
+        param.value = value;
+    }
+
+    any_wrote
+}
+
+#[inline]
+fn contains_automation_key<T>(
+    map: &AHashMap<(EffectId, ParamId), T>,
+    fx_id: &EffectId,
+    param_id: &ParamId,
+) -> bool {
+    map.keys()
+        .any(|(key_fx_id, key_param_id)| key_fx_id == fx_id && key_param_id == param_id)
 }
 
 /// Evaluate every automation lane on a single instance, plus (when armed)
@@ -180,12 +314,13 @@ fn evaluate_instance_automation(
     if !fx.enabled {
         return false;
     }
+    let recording = armed;
     let has_lanes = fx.automation_lanes.as_ref().is_some_and(|v| !v.is_empty());
     let any_touched = fx.params.iter().any(|p| p.touched);
     // Nothing to do unless there's an existing lane to sample/latch/continue
     // recording, or (armed) a touch that might be starting a brand new
     // gesture — see docs/AUTOMATION_LANES_DESIGN.md section 5 "arm creates a lane".
-    if !(has_lanes || (armed && any_touched)) {
+    if !(has_lanes || (recording && any_touched)) {
         return false;
     }
     let fx_id = fx.id.clone();
@@ -208,7 +343,7 @@ fn evaluate_instance_automation(
             };
             handled_ids.push(lane.param_id.clone());
             if p.touched {
-                if armed {
+                if recording {
                     to_record.push((lane.param_id.clone(), p.base));
                 } else {
                     to_latch.push(lane.param_id.clone());
@@ -246,7 +381,7 @@ fn evaluate_instance_automation(
     // Includes a currently-disabled lane's param, which `param_id_for_idx`
     // + the gesture-start lookup below treat the same as "not currently
     // automated" from the touch's perspective.
-    if armed {
+    if recording {
         for p in fx.params.iter() {
             if !p.touched {
                 continue;
@@ -272,8 +407,12 @@ fn evaluate_instance_automation(
     }
     let mut any_wrote = false;
     for (param_id, value) in to_write {
+        let changed = fx
+            .params
+            .get(param_id.as_ref())
+            .is_some_and(|p| p.base != value || p.value != value);
         fx.set_base_param_from_automation(param_id.as_ref(), value);
-        any_wrote = true;
+        any_wrote |= changed;
     }
     for (param_id, applied_base) in to_record {
         if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
@@ -464,6 +603,104 @@ mod tests {
             "base sampled at the midpoint, got {}",
             fx.params.get("amount").unwrap().base
         );
+    }
+
+    #[test]
+    fn inspection_samples_curve_without_dirtying_an_unchanged_value() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+        let mut gestures = AutomationGestures::default();
+
+        let (wrote, commits) = evaluate_all_automation_with_mode(
+            &mut project,
+            Beats(2.0),
+            &mut latches,
+            false,
+            &mut gestures,
+            AutomationSamplingMode::Inspection,
+        );
+        assert!(wrote);
+        assert!(commits.is_empty());
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .base, 0.5);
+
+        let (wrote, commits) = evaluate_all_automation_with_mode(
+            &mut project,
+            Beats(2.0),
+            &mut latches,
+            false,
+            &mut gestures,
+            AutomationSamplingMode::Inspection,
+        );
+        assert!(!wrote, "an unchanged inspection sample need not refresh output");
+        assert!(commits.is_empty());
+    }
+
+    #[test]
+    fn inspection_never_records_or_closes_a_gesture() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
+        layer.effects.as_mut().unwrap()[0].set_base_param("amount", 0.42);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+        let mut gestures = AutomationGestures::default();
+
+        // Establish an active recording gesture through the normal playback
+        // mode, then seek well beyond its inactivity window in inspection.
+        let (_, commits) = evaluate_all_automation_with_mode(
+            &mut project,
+            Beats(1.0),
+            &mut latches,
+            true,
+            &mut gestures,
+            AutomationSamplingMode::Playback,
+        );
+        assert!(commits.is_empty());
+        assert_eq!(gestures.len(), 1);
+
+        let (_, commits) = evaluate_all_automation_with_mode(
+            &mut project,
+            Beats(10.0),
+            &mut latches,
+            true,
+            &mut gestures,
+            AutomationSamplingMode::Inspection,
+        );
+        assert!(commits.is_empty(), "inspection seeks cannot close gestures");
+        assert_eq!(gestures.len(), 1, "the active gesture remains in flight");
+    }
+
+    #[test]
+    fn armed_inspection_touch_is_a_manual_override_not_recording() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
+        layer.effects.as_mut().unwrap()[0].set_base_param("amount", 0.91);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+        let mut gestures = AutomationGestures::default();
+
+        let (wrote, commits) = evaluate_all_automation_with_mode(
+            &mut project,
+            Beats(2.0),
+            &mut latches,
+            true,
+            &mut gestures,
+            AutomationSamplingMode::Inspection,
+        );
+        assert!(!wrote);
+        assert!(commits.is_empty());
+        assert!(gestures.is_empty());
+        assert_eq!(latches.len(), 1);
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .base, 0.91);
     }
 
     #[test]

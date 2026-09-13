@@ -201,6 +201,12 @@ impl HitTargets for AutomationHitTargets<'_> {
                     payload: format!("{key}|{}|{dot_index}", lane.param_id.as_ref()),
                 });
             }
+            out.push(HitTargetEntry {
+                kind: "automation_resize",
+                label: lane.label.clone(),
+                rect: lane.resize_rect(),
+                payload: format!("{key}|{}", lane.param_id.as_ref()),
+            });
         }
     }
 }
@@ -463,13 +469,15 @@ mod tests {
         assert_eq!(targets.surface_id(), "automation_lanes");
         let mut out = Vec::new();
         targets.enumerate(&mut out);
-        // One strip entry + one entry per dot.
-        assert_eq!(out.len(), 3);
+        // One strip, one entry per dot, and the shared resize handle.
+        assert_eq!(out.len(), 4);
         assert_eq!(out[0].kind, "automation_strip");
         assert_eq!(out[0].payload, "effect:fx|amount");
         assert_eq!(out[1].kind, "automation_point");
         assert_eq!(out[1].payload, "effect:fx|amount|0");
         assert_eq!(out[2].payload, "effect:fx|amount|1");
+        assert_eq!(out[3].kind, "automation_resize");
+        assert_eq!(out[3].rect, lanes[0].resize_rect());
     }
 
     #[test]

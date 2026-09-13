@@ -230,6 +230,22 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   one quarter. Landing on an occupied beat replaces that breakpoint, with exact
   lane restoration on undo. Moving past it during preview restores it.
   Segments remain editable when either endpoint is outside the viewport.
+- **Show Automation** in an effect/generator parameter's context menu reveals
+  its lane without touching the parameter, arming recording, or creating points.
+  It expands the owning track and folded parents through the content command
+  path. A newly revealed lane opens at 96px; an existing session height is kept.
+  Master and group automation editors remain deferred.
+- **Drag the grip at the bottom-left of a lane** to resize it from 28–240px.
+  Heights are session-only UI state keyed by the existing target/parameter
+  address. Mapper row totals and visible strips use the same resolved heights;
+  folding a track preserves its size without reserving hidden space.
+  Lane labels use manifest parameter names.
+- **Stopped and paused inspection** samples automation at the current playhead
+  before modulation, using the same curve sampler as playback. Manual overrides
+  remain latched until Back to Arrangement. Stopped seeks neither record nor
+  finalize a pending recording gesture. Envelope drag previews are still UI-local
+  until release; authoritative live gesture preview and recording finalization
+  remain separate unfinished work.
 - **Drag a segment** vertically to move it; **modifier-drag a segment**
   (Alt/Option, Live 11 style) bends it into a curve — this is the
   `Curved(f32)` shape in section 2.
