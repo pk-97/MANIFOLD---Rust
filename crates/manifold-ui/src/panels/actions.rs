@@ -305,6 +305,10 @@ pub enum ProjectAction {
     /// Duplicate the selected scene modifiers, preserving their stable ids in
     /// the command's captured selection.
     SceneModifiersDuplicate(LayerId, Vec<NodeId>),
+    /// Capture the selected scene modifiers into the UI-owned clipboard.
+    SceneModifiersCopy(LayerId, Vec<NodeId>),
+    /// Paste the UI-owned scene modifier snapshot through the content thread.
+    SceneModifiersPaste(LayerId),
     /// Remove the selected scene modifiers as one undoable operation.
     SceneModifiersRemove(LayerId, Vec<NodeId>),
 }

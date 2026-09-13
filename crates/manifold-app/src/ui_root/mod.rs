@@ -273,6 +273,8 @@ pub struct UIRoot {
 
     /// Generator clipboard for copy/paste between generator layers.
     pub gen_clipboard: manifold_editing::clipboard::GeneratorClipboard,
+    /// UI-owned immutable scene-modifier snapshot used by copy/paste.
+    pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
@@ -474,6 +476,7 @@ impl UIRoot {
             overlay_dirty: false,
             effect_clipboard_count: 0,
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
+            scene_modifier_clipboard: None,
             cursor_hover_actions: Vec::new(),
             pending_keyboard_actions: Vec::new(),
             viewport_events: Vec::new(),
@@ -1817,6 +1820,5 @@ mod tick_parity_tests {
         );
     }
 }
-
 
 
