@@ -1,0 +1,736 @@
+{
+  "version": 3,
+  "name": "Surface Peel \u2014 Masked",
+  "presetMetadata": {
+    "id": "MaskedPeel",
+    "displayName": "Surface Peel \u2014 Masked",
+    "category": "Geometry",
+    "oscPrefix": "masked_peel",
+    "available": true,
+    "params": [
+      {
+        "id": "lift",
+        "name": "Lift",
+        "min": 0.0,
+        "max": 0.8,
+        "defaultValue": 0.18
+      },
+      {
+        "id": "curl",
+        "name": "Curl",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 1.0,
+        "isAngle": true
+      },
+      {
+        "id": "spread",
+        "name": "Spread",
+        "min": -0.5,
+        "max": 0.5,
+        "defaultValue": 0.03
+      },
+      {
+        "id": "phase",
+        "name": "Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "detail",
+        "name": "Detail",
+        "min": 0.0,
+        "max": 6.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "yaw",
+        "name": "Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "pitch",
+        "name": "Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "mask_amount",
+        "name": "Mask Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "mask_shape",
+        "name": "Mask Shape",
+        "defaultValue": 0,
+        "min": 0.0,
+        "max": 1.0,
+        "valueLabels": [
+          "Band",
+          "Sphere"
+        ],
+        "wholeNumbers": true
+      },
+      {
+        "id": "mask_width",
+        "name": "Mask Width",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.25
+      },
+      {
+        "id": "mask_feather",
+        "name": "Mask Feather",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.12
+      },
+      {
+        "id": "mask_invert",
+        "name": "Mask Invert",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "isToggle": true
+      },
+      {
+        "id": "mask_center_x",
+        "name": "Mask Center X",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "mask_center_y",
+        "name": "Mask Center Y",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "mask_center_z",
+        "name": "Mask Center Z",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "mask_yaw",
+        "name": "Mask Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "mask_pitch",
+        "name": "Mask Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "lift",
+        "label": "Lift",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "separation"
+        }
+      },
+      {
+        "id": "curl",
+        "label": "Curl",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "rotation"
+        }
+      },
+      {
+        "id": "spread",
+        "label": "Spread",
+        "defaultValue": 0.03,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "spread"
+        }
+      },
+      {
+        "id": "phase",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "phase"
+        }
+      },
+      {
+        "id": "detail",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "frequency"
+        }
+      },
+      {
+        "id": "yaw",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "yaw"
+        }
+      },
+      {
+        "id": "pitch",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "pitch"
+        }
+      },
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "patch",
+          "param": "enabled"
+        }
+      },
+      {
+        "id": "mask_amount",
+        "label": "Mask Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "amount"
+        }
+      },
+      {
+        "id": "mask_shape",
+        "label": "Mask Shape",
+        "defaultValue": 0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "shape"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "mask_width",
+        "label": "Mask Width",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "width"
+        }
+      },
+      {
+        "id": "mask_feather",
+        "label": "Mask Feather",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "feather"
+        }
+      },
+      {
+        "id": "mask_invert",
+        "label": "Mask Invert",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "invert"
+        }
+      },
+      {
+        "id": "mask_center_x",
+        "label": "Mask Center X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "center_x"
+        }
+      },
+      {
+        "id": "mask_center_y",
+        "label": "Mask Center Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "center_y"
+        }
+      },
+      {
+        "id": "mask_center_z",
+        "label": "Mask Center Z",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "center_z"
+        }
+      },
+      {
+        "id": "mask_yaw",
+        "label": "Mask Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "yaw"
+        }
+      },
+      {
+        "id": "mask_pitch",
+        "label": "Mask Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mask",
+          "param": "pitch"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "peel_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "current",
+              "source": {
+                "previous": {
+                  "endpoint": "vertices"
+                }
+              }
+            },
+            {
+              "port": "reference",
+              "source": {
+                "reference": {
+                  "endpoint": "vertices"
+                }
+              }
+            },
+            {
+              "port": "sourceRadius",
+              "source": {
+                "context": {
+                  "value": "sceneRadius"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetX",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetX"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetY",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetY"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetZ",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetZ"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "vertices",
+              "endpoint": "vertices"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "peel_stage",
+      "typeId": "group",
+      "handle": "SurfacePeelStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "current",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "reference",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "sourceRadius",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetZ",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "vertices",
+              "portType": "Array(MeshVertex)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_current",
+            "typeId": "system.group_input",
+            "handle": "current"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_reference",
+            "typeId": "system.group_input",
+            "handle": "reference"
+          },
+          {
+            "id": 6,
+            "nodeId": "group_source_radius",
+            "typeId": "system.group_input",
+            "handle": "sourceRadius"
+          },
+          {
+            "id": 7,
+            "nodeId": "group_source_offset_x",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetX"
+          },
+          {
+            "id": 8,
+            "nodeId": "group_source_offset_y",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetY"
+          },
+          {
+            "id": 9,
+            "nodeId": "group_source_offset_z",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetZ"
+          },
+          {
+            "id": 3,
+            "nodeId": "patch",
+            "typeId": "node.transform_mesh_patches",
+            "handle": "patch",
+            "params": {
+              "orbit": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "separation": {
+                "type": "Float",
+                "value": 0.18
+              },
+              "rotation": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "spread": {
+                "type": "Float",
+                "value": 0.03
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "frequency": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "yaw": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "pitch": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "cell_size": {
+                "type": "Float",
+                "value": 0.15
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "enabled": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "source_offset_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "source_offset_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "source_offset_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          },
+          {
+            "id": 10,
+            "nodeId": "mask",
+            "typeId": "node.mesh_spatial_mask",
+            "handle": "mask",
+            "params": {
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "sample_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "center_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "center_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "center_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "yaw": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "pitch": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "width": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "feather": {
+                "type": "Float",
+                "value": 0.12
+              },
+              "invert": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "source_offset_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "source_offset_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "source_offset_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 11,
+            "nodeId": "mask_morph",
+            "typeId": "node.morph_mesh",
+            "handle": "maskMorph",
+            "params": {
+              "t": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "blend_frames": {
+                "type": "Bool",
+                "value": true
+              }
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "current",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "reference",
+            "toNode": 3,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "sourceRadius",
+            "toNode": 3,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "sourceOffsetX",
+            "toNode": 3,
+            "toPort": "source_offset_x"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "sourceOffsetY",
+            "toNode": 3,
+            "toPort": "source_offset_y"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "sourceOffsetZ",
+            "toNode": 3,
+            "toPort": "source_offset_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "current",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "reference",
+            "toNode": 10,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "sourceRadius",
+            "toNode": 10,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "sourceOffsetX",
+            "toNode": 10,
+            "toPort": "source_offset_x"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "sourceOffsetY",
+            "toNode": 10,
+            "toPort": "source_offset_y"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "sourceOffsetZ",
+            "toNode": 10,
+            "toPort": "source_offset_z"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "weights",
+            "toNode": 11,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "vertices"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

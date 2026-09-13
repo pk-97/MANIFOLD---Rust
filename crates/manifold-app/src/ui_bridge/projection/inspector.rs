@@ -1228,13 +1228,7 @@ pub fn sync_inspector_data(
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
 
-            // SCENE_MODIFIER_FRAMEWORK section 3.7: the layer scope's modifier
-            // cards. Same layer as the generator card above (never a
-            // differently-resolved scope — the cards stack). The applied list
-            // derives from the generic trace (`SceneVm`); the surfaces come
-            // from `modifier_surfaces`' ONE All-visibility projection of THIS
-            // layer's generator manifest, section-filtered per kind. A layer
-            // whose graph isn't a scene (no render_scene) gets no region.
+            // Stable instances own cards; the catalog supplies the picker.
             {
                 let modifier_region = (|| {
                     let def = layer

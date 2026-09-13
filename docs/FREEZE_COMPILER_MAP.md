@@ -89,6 +89,8 @@ EffectGraphDef (canonical | edited | segment-concat)
   → compile() → ExecutionPlan → Executor (per frame)
 ```
 
+The generator cache stores a `FusedGeneratorView`: the render definition and the original-node/parameter → fused-uniform retarget map together. `fused_generator_def_for` remains the definition-only accessor; callers preparing scene-modifier value routes use `fused_generator_view_for` so inner-node edits can follow fusion without recompiling.
+
 Everything above the cache line is CPU codegen, no GPU device. The GPU pipeline
 compile happens downstream in the normal chain/generator build. Segment codegen
 runs on a dedicated `chain-fusion-worker` thread; everything else is

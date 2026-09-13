@@ -13,6 +13,7 @@ ahash = { workspace = true }
 arc-swap = { workspace = true }
 inventory = "0.3"
 log = { workspace = true }
+sha2 = "0.10"
 
 [features]
 # Wall-clock ceiling micro-benchmarks (BUG-113/BUG-142): sensitive to CPU

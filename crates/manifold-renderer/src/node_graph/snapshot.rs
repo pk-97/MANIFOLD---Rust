@@ -16,6 +16,8 @@
 //! gate snapshot generation on a topology version counter.
 
 use crate::node_graph::effect_node::{EffectNode, ParamValues};
+#[cfg(test)]
+mod scene_modifier_tests;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
@@ -530,7 +532,9 @@ impl GraphSnapshot {
         // misalign (one group node in the def vs. N expanded nodes in the
         // graph). Snapshot the document structurally instead, preserving the
         // nesting so the canvas can render and descend into groups.
-        if def.nodes.iter().any(|n| n.group.is_some()) {
+        if def.nodes.iter().any(|n| n.group.is_some())
+            || manifold_core::scene_modifier_preset::has_scene_modifier_data(def)
+        {
             return Self::from_def_structural(def, &registry);
         }
         let graph = match def.clone().into_graph(&registry) {
@@ -1036,6 +1040,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 mk(0, "system.source", Some("source")),
                 group_node,
@@ -1345,6 +1350,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 EffectGraphNode {
                     id: 10,
@@ -1400,6 +1406,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::default(),

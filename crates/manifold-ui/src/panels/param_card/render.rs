@@ -113,29 +113,7 @@ impl ParamCardPanel {
         self.rows = config.rows.clone();
         self.string_param_info = config.string_params.clone();
 
-        // SCENE_MODIFIER_FRAMEWORK section 3.7: modifier cards carry their
-        // kind/layer identity + chrome flags. The wrap-debug stash re-arms
-        // from the live Bars row each configure: a RUNNING loop refreshes the
-        // resume value, a PARKED one (bars == 0) keeps the stash (the graph
-        // no longer carries the real bars — exactly the old SceneLoopUi rule,
-        // relocated to the card).
         self.modifier = config.modifier.clone();
-        self.wrap_debug_resume_bars = None;
-        self.wrap_debug_row = None;
-        self.cached_wrap_debug_parked = false;
-        if let Some(addr) = self.modifier.as_ref().and_then(|m| m.wrap_debug.clone())
-            && let Some((row_idx, row)) = config
-                .rows
-                .iter()
-                .enumerate()
-                .find(|(_, r)| r.scene_addr.as_ref() == Some(&addr))
-        {
-            self.wrap_debug_row = Some(row_idx);
-            self.cached_wrap_debug_parked = row.value.base.abs() < f32::EPSILON;
-            if row.value.base.abs() >= f32::EPSILON {
-                self.wrap_debug_resume_bars = Some(row.value.base);
-            }
-        }
 
         let n = config.rows.len();
         // BUG-313: rebuild the id→row-index join map from the same rows being
@@ -565,9 +543,10 @@ impl ParamCardPanel {
     /// in-place re-pack, so badge behaviour is unchanged.
     ///
     /// A MODIFIER card (SCENE_MODIFIER_FRAMEWORK section 3.7) is the same
-    /// shell minus the editor furniture — no drag handle (fixed slots, D2), no
-    /// relight chip — plus the remove × and (loop kinds) the wrap-debug
-    /// button. The cog stays, navigating to the layer's generator graph where
+    /// shell minus the editor furniture — no relight chip — plus the common
+    /// enabled toggle and object-target/remove controls. The same drag handle
+    /// as effect cards addresses the modifier's own ordered stack. The cog stays,
+    /// navigating to the layer's generator graph where
     /// the modifier's nodes live. These are permanent chrome differences
     /// between card species, not state-conditional visibility.
     fn effect_header_row(&self, header_bg: Color32) -> View {
@@ -589,7 +568,7 @@ impl ParamCardPanel {
             .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
             .cross_align(Align::Center)
             .key(KEY_HEADER_BG);
-        if !author && !modifier {
+        if !author {
             row = row.child(
                 View::button("")
                     .fixed(DRAG_HANDLE_W, 16.0)
@@ -617,30 +596,24 @@ impl ParamCardPanel {
                         .key(KEY_NAME),
                 ),
         );
-        // Enable toggle: switch kinds carry it in the chrome (writes the
-        // camera switch's `select`); gate kinds put the toggle IN the rows
-        // (D5), so their header has none.
-        if !modifier || self.modifier.as_ref().is_some_and(|m| m.show_enable_toggle) {
-            row = row.child(
-                View::button(if self.enabled { "ON" } else { "OFF" })
-                    .fixed(TOGGLE_W, 16.0)
-                    .style(toggle_btn_style(self.enabled))
-                    .inert()
-                    .key(KEY_TOGGLE),
-            );
-        }
+        // Every modifier uses the common chrome toggle. The projection omits
+        // the authored enabled parameter's duplicate row.
+        row = row.child(
+            View::button(if self.enabled { "ON" } else { "OFF" })
+                .fixed(TOGGLE_W, 16.0)
+                .style(toggle_btn_style(self.enabled))
+                .inert()
+                .key(KEY_TOGGLE),
+        );
         if modifier {
-            // Wrap-debug (loop kinds only) — parks the camera at phase 0 via a
-            // real `bars` write through the scene write path.
-            if self.modifier.as_ref().is_some_and(|m| m.wrap_debug.is_some()) {
-                row = row.child(
-                    View::button("DBG")
-                        .fixed(TOGGLE_W, 16.0)
-                        .style(toggle_btn_style(self.wrap_debug_parked()))
+            row = row
+                .child(
+                    View::button("OBJ")
+                        .fixed(OBJECTS_W, 16.0)
+                        .style(transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY))
                         .inert()
-                        .key(KEY_WRAP_DEBUG),
+                        .key(KEY_MODIFIER_OBJECTS),
                 );
-            }
             // Remove × — structural inverse through the generic remove command;
             // the delete-collapse exit animation rides the existing machinery.
             row = row.child(
@@ -776,24 +749,26 @@ impl ParamCardPanel {
         // the toggle — only the active ones take a slot — so the name cell is
         // as wide as possible and a lone badge never floats mid-header.
         // Trailing order (right→left): chevron (always rightmost), cog, toggle —
-        // matches the host View child order in `effect_header_row`. A MODIFIER
-        // card keeps the cog (same generator-graph destination) and packs the
-        // remove × left of it (plus the wrap-debug button left of that):
-        // chevron, cog, ×, [DBG], [toggle] — badges pack left of the leftmost
-        // control.
+        // matches the host View child order in `effect_header_row`. A modifier
+        // card keeps the cog and packs object-target and remove controls to its
+        // left.
         let chevron_x = x + w - PADDING - CHEVRON_W;
         let modifier = self.modifier.is_some();
         let (badge_right, content_left) = if modifier {
             let cog_x = chevron_x - GAP - COG_W;
             let remove_x = cog_x - GAP - CHEVRON_W;
-            let mut chrome_left = remove_x;
-            if self.modifier.as_ref().is_some_and(|m| m.wrap_debug.is_some()) {
-                chrome_left = chrome_left - GAP - TOGGLE_W;
-            }
-            if self.modifier.as_ref().is_some_and(|m| m.show_enable_toggle) {
-                chrome_left = chrome_left - GAP - TOGGLE_W;
-            }
-            let content_left = x + PADDING;
+            let chrome_left = remove_x
+                - GAP
+                - OBJECTS_W
+                - GAP
+                - TOGGLE_W;
+            let content_left = x
+                + PADDING
+                + if self.context == CardContext::Perform {
+                    DRAG_HANDLE_W + GAP
+                } else {
+                    0.0
+                };
             (chrome_left, content_left)
         } else {
             let cog_x = chevron_x - GAP - COG_W;
@@ -821,7 +796,7 @@ impl ParamCardPanel {
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
         // The header structure (drag handle, name-clip + label, toggle, chevron,
-        // cog — and, on modifier cards, the wrap-debug + remove buttons) is
+        // cog — and, on modifier cards, the object-target + remove buttons) is
         // host-built (see `effect_header_row`); resolve its ids by key. The
         // badges, the drag bars, and the cog dots below are the imperative
         // decorations layered on top.
@@ -836,7 +811,7 @@ impl ParamCardPanel {
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
         self.modifier_remove_btn_id = self.host.node_id_for_key(KEY_MODIFIER_REMOVE);
-        self.wrap_debug_btn_id = self.host.node_id_for_key(KEY_WRAP_DEBUG);
+        self.modifier_objects_btn_id = self.host.node_id_for_key(KEY_MODIFIER_OBJECTS);
         // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): the modifier
         // chrome buttons get static names — flows reach them by name (the
         // ON/OFF text they could otherwise be queried by is not unique
@@ -848,8 +823,8 @@ impl ParamCardPanel {
             if let Some(id) = self.modifier_remove_btn_id {
                 tree.set_name(id, "inspector.modifier.remove");
             }
-            if let Some(id) = self.wrap_debug_btn_id {
-                tree.set_name(id, "inspector.modifier.wrap_debug");
+            if let Some(id) = self.modifier_objects_btn_id {
+                tree.set_name(id, "inspector.modifier.objects");
             }
         }
 
@@ -2021,22 +1996,6 @@ impl ParamCardPanel {
             if let Some(toggle_btn_id) = self.toggle_btn_id {
                 tree.set_style(toggle_btn_id, toggle_btn_style(self.enabled));
                 tree.set_text(toggle_btn_id, if self.enabled { "ON" } else { "OFF" });
-            }
-        }
-
-        // Wrap-debug dirty-check (modifier cards): the parked state is the
-        // beat_ramp's REAL `bars`, which the id-join below refreshes in
-        // `base_values` every sync — restyle the DBG button when it flips
-        // (a park/resume write lands through the content thread).
-        if let (Some(row), Some(btn)) = (self.wrap_debug_row, self.wrap_debug_btn_id) {
-            let parked = self
-                .base_values
-                .get(row)
-                .map(|v| v.abs() < f32::EPSILON)
-                .unwrap_or(false);
-            if parked != self.cached_wrap_debug_parked {
-                self.cached_wrap_debug_parked = parked;
-                tree.set_style(btn, toggle_btn_style(parked));
             }
         }
 

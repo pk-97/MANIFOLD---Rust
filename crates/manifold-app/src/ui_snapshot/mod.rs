@@ -302,6 +302,7 @@ fn render_ui_scene(
         || scene == "bug060"
         || scene == "paramsteps"
         || scene == "gltfscene"
+        || scene == "mushroomscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "dmxcard"
@@ -733,7 +734,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
                         source: OuterParamSource::Static,
                     })
                 }
-                BindingTarget::Composite { .. } => None,
+                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
     }
@@ -782,6 +783,7 @@ fn group_demo_snapshot() -> manifold_ui::graph_view::GraphSnapshot {
             range: Some((0.0, 1.0)),
             enum_labels: None,
             exposed: true,
+            preparation_only: false,
             summary: None,
             vec_value: None,
             string_value: None,
@@ -1626,11 +1628,11 @@ mod editor_window_harness {
         // exactly the topology `present_graph_editor_window` and (post-P3)
         // `render_graph_editor_to_png` both build.
         let mut ui_root = UIRoot::new();
-        let active_idx = match &target {
-            manifold_core::GraphTarget::Generator(lid) => {
+        let active_idx = match target.host_target() {
+            Some(manifold_core::GraphTarget::Generator(lid)) => {
                 project.timeline.layers.iter().position(|l| &l.layer_id == lid)
             }
-            manifold_core::GraphTarget::Effect(_) => None,
+            _ => None,
         };
         sync_project_data(&mut ui_root, &project, active_idx, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);

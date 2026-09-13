@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 270 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 277 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,10 +157,11 @@ _Generated from the node registry. Do not hand-edit. 270 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (67)
+### 3D Geometry (72)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Analytic Echoes | `node.analytic_echo_instances` | Filter | Fans each source object into a small, formula-driven trail of shared mesh copies. |
 | Arrange Copies | `node.arrange_copies` | Source | Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies. |
 | Atmosphere | `node.atmosphere` | Source | Scene fog + sky tint for render_scene. Wire it into a scene's atmosphere input; put fog density on a fader for an instant depth-mood knob. |
 | Bend Mesh | `node.bend_mesh` | Filter | Curves a mesh into an arc around a hinge line, like bending a rod. Position and lighting normals both rotate exactly, so it reads correctly at any angle, inclu… |
@@ -194,11 +195,15 @@ _Generated from the node registry. Do not hand-edit. 270 nodes registered, group
 | Melt | `node.melt_mesh` | Filter | Pulls every vertex downward by a noise-driven amount, making a mesh appear to melt or slump. |
 | Mesh Edges | `node.mesh_edges` | Filter | Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges. |
 | Mesh Ramp | `node.mesh_ramp` | Source | Turns a mesh's own positions into a growth mask — a value from 0 to 1 per vertex that sweeps across the mesh along an axis. Feeds any deformer's weight input t… |
+| Mesh Spatial Mask | `node.mesh_spatial_mask` | Source | Makes soft band or sphere weights from mesh positions for driving a staged surface response. |
+| Mesh Stagger Envelope | `node.mesh_stagger_envelope` | Source | Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order. |
 | Morph Mesh | `node.morph_mesh` | Filter | Blends smoothly between two meshes vertex-by-vertex, so one shape dissolves into another. Works best when both meshes share the same vertex count and layout. |
 | Morph Targets Blend | `node.morph_targets_blend` | Filter | Blends an imported mesh's morph targets by their live animated weights — the GPU counterpart to a Morph Weights node's sampled weight vector. |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
+| Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
+| Ordered Recon | `node.ordered_recon_mesh` | Filter | Reassembles an incoming mesh in directional bands, with each band settling as a rigid group. |
 | Plane Mesh | `node.plane_mesh` | Source | Builds a flat rectangular sheet of mesh ready to skin with another layer's output. The surface for placing live video in a 3D scene. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
@@ -284,7 +289,7 @@ _Generated from the node registry. Do not hand-edit. 270 nodes registered, group
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 
-### Control (23)
+### Control (25)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -293,8 +298,10 @@ _Generated from the node registry. Do not hand-edit. 270 nodes registered, group
 | Canvas Area Scale | `node.canvas_area_scale` | Control | Outputs how big the canvas is compared to a reference size, used to keep particle brightness steady when the resolution changes. |
 | Clip Trigger Cycle | `node.clip_trigger_cycle` | Control | Steps through a range on each clip trigger, never landing on the same value twice in a row. Drives never-repeat preset cycling. |
 | Clip Trigger Index | `node.clip_trigger_index` | Control | Counts how many times a clip has been triggered and wraps it to a range, so each retrigger steps to the next slot. Drives preset cycling. |
+| Compose Vec3 | `node.compose_vec3` | Control | Combines three scalar controls into one Vec3 wire. |
 | Compressor Envelope | `node.compressor_envelope` | Control | Takes a signal level and produces a gain that ducks when the input is loud, the way an audio compressor rides the volume. Use it for auto-gain on brightness. |
 | Cycle Table Row | `node.cycle_table_row` | Control | Steps through the rows of a small built-in table on each clip trigger, emitting one row of numbers at a time. A way to sequence preset values. |
+| Envelope Beats | `node.envelope_beats` | Control | Turns each trigger advance into a linear pulse whose duration is measured in musical beats. |
 | Envelope Decay | `node.envelope_decay` | Control | Snaps to full on each trigger then fades back to zero at a rate you set. The classic one-shot envelope for hits and flashes. |
 | Envelope Follower (A/R) | `node.envelope_follower_ar` | Control | Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth. |
 | Frequency Ratio | `node.frequency_ratio` | Control | Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form. |

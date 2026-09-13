@@ -159,7 +159,7 @@ impl GraphCanvas {
             return None;
         }
         let p = node.params.get(pi)?;
-        if !kind_is_exposable(p.kind) {
+        if p.preparation_only || !kind_is_exposable(p.kind) {
             return None;
         }
         let row = self.param_row_rect(viewport, node_id, pi)?;

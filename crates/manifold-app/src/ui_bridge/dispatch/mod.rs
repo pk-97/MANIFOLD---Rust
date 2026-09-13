@@ -14,6 +14,7 @@ pub(crate) mod clip;
 pub(crate) mod mapping;
 pub(crate) mod modulation;
 pub(crate) mod params;
+pub(crate) mod presets;
 pub(crate) mod resolve;
 
 // `resolve.rs`'s moved helpers reference `super::resolve_effect_id` /

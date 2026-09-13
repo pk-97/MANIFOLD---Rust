@@ -81,11 +81,86 @@ pub(crate) struct UnboundNodeParamDrag {
     param_name: String,
     scope_path: Vec<u32>,
     catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
+    /// Preparation-only local controls are held in the same draft slot but
+    /// commit through the content-owned modifier action instead of a live
+    /// graph write.
+    preparation: Option<(manifold_core::NodeId, String)>,
     /// Value before the drag started. `None` means the key was absent —
     /// the same `Option<SerializedParamValue>` shape `with_previous` takes.
     pre_drag_value: Option<manifold_core::effect_graph_def::SerializedParamValue>,
     /// Value as of the last move — the undo redo target.
     current_value: manifold_core::effect_graph_def::SerializedParamValue,
+}
+
+fn invert_preparation_value(
+    node_value: f32,
+    target: &crate::scene_modifier_edit::PreparationTarget,
+) -> Option<f32> {
+    if !node_value.is_finite()
+        || !target.min.is_finite()
+        || !target.max.is_finite()
+        || target.min > target.max
+        || !target.scale.is_finite()
+        || !target.offset.is_finite()
+    {
+        return None;
+    }
+    let value = manifold_core::effects::invert_card_reshape(
+        node_value,
+        target.min,
+        target.max,
+        target.invert,
+        target.curve,
+        target.scale,
+        target.offset,
+    )?;
+    if !value.is_finite() || value < target.min || value > target.max {
+        return None;
+    }
+    let roundtrip = manifold_core::effects::apply_card_reshape(
+        value,
+        target.min,
+        target.max,
+        target.invert,
+        target.curve,
+        target.scale,
+        target.offset,
+    );
+    let tolerance = 1e-4 * node_value.abs().max(1.0);
+    (roundtrip.is_finite() && (roundtrip - node_value).abs() <= tolerance).then_some(value)
+}
+
+#[cfg(test)]
+mod preparation_inversion_tests {
+    use super::invert_preparation_value;
+    use crate::scene_modifier_edit::PreparationTarget;
+    use manifold_core::NodeId;
+    use manifold_core::macro_bank::MacroCurve;
+
+    fn target(scale: f32) -> PreparationTarget {
+        PreparationTarget {
+            modifier_id: NodeId::new("modifier"),
+            param_id: "prep".into(),
+            baseline: 0.5,
+            min: 0.0,
+            max: 1.0,
+            invert: false,
+            curve: MacroCurve::Linear,
+            scale,
+            offset: 0.0,
+        }
+    }
+
+    #[test]
+    fn affine_inverse_accepts_representable_value() {
+        assert_eq!(invert_preparation_value(0.75, &target(2.0)), Some(0.375));
+    }
+
+    #[test]
+    fn affine_inverse_rejects_degenerate_and_unrepresentable_values() {
+        assert!(invert_preparation_value(0.5, &target(0.0)).is_none());
+        assert!(invert_preparation_value(3.0, &target(2.0)).is_none());
+    }
 }
 
 impl Application {
@@ -413,8 +488,13 @@ impl Application {
                         .timeline
                         .find_layer_by_id(lid)
                         .and_then(|(_, l)| l.generator_graph()),
+                    manifold_core::GraphTarget::SceneModifier { .. } => self
+                        .local_project
+                        .graph_target_owner(target)
+                        .and_then(|owner| owner.graph.as_ref())
+                        .and_then(|graph| target.graph_in(graph)),
                 };
-                match (instance_graph, self.watched_catalog_default.as_ref()) {
+                match (instance_graph, self.watched_catalog_default.as_ref().and_then(|base| target.graph_in(base))) {
                     // Diverged from the bundled preset beyond mere layout.
                     (Some(g), Some(base)) => g.diverges_ignoring_layout(base),
                     // Override present but no catalog base to compare against —
@@ -1056,6 +1136,23 @@ impl Application {
                     // the pending_open_settings block below.
                     self.ws.ui_root.rt_quality_panel.open();
                     self.ws.ui_root.overlay_dirty = true;
+                    continue;
+                }
+                PanelAction::Root(RootAction::PreviewSceneModifierObject(layer, modifier_id, object)) => {
+                    let target = manifold_core::GraphTarget::SceneModifier {
+                        owner: Box::new(manifold_core::GraphTarget::Generator(layer.clone())),
+                        modifier_id: modifier_id.clone(),
+                    };
+                    self.watch_graph_target(target.clone());
+                    self.modifier_preview_object = Some((target, manifold_core::scene_modifier_preset::SceneNodeRef {
+                        scope: object.scope.clone(), node: object.node.clone(),
+                    }));
+                    self.pending_open_graph_editor = true;
+                    continue;
+                }
+                PanelAction::Root(RootAction::OpenGraphTarget(target)) => {
+                    self.watch_graph_target(crate::editing_host::to_graph_target(target));
+                    self.pending_open_graph_editor = true;
                     continue;
                 }
                 PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {
@@ -1911,10 +2008,18 @@ impl Application {
                 }
                 manifold_ui::GraphEditCommand::RevertEffectGraph => {
                     if let Some(eid) = self.watched_graph_target.as_ref() {
-                        let cmd =
+                        let mut cmd =
                             manifold_editing::commands::graph::RevertEffectGraphCommand::new(
                                 eid.clone(),
                             );
+                        if matches!(eid, manifold_core::GraphTarget::SceneModifier { .. }) {
+                            let Some(id) = self.local_project.instance_preset_id(eid) else { continue; };
+                            let Some(def) = manifold_renderer::node_graph::bundled_preset_def(&id) else {
+                                log::error!("[preset] local modifier preset {id} is unavailable for revert");
+                                continue;
+                            };
+                            cmd = cmd.with_resolved_def(def.clone());
+                        }
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -1934,13 +2039,8 @@ impl Application {
                         crate::text_input::SavePresetDestination::Project
                     };
                     if let Some(target) = self.watched_graph_target.clone()
-                        && let Some(inst) = self.local_project.preset_instance(&target)
-                        && let Some(mut def) = inst
-                            .graph
-                            .clone()
-                            .or_else(|| self.watched_catalog_default.clone())
+                        && let Some((def, _)) = crate::ui_bridge::preset_source_def(&target, &self.local_project)
                     {
-                        inst.snapshot_values_into_def(&mut def);
                         let kind = target.preset_kind();
                         self.text_input.begin(
                             crate::text_input::TextInputField::SavePresetName,
@@ -1963,11 +2063,8 @@ impl Application {
                     // diverged graph — no catalog-default fallback (there
                     // would be nothing meaningful to push).
                     if let Some(target) = self.watched_graph_target.clone()
-                        && let Some(inst) = self.local_project.preset_instance(&target)
-                        && let Some(mut def) = inst.graph.clone()
+                        && let Some((def, preset_id)) = crate::ui_bridge::preset_source_def(&target, &self.local_project)
                     {
-                        let preset_id = inst.effect_type().clone();
-                        inst.snapshot_values_into_def(&mut def);
                         let kind = target.preset_kind();
                         let lib = crate::user_library::UserLibrary::new();
                         if lib.is_user_entry(kind, &preset_id) {
@@ -2103,7 +2200,105 @@ impl Application {
                         // reroute. Step 3: unbound → existing path,
                         // unchanged.
                         let wired =
-                            self.watched_node_param_is_wired(&canvas_scope, *node_id, param_name);
+                        self.watched_node_param_is_wired(&canvas_scope, *node_id, param_name);
+
+                        if let Some(reason) = crate::scene_modifier_edit::node_parameter_lock_reason(
+                            &self.local_project, &target, &canvas_scope, *node_id, param_name,
+                        ) {
+                            self.send_content_cmd(ContentCommand::GraphEditRejected(reason.into()));
+                            continue;
+                        }
+                        let preparation = if matches!(
+                            &target,
+                            manifold_core::GraphTarget::SceneModifier { .. }
+                        ) {
+                            match crate::scene_modifier_edit::preparation_target_for_node_param(
+                                &self.local_project,
+                                &target,
+                                &canvas_scope,
+                                *node_id,
+                                param_name,
+                            ) {
+                                Ok(target) => target,
+                                Err(error) => {
+                                    self.send_content_cmd(ContentCommand::GraphEditRejected(error));
+                                    continue;
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(preparation) = preparation {
+                            let core_value =
+                                crate::ui_translate::serialized_param_value_to_core(new_value);
+                            let Some(node_value) = serialized_value_as_f32(&core_value) else {
+                                self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                    format!(
+                                        "Preparation control {}.{} is not numeric",
+                                        preparation.modifier_id, preparation.param_id
+                                    ),
+                                ));
+                                continue;
+                            };
+                            let Some(preparation_value) = invert_preparation_value(
+                                node_value,
+                                &preparation,
+                            ) else {
+                                self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                    format!(
+                                        "Preparation control {}.{} has an unrepresentable value",
+                                        preparation.modifier_id, preparation.param_id
+                                    ),
+                                ));
+                                continue;
+                            };
+                            let prep_key =
+                                (preparation.modifier_id.clone(), preparation.param_id.clone());
+                            let is_new_session = !matches!(
+                                &self.scrub.active,
+                                Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(d))
+                                    if d.target == target
+                                        && d.node_id == *node_id
+                                        && d.param_name == *param_name
+                                        && d.scope_path == canvas_scope
+                                        && d.preparation.as_ref() == Some(&prep_key)
+                            );
+                            if is_new_session {
+                                self.scrub.check_single_active_on_begin("preparation-node-param");
+                                self.scrub.active = Some(
+                                    crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
+                                        Box::new(UnboundNodeParamDrag {
+                                            target: target.clone(),
+                                            node_id: *node_id,
+                                            param_name: param_name.clone(),
+                                            scope_path: canvas_scope.clone(),
+                                            catalog_default: default.clone(),
+                                            preparation: Some(prep_key),
+                                            pre_drag_value: Some(
+                                                manifold_core::effect_graph_def::SerializedParamValue::Float {
+                                                    value: preparation.baseline,
+                                                },
+                                            ),
+                                            current_value:
+                                                manifold_core::effect_graph_def::SerializedParamValue::Float {
+                                                    value: preparation_value,
+                                                },
+                                        }),
+                                    ),
+                                );
+                            } else if let Some(
+                                crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag),
+                            ) = self.scrub.active.as_mut()
+                            {
+                                drag.current_value =
+                                    manifold_core::effect_graph_def::SerializedParamValue::Float {
+                                        value: preparation_value,
+                                    };
+                            }
+                            // Preparation changes are drafts. No local or
+                            // content live mutation occurs until End.
+                            continue;
+                        }
                         debug_assert!(
                             !wired,
                             "node-face scrub started on a wired param row — P2's \
@@ -2221,6 +2416,7 @@ impl Application {
                                         param_name: param_name.clone(),
                                         scope_path: canvas_scope.clone(),
                                         catalog_default: default.clone(),
+                                        preparation: None,
                                         pre_drag_value,
                                         current_value: core_value.clone(),
                                     }),
@@ -2286,17 +2482,49 @@ impl Application {
                                     None => true,
                                 };
                                 if moved {
-                                    let cmd =
-                                        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                            drag.target,
-                                            drag.node_id,
-                                            drag.param_name,
-                                            drag.current_value,
-                                            drag.catalog_default,
-                                        )
-                                        .with_scope(drag.scope_path)
-                                        .with_previous(drag.pre_drag_value);
-                                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                                    if let Some((modifier_id, param_id)) = drag.preparation {
+                                        let Some(layer_id) = drag.target.host_target().and_then(
+                                            |target| match target {
+                                                manifold_core::GraphTarget::Generator(layer_id) => {
+                                                    Some(layer_id.clone())
+                                                }
+                                                _ => None,
+                                            },
+                                        ) else {
+                                            self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                                "Preparation target has no generator owner".into(),
+                                            ));
+                                            continue;
+                                        };
+                                        let Some(value) =
+                                            serialized_value_as_f32(&drag.current_value)
+                                        else {
+                                            self.send_content_cmd(ContentCommand::GraphEditRejected(
+                                                "Preparation value is not numeric".into(),
+                                            ));
+                                            continue;
+                                        };
+                                        self.send_content_cmd(ContentCommand::SceneModifier(
+                                            crate::scene_modifier_edit::SceneModifierAction::Preparation(
+                                                layer_id,
+                                                modifier_id,
+                                                param_id,
+                                                value,
+                                            ),
+                                        ));
+                                    } else {
+                                        let cmd =
+                                            manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                                                drag.target,
+                                                drag.node_id,
+                                                drag.param_name,
+                                                drag.current_value,
+                                                drag.catalog_default,
+                                            )
+                                            .with_scope(drag.scope_path)
+                                            .with_previous(drag.pre_drag_value);
+                                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                                    }
                                 }
                             }
                         }
@@ -2326,6 +2554,9 @@ impl Application {
                                 manifold_ui::panels::GraphParamTarget::Effect(0)
                             }
                             manifold_core::GraphTarget::Generator(_) => {
+                                manifold_ui::panels::GraphParamTarget::Generator
+                            }
+                            manifold_core::GraphTarget::SceneModifier { .. } => {
                                 manifold_ui::panels::GraphParamTarget::Generator
                             }
                         };
@@ -3570,6 +3801,7 @@ mod unbound_node_param_drag_tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![],
             wires: vec![],
         }

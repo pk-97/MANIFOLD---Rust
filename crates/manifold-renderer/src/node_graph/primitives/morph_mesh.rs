@@ -2,7 +2,10 @@
 //! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4/D9, section 3 atom table).
 //!
 //! `n = min(count_a, count_b)`; `pos = mix(a, b, t * w)`, `normal =
-//! normalize(mix(a.normal, b.normal, t * w))`, `uv` from `a`. Correspondence
+//! normalize(mix(a.normal, b.normal, t * w))`, `uv` from `a`. With the
+//! opt-in `blend_frames` parameter, normals and tangents also receive a
+//! topology-preserving frame blend; partial frame blends are interpolated
+//! approximations, not recomputed shading frames. Correspondence
 //! is by index — meaningful between variants of one mesh or as a deliberate
 //! scramble-morph between unrelated ones; both are stage-valid. `w` is the
 //! optional per-vertex `weights` input (degrading to 1.0 past a
@@ -20,23 +23,23 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::standalone_pipeline::standalone_pipeline;
 
-/// Generated-codegen uniform layout: the `t` param (f32), then the derived
-/// `weights_len` (u32), then the codegen-injected `dispatch_count`, padded
-/// to a 16-byte multiple. 3 words + 1 pad = 16 bytes. Matches
+/// Generated-codegen uniform layout: the `t` param (f32), `blend_frames` (u32),
+/// then the derived `weights_len` and codegen-injected `dispatch_count`.
+/// Four words = 16 bytes. Matches
 /// `standalone_for_spec::<MorphMesh>()`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MorphUniforms {
     t: f32,
+    blend_frames: u32,
     weights_len: u32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 crate::primitive! {
     name: MorphMesh,
     type_id: "node.morph_mesh",
-    purpose: "Static two-mesh lerp between two Array<MeshVertex>s, by index. n = min(count_a, count_b); pos = mix(a, b, t * w), normal = normalize(mix(a.normal, b.normal, t * w)), uv from `a`. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Correspondence is by index — meaningful between variants of one mesh (a low-poly and a scanned-detail version of the same object) or as a deliberate scramble-morph between unrelated meshes of similar vertex count; both are stage-valid. Normals are approximate (lerp + renormalize), correct-looking for moderate blends. This is the static two-mesh lerp only — glTF morph-target playback is a separate future design, not an extension of this atom.",
+    purpose: "Static two-mesh lerp between two Array<MeshVertex>s, by index. n = min(count_a, count_b); pos = mix(a, b, t * w), normal = normalize(mix(a.normal, b.normal, t * w)), uv from `a`. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). `blend_frames` opts into interpolated, orthonormalized normals and tangents for same-topology variants; partial frames are an approximate interpolation, not recomputed shading. Correspondence is by index — meaningful between variants of one mesh (a low-poly and a scanned-detail version of the same object) or as a deliberate scramble-morph between unrelated meshes of similar vertex count; both are stage-valid. This is the static two-mesh lerp only — glTF morph-target playback is a separate future design, not an extension of this atom.",
     inputs: {
         in: Array(MeshVertex) required,
         b: Array(MeshVertex) required,
@@ -53,6 +56,14 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
             range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("blend_frames"),
+            label: "Blend Frames",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -100,6 +111,7 @@ impl Primitive for MorphMesh {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let t = ctx.scalar_or_param("t", 0.5);
+        let blend_frames = matches!(ctx.params.get("blend_frames"), Some(ParamValue::Bool(true)));
 
         let Some(a_buf) = ctx.inputs.array("in") else {
             return;
@@ -131,9 +143,9 @@ impl Primitive for MorphMesh {
 
         let uniforms = MorphUniforms {
             t,
+            blend_frames: blend_frames as u32,
             weights_len,
             dispatch_count: count,
-            _pad0: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -203,6 +215,11 @@ mod tests {
 
         assert_eq!(MorphMesh::OUTPUTS.len(), 1);
         assert_eq!(MorphMesh::OUTPUTS[0].ty, PortType::Array(mesh_layout));
+        let params = MorphMesh::PARAMS;
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[1].name, "blend_frames");
+        assert_eq!(params[1].ty, ParamType::Bool);
+        assert_eq!(params[1].default, ParamValue::Bool(false));
     }
 
     #[test]
@@ -236,6 +253,8 @@ mod gpu_tests {
     //! parity is against a hand-written Rust reference of the committed
     //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
+    use crate::node_graph::freeze::codegen::{generate_fused, FusionRegion, InputSource, RegionNode};
+    use crate::node_graph::primitive::PrimitiveSpec;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
         MeshVertex {
@@ -281,6 +300,7 @@ mod gpu_tests {
         b: &[MeshVertex],
         weights: Option<&[f32]>,
         weights_len_override: Option<u32>,
+        blend_frames: bool,
         t: f32,
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
@@ -313,9 +333,9 @@ mod gpu_tests {
 
         let uniforms = MorphUniforms {
             t,
+            blend_frames: blend_frames as u32,
             weights_len,
             dispatch_count: a.len() as u32,
-            _pad0: 0,
         };
 
         let bindings = [
@@ -338,6 +358,80 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, a.len()) }.to_vec()
     }
 
+    fn dispatch_fused_morph(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        a: &[MeshVertex],
+        b: &[MeshVertex],
+        weights: &[f32],
+        blend_frames: bool,
+        t: f32,
+    ) -> Vec<MeshVertex> {
+        let pipeline = device.create_compute_pipeline(
+            wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "morph-mesh-fused-test",
+        );
+        let a_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
+        let b_buf = device.create_buffer_shared(std::mem::size_of_val(b) as u64);
+        let w_buf = device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
+        let dst_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
+        unsafe {
+            a_buf.write(0, bytemuck::cast_slice(a));
+            b_buf.write(0, bytemuck::cast_slice(b));
+            w_buf.write(0, bytemuck::cast_slice(weights));
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+        struct FusedUniforms {
+            t: f32,
+            blend_frames: u32,
+            weights_len: u32,
+            _pad0: u32,
+        }
+        let uniforms = FusedUniforms {
+            t,
+            blend_frames: blend_frames as u32,
+            weights_len: weights.len() as u32,
+            _pad0: 0,
+        };
+        let mut enc = device.create_encoder("morph-mesh-fused-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &a_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &b_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &w_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &dst_buf,
+                    offset: 0,
+                },
+            ],
+            [(a.len() as u32).div_ceil(256), 1, 1],
+            "morph-mesh-fused-test",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = dst_buf.mapped_ptr().expect("shared fused dst buffer");
+        unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, a.len()) }.to_vec()
+    }
+
 
     #[test]
     fn matches_hand_formula_analytically_and_uv_from_a() {
@@ -352,7 +446,7 @@ mod gpu_tests {
             mk_vertex([-1.0, 0.5, 2.0], [0.0, 1.0, 0.0], [0.66, 0.55]),
         ];
         let t = 0.4f32;
-        let out = dispatch_morph(&device, &gen_wgsl, &a, &b, None, None, t);
+        let out = dispatch_morph(&device, &gen_wgsl, &a, &b, None, None, false, t);
         for i in 0..a.len() {
             let (exp_pos, exp_n) = expected_morph(&a[i], &b[i], t, 1.0);
             for c in 0..3 {
@@ -387,12 +481,12 @@ mod gpu_tests {
             mk_vertex([8.0, 8.0, 8.0], [0.0, 1.0, 0.0], [0.8, 0.8]),
             mk_vertex([7.0, 7.0, 7.0], [0.0, 0.0, 1.0], [0.7, 0.7]),
         ];
-        let out0 = dispatch_morph(&device, &gen_wgsl, &a, &b, None, None, 0.0);
+        let out0 = dispatch_morph(&device, &gen_wgsl, &a, &b, None, None, false, 0.0);
         assert_eq!(out0.len(), a.len());
         for i in 0..a.len() {
             assert_eq!(out0[i].position, a[i].position, "t=0 should equal a exactly, vertex {i}");
         }
-        let out1 = dispatch_morph(&device, &gen_wgsl, &a, &b, None, None, 1.0);
+        let out1 = dispatch_morph(&device, &gen_wgsl, &a, &b, None, None, false, 1.0);
         for i in 0..a.len() {
             for c in 0..3 {
                 assert!(
@@ -416,7 +510,7 @@ mod gpu_tests {
         let weights = [0.0f32, 0.0];
         let t = 0.7f32;
 
-        let out = dispatch_morph(&device, &gen_wgsl, &a, &b, Some(&weights), Some(2), t);
+        let out = dispatch_morph(&device, &gen_wgsl, &a, &b, Some(&weights), Some(2), false, t);
 
         assert!(
             (out[0].position[0]).abs() < 1e-5,
@@ -437,5 +531,123 @@ mod gpu_tests {
                 expected_x
             );
         }
+    }
+
+    fn assert_semantic_equal(got: &MeshVertex, expected: &MeshVertex, label: &str) {
+        for c in 0..3 {
+            assert!((got.position[c] - expected.position[c]).abs() < 1e-5, "{label} position[{c}]");
+            assert!((got.normal[c] - expected.normal[c]).abs() < 1e-5, "{label} normal[{c}]");
+        }
+        assert_eq!(got.uv, expected.uv, "{label} uv");
+        for c in 0..4 {
+            assert!((got.tangent[c] - expected.tangent[c]).abs() < 1e-5, "{label} tangent[{c}]");
+        }
+    }
+
+    #[test]
+    fn overnight_modifier_opted_in_frames_have_gpu_neutral_midframe_and_hand_parity() {
+        let device = crate::test_device();
+        let generated = generated_wgsl();
+        let hand = include_str!("shaders/morph_mesh.wgsl");
+        let a = vec![MeshVertex {
+            position: [0.0, 0.0, 0.0],
+            _pad0: 0.0,
+            normal: [0.0, 1.0, 0.0],
+            _pad1: 0.0,
+            uv: [0.1, 0.2],
+            _pad2: [7.0, 8.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        }];
+        let b = vec![MeshVertex {
+            position: [2.0, 4.0, 6.0],
+            _pad0: 0.0,
+            normal: [0.0, 0.0, 1.0],
+            _pad1: 0.0,
+            uv: [0.9, 0.8],
+            _pad2: [9.0, 10.0],
+            tangent: [0.0, 1.0, 0.0, -1.0],
+        }];
+
+        // Neutral opt-in mask must return the complete input semantic vertex.
+        let generated_neutral = dispatch_morph(&device, &generated, &a, &b, None, None, true, 0.0);
+        let hand_neutral = dispatch_morph(&device, hand, &a, &b, None, None, true, 0.0);
+        assert_semantic_equal(&generated_neutral[0], &a[0], "generated neutral");
+        assert_semantic_equal(&hand_neutral[0], &a[0], "hand neutral");
+        let generated_target = dispatch_morph(&device, &generated, &a, &b, None, None, true, 1.0);
+        let mut target = b[0];
+        target.uv = a[0].uv;
+        assert_semantic_equal(&generated_target[0], &target, "generated target");
+
+        // Mid-frame compares the generated unfused kernel with the hand
+        // parity oracle while exercising orthonormalized tangent output.
+        let generated_mid = dispatch_morph(&device, &generated, &a, &b, None, None, true, 0.5);
+        let hand_mid = dispatch_morph(&device, hand, &a, &b, None, None, true, 0.5);
+        assert_semantic_equal(&generated_mid[0], &hand_mid[0], "midframe parity");
+        let tangent = generated_mid[0].tangent;
+        assert!((tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2] - 1.0).abs() < 1e-5);
+        assert_eq!(tangent[3], 1.0, "nearest endpoint supplies handedness at the midpoint");
+    }
+
+    #[test]
+    fn overnight_modifier_fused_and_unfused_opted_in_outputs_match() {
+        let device = crate::test_device();
+        let id = crate::node_graph::effect_node::NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![RegionNode {
+                node_id: id(0),
+                fusion_kind: crate::node_graph::freeze::classify::FusionKind::Pointwise,
+                body: MorphMesh::WGSL_BODY.unwrap(),
+                params: MorphMesh::PARAMS,
+                inputs: vec![
+                    InputSource::External(0),
+                    InputSource::External(1),
+                    InputSource::External(2),
+                ],
+                input_access: MorphMesh::INPUT_ACCESS.to_vec(),
+                node_inputs: MorphMesh::INPUTS,
+                node_outputs: MorphMesh::OUTPUTS,
+                node_includes: MorphMesh::WGSL_INCLUDES,
+                derived_uniforms: MorphMesh::DERIVED_UNIFORMS,
+                type_id: MorphMesh::TYPE_ID.to_string(),
+                derived_camera_ext: None,
+                output_storage: "rgba16float",
+                stencil_fetch: false,
+                quantize_f16: false,
+            }],
+            num_external_inputs: 3,
+            outputs: vec![(id(0), "out".to_string())],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+        };
+        let generated_fused = generate_fused(&region).expect("morph mesh should fuse");
+        assert!(naga::front::wgsl::parse_str(&generated_fused.wgsl).is_ok());
+
+        let a = vec![mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.1, 0.2])];
+        let b = vec![mk_vertex([2.0, 3.0, 4.0], [0.0, 0.0, 1.0], [0.9, 0.8])];
+        let weights = [1.0];
+        let standalone = dispatch_morph(
+            &device,
+            &generated_wgsl(),
+            &a,
+            &b,
+            Some(&weights),
+            None,
+            true,
+            0.5,
+        );
+        let fused = dispatch_fused_morph(
+            &device,
+            &generated_fused.wgsl,
+            &a,
+            &b,
+            &weights,
+            true,
+            0.5,
+        );
+        assert_semantic_equal(&fused[0], &standalone[0], "fused/unfused midpoint");
     }
 }

@@ -1,0 +1,686 @@
+[
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Elastic Sculpture",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Cross Bend"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.objects"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u2713 Apply to all objects"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Phase",
+          "text": "0.00"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "under_text": "Phase",
+          "type": "Button"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "under_text": "Phase",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "under_text": "Phase",
+              "type": "Label"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Phase",
+          "text": "0.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Phase",
+          "text": "0.00"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene Fog",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_card.drag_handle.Scene Fog"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_card.drag_handle.Scene Fog"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "name": "param_card.drag_handle.Elastic Sculpture"
+            }
+          },
+          "steps": 10
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Scene Fog"
+        }
+      },
+      "check": {
+        "Above": {
+          "text": "Elastic Sculpture"
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove",
+          "nth": 0
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Elastic Sculpture"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Scene Fog"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Surface Peel",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Lift"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Vortex Fragments",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Rise"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene Loop",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Bars"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene Fog",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Density"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

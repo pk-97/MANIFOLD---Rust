@@ -23,6 +23,15 @@ const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
 const PAUSED_YELLOW: Color32 = Color32::new(209, 166, 38, 255);
 
+fn graph_edit_diagnostic_toast(
+    last_sequence: Option<u64>,
+    diagnostic: Option<&crate::content_state::GraphEditDiagnostic>,
+) -> Option<(u64, &str)> {
+    diagnostic
+        .filter(|event| last_sequence != Some(event.sequence))
+        .map(|event| (event.sequence, event.message.as_str()))
+}
+
 /// Push engine state into UI panels (called once per frame, AFTER build).
 /// Syncs all data-model state into tree nodes so the renderer shows current values.
 pub fn push_state(
@@ -134,6 +143,17 @@ pub fn push_state(
                 ui.toast.show(format!("{verb}: {}", ev.description));
                 ui.last_undo_redo_toast_key = Some(key);
             }
+        }
+
+        // Rejected graph edits do not change project data, so they carry an
+        // independent sequence. Keep the diagnostic persistent in the content
+        // snapshot and show each sequence exactly once.
+        if let Some((sequence, message)) = graph_edit_diagnostic_toast(
+            ui.last_graph_edit_diagnostic_sequence,
+            content_state.graph_edit_diagnostic.as_ref(),
+        ) {
+            ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
+            ui.last_graph_edit_diagnostic_sequence = Some(sequence);
         }
 
         // Cache Ableton session for parameter mapping dropdown
@@ -680,4 +700,32 @@ pub fn push_state(
 
     // Sync Scene Setup row values (same per-frame value plane, dock rows)
     sync_scene_row_values(ui, project);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::graph_edit_diagnostic_toast;
+    use crate::content_state::GraphEditDiagnostic;
+
+    #[test]
+    fn graph_edit_diagnostic_toast_is_sequence_gated() {
+        let first = GraphEditDiagnostic {
+            sequence: 4,
+            message: "Cannot remove connected node".into(),
+        };
+        assert_eq!(
+            graph_edit_diagnostic_toast(None, Some(&first)),
+            Some((4, "Cannot remove connected node"))
+        );
+        assert_eq!(graph_edit_diagnostic_toast(Some(4), Some(&first)), None);
+
+        let newer = GraphEditDiagnostic {
+            sequence: 5,
+            message: "Cannot remove connected node".into(),
+        };
+        assert_eq!(
+            graph_edit_diagnostic_toast(Some(4), Some(&newer)),
+            Some((5, "Cannot remove connected node"))
+        );
+    }
 }

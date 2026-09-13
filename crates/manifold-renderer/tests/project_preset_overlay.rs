@@ -60,6 +60,7 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
     set_project_presets(
         Vec::new(),
         vec![(id.to_string(), fake_generator_preset(id), EmbeddedOrigin::Saved)],
+        Vec::new(),
     );
 
     // Now resolvable through BOTH the renderer catalog (graph JSON) and the
@@ -117,6 +118,7 @@ fn snapshot_tier_never_shadows_a_real_disk_preset() {
     set_project_presets(
         vec![("Bloom".to_string(), fake_effect_preset("Bloom", marker), EmbeddedOrigin::Snapshot)],
         Vec::new(),
+        Vec::new(),
     );
 
     let resolved = EFFECT_CATALOG
@@ -149,6 +151,7 @@ fn snapshot_tier_resolves_when_disk_is_absent() {
     set_project_presets(
         vec![(id.to_string(), fake_effect_preset(id, marker), EmbeddedOrigin::Snapshot)],
         Vec::new(),
+        Vec::new(),
     );
 
     let resolved = EFFECT_CATALOG
@@ -169,6 +172,7 @@ fn saved_tier_still_overrides_disk_like_before_p2() {
     let marker = "SAVED_TIER_ON_TOP_MARKER";
     set_project_presets(
         vec![("Bloom".to_string(), fake_effect_preset("Bloom", marker), EmbeddedOrigin::Saved)],
+        Vec::new(),
         Vec::new(),
     );
 
@@ -222,6 +226,7 @@ fn overlay_only_generator_produces_nonempty_editor_snapshot() {
     set_project_presets(
         Vec::new(),
         vec![(id.to_string(), json, EmbeddedOrigin::Saved)],
+        Vec::new(),
     );
 
     // Render path: resolves the tracking layer's def by id.

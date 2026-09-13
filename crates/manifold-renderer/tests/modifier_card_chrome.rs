@@ -1,6 +1,6 @@
 //! Modifier-card chrome contact sheet (BUG-oe99) — renders a regular effect
 //! card next to a Scene Loop modifier card into one PNG so the header chrome
-//! parity (cog, ON, DBG, ×, chevron) and the section-header-stripped body can
+//! parity (cog, ON, reorder, ×, chevron) and the section-header-stripped body can
 //! be eyeballed headlessly. Same windowless render path as
 //! `ui_color_swatches.rs`: `GpuDevice::new()` → `UIRenderer::render_tree` →
 //! texture readback → PNG.
@@ -13,7 +13,7 @@ use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::param_surface::{
-    ModifierCardInfo, ParamRow, ParamSurface, RowMapping, RowSpec, RowValue, SceneRowAddr,
+    ModifierCardInfo, ParamRow, ParamSurface, RowMapping, RowSpec, RowValue,
 };
 use manifold_ui::panels::param_card::{ParamCardKind, ParamCardPanel, RowMod};
 use manifold_ui::{Rect, UITree};
@@ -86,14 +86,13 @@ fn modifier_surface() -> ParamSurface {
         has_graph_mod: false,
         layer_id: None,
         modifier: Some(ModifierCardInfo {
-            kind_id: "scene_loop".into(),
+            instance_id: manifold_foundation::NodeId::new("loop-instance-a"),
             layer_id: manifold_foundation::LayerId::new("layer-a"),
-            show_enable_toggle: true,
-            wrap_debug: Some(SceneRowAddr {
-                scope_path: Vec::new(),
-                node_doc_id: 7,
-                param_id: "bars".into(),
-            }),
+            enabled_label: "Camera Travel".into(),
+            stack_index: 0,
+            stack_len: 1,
+            targets_all: true,
+            objects: vec![],
         }),
         rows: vec![
             row("bars", "Bars", 1.0, 64.0, 8.0, true),

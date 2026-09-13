@@ -39,6 +39,7 @@ mod execution_plan;
 pub mod freeze;
 mod graph;
 mod graph_loader;
+pub mod resource_allocation;
 mod gltf_anim_cache;
 pub mod gltf_import;
 mod gltf_load;
@@ -55,7 +56,9 @@ pub mod ports;
 pub mod primitive;
 pub mod primitives;
 pub mod relight;
-pub mod scene_modifier;
+pub mod scene_modifier_authoring;
+pub mod scene_modifier_expand;
+pub mod scene_modifier_legacy_migration;
 pub mod scene_vm;
 mod snapshot;
 mod state_store;
@@ -100,6 +103,7 @@ pub use bound_graph::{
 };
 pub use bundled_presets::{
     bundled_preset_def, bundled_preset_json, bundled_preset_type_ids, loaded_presets_from_bundled,
+    loaded_scene_modifier_presets_from_bundled,
 };
 pub use effect_node::{
     intern_name, EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,

@@ -360,7 +360,7 @@ thread_local! {
     static FUSED_EFFECT_CACHE: std::cell::RefCell<LruCache<Option<Arc<LoadedPresetView>>>> =
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Generator twin — values are fused defs (generators compile via `from_def`).
-    static FUSED_GENERATOR_CACHE: std::cell::RefCell<LruCache<Option<Arc<EffectGraphDef>>>> =
+    static FUSED_GENERATOR_CACHE: std::cell::RefCell<LruCache<Option<Arc<FusedGeneratorView>>>> =
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Effect-view keys compiling on the worker right now (BUG-j8gy) — the
     /// segment `SEGMENT_PENDING` analog: dedupes enqueues across the rebuilds
@@ -414,12 +414,26 @@ fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
 /// bindings from the cached def — they flow through `ResolvedBinding::from_static`
 /// at slot-build time — so effects use `effect_def_content_key`.
 pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDef>> {
+    fused_generator_view_for(def).map(|view| Arc::clone(&view.def))
+}
+
+/// The render definition and authored-leaf uniform routes are one cached
+/// result. Runtime value edits need these routes after members fuse away.
+pub struct FusedGeneratorView {
+    pub def: Arc<EffectGraphDef>,
+    pub retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// Every fused-away authored node, including parameterless atoms, mapped
+    /// to the generated fused region node that evaluates it.
+    pub node_retarget: AHashMap<NodeId, NodeId>,
+}
+
+pub fn fused_generator_view_for(def: &EffectGraphDef) -> Option<Arc<FusedGeneratorView>> {
     let key = def_content_key(def);
     if let Some(cached) = FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
     }
     let registry = PrimitiveRegistry::with_builtin();
-    let compiled = fuse_generator_def(def, &registry).map(Arc::new);
+    let compiled = fuse_generator_view_masked(def, &registry, None).map(Arc::new);
     FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
     compiled
 }
@@ -1176,6 +1190,14 @@ pub(crate) fn fuse_generator_def_masked(
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
 ) -> Option<EffectGraphDef> {
+    fuse_generator_view_masked(def, registry, region_mask).map(|view| Arc::unwrap_or_clone(view.def))
+}
+
+fn fuse_generator_view_masked(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    region_mask: Option<&[bool]>,
+) -> Option<FusedGeneratorView> {
     let fused = fuse_canonical_def_masked(def, registry, region_mask)?;
     // Node ids that survive (boundaries + fused nodes) — a binding targeting one
     // is left as-is; one targeting a fused-away member is retargeted; anything
@@ -1196,7 +1218,11 @@ pub(crate) fn fuse_generator_def_masked(
     if !fused_def_builds(&out_def, registry, &expected_spaces) {
         return None;
     }
-    Some(out_def)
+    Some(FusedGeneratorView {
+        def: Arc::new(out_def),
+        retarget: fused.retarget,
+        node_retarget: fused.node_retarget,
+    })
 }
 
 /// Rewrite each `preset_metadata` `BindingDef` so it lands right after fusion: a
@@ -1301,6 +1327,9 @@ pub(crate) struct FusedDef {
     /// within its region — the codegen convention); the node id is that region's
     /// `fused_region_{i}`.
     pub retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// `(original stable node_id) → fused region node_id`, including members
+    /// with no parameters and members absorbed into virtual chains.
+    pub node_retarget: AHashMap<NodeId, NodeId>,
     /// Tier 6: `(fused doc id, output port, space)` per texture-region output —
     /// the element space the replaced member's output resolved to in the
     /// UNFUSED plan. [`fused_def_builds`] verifies the fused def resolves each
@@ -1549,6 +1578,11 @@ pub(crate) fn fuse_canonical_def_masked(
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
 ) -> Option<FusedDef> {
+    let prepared;
+    let def = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+        prepared = crate::node_graph::scene_modifier_expand::expand_scene_modifiers(def, registry).ok()?;
+        &prepared
+    } else { def };
     // The finder operates on a FLATTENED graph: `partition_regions` refuses any
     // def still carrying a group node (group boundary nodes would fragment every
     // region), and the live loader (`graph_loader`) flattens before building. So
@@ -1593,6 +1627,7 @@ pub(crate) fn fuse_canonical_def_masked(
     let max_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0);
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
+    let mut node_retarget: AHashMap<NodeId, NodeId> = AHashMap::default();
     let mut fused_docs: Vec<u32> = Vec::with_capacity(regions.len());
     // Tier 6: per texture-region output, the element space the unfused member
     // resolved to — verified against the fused def by `fused_def_builds`.
@@ -1837,8 +1872,11 @@ pub(crate) fn fuse_canonical_def_masked(
         let mut fused_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
         for (idx, member) in all_members.iter().enumerate() {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
-            let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
             let stable = resolve_node_id(doc_node);
+            if !stable.is_empty() {
+                node_retarget.insert(stable.clone(), fused_id.clone());
+            }
+            let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
             for p in node.parameters() {
                 let field = format!("n{idx}_{}", p.name);
 
@@ -2183,11 +2221,12 @@ pub(crate) fn fuse_canonical_def_masked(
         // Keep the outer-card surface (params / skip / aliases) byte-identical so
         // the chain builder's outer_param_index + skip logic are unchanged.
         preset_metadata: def.preset_metadata.clone(),
+        scene_modifiers: def.scene_modifiers.clone(),
         nodes: new_nodes,
         wires: new_wires,
     };
 
-    Some(FusedDef { def: fused_def, retarget, expected_spaces })
+    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces })
 }
 
 /// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
@@ -3010,6 +3049,7 @@ mod tests {
     /// member 1), so the generator's modulation surface keeps driving the kernel.
     #[test]
     fn generator_binding_def_retargets_onto_fused() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
         use manifold_core::effect_graph_def::BindingTarget;
         let json = r#"{
             "version": 1, "name": "FuseGen",
@@ -3025,15 +3065,34 @@ mod tests {
                 { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
                 { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
-                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+                { "id": 4, "typeId": "node.absolute_value", "nodeId": "atomless" },
+                { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
                 { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
             ]
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-        let fused = fuse_generator_def(&def, &registry()).expect("the generator fuses");
+        let view = fused_generator_view_for(&def).expect("the generator fuses");
+        let cached = fused_generator_view_for(&def).expect("cached view");
+        assert!(Arc::ptr_eq(&view, &cached));
+        let fused = fused_generator_def_for(&def).expect("legacy def accessor");
+        assert!(Arc::ptr_eq(&fused, &view.def));
+        let (target, field) = view.retarget.get(&("gain".into(), "gain".into()))
+            .expect("value edit route survives caching");
+        let fused_id = NodeId::new("fused_region_0");
+        assert_eq!(view.node_retarget.get(&NodeId::new("gain")), Some(&fused_id));
+        assert_eq!(view.node_retarget.get(&NodeId::new("atomless")), Some(&fused_id));
+        assert_eq!(view.node_retarget, cached.node_retarget, "cache retains member attribution");
+        assert!(view.node_retarget.values().all(|id| {
+            view.def.nodes.iter().any(|node| resolve_node_id(node) == *id)
+        }));
+        let mut graph = (*fused).clone().into_graph(&registry()).unwrap();
+        let runtime_id = graph.instance_by_node_id(target).unwrap();
+        graph.set_param(runtime_id, field, ParamValue::Float(0.375)).unwrap();
+        assert_eq!(graph.get_node(runtime_id).unwrap().params.get(field.as_str()), Some(&ParamValue::Float(0.375)));
         let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
         assert_eq!(meta.bindings.len(), 1);
         match &meta.bindings[0].target {

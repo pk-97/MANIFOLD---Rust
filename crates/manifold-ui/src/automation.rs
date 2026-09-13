@@ -160,6 +160,8 @@ pub enum AssertCheck {
 #[serde(default)]
 pub struct SelectorQuery {
     pub name: Option<String>,
+    /// Stable control suffix when a row name contains a runtime instance ID.
+    pub name_suffix: Option<String>,
     pub text: Option<String>,
     #[serde(rename = "type")]
     pub node_type: Option<String>,
@@ -339,6 +341,11 @@ fn node_matches(
     {
         return false;
     }
+    if let Some(suffix) = &q.name_suffix
+        && !tree.name_of(n.id).is_some_and(|name| name.ends_with(suffix))
+    {
+        return false;
+    }
     if let Some(text) = &q.text
         && n.text.as_deref() != Some(text.as_str())
     {
@@ -421,6 +428,9 @@ fn describe_query(q: &SelectorQuery) -> String {
     if let Some(v) = &q.name {
         parts.push(format!("name={v:?}"));
     }
+    if let Some(v) = &q.name_suffix {
+        parts.push(format!("name_suffix={v:?}"));
+    }
     if let Some(v) = &q.text {
         parts.push(format!("text={v:?}"));
     }
@@ -487,6 +497,24 @@ mod tests {
         let q = SelectorQuery { text: Some("Bloom".into()), ..Default::default() };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
         assert_eq!(resolved.rect.width, 10.0);
+    }
+
+    #[test]
+    fn name_suffix_resolves_runtime_ids_and_keeps_ambiguity_checks() {
+        let mut tree = UITree::new();
+        let first = button(&mut tree, "T");
+        tree.set_name(first, "param_row.sceneModifier:[\"first\",\"flow\"].trigger_btn");
+        let other = button(&mut tree, "T");
+        tree.set_name(other, "param_row.sceneModifier:[\"first\",\"bars\"].trigger_btn");
+        let q = SelectorQuery {
+            name_suffix: Some("\"flow\"].trigger_btn".into()),
+            ..Default::default()
+        };
+        let target = AutomationTarget::Query(q);
+        assert_eq!(resolve(&tree, &[], &target).unwrap().node, Some(first));
+        let second = button(&mut tree, "T");
+        tree.set_name(second, "param_row.sceneModifier:[\"second\",\"flow\"].trigger_btn");
+        assert!(matches!(resolve(&tree, &[], &target), Err(ResolveError::Ambiguous { .. })));
     }
 
     #[test]

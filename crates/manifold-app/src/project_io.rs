@@ -44,6 +44,7 @@ pub(crate) fn install_project_preset_overlay(project: &Project) {
 pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::EmbeddedPreset]) {
     let mut effect = Vec::new();
     let mut generator = Vec::new();
+    let mut scene_modifier = Vec::new();
     for p in presets {
         let Some(id) = p.id() else { continue };
         let Ok(json) = serde_json::to_string(&p.def) else {
@@ -53,9 +54,10 @@ pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::Embedd
         match p.kind {
             PresetKind::Effect => effect.push((id.as_str().to_string(), json, p.origin)),
             PresetKind::Generator => generator.push((id.as_str().to_string(), json, p.origin)),
+            PresetKind::SceneModifier => scene_modifier.push((id.as_str().to_string(), json, p.origin)),
         }
     }
-    manifold_renderer::preset_loader::set_project_presets(effect, generator);
+    manifold_renderer::preset_loader::set_project_presets(effect, generator, scene_modifier);
 }
 
 /// Self-containment snapshot (PRESET_LIBRARY_DESIGN D5, P2). Called
@@ -189,6 +191,23 @@ pub struct ProjectIOAction {
     /// `None` means nothing to show — the common case. See BUG-063,
     /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6.
     pub notice: Option<String>,
+}
+
+/// One load-time migration path for editable scene graphs and acceptance
+/// fixtures. Unsupported legacy ownership remains intact with a visible notice.
+pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
+    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let mut notices = Vec::new();
+    for layer in &mut project.timeline.layers {
+        let Some(host) = layer.gen_params_mut() else { continue; };
+        let Some(graph) = host.graph.as_mut() else { continue; };
+        manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
+        let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
+        notices.extend(report.diagnostics);
+        host.refresh_manifest_from_graph();
+    }
+    notices
 }
 
 // ── ProjectIOService ────────────────────────────────────────────────
@@ -404,29 +423,7 @@ impl ProjectIOService {
                 // wire migration above — an old project (or one edited before
                 // this migration shipped) gets working card rows without a
                 // re-import.
-                for layer in &mut project.timeline.layers {
-                    if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
-                        manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
-                        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
-                        // SCENE_MODIFIER_FRAMEWORK D8 (INV-M8): pre-switch
-                        // loop graphs gain the loop_cam_switch camera mux at
-                        // load, once, through the same generic shape the
-                        // apply mints — never a manual migrate button.
-                        manifold_renderer::node_graph::scene_modifier::migrate_pre_switch_scene_loops(graph);
-                        // ENDLESS_CORRIDOR D7: fixed-row loops (count/stride/
-                        // jitter_period shape) upgrade to the corridor shape
-                        // at load, BEFORE the exposure-row migration below —
-                        // it re-stamps through the current whitelist and its
-                        // jitter_period re-stamp is gated on the old node
-                        // shape this migration removes.
-                        manifold_renderer::node_graph::scene_modifier::migrate_fixed_row_scene_loops(graph);
-                        // P4: applied loops stamped before the control
-                        // enrichment gain the new card rows (Flow/Stride/
-                        // Sway/…/Spacing/Jitter) at load, once — the stamper
-                        // is idempotent by (node_id, param).
-                        manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(graph);
-                    }
-                }
+                let modifier_notices = migrate_project_scene_graphs(&mut project);
 
                 // Overlay install happened in the pre-deserialize hook above;
                 // `apply_project_io_action` re-installs on every project apply
@@ -457,7 +454,7 @@ impl ProjectIOService {
                 // Surface silent load-repairs (BUG-063) as a non-blocking
                 // toast — never `alerts::error`, which is D1's blocking
                 // refusal path for a too-new file.
-                let notice = if !project.load_report.is_empty() {
+                let mut notice = if !project.load_report.is_empty() {
                     Some(format!(
                         "Opened with repairs:\n{}",
                         project.load_report.human_lines().join("\n")
@@ -465,6 +462,11 @@ impl ProjectIOService {
                 } else {
                     None
                 };
+
+                if !modifier_notices.is_empty() {
+                    let message = modifier_notices.join("\n");
+                    notice = Some(notice.map_or_else(|| message.clone(), |existing| format!("{existing}\n{message}")));
+                }
 
                 ProjectIOAction {
                     apply_project: Some(project),
@@ -1297,6 +1299,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None, // pre-P1 shape: no exposures stamped at all
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 1,
                 node_id: manifold_core::NodeId::new("sun"),

@@ -59,18 +59,18 @@ impl PasteNodesCommand {
     }
 }
 impl Command for PasteNodesCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let existing_remap = self.remap.clone();
         let src_nodes = &self.src_nodes;
         let src_wires = &self.src_wires;
         let offset = self.offset;
-        let result = with_target_graph_mut(
-            project,
-            &self.target,
-            &self.catalog_default,
-            true,
-            |def| {
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 // Fresh ids start past the level's current max; fresh node_ids
                 // are minted once and reused on redo.
@@ -119,9 +119,8 @@ impl Command for PasteNodesCommand {
                     }
                 }
                 Some(remap)
-            },
-        )
-        .flatten();
+            })
+            .flatten();
         if self.remap.is_none() {
             self.remap = result;
         }
@@ -131,15 +130,12 @@ impl Command for PasteNodesCommand {
         let Some(remap) = self.remap.clone() else {
             return;
         };
-        let new_ids: std::collections::HashSet<u32> =
-            remap.iter().map(|(_, n, _)| *n).collect();
+        let new_ids: std::collections::HashSet<u32> = remap.iter().map(|(_, n, _)| *n).collect();
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 nodes.retain(|n| !new_ids.contains(&n.id));
-                wires.retain(|w| {
-                    !new_ids.contains(&w.from_node) && !new_ids.contains(&w.to_node)
-                });
+                wires.retain(|w| !new_ids.contains(&w.from_node) && !new_ids.contains(&w.to_node));
             }
         });
     }
@@ -149,11 +145,10 @@ impl Command for PasteNodesCommand {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::super::test_support::*;
+    use super::super::*;
     use crate::command::Command;
 
     #[test]
@@ -220,9 +215,21 @@ mod tests {
         cmd.execute(&mut project);
 
         let def = graph_of(&project, &fx);
-        let a2 = def.nodes.iter().find(|n| n.handle.as_deref() == Some("a_2")).unwrap();
-        let b2 = def.nodes.iter().find(|n| n.handle.as_deref() == Some("b_2")).unwrap();
-        assert_eq!(def.wires.len(), wires_before + 1, "one internal wire pasted");
+        let a2 = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("a_2"))
+            .unwrap();
+        let b2 = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("b_2"))
+            .unwrap();
+        assert_eq!(
+            def.wires.len(),
+            wires_before + 1,
+            "one internal wire pasted"
+        );
         assert!(
             def.wires
                 .iter()

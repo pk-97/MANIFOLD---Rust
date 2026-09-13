@@ -69,6 +69,7 @@
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: node_id.clone(),

@@ -32,13 +32,15 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
 use crate::node_graph::scene_exposure::migrate_scene_exposures;
-use crate::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, catalog_generation};
+use crate::preset_loader::{
+    EFFECT_CATALOG, GENERATOR_CATALOG, SCENE_MODIFIER_CATALOG, catalog_generation,
+};
 
 /// Raw JSON for the bundled preset of `preset_type` (either kind), or
 /// `None` if no preset has that type id.
 ///
-/// Kind-agnostic: effect and generator ids are globally disjoint
-/// (verified), so this checks the effect catalog then the generator one
+/// Kind-agnostic: catalog ids are globally disjoint (verified), so this checks
+/// effect, generator, then scene modifier catalogs
 /// and returns the single match. The string is the current on-disk file
 /// verbatim. Hot-reload (step 10): the catalogs live behind [`ArcSwap`], so
 /// this returns an owned `Arc<str>` cloned from the current snapshot rather
@@ -49,6 +51,7 @@ pub fn bundled_preset_json(preset_type: &PresetTypeId) -> Option<Arc<str>> {
         .load()
         .json(preset_type.as_str())
         .or_else(|| GENERATOR_CATALOG.load().json(preset_type.as_str()))
+        .or_else(|| SCENE_MODIFIER_CATALOG.load().json(preset_type.as_str()))
 }
 
 /// Generation-stamped parsed-def cache. Keyed `&'static str` → leaked
@@ -100,6 +103,16 @@ fn rebuild_def_cache(generation: u64) {
         let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
         m.insert(id_static, def_static);
     }
+    let scene_modifier_catalog = SCENE_MODIFIER_CATALOG.load();
+    for (id, json) in scene_modifier_catalog.entries() {
+        let def: EffectGraphDef = serde_json::from_str(&json)
+            .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
+        let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
+        // Scene modifier recipes use their own vocabulary. In particular,
+        // do not stamp generator scene exposures onto their raw metadata.
+        let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
+        m.insert(id_static, def_static);
+    }
     DEF_CACHE.map.store(Arc::new(m));
     DEF_CACHE
         .generation
@@ -126,6 +139,7 @@ pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetT
     let catalog = match kind {
         PresetKind::Effect => &EFFECT_CATALOG,
         PresetKind::Generator => &GENERATOR_CATALOG,
+        PresetKind::SceneModifier => &SCENE_MODIFIER_CATALOG,
     };
     catalog
         .load()
@@ -163,9 +177,30 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
         .collect()
 }
 
+/// Loader for the dedicated scene-modifier metadata inventory bucket. Raw
+/// modifier recipes deliberately skip [`migrate_scene_exposures`].
+pub fn loaded_scene_modifier_presets_from_bundled(
+) -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
+    SCENE_MODIFIER_CATALOG
+        .load()
+        .entries()
+        .filter_map(|(id, json)| {
+            let def: EffectGraphDef = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("bundled scene modifier preset {id}: parse failed: {e}"));
+            def.preset_metadata
+        })
+        .collect()
+}
+
 inventory::submit! {
     manifold_core::preset_definition_registry::effect::PresetSource {
         load: loaded_presets_from_bundled,
+    }
+}
+
+inventory::submit! {
+    manifold_core::effect_registration::LoadedSceneModifierPresetSource {
+        load: loaded_scene_modifier_presets_from_bundled,
     }
 }
 
@@ -207,6 +242,20 @@ mod tests {
                 type_id.as_str(),
             );
         }
+    }
+
+    #[test]
+    fn bundled_scene_modifier_catalog_enumerates_playable_stock_recipes() {
+        let ids: Vec<String> = bundled_preset_type_ids(PresetKind::SceneModifier)
+            .map(|t| t.as_str().to_string())
+            .collect();
+        assert!(ids.iter().any(|id| id == "ElasticSculpture"));
+        assert!(ids.iter().any(|id| id == "SceneFog"));
+        for expected in ["SurfaceWaves", "OrderedRecon", "SpatialEchoes", "MaskedPeel", "OrderedReconHit", "WavesEchoes"] {
+            assert!(ids.iter().any(|id| id == expected), "missing {expected}");
+        }
+        let metadata = loaded_scene_modifier_presets_from_bundled();
+        assert!(metadata.iter().all(|m| m.available));
     }
 
     #[test]
@@ -330,6 +379,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
                 id: 1,
                 node_id: NodeId::new("render"),

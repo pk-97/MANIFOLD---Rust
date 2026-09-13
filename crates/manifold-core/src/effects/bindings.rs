@@ -178,6 +178,65 @@ fn one() -> f32 {
     1.0
 }
 
+impl UserParamBinding {
+    /// Build the canonical card parameter descriptor used by the host
+    /// manifest and its graph metadata shadow.
+    pub fn param_spec(&self) -> crate::effect_graph_def::ParamSpecDef {
+        use crate::effect_graph_def::ParamSpecDef;
+
+        let whole_numbers = matches!(
+            self.convert,
+            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
+        );
+        ParamSpecDef {
+            id: self.id.clone(),
+            name: self.label.clone(),
+            min: self.min,
+            max: self.max,
+            default_value: self.default_value,
+            whole_numbers,
+            is_toggle: matches!(self.convert, ParamConvert::BoolThreshold),
+            is_trigger: matches!(self.convert, ParamConvert::Trigger),
+            value_labels: self.value_labels.clone(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: self.curve,
+            invert: self.invert,
+            // Captured from the inner angle parameter at expose time. The
+            // spec is the single home for this card presentation flag.
+            is_angle: self.is_angle,
+            // A user-exposed inner graph parameter is never the trigger-gate
+            // card; that is reserved for the preset-authored outer card.
+            is_trigger_gate: false,
+            wraps: false,
+            // Section is captured from the innermost enclosing group during
+            // expose and carried by the binding.
+            section: self.section.clone(),
+            // User-added exposes always show on the card. Curated hiding is
+            // only for the scene-vocabulary auto-stamping path.
+            card_visible: true,
+        }
+    }
+
+    /// Build the canonical graph binding descriptor for this user binding.
+    pub fn binding_def(&self) -> crate::effect_graph_def::BindingDef {
+        crate::effect_graph_def::BindingDef {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            default_value: self.default_value,
+            target: crate::effect_graph_def::BindingTarget::Node {
+                node_id: self.node_id.clone(),
+                param: self.inner_param.clone(),
+            },
+            convert: self.convert,
+            user_added: true,
+            scale: self.scale,
+            offset: self.offset,
+            default_mirrors_node_param: false,
+        }
+    }
+}
+
 // ─── Card → consumer reshape pipeline ───
 
 /// The card→consumer reshape pipeline — the **single definition** shared by
@@ -247,7 +306,7 @@ pub fn binding_id_for_node_param_in(
         .iter()
         .find(|b| match &b.target {
             BindingTarget::Node { node_id, param } => *node_id == identity && param == param_key,
-            BindingTarget::Composite { .. } => false,
+            BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
         })
         .map(|b| b.id.clone())
 }

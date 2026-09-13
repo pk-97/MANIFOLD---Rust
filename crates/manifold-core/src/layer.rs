@@ -1237,6 +1237,7 @@ mod tests {
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -1248,6 +1249,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![],
             wires: vec![],
         });

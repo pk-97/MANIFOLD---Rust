@@ -10,6 +10,8 @@ use manifold_core::project::Project;
 
 use crate::command::Command;
 
+mod modifier;
+
 use super::{
     descend_level, innermost_group_display_name, with_existing_target_graph_mut,
     with_target_graph_mut,
@@ -96,6 +98,10 @@ pub struct ToggleNodeParamExposeCommand {
 enum NodeExposeReverse {
     #[default]
     None,
+    Modifier {
+        graph: Option<EffectGraphDef>,
+        instance: super::InstanceLayerSnapshot,
+    },
     /// Captured on execute. Restored on undo.
     Captured {
         /// Previous membership of `inner_param` in the node's
@@ -122,12 +128,13 @@ enum NodeExposeReverse {
 enum EffectMirrorReverse {
     /// The (handle, param) maps to a bundled-prefix param; we flipped its
     /// exposure via `set_param_exposed`. Undo restores `prev_exposed`.
-    StaticSlot { param_id: String, prev_exposed: bool },
+    StaticSlot {
+        param_id: String,
+        prev_exposed: bool,
+    },
     /// The (handle, param) is a non-preset param; we appended a
     /// `UserParamBinding`. Undo removes it by id.
-    AppendedUserBinding {
-        user_param_id: String,
-    },
+    AppendedUserBinding { user_param_id: String },
     /// The (handle, param) is a non-preset param; we removed an
     /// existing `UserParamBinding`. Undo reinserts it at `position`
     /// with the captured manifest entry, plus re-attaches any orphaned
@@ -144,8 +151,7 @@ enum EffectMirrorReverse {
         /// automation behind.
         removed_drivers: Vec<manifold_core::effects::ParameterDriver>,
         /// Ableton mappings pruned for the same reason.
-        removed_ableton_mappings:
-            Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
+        removed_ableton_mappings: Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
         /// Envelopes pruned from `PresetInstance.envelopes` whose
         /// `param_id` matched the removed binding's id. Envelope-home
         /// unification put envelopes on the instance, so they prune and
@@ -245,10 +251,9 @@ fn materialize_binding_exposures(def: &mut EffectGraphDef) {
         .bindings
         .iter()
         .filter_map(|b| match &b.target {
-            BindingTarget::Node { node_id, param } => {
-                Some((node_id.clone(), param.clone()))
-            }
+            BindingTarget::Node { node_id, param } => Some((node_id.clone(), param.clone())),
             BindingTarget::Composite { .. } => None,
+            BindingTarget::SceneModifier { .. } => None,
         })
         .collect();
     for (node_id, param) in pairs {
@@ -281,11 +286,7 @@ fn restore_node_exposed(
 /// position in `metadata.params` of the binding whose target is
 /// `(node_id, param)`. `None` if the def has no metadata or no binding
 /// targets that `(node_id, param)`.
-fn static_slot_for(
-    def: &EffectGraphDef,
-    node_id: &NodeId,
-    inner_param: &str,
-) -> Option<usize> {
+fn static_slot_for(def: &EffectGraphDef, node_id: &NodeId, inner_param: &str) -> Option<usize> {
     use manifold_core::effect_graph_def::BindingTarget;
     let meta = def.preset_metadata.as_ref()?;
     let binding_idx = meta.bindings.iter().position(|b| {
@@ -296,10 +297,12 @@ fn static_slot_for(
             return false;
         }
         match &b.target {
-            BindingTarget::Node { node_id: nid, param } => {
-                nid == node_id && param == inner_param
-            }
+            BindingTarget::Node {
+                node_id: nid,
+                param,
+            } => nid == node_id && param == inner_param,
             BindingTarget::Composite { .. } => false,
+            BindingTarget::SceneModifier { .. } => false,
         }
     })?;
     // Static-block slots are positional against `metadata.params` —
@@ -309,7 +312,15 @@ fn static_slot_for(
 }
 
 impl Command for ToggleNodeParamExposeCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::execute(self, project);
+            return;
+        }
         let node_handle = self.node_handle.clone();
         // Mirror-side identity for the card binding: apply the same "node_id
         // defaults to handle" convention the runtime graph loader uses
@@ -330,7 +341,9 @@ impl Command for ToggleNodeParamExposeCommand {
         let inner_min = self.inner_min;
         let inner_max = self.inner_max;
         let inner_default = self.inner_default;
-        let inner_convert = self.inner_meta.unwrap_or(manifold_core::effects::ParamConvert::Float);
+        let inner_convert = self
+            .inner_meta
+            .unwrap_or(manifold_core::effects::ParamConvert::Float);
         let inner_is_angle = self.inner_is_angle;
         let inner_value_labels = self.inner_value_labels.clone();
 
@@ -343,12 +356,8 @@ impl Command for ToggleNodeParamExposeCommand {
         // bundled node's stable `node_id` is empty and won't locate anything.
         let scope = self.scope_path.clone();
         let node_u32_id = self.node_u32_id;
-        let graph_result: Option<(bool, Option<usize>, Option<String>)> = with_target_graph_mut(
-            project,
-            &self.target,
-            &self.catalog_default,
-            true,
-            |def| {
+        let graph_result: Option<(bool, Option<usize>, Option<String>)> =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 // Materialise bundled binding exposures + resolve the static slot
                 // at the def level (both read `preset_metadata`, which is
                 // document-global), then descend to flip the target node.
@@ -363,9 +372,8 @@ impl Command for ToggleNodeParamExposeCommand {
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev_in_set = flip_node_exposed(nodes, node_u32_id, &inner_param, expose)?;
                 Some((prev_in_set, static_slot, inner_section))
-            },
-        )
-        .flatten();
+            })
+            .flatten();
 
         let Some((prev_in_set, static_slot, inner_section)) = graph_result else {
             // Target / scope / node didn't resolve — nothing to undo.
@@ -387,6 +395,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .map(|(_, layer)| layer.gen_params_or_init()),
+            GraphTarget::SceneModifier { .. } => unreachable!("handled above"),
         };
         let mirror = match instance {
             Some(inst) => mirror_effect_side(
@@ -417,6 +426,10 @@ impl Command for ToggleNodeParamExposeCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            modifier::undo(self, project);
+            return;
+        }
         let reverse = std::mem::take(&mut self.reverse);
         let NodeExposeReverse::Captured {
             prev_in_set,
@@ -438,6 +451,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .map(|(_, layer)| layer.gen_params_or_init()),
+            GraphTarget::SceneModifier { .. } => unreachable!("handled above"),
         };
         if let Some(inst) = instance {
             unmirror_effect_side(inst, mirror);
@@ -457,6 +471,10 @@ impl Command for ToggleNodeParamExposeCommand {
         } else {
             "Hide Param"
         }
+    }
+
+    fn was_applied(&self) -> bool {
+        !matches!(self.reverse, NodeExposeReverse::None)
     }
 }
 
@@ -481,7 +499,8 @@ fn find_node_by_id_or_handle_mut<'a>(
     }
     for n in nodes.iter_mut() {
         if let Some(group) = n.group.as_deref_mut()
-            && let Some(found) = find_node_by_id_or_handle_mut(&mut group.nodes, node_id, node_handle)
+            && let Some(found) =
+                find_node_by_id_or_handle_mut(&mut group.nodes, node_id, node_handle)
         {
             return Some(found);
         }
@@ -500,7 +519,9 @@ fn effective_value_to_serialized(
     use manifold_core::effects::ParamConvert;
     match convert {
         ParamConvert::Float | ParamConvert::Trigger => SerializedParamValue::Float { value },
-        ParamConvert::IntRound => SerializedParamValue::Int { value: value.round() as i32 },
+        ParamConvert::IntRound => SerializedParamValue::Int {
+            value: value.round() as i32,
+        },
         ParamConvert::BoolThreshold => SerializedParamValue::Bool { value: value > 0.5 },
         ParamConvert::EnumRound => SerializedParamValue::Enum {
             value: value.round().max(0.0) as u32,
@@ -536,8 +557,7 @@ fn mirror_effect_side(
         // Bundled-prefix path: flip the exposure flag on the slot-th manifest
         // entry (bundled params occupy the prefix, in card order). Resolve the
         // positional slot to its stable id so undo re-addresses the same param.
-        let Some(param_id) = effect.params.iter().nth(slot).map(|p| p.id().to_string())
-        else {
+        let Some(param_id) = effect.params.iter().nth(slot).map(|p| p.id().to_string()) else {
             return EffectMirrorReverse::NoOp;
         };
         let prev_exposed = effect.is_param_exposed(&param_id);
@@ -545,7 +565,10 @@ fn mirror_effect_side(
             return EffectMirrorReverse::NoOp;
         }
         effect.set_param_exposed(&param_id, expose);
-        return EffectMirrorReverse::StaticSlot { param_id, prev_exposed };
+        return EffectMirrorReverse::StaticSlot {
+            param_id,
+            prev_exposed,
+        };
     }
 
     // Non-static path: append / remove a user-added binding (stored in
@@ -559,8 +582,7 @@ fn mirror_effect_side(
         if existing_position.is_some() {
             return EffectMirrorReverse::NoOp;
         }
-        let existing_ids: Vec<String> =
-            user_bindings.iter().map(|b| b.id.clone()).collect();
+        let existing_ids: Vec<String> = user_bindings.iter().map(|b| b.id.clone()).collect();
         let id = crate::commands::effects::generate_user_param_id(
             node_handle,
             inner_param,
@@ -585,9 +607,7 @@ fn mirror_effect_side(
             section: inner_section,
         };
         effect.append_user_binding(binding);
-        EffectMirrorReverse::AppendedUserBinding {
-            user_param_id: id,
-        }
+        EffectMirrorReverse::AppendedUserBinding { user_param_id: id }
     } else {
         let Some(position) = existing_position else {
             return EffectMirrorReverse::NoOp;
@@ -700,7 +720,10 @@ fn unmirror_effect_side(
 ) {
     match mirror {
         EffectMirrorReverse::NoOp => {}
-        EffectMirrorReverse::StaticSlot { param_id, prev_exposed } => {
+        EffectMirrorReverse::StaticSlot {
+            param_id,
+            prev_exposed,
+        } => {
             effect.set_param_exposed(&param_id, prev_exposed);
         }
         EffectMirrorReverse::AppendedUserBinding { user_param_id } => {
@@ -743,15 +766,14 @@ fn unmirror_effect_side(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::super::test_support::*;
+    use super::super::*;
+    use crate::command::Command;
     use manifold_core::EffectId;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
-    use crate::command::Command;
 
     #[test]
     fn toggle_node_param_expose_against_generator_flips_graph_exposed_set() {
@@ -944,7 +966,10 @@ mod tests {
         let fx_inst = project.find_effect_by_id(&fx).unwrap();
         let ub = fx_inst.user_param_bindings();
         assert_eq!(ub.len(), 1);
-        let entry = fx_inst.params.get(&ub[0].id).expect("manifest entry for the new binding");
+        let entry = fx_inst
+            .params
+            .get(&ub[0].id)
+            .expect("manifest entry for the new binding");
         assert_eq!(
             entry.spec.section.as_deref(),
             Some("g"),
@@ -955,7 +980,10 @@ mod tests {
         // dangling manifest entry.
         expose.undo(&mut project);
         let fx_inst = project.find_effect_by_id(&fx).unwrap();
-        assert!(fx_inst.params.get(&ub[0].id).is_none(), "undo removed the manifest entry entirely");
+        assert!(
+            fx_inst.params.get(&ub[0].id).is_none(),
+            "undo removed the manifest entry entirely"
+        );
     }
 
     #[test]
@@ -986,7 +1014,10 @@ mod tests {
         let ub = fx_inst.user_param_bindings();
         assert_eq!(ub.len(), 1);
         let entry = fx_inst.params.get(&ub[0].id).unwrap();
-        assert_eq!(entry.spec.section, None, "a top-level expose gets no section");
+        assert_eq!(
+            entry.spec.section, None,
+            "a top-level expose gets no section"
+        );
     }
 
     #[test]
@@ -1082,10 +1113,11 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![
                     ParamSpecDef {
                         id: "shape".into(),
@@ -1163,6 +1195,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("render"),
@@ -1186,9 +1219,7 @@ mod tests {
             layer.gen_params_or_init().graph = Some(preset_def());
             // gen_params starts with the two bundled slot values.
             let gp = layer.gen_params_or_init();
-            gp.init_defaults_for_type(PresetTypeId::from_string(
-                "test.wireframe".to_string(),
-            ));
+            gp.init_defaults_for_type(PresetTypeId::from_string("test.wireframe".to_string()));
             // Override values after init — the registry doesn't know
             // about our synthetic preset, so init may leave the vec
             // empty. Force the bundled slot count to match the preset.
@@ -1351,10 +1382,11 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![
                     ParamSpecDef {
                         id: "shape".into(),
@@ -1432,6 +1464,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("render"),
@@ -1458,9 +1491,7 @@ mod tests {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
             layer.gen_params_or_init().graph = Some(preset_def_with_user_added());
             let gp = layer.gen_params_or_init();
-            gp.init_defaults_for_type(PresetTypeId::from_string(
-                "test.wireframe".to_string(),
-            ));
+            gp.init_defaults_for_type(PresetTypeId::from_string("test.wireframe".to_string()));
             gp.params = manifold_core::params::ParamManifest::from_params(vec![
                 slot("shape", 0.0, true),
                 slot("user.render.animate.1", 0.75, true),
@@ -1479,7 +1510,7 @@ mod tests {
                 trim_max: 1.0,
                 reversed: false,
                 free_period_beats: None,
-            frame_aligned: false,
+                frame_aligned: false,
                 legacy_param_index: None,
                 is_paused_by_user: false,
             }]);
@@ -1566,8 +1597,7 @@ mod tests {
         // project file, never matched at resolve time. The unified
         // command prunes them on unexpose and restores them on undo.
         use manifold_core::ableton_mapping::{
-            AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
-            AbletonParamMapping,
+            AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
         };
         use manifold_core::effects::{ParamConvert, ParameterDriver};
         use manifold_core::types::{BeatDivision, DriverWaveform};
@@ -1620,7 +1650,7 @@ mod tests {
                 trim_max: 1.0,
                 reversed: false,
                 free_period_beats: None,
-            frame_aligned: false,
+                frame_aligned: false,
                 legacy_param_index: None,
                 is_paused_by_user: false,
             }]);
@@ -1671,8 +1701,7 @@ mod tests {
             "drivers pruned on unexpose"
         );
         assert!(
-            fx.ableton_mappings.is_none()
-                || fx.ableton_mappings.as_ref().unwrap().is_empty(),
+            fx.ableton_mappings.is_none() || fx.ableton_mappings.as_ref().unwrap().is_empty(),
             "ableton_mappings pruned on unexpose"
         );
 
@@ -1742,10 +1771,12 @@ mod tests {
         };
         {
             let fx = project.find_effect_by_id_mut(&effect_id).unwrap();
-            fx.envelopes_mut().push(ParamEnvelope::new(user_param_id.clone()));
+            fx.envelopes_mut()
+                .push(ParamEnvelope::new(user_param_id.clone()));
             // Add an unrelated envelope that should NOT get pruned —
             // different param_id.
-            fx.envelopes_mut().push(ParamEnvelope::new("unrelated.param".to_string()));
+            fx.envelopes_mut()
+                .push(ParamEnvelope::new("unrelated.param".to_string()));
         }
 
         // Unexpose. The matching envelope must be pruned; the unrelated
@@ -1791,8 +1822,8 @@ mod tests {
         // `into_graph` binding backfill ran unconditionally and
         // re-set the exposure, masking the user's intent.
         use manifold_core::effect_graph_def::{
-            BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
-            EFFECT_GRAPH_VERSION_WITH_METADATA,
+            BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, ParamSpecDef,
+            PresetMetadata,
         };
         use manifold_core::effects::ParamConvert;
 
@@ -1808,10 +1839,11 @@ mod tests {
                 category: "Procedural".into(),
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![ParamSpecDef {
                     id: "pattern".into(),
                     name: "Pattern".into(),
@@ -1851,6 +1883,7 @@ mod tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("gen"),
@@ -1881,7 +1914,8 @@ mod tests {
             .find_layer_by_id_mut(&lid)
             .unwrap()
             .1
-            .gen_params_or_init().graph = Some(preset_def_with_pattern_binding());
+            .gen_params_or_init()
+            .graph = Some(preset_def_with_pattern_binding());
 
         // UNCHECK Pattern.
         let mut cmd = ToggleNodeParamExposeCommand::new(
@@ -2072,7 +2106,10 @@ mod tests {
             .unwrap();
         match node.params.get("rotation") {
             Some(SerializedParamValue::Float { value }) => {
-                assert!((value - 77.0).abs() < 1e-6, "expected frozen 77.0, got {value}");
+                assert!(
+                    (value - 77.0).abs() < 1e-6,
+                    "expected frozen 77.0, got {value}"
+                );
             }
             other => panic!("expected a frozen Float value, got {other:?}"),
         }

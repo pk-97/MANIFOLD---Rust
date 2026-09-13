@@ -1,0 +1,218 @@
+{
+  "version": 3,
+  "name": "Scene Fog",
+  "presetMetadata": {
+    "id": "SceneFog",
+    "displayName": "Scene Fog",
+    "category": "Atmosphere",
+    "oscPrefix": "scene_fog",
+    "available": true,
+    "params": [
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "amount",
+        "name": "Density",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.1
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "fog_enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "amount",
+        "label": "Density",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "fog_amount",
+          "param": "value"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": true,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "fog_scene_stage",
+          "scope": "scene",
+          "inputs": [],
+          "outputs": [
+            {
+              "port": "atmosphere",
+              "endpoint": "atmosphere"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "fog_scene_stage",
+      "typeId": "group",
+      "handle": "SceneFogStage",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "atmosphere",
+              "portType": "Atmosphere"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "fog_atm",
+            "typeId": "node.atmosphere",
+            "handle": "fog_atm",
+            "params": {
+              "fog_color_r": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "fog_color_g": {
+                "type": "Float",
+                "value": 0.55
+              },
+              "fog_color_b": {
+                "type": "Float",
+                "value": 0.65
+              },
+              "fog_density": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "height_falloff": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "ambient_tint_r": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "ambient_tint_g": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "ambient_tint_b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "shaft_intensity": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "shaft_anisotropy": {
+                "type": "Float",
+                "value": 0.6
+              },
+              "shaft_quality": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 2,
+            "nodeId": "fog_enabled",
+            "typeId": "node.value",
+            "handle": "fog_enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "fog_amount",
+            "typeId": "node.value",
+            "handle": "fog_amount",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.1
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "fog_mul",
+            "typeId": "node.math",
+            "handle": "fog_mul",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 5,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "fog_density"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "atmosphere",
+            "toNode": 5,
+            "toPort": "atmosphere"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

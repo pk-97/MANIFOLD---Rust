@@ -19,6 +19,7 @@
 //! there is nothing left to be "at parity" with.)
 
 mod harness;
+mod scene_modifier_legacy;
 
 mod alpha_contract;
 mod bug237_light_camera_commit_render_proof;

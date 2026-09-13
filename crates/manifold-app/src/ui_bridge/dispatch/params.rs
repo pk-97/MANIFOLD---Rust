@@ -25,11 +25,22 @@ use manifold_ui::{InspectorTab, ParamsAction};
 
 use super::super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read};
-use super::resolve::{preset_source_def, resolve_graph_target};
+use super::resolve::{resolve_graph_target, resolve_preset_target};
 
 pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
+    if let ParamsAction::ParamEnumSet(gpt, param_id, _)
+        | ParamsAction::ParamToggle(gpt, param_id)
+        | ParamsAction::ParamFire(gpt, param_id) = action
+        && let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab,
+            active_layer, ctx.selection, ctx.project)
+        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(ctx.project, &target, param_id.as_ref())
+    {
+        ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
+        return DispatchResult::handled();
+    }
+
     match action {
         ParamsAction::ShowAutomation(gpt, param_id) => {
             let Some(target) = resolve_graph_target(
@@ -49,6 +60,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
                 manifold_core::GraphTarget::Effect(id) => layer.effects.as_ref()
                     .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
+                // Modifier controls resolve to their generator owner above.
+                manifold_core::GraphTarget::SceneModifier { .. } => false,
             });
             let Some(owner) = owner.filter(|layer| !layer.is_group()) else {
                 return DispatchResult::handled();
@@ -522,7 +535,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ctx.ui.inspector.clear_effect_selection(&mut ctx.ui.tree);
             DispatchResult::handled()
         }
-        ParamsAction::CardRightClicked(_) => {
+        ParamsAction::CardRightClicked(_) | ParamsAction::ModifierCardClicked(_) => {
             // Handled by UIRoot::try_open_dropdown (opens the card context menu)
             // — should not reach dispatch.
             DispatchResult::handled()
@@ -570,170 +583,42 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::structural()
         }
         ParamsAction::MakePresetUnique(gpt) => {
-            // Fork the targeted preset (effect OR generator) into a
-            // project-embedded copy and retarget the instance to it. One path
-            // for both kinds: resolve the GraphTarget, take its source def
-            // (diverged per-instance graph else catalog canonical), fork via
-            // the shared command keyed off `target.preset_kind()`.
-            use manifold_editing::commands::preset::ForkPresetCommand;
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) && let Some((source_def, _)) = preset_source_def(&target, ctx.project)
-            {
-                let cmd = ForkPresetCommand::new(target.clone(), target.preset_kind(), source_def);
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-            }
-            DispatchResult::structural()
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::MakeUnique, ctx)
         }
         ParamsAction::ExportPreset(gpt) => {
-            // Export the targeted preset's graph to a .json via a native save
-            // dialog. Source def is the diverged per-instance graph else the
-            // catalog canonical; the preset id is the filename stem.
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) && let Some((def, preset_id)) = preset_source_def(&target, ctx.project)
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("MANIFOLD Preset", &["json"])
-                    .set_file_name(format!("{}.json", preset_id.as_str()))
-                    .save_file()
-                && let Err(e) = manifold_io::preset_file::export_preset(&def, &path)
-            {
-                log::error!("[preset] export failed: {e}");
-            }
-            DispatchResult::handled()
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::Export, ctx)
         }
         ParamsAction::ImportPreset(gpt) => {
-            // Import a .json preset and retarget the targeted instance to it
-            // (registered as a project-embedded preset via the shared fork
-            // command, so it rides undo + the overlay refresh).
-            use manifold_editing::commands::preset::ForkPresetCommand;
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) && let Some(path) = rfd::FileDialog::new()
-                .add_filter("MANIFOLD Preset", &["json"])
-                .pick_file()
-            {
-                match manifold_io::preset_file::import_preset(&path) {
-                    Ok(def) => {
-                        let cmd =
-                            ForkPresetCommand::importing(target.clone(), target.preset_kind(), def);
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(ctx.project);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-                    }
-                    Err(e) => log::error!("[preset] import failed: {e}"),
-                }
-            }
-            DispatchResult::structural()
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::Import, ctx)
         }
-        ParamsAction::SaveToLibrary(gpt) | ParamsAction::SaveToProject(gpt) => {
-            // Library doors (PRESET_LIBRARY_DESIGN D4): resolve the target's
-            // current effective def (same `preset_source_def` resolution as
-            // Make Unique / Export) and hand it back on `DispatchResult` for
-            // the caller to open the shared name-prompt text-input session
-            // with — this function has no `TextInputState` access (it's
-            // UI-thread overlay state, not routed here), so the prompt itself
-            // opens one level up.
-            let mut result = DispatchResult::handled();
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) && let Some((def, _)) = preset_source_def(&target, ctx.project)
-            {
-                let destination = if matches!(action, ParamsAction::SaveToLibrary(_)) {
-                    crate::text_input::SavePresetDestination::Library
-                } else {
-                    crate::text_input::SavePresetDestination::Project
-                };
-                result.begin_save_preset = Some((target.preset_kind(), def, destination));
-            }
-            result
+        ParamsAction::SaveToLibrary(gpt) => {
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::SaveToLibrary, ctx)
+        }
+        ParamsAction::SaveToProject(gpt) => {
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::SaveToProject, ctx)
         }
         ParamsAction::RevertToLibrary(gpt) => {
-            // PRESET_LIBRARY_DESIGN D3/P4: clear the per-instance graph
-            // override, undoable — but ONLY if the tracked library id still
-            // resolves in the catalog. The resolution check happens HERE
-            // (app/renderer-aware) rather than inside the command itself:
-            // `manifold-editing` cannot depend on `manifold-renderer`
-            // (`manifold-playback` already depends on `manifold-editing`,
-            // and `manifold-renderer` depends on `manifold-playback` — the
-            // reverse dependency would cycle), so the fact is resolved once
-            // here and baked into the command, mirroring how
-            // `ForkPresetCommand` is handed an already-resolved `source_def`
-            // rather than looking the catalog up inside `Command::execute`.
-            use manifold_editing::commands::preset::RevertToLibraryCommand;
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) && let Some(preset_id) = ctx.project.instance_preset_id(&target)
-            {
-                let resolves = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
-                    .is_some();
-                let cmd = RevertToLibraryCommand::new(target, resolves);
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-            }
-            DispatchResult::structural()
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::RevertToLibrary, ctx)
         }
         ParamsAction::PushToLibrary(gpt) => {
-            // Push to Library (D3, P4): overwrite the targeted preset's
-            // tracked user-library file with its current (diverged)
-            // definition in place — no name prompt (id/filename never
-            // change). A factory/stock id has no user file to overwrite;
-            // fall back to the same Save-to-Library-as-new prompt the
-            // `SaveToLibrary` action opens, via `begin_save_preset` (this
-            // function has no `TextInputState` access — see the comment on
-            // the `SaveToLibrary`/`SaveToProject` arm above).
-            let mut result = DispatchResult::handled();
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) && let Some((def, preset_id)) = preset_source_def(&target, ctx.project)
-            {
-                let kind = target.preset_kind();
-                let lib = crate::user_library::UserLibrary::new();
-                if lib.is_user_entry(kind, &preset_id) {
-                    if let Err(e) = lib.push(kind, &preset_id, &def) {
-                        log::error!("[preset] push to library failed: {e}");
-                    }
-                } else {
-                    result.begin_save_preset =
-                        Some((kind, def, crate::text_input::SavePresetDestination::Library));
-                }
-            }
-            result
+            let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
+                active_layer, ctx.selection, ctx.project);
+            super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::PushToLibrary, ctx)
         }
+        ParamsAction::PresetAction(target, kind) => super::presets::dispatch_preset(
+            Some(crate::editing_host::to_graph_target(target)), *kind, ctx),
 
         // ── Browser: sources, badges, management (PRESET_LIBRARY_DESIGN P5) ──
         // `BrowserCellRightClicked` opens its menu entirely inside

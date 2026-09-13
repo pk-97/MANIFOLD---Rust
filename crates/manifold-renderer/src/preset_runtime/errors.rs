@@ -8,6 +8,7 @@ use super::*;
 /// construction path of [`PresetRuntime`]).
 #[derive(Debug)]
 pub enum JsonGeneratorLoadError {
+    SceneModifier(crate::node_graph::scene_modifier_expand::SceneModifierExpandError),
     /// JSON parsing failed.
     Json(serde_json::Error),
     /// The schema document failed to construct a Graph.
@@ -45,6 +46,7 @@ pub enum JsonGeneratorLoadError {
 impl std::fmt::Display for JsonGeneratorLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SceneModifier(error) => error.fmt(f),
             Self::Json(e) => write!(f, "JSON parse error: {e}"),
             Self::Load(e) => write!(f, "graph load error: {e}"),
             Self::Compile(e) => write!(f, "graph compile error: {e:?}"),
@@ -126,6 +128,7 @@ impl From<GraphError> for JsonGeneratorLoadError {
 /// the editor reads via [`PresetRuntime::errors`].
 #[derive(Debug, Clone)]
 pub enum ChainError {
+    PreparedParameterChanged { node_id: String, param: String },
     /// A per-instance divergent graph failed to splice; the chain
     /// fell back to the canonical preset. Most often caused by a
     /// stale handle reference after a primitive rename, or a
@@ -196,6 +199,8 @@ pub enum ChainError {
 impl std::fmt::Display for ChainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PreparedParameterChanged { node_id, param } => write!(f,
+                "{node_id}.{param}: prepared source or render mode changed; restore it or reapply the modifier. Rendering is suspended."),
             Self::DivergentGraphFellBack {
                 effect_id,
                 effect_type,
@@ -281,4 +286,10 @@ impl std::error::Error for ChainError {}
 pub(super) fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
     eprintln!("[chain-error] {err}");
     errors.push(err);
+}
+
+impl From<crate::node_graph::scene_modifier_expand::SceneModifierExpandError> for JsonGeneratorLoadError {
+    fn from(error: crate::node_graph::scene_modifier_expand::SceneModifierExpandError) -> Self {
+        Self::SceneModifier(error)
+    }
 }

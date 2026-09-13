@@ -136,6 +136,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.14.0".to_string());
     }
 
+    // v1.14.0 -> v1.15.0 reserves lossless graph-v3 scene modifier storage.
+    // Legacy modifier adoption is a later activation; this rung changes no graph.
+    if is_version_less_than(&version, "1.15.0") {
+        root["projectVersion"] = Value::String("1.15.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

@@ -196,10 +196,10 @@ mod gpu_tests {
             .map_err(|_| failures.push("node.taper_mesh".into()));
         }
 
-        // morph_mesh: t=0, weights_len=0, dispatch_count=N, pad. Bind b at binding 2.
+        // morph_mesh: t=0, blend_frames=0, weights_len=0, dispatch_count=N.
         {
             let wgsl = standalone_for_spec::<MorphMesh>().expect("morph_mesh codegen");
-            let uniforms = &[u(0.0), 0u32, count, 0u32];
+            let uniforms = &[u(0.0), 0u32, 0u32, count];
             let sbuf = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
             unsafe {
                 sbuf.write(0, bytemuck::cast_slice(&src));

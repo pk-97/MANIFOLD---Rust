@@ -870,6 +870,7 @@ mod import_model_tests {
             category: "Geometry".to_string(),
             osc_prefix: id.to_string(),
             legacy_discriminant: None,
+            scene_modifier: None,
             scene_bounds: None,
             available: true,
             is_line_based: false,
@@ -886,6 +887,7 @@ mod import_model_tests {
             name: Some("Azalea".to_string()),
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         };

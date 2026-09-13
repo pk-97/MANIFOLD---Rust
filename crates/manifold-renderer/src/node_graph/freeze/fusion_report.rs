@@ -27,6 +27,7 @@ use crate::node_graph::PrimitiveRegistry;
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::freeze::region::{self, NodeClass, Region};
+use crate::node_graph::scene_modifier_expand::prepare_scene_modifiers;
 
 /// One node's fusion classification within a specific (flattened) def.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -62,12 +63,34 @@ pub struct FusionReport {
     /// dispatch count the fused graph would issue, vs. one dispatch per
     /// node unfused.
     pub estimated_dispatch_count: usize,
+    /// Preparation diagnostics for authored scene modifiers, when expansion
+    /// could not produce the graph that the runtime would compile.
+    #[serde(rename = "preparationError", skip_serializing_if = "Option::is_none")]
+    pub preparation_error: Option<String>,
 }
 
-/// Build the report for `def`. Flattens groups first (D10), then calls
+/// Build the report for `def`. Prepares authored scene modifiers through the
+/// shared runtime expander, flattens groups (D10), then calls
 /// [`region::partition_regions`] once — the SAME call the freeze pipeline
 /// makes — and classifies every remaining node for context.
 pub fn fusion_report(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> FusionReport {
+    let prepared = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+        Some(match prepare_scene_modifiers(def, registry) {
+            Ok(prepared) => prepared.def,
+            Err(error) => {
+                return FusionReport {
+                    nodes: Vec::new(),
+                    regions: Vec::new(),
+                    estimated_dispatch_count: 0,
+                    preparation_error: Some(error.to_string()),
+                };
+            }
+        })
+    } else {
+        None
+    };
+    let def = prepared.as_ref().unwrap_or(def);
+
     // Loader parity (D10): `flatten_groups` is a cheap clone when nothing
     // needs flattening (its own fast path), so this costs nothing for the
     // overwhelming majority of already-flat presets and is required for
@@ -128,6 +151,7 @@ pub fn fusion_report(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Fusi
         nodes,
         regions: regions_out,
         estimated_dispatch_count,
+        preparation_error: None,
     }
 }
 
@@ -173,6 +197,42 @@ mod tests {
     use super::*;
     use crate::node_graph::PrimitiveRegistry;
 
+    #[test]
+    fn invalid_v3_modifier_report_exposes_preparation_error() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "sceneModifiers": [{
+                "id": "invalid-modifier",
+                "scene": {"node": "scene"},
+                "targets": "allObjects",
+                "graph": {
+                    "version": 3,
+                    "nodes": [],
+                    "wires": []
+                }
+            }],
+            "nodes": [],
+            "wires": []
+        }))
+        .expect("invalid v3 fixture parses");
+
+        let report = fusion_report(&def, &PrimitiveRegistry::with_builtin());
+        assert!(report.nodes.is_empty());
+        assert!(report.regions.is_empty());
+        assert_eq!(report.estimated_dispatch_count, 0);
+        let error = report
+            .preparation_error
+            .as_deref()
+            .expect("invalid modifier preparation must be reported");
+        assert!(
+            error.contains("InvalidRecipe"),
+            "unexpected diagnostic: {error}"
+        );
+
+        let serialized = serde_json::to_value(&report).expect("report serializes");
+        assert!(serialized.get("preparationError").is_some());
+    }
+
     /// Ground-truth gate (P3): the verb's region count + membership must be
     /// bit-identical to calling the freeze pipeline's own
     /// `flatten_groups` → `partition_regions` directly — the same library
@@ -211,7 +271,8 @@ mod tests {
             for (got, want) in report.regions.iter().zip(ground_truth.iter()) {
                 let want_members: Vec<u32> = want.members.iter().map(|m| m.doc_id).collect();
                 assert_eq!(
-                    got.member_node_ids, want_members,
+                    got.member_node_ids,
+                    want_members,
                     "{}: region MEMBERSHIP mismatch",
                     path.display()
                 );

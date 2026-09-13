@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use ahash::AHashMap;
 
 use manifold_core::effect_graph_def::{
-    EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, InterfacePortDef, SerializedParamValue,
 };
 use manifold_gpu::{
@@ -97,6 +97,7 @@ pub enum BoundaryHandling {
 /// affected node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphBuildError {
+    SceneModifier(super::scene_modifier_expand::SceneModifierExpandError),
     UnsupportedVersion {
         found: u32,
         max: u32,
@@ -692,12 +693,26 @@ pub fn instantiate_def(
     handle_scope: HandleScope,
     boundary: BoundaryHandling,
 ) -> Result<NodeInstantiation, GraphBuildError> {
-    if def.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
+    if def.version == 0 || def.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
         return Err(GraphBuildError::UnsupportedVersion {
             found: def.version,
-            max: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            max: EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
         });
     }
+
+    // All raw host loads use the same structural preparation before any
+    // primitive is installed. A standalone recipe still requires attachment.
+    let modifier_owner = def;
+    let prepared = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+        if !matches!(boundary, BoundaryHandling::Standalone) {
+            return Err(GraphBuildError::SceneModifier(super::scene_modifier_expand::SceneModifierExpandError::InvalidRecipe {
+                path: "sceneModifiers".into(), detail: "scene modifiers require a standalone generator owner".into(),
+            }));
+        }
+        Some(super::scene_modifier_expand::prepare_scene_modifiers(def, registry)
+            .map_err(GraphBuildError::SceneModifier)?)
+    } else { None };
+    let def = prepared.as_ref().map_or(def, |prepared| &prepared.def);
 
     // Migrate legacy node type_ids before anything else runs, including
     // inside group bodies — the group flatten below only rewires structure,
@@ -1151,6 +1166,14 @@ pub fn instantiate_def(
         }
     }
 
+    if let Some(prepared) = prepared {
+        let budget = super::scene_modifier_expand::PreparedModifierBufferBudget::prepare(
+            modifier_owner, &prepared.routes, graph, &AHashMap::default(),
+        ).map_err(GraphBuildError::SceneModifier)?;
+        graph.set_modifier_buffer_budget(budget);
+        super::scene_modifier_expand::PreparedModifierParameterGuards::prepare(modifier_owner)
+            .and_then(|guards| guards.install(graph)).map_err(GraphBuildError::SceneModifier)?;
+    }
     Ok(NodeInstantiation {
         id_map,
         effect_local_handles,
@@ -1299,6 +1322,9 @@ pub fn log_build_error(context: &str, err: &GraphBuildError) {
         GraphBuildError::MissingBoundaryFinalOutput => {
             let _ = write!(buf, "splice def has no system.final_output boundary");
         }
+        GraphBuildError::SceneModifier(error) => {
+            let _ = write!(buf, "scene modifier preparation failed: {error}");
+        }
         GraphBuildError::Flatten(e) => {
             let _ = write!(buf, "group flatten failed: {e}");
         }
@@ -1339,6 +1365,10 @@ fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Optio
 /// so callers can surface them with full context to the operator.
 #[derive(Debug, Clone)]
 pub enum PreAllocationError {
+    ModifierAdmission(super::scene_modifier_expand::SceneModifierExpandError),
+    /// The graph has modifier-owned allocations but the active GPU backend
+    /// cannot provide a memory snapshot for admission.
+    ModifierMemoryUnavailable,
     /// A primitive declared an `Array<T>` output but
     /// `array_output_capacity()` returned `None` — pre-bound allocation
     /// is a hard contract, so partial allocation is rejected loudly
@@ -1373,6 +1403,11 @@ pub enum PreAllocationError {
 impl std::fmt::Display for PreAllocationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ModifierAdmission(error) => error.fmt(f),
+            Self::ModifierMemoryUnavailable => write!(
+                f,
+                "scene modifier memory admission unavailable: the GPU did not expose current allocated size and working-set capacity"
+            ),
             Self::UnsizedArrayOutput {
                 node_type,
                 port,
@@ -1467,133 +1502,54 @@ fn pre_allocate_array_buffers(
     device: &GpuDevice,
     backend: &mut MetalBackend,
 ) -> Result<(), PreAllocationError> {
-    // Reverse handle map for error context. The audit / size-failure
-    // paths name the producer's handle so the operator can find it in
-    // the editor.
-    let handle_by_node: AHashMap<NodeInstanceId, &'static str> =
-        graph.handles().map(|(h, id)| (id, h)).collect();
+    use super::resource_allocation::{ArrayAllocationAction, ArrayStorage, plan_array_allocations};
 
-    let mut input_capacities: Vec<(&str, u32)> = Vec::with_capacity(8);
-
-    for step in plan.steps() {
-        let Some(node_inst) = graph.get_node(step.node) else {
+    // Snapshot existing physical storage once. Several resources may already
+    // share a backend slot; preserve that identity in the pure allocation plan.
+    let mut prebound = AHashMap::default();
+    let mut roots = AHashMap::default();
+    for raw in 0..plan.resource_count() {
+        let resource = ResourceId(raw as u32);
+        if !matches!(plan.resource_type(resource), Some(PortType::Array(_))) {
             continue;
-        };
-        let node_type = node_inst.node.type_id().as_str();
-
-        input_capacities.clear();
-        for (port_name, res_id) in &step.inputs {
-            let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
-                continue;
-            };
-            let Some(slot) = backend.slot_for(*res_id) else {
-                continue;
-            };
-            let Some(buf) = Backend::array_buffer(backend, slot) else {
-                continue;
-            };
-            let count = (buf.size / layout.item_size as u64) as u32;
-            input_capacities.push((*port_name, count));
         }
-
-        let aliased_pairs = node_inst.node.aliased_array_io();
-        let canvas_sized_outputs = node_inst.node.canvas_sized_array_outputs();
-        let atomic_outputs = node_inst.node.atomic_outputs();
-        let (canvas_w, canvas_h) = Backend::canvas_dims(backend as &dyn Backend);
-
-        for (port_name, res_id) in &step.outputs {
-            let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
-                continue;
-            };
-
-            // Atomic-accumulator outputs (e.g. node.draw_particles' u32 grid)
-            // are read-modify-written: the downstream node.resolve_scatter
-            // reads then zeros the buffer, so the buffer's contract is that it
-            // STARTS at zero. Metal's create_buffer* does not zero-init, so a
-            // fresh allocation would let frame 0 resolve the splat on top of
-            // uninitialized VRAM — garbage that, in a feedback sim, amplifies
-            // into run-to-run non-determinism (see the FluidSim2D
-            // determinism guard in freeze::proof). Zero it once here so the
-            // clear-after-read contract holds from the first frame.
-            let needs_zero_init = atomic_outputs.contains(port_name);
-
-            // Aliased in/out pairs (stateful array sims) — route the
-            // output's resource id to the input's slot. No new
-            // allocation; the simulator reads + writes the same
-            // storage in place.
-            let aliased_input_port = aliased_pairs
-                .iter()
-                .find(|(_, out_port)| *out_port == *port_name)
-                .map(|(in_port, _)| *in_port);
-            if let Some(in_port) = aliased_input_port {
-                let in_res = step
-                    .inputs
-                    .iter()
-                    .find(|(name, _)| *name == in_port)
-                    .map(|(_, id)| *id);
-                if let Some(in_res) = in_res
-                    && let Some(in_slot) = backend.slot_for(in_res)
-                {
-                    backend.alias_array_resource(*res_id, in_slot);
-                    continue;
-                }
-                log::warn!(
-                    "[graph-loader] node `{node_type}` declared aliased pair \
-                     `{in_port}` → `{port_name}` but `{in_port}` is not wired \
-                     or has no pre-bound slot. Falling back to a fresh \
-                     allocation; the simulator's in-place dispatch will \
-                     write to a standalone buffer."
-                );
+        let Some(slot) = backend.slot_for(resource) else { continue; };
+        let Some(buffer) = Backend::array_buffer(backend, slot) else { continue; };
+        let root = *roots.entry(slot).or_insert(resource);
+        prebound.insert(resource, ArrayStorage { root, bytes: buffer.size });
+    }
+    let allocation = plan_array_allocations(
+        graph, plan, Backend::canvas_dims(backend), &prebound,
+    )?;
+    if let Some(budget) = graph.modifier_buffer_budget() {
+        // Capture immediately before allocation. `currentAllocatedSize`
+        // includes the live scene being replaced, so the projected peak must
+        // conservatively cover old and candidate resources overlapping.
+        let snapshot = device
+            .modifier_memory_snapshot()
+            .ok_or(PreAllocationError::ModifierMemoryUnavailable)?;
+        let usage = budget
+            .check_with_snapshot(&allocation, Some(snapshot))
+            .map_err(PreAllocationError::ModifierAdmission)?;
+        log::debug!("prepared modifier buffer usage: {usage:?}");
+    }
+    for warning in &allocation.warnings {
+        log::warn!("[graph-loader] {warning}");
+    }
+    // Sizing, capacity propagation and alias decisions have one authority.
+    // Admission inspects these same actions before any buffer is allocated.
+    for action in allocation.actions {
+        match action {
+            ArrayAllocationAction::Allocate(allocation) => {
+                let buffer = device.create_buffer_shared(allocation.bytes);
+                if allocation.zero_init { buffer.zero_fill(); }
+                backend.pre_bind_array(allocation.resource, buffer);
             }
-
-            // Canvas-sized output: scatter accumulators and similar
-            // primitives whose Array output must align pixel-for-pixel
-            // with the host canvas.
-            if canvas_sized_outputs.contains(port_name) {
-                if canvas_w == 0 || canvas_h == 0 {
-                    log::warn!(
-                        "[graph-loader] node `{node_type}` port `{port_name}` is \
-                         canvas-sized but backend canvas dims are 0×0 (mock backend \
-                         or unconfigured). Skipping allocation."
-                    );
-                    continue;
-                }
-                let capacity = (canvas_w as u64) * (canvas_h as u64);
-                let bytes = capacity * layout.item_size as u64;
-                let buffer = device.create_buffer_shared(bytes);
-                if needs_zero_init {
-                    buffer.zero_fill();
-                }
-                backend.pre_bind_array(*res_id, buffer);
-                continue;
+            ArrayAllocationAction::Alias { resource, input } => {
+                let slot = backend.slot_for(input)
+                    .expect("array plan only aliases known storage");
+                backend.alias_array_resource(resource, slot);
             }
-
-            let Some(capacity) = node_inst.node.array_output_capacity(
-                port_name,
-                &node_inst.params,
-                &input_capacities,
-            ) else {
-                return Err(PreAllocationError::UnsizedArrayOutput {
-                    node_type: node_type.to_string(),
-                    port: port_name.to_string(),
-                    handle: handle_by_node.get(&step.node).map(|h| h.to_string()),
-                });
-            };
-            let bytes = capacity as u64 * layout.item_size as u64;
-            if bytes == 0 {
-                log::warn!(
-                    "[graph-loader] node `{node_type}` port `{port_name}` resolved \
-                     to a zero-byte Array<T> buffer (capacity={capacity}, \
-                     item_size={}). Skipping allocation.",
-                    layout.item_size,
-                );
-                continue;
-            }
-            let buffer = device.create_buffer_shared(bytes);
-            if needs_zero_init {
-                buffer.zero_fill();
-            }
-            backend.pre_bind_array(*res_id, buffer);
         }
     }
     Ok(())
@@ -1747,6 +1703,32 @@ fn audit_array_resource_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_modifier_v3_runtime_requires_attachment_before_node_installation() {
+        let mut doc: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3, "nodes": [], "wires": [],
+            "sceneModifiers": [{
+                "id": "modifier", "scene": {"node": "scene"},
+                "targets": "allObjects",
+                "graph": {"version": 3, "nodes": [], "wires": []}
+            }]
+        })).unwrap();
+        let mut graph = Graph::new();
+        let registry = PrimitiveRegistry::new();
+        let result = instantiate_def(
+            &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
+        );
+        assert!(matches!(result, Err(GraphBuildError::SceneModifier(_))));
+        assert_eq!(graph.nodes().count(), 0);
+
+        // The malformed attachment is refused before installation. An ordinary
+        // v3 graph still takes the existing runtime path.
+        doc.scene_modifiers.clear();
+        assert!(instantiate_def(
+            &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
+        ).is_ok());
+    }
     use crate::node_graph::boundary_nodes::{FinalOutput, Source};
 
     fn registry() -> PrimitiveRegistry {
@@ -2157,6 +2139,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 bare_node(0, "__vocab_migration_test_old__"),
                 grouped_node(1, "__vocab_migration_test_old__"),
@@ -2168,6 +2151,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 bare_node(0, "__vocab_migration_test_new__"),
                 grouped_node(1, "__vocab_migration_test_new__"),
@@ -2198,6 +2182,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![
                 bare_node(0, "node.rotate_vec2_90"),
                 grouped_node(1, "node.rotate_vec2_90"),
@@ -2243,6 +2228,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![node],
             wires: vec![],
         };
@@ -2269,6 +2255,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![bare_node(0, "node.fluid_project_scatter_2d")],
             wires: vec![],
         };
@@ -2296,6 +2283,7 @@ mod tests {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }
     }
@@ -2349,6 +2337,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: vec![group],
             wires: vec![],
         };
@@ -2390,6 +2379,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: Some(minimal_preset_metadata()),
+            scene_modifiers: Vec::new(),
             nodes: vec![anim],
             wires: vec![],
         };
@@ -2464,6 +2454,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render_scene, ao_group],
             wires: vec![
                 EffectGraphWire { from_node: 1, from_port: "depth".to_string(), to_node: 2, to_port: "depth".to_string() },

@@ -4,7 +4,7 @@
 //! Writes/renames/duplicates/deletes standalone preset JSON files under the
 //! SAME user preset root `manifold_renderer::preset_loader` already resolves
 //! read-only (`~/Library/Application Support/MANIFOLD/presets/{effects,
-//! generators}`), so a save here is picked up by the existing hot-reload
+//! generators,scene-modifiers}`), so a save here is picked up by the existing hot-reload
 //! watcher with no separate wiring — no new storage tier, just a writer for
 //! the one that already exists.
 //!
@@ -93,6 +93,7 @@ impl UserLibrary {
         self.root.join(match kind {
             PresetKind::Effect => "effects",
             PresetKind::Generator => "generators",
+            PresetKind::SceneModifier => "scene-modifiers",
         })
     }
 
@@ -130,6 +131,10 @@ impl UserLibrary {
             PresetKind::Generator => {
                 manifold_renderer::preset_loader::GENERATOR_CATALOG.load().json(id).is_some()
             }
+            PresetKind::SceneModifier => manifold_renderer::preset_loader::SCENE_MODIFIER_CATALOG
+                .load()
+                .json(id)
+                .is_some(),
         }
     }
 
@@ -152,7 +157,7 @@ impl UserLibrary {
     }
 
     /// Save `def` as a new library entry named `name` (disambiguated on
-    /// collision). Writes `<root>/{effects,generators}/<mintedName>.json` —
+    /// collision). Writes `<root>/{effects,generators,scene-modifiers}/<mintedName>.json` —
     /// the id and filename stem are the minted name itself (D2's
     /// display-based-id style), so the file is human-readable AND
     /// self-describing. Never overwrites an existing entry (that's `Push to
@@ -340,6 +345,7 @@ mod tests {
                 category: "Test".to_string(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -351,6 +357,7 @@ mod tests {
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
             }),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         }

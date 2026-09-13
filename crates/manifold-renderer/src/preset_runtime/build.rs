@@ -4,32 +4,6 @@
 
 use super::*;
 
-/// Map a [`crate::node_graph::PreAllocationError`] into [`JsonGeneratorLoadError`].
-fn generator_error_from_prealloc(
-    e: crate::node_graph::PreAllocationError,
-) -> JsonGeneratorLoadError {
-    use crate::node_graph::PreAllocationError as P;
-    match e {
-        P::UnsizedArrayOutput { node_type, port, .. } => {
-            JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port }
-        }
-        P::UnsizedTexture3DOutput { node_type, port, .. } => {
-            JsonGeneratorLoadError::UnsizedTexture3DOutput { node_type, port }
-        }
-        P::UnboundArrayResource {
-            producer_handle,
-            producer_node_type,
-            producer_port,
-            cause,
-        } => JsonGeneratorLoadError::UnboundArrayResource {
-            producer_handle,
-            producer_node_type,
-            producer_port,
-            cause,
-        },
-    }
-}
-
 /// Topology hash — captures only the layout-affecting fields of
 /// `effects` + `groups`. Per-frame param values, drivers,
 /// envelopes, AND continuous wet/dry values are EXCLUDED so live
@@ -310,14 +284,25 @@ impl PresetRuntime {
     /// calibration and the next save (BUG-078). `None` keeps reading the
     /// shadow, correct for a fresh-from-disk def whose shadow is accurate.
     pub fn from_def(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        Self::from_def_for_render(doc, registry, manifest, false)
+    }
+
+    /// Compile a generator runtime from an already prepared render definition.
+    /// The caller owns scene-modifier expansion; this method performs the
+    /// common graph validation, binding setup, and resource preparation.
+    pub(super) fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        if doc.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
+        if doc.version == 0 || doc.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
             return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
                 found: doc.version,
-                max: EFFECT_GRAPH_VERSION_WITH_METADATA,
+                max: EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
             }));
         }
 
@@ -522,7 +507,7 @@ impl PresetRuntime {
                         b.default_mirrors_node_param,
                     ))
                 }
-                BindingTarget::Composite { .. } => None,
+                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
 
@@ -606,7 +591,7 @@ impl PresetRuntime {
                             .and_then(|flat| def_string_param_value(flat, node_id, param)),
                     })
                 }
-                BindingTarget::Composite { .. } => None,
+                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
             })
             .collect();
 
@@ -641,6 +626,10 @@ impl PresetRuntime {
             forced_outputs_stale: false,
             executor: Executor::with_mock(),
             effect_nodes: vec![segment],
+            modifier_preview_routes: Vec::new(),
+            pending_trigger_baseline: None,
+            modifier_control_state: None,
+            modifier_events: None,
             group_mix_nodes: Vec::new(),
             io: PresetIo::Generate {
                 generator_input_id,
@@ -697,7 +686,17 @@ impl PresetRuntime {
         format: GpuTextureFormat,
         manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        let mut g = Self::from_def(doc, registry, manifest)?;
+        Self::from_def(doc, registry, manifest)?.with_generator_device(device, width, height, format)
+    }
+
+    pub(crate) fn with_generator_device(
+        mut self,
+        device: std::sync::Arc<GpuDevice>,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let g = &mut self;
         g.width = width;
         g.height = height;
         let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), width, height, format);
@@ -726,10 +725,10 @@ impl PresetRuntime {
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
         crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
-            .map_err(generator_error_from_prealloc)?;
+            .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
-        Ok(g)
+        Ok(self)
     }
 
 }

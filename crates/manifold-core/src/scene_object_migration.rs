@@ -305,6 +305,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, mesh0, mat0, mesh1, mat1],
             wires: vec![
                 wire(1, "out", 0, "mesh_0"),
@@ -391,6 +392,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, mesh],
             // Not a real legacy family (no trailing integer) — must survive
             // untouched, never dropped.
@@ -411,6 +413,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, cam],
             wires: vec![wire(1, "out", 0, "camera")],
         };
@@ -453,6 +456,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, group_node],
             wires: vec![wire(1, "vertices", 0, "mesh_0"), wire(1, "material", 0, "material_0")],
         };
@@ -512,6 +516,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, view_camera, group_node],
             wires: vec![
                 wire(1, "out", 0, "camera"),
@@ -565,6 +570,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![outer],
             wires: vec![],
         };
@@ -614,6 +620,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, group_node],
             wires: vec![wire(1, "vertices", 0, "mesh_0"), wire(1, "material", 0, "material_0")],
         };
@@ -653,6 +660,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![render, mesh, sibling_group],
             wires: vec![wire(2, "out", 0, "mesh_0")],
         };

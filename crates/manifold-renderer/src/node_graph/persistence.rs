@@ -226,6 +226,7 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
 /// Errors raised by [`GraphDocument::into_graph`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadError {
+    SceneModifier(super::scene_modifier_expand::SceneModifierExpandError),
     /// Document `version` is newer than this binary understands.
     UnsupportedVersion { found: u32, max: u32 },
     /// Two nodes share the same document id.
@@ -376,6 +377,7 @@ impl std::fmt::Display for LoadError {
                  Pick a convert variant that matches: Float / IntRound → Float or Int targets, \
                  BoolThreshold → Bool targets, EnumRound → Enum targets."
             ),
+            Self::SceneModifier(error) => error.fmt(f),
             Self::Flatten(msg) => write!(f, "group flatten failed: {msg}"),
         }
     }
@@ -558,6 +560,7 @@ impl EffectGraphDefExt for EffectGraphDef {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes,
             wires,
         }
@@ -746,6 +749,7 @@ fn load_error_from_build(e: crate::node_graph::graph_loader::GraphBuildError) ->
             reason: "graph_loader reported a Splice-only boundary error from a Standalone build"
                 .to_string(),
         },
+        G::SceneModifier(error) => LoadError::SceneModifier(error),
         G::Flatten(e) => LoadError::Flatten(e.to_string()),
     }
 }
@@ -1071,6 +1075,7 @@ mod tests {
     #[test]
     fn wgsl_compute_title_field_round_trips_through_json() {
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1142,6 +1147,7 @@ mod tests {
         output_formats.insert("output_tex".to_string(), "made_up_format".to_string());
         let output_canvas_scales = BTreeMap::new();
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1178,6 +1184,7 @@ mod tests {
     #[test]
     fn unknown_type_id_is_a_clean_error() {
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1221,6 +1228,7 @@ mod tests {
     #[test]
     fn invalid_wire_port_is_a_clean_error() {
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1274,6 +1282,7 @@ mod tests {
             SerializedParamValue::Float { value: 0.5 },
         );
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1307,6 +1316,7 @@ mod tests {
         // Threshold.level is a Float; we send an Enum.
         params.insert("level".to_string(), SerializedParamValue::Enum { value: 3 });
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1340,7 +1350,8 @@ mod tests {
     #[test]
     fn future_version_is_rejected() {
         let doc = GraphDocument {
-            version: EFFECT_GRAPH_VERSION_WITH_METADATA + 1,
+            scene_modifiers: Vec::new(),
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS + 1,
             name: None,
             description: None,
             preset_metadata: None,
@@ -1358,6 +1369,7 @@ mod tests {
         // v2 post-section 11, but user projects + test fixtures saved before
         // the migration must still round-trip.
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: None,
             description: None,
@@ -1372,6 +1384,7 @@ mod tests {
     #[test]
     fn v2_document_is_accepted() {
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION_WITH_METADATA,
             name: None,
             description: None,
@@ -1429,9 +1442,11 @@ mod tests {
             value_aliases: vec![],
             string_params: vec![],
             string_bindings: vec![],
+            scene_modifier: None,
             scene_bounds: None,
         });
         let doc = GraphDocument {
+            scene_modifiers: Vec::new(),
             version: EFFECT_GRAPH_VERSION_WITH_METADATA,
             name: None,
             description: None,

@@ -99,30 +99,44 @@ pub struct SceneRowAddr {
 /// Card-level facts for one APPLIED scene modifier (SCENE_MODIFIER_FRAMEWORK
 /// section 3.7) — the chrome + write addressing an ordinary effect-shell card
 /// needs to behave as a modifier card. `None` on every non-modifier surface.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModifierCardInfo {
-    /// Registry kind id — public API ("scene_loop", "scene_fog"); the wire
-    /// identity the apply/remove/toggle actions carry.
-    pub kind_id: String,
-    /// The OWNING layer — every row gesture addresses `GeneratorOf(this)`.
-    pub layer_id: LayerId,
-    /// `true` for switch kinds (the enable toggle lives in the card chrome,
-    /// writing the camera switch's `select`); `false` for gate kinds (the
-    /// Enabled row IS the toggle, per D5).
-    pub show_enable_toggle: bool,
-    /// The loop kind's wrap-debug target — the beat_ramp's `bars` write
-    /// address. `None` on kinds without wrap-debug.
-    pub wrap_debug: Option<SceneRowAddr>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifierObjectRef {
+    /// Stable object scope path in the owning scene graph.
+    pub scope: Vec<manifold_foundation::NodeId>,
+    /// Stable node identity within that scope.
+    pub node: manifold_foundation::NodeId,
 }
 
-/// One entry in the "+ Add Modifier" picker (SCENE_MODIFIER_FRAMEWORK
-/// section 3.7) — one per REGISTRY kind (applied or not: applied and
-/// inapplicable kinds show disabled, per the picker contract). Built
-/// app-side at the same structural sync that configures the modifier cards
-/// (applicability is a function of the live graph, which the UI never reads).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifierObjectOption {
+    pub object: ModifierObjectRef,
+    pub label: String,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModifierCardInfo {
+    /// Stable identity of this applied modifier instance.
+    pub instance_id: manifold_foundation::NodeId,
+    /// The owning layer — every row gesture addresses `GeneratorOf(this)`.
+    pub layer_id: LayerId,
+    /// Authored enabled-parameter label shown by the common card toggle.
+    pub enabled_label: String,
+    /// Position in the owning layer's ordered modifier stack.
+    pub stack_index: usize,
+    /// Number of entries in the owning layer's modifier stack.
+    pub stack_len: usize,
+    /// Whether this modifier currently applies to every object in its scope.
+    pub targets_all: bool,
+    /// Available target objects and their explicit-selection state.
+    pub objects: Vec<ModifierObjectOption>,
+}
+
+/// One catalog recipe in the modifier picker. Applicability and singleton
+/// restrictions are projected from the scene by the app; the UI reads no graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModifierPickerEntry {
-    pub kind_id: String,
+    pub preset_id: String,
     pub label: String,
     /// `None` = clickable (applies the kind); `Some(reason)` = disabled with
     /// the reason appended ("applied", "not applicable").
@@ -171,9 +185,9 @@ pub struct ParamSurface {
 
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: `Some` on a scene modifier card
     /// (an effect-shell card whose rows are the kind's stamped exposures).
-    /// Drives the chrome differences (no drag handle / cog, the enable toggle
-    /// for switch kinds, the remove × and the loop's wrap-debug button) and
-    /// the `GeneratorOf(layer)` write addressing. `None` everywhere else.
+    /// Drives the chrome differences (no drag handle / relight chip, the
+    /// common enable toggle, ordered-stack controls, and remove ×) and the
+    /// `GeneratorOf(layer)` write addressing. `None` everywhere else.
     pub modifier: Option<ModifierCardInfo>,
 
     /// The rows, manifest order == render order.

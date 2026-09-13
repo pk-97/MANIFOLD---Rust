@@ -222,6 +222,10 @@ fn target_key(target: &crate::view::UiGraphTarget) -> String {
     match target {
         crate::view::UiGraphTarget::Effect(id) => format!("effect:{}", id.as_str()),
         crate::view::UiGraphTarget::Generator(id) => format!("generator:{}", id.as_str()),
+        crate::view::UiGraphTarget::SceneModifier { owner, modifier_id } => {
+            let owner = target_key(owner);
+            format!("modifier:{}:{owner}:{}", owner.len(), modifier_id.as_str())
+        }
     }
 }
 

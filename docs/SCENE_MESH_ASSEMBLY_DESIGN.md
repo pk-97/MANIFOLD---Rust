@@ -2,8 +2,8 @@
 
 <!-- index: Reference geometry, vertex and triangle-face targets, progressive assembly, normal/tangent handling and matched-mesh morph contracts. -->
 
-**Status:** PROPOSED · 2026-09-12 · Codex lead · not implemented.
-**Prerequisites:** Foundation F8 (F1–F8 remains unbuilt; that foundation migrates Elastic Sculpture, Surface Peel, Vortex Fragments and Loop/Fog) and the later field seams W1–W3 where required. The landed photoscan slice is a current/reference mesh-stage precedent, not this assembly contract. Existing mesh deformers remain authoritative.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Ordered Recon is the approved bounded rigid-band reconstruction slice; general segmentation and arbitrary morphing remain proposed.
+**Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; conformance treatment, with fresh source/schema verification before each phase.
 
 Peter asks for vertices and faces to be "warped and distorted or split apart or morphed into their final mesh creatively". **The first assembly operation returns elements of one source mesh to their own reference geometry.** This gives reliable reconstruction without solving correspondence between unrelated models. The shipped photoscan examples establish the adjacent behaviours: Elastic Sculpture continuously deforms, while Surface Peel and Vortex Fragments move rigid fixed-cell patches. Assembly and coherent slicing remain proposed next families.
@@ -24,6 +24,8 @@ Shared gates and resource limits: [Validation V9](SCENE_MODIFIER_VALIDATION_PLAN
 | Shipped photoscan mesh stages | `primitives/wave_shear_mesh.rs`, `primitives/transform_mesh_patches.rs`; [landing report](landings/2026-09-11-photoscan-modifiers.md) | Existing current/reference group contract, analytic normal/tangent transport, fixed spatial-cell patch rigidity, exact bypass and raster qualification |
 
 Read the actual shader and capacity method of every reused deformer. Some purpose/comments reflect older limitations; current code and focused proofs decide. No blanket normal-policy change to existing effects in this programme.
+
+**September 12 implementation slice:** The current `OrderedRecon.json` modifier uses `primitives/ordered_recon_mesh.rs` and its WGSL body. Reference triangle centroids select directional bands with common pivots; a fixed stagger lets early bands settle before later bands. Progress 1 and settled bands return the incoming mesh exactly, preserving preceding modifiers. This is rigid face-band motion, with preserved UVs and rotated normals/tangents; it adds no segmentation, caps or correspondence. Neighbour reads use the established gather boundary. The wider assembly phases below remain future work.
 
 ## 2. Decisions
 

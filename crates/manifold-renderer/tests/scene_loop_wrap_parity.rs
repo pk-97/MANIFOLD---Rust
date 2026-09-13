@@ -20,10 +20,12 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GroupDef, GroupInterface,
+    InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_renderer::node_graph::{PrimitiveRegistry, render_viewport_frame};
+use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_renderer::preset_context::PresetContext;
 
 fn node(
@@ -110,8 +112,10 @@ fn build_loop_graph() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "input", "system.generator_input", BTreeMap::new()),
             node(1, "loop_phase", "node.beat_ramp", params_phase),
@@ -228,8 +232,10 @@ fn build_red_graph() -> EffectGraphDef {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         }),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             node(0, "input", "system.generator_input", BTreeMap::new()),
             node(3, "cam", "node.orbit_camera", params_orbit_cam),
@@ -251,7 +257,7 @@ fn build_red_graph() -> EffectGraphDef {
 
 /// P4 extension: the loop graph with EVERY movement control live — flow
 /// 0.8, sway amp 0.5 cycles 2, look sweep amp 0.5 cycles 1, zoom pulse 0.25,
-/// jitter amount 0.5 seed 7. Shaped like the plan builder builds it (home =
+/// jitter amount 0.5 seed 7. Shaped like the bundled SceneLoop recipe (home =
 /// −cell/2 = mid-gap, pattern_length 1 = uniform jitter, the corridor mint).
 /// All controls phase-periodic (or cell-index-only) by construction; the
 /// exact-seam wrap gate proves it.
@@ -321,6 +327,102 @@ fn build_loop_graph_phase_controls() -> EffectGraphDef {
 fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
     let mut def = build_loop_graph();
 
+    // The legacy instance route is a group boundary, not a direct
+    // scene_object connection. Preserve that authored shape so migration can
+    // identify the exact instance consumer without inferring ownership.
+    let mut cube = def
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "cube_mesh")
+        .cloned()
+        .expect("cube_mesh");
+    let mut material = def
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "mat")
+        .cloned()
+        .expect("mat");
+    let mut scene_object = def
+        .nodes
+        .iter()
+        .find(|n| n.node_id.as_str() == "scene_object")
+        .cloned()
+        .expect("scene_object");
+    cube.id = 41;
+    material.id = 42;
+    scene_object.id = 43;
+    let group_input = node(40, "scene_instances", "system.group_input", BTreeMap::new());
+    let group_output = node(44, "scene_object_output", "system.group_output", BTreeMap::new());
+    let mut scene_group = node(6, "scene_object_group", "group", BTreeMap::new());
+    scene_group.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: vec![InterfacePortDef {
+                name: "instances".to_string(),
+                port_type: "Array(InstanceTransform)".to_string(),
+            }],
+            outputs: vec![InterfacePortDef {
+                name: "object".to_string(),
+                port_type: "Object".to_string(),
+            }],
+            params: Vec::new(),
+        },
+        nodes: vec![group_input, cube, material, scene_object, group_output],
+        wires: vec![
+            wire(41, "vertices", 43, "vertices"),
+            wire(42, "out", 43, "material"),
+            wire(40, "instances", 43, "instances"),
+            wire(43, "object", 44, "object"),
+        ],
+        tint: None,
+    }));
+    def.nodes
+        .retain(|n| !matches!(n.id, 4..=6));
+    def.nodes.push(scene_group);
+    def.wires.retain(|w| {
+        !matches!(w.from_node, 4..=6) && !matches!(w.to_node, 4..=6)
+    });
+    def.wires.push(wire(2, "out", 6, "instances"));
+    def.wires.push(wire(6, "object", 7, "object_0"));
+
+    // The legacy fixed row includes the original camera and camera switch.
+    // Keep the loop camera on the switch's B input so migration can preserve
+    // the pre modifier camera on A instead of guessing its ownership.
+    let mut params_camera = BTreeMap::new();
+    params_camera.insert(
+        "orbit".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+    );
+    params_camera.insert(
+        "tilt".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+    );
+    params_camera.insert(
+        "distance".to_string(),
+        SerializedParamValue::Float { value: 5.0 },
+    );
+    params_camera.insert(
+        "fov_y".to_string(),
+        SerializedParamValue::Float { value: 0.9 },
+    );
+    def.nodes
+        .push(node(9, "scene_camera", "node.orbit_camera", params_camera));
+    let mut params_switch = BTreeMap::new();
+    params_switch.insert(
+        "select".to_string(),
+        SerializedParamValue::Enum { value: 1 },
+    );
+    def.nodes.push(node(
+        10,
+        "loop_cam_switch",
+        "node.camera_switch",
+        params_switch,
+    ));
+    def.wires
+        .retain(|w| !(w.from_node == 3 && w.to_node == 7 && w.to_port == "camera"));
+    def.wires.push(wire(9, "out", 10, "a"));
+    def.wires.push(wire(3, "out", 10, "b"));
+    def.wires.push(wire(10, "out", 7, "camera"));
+
     // Downgrade to the saved P4 shape.
     let array = def
         .nodes
@@ -340,12 +442,9 @@ fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
     camera.params.insert("stride".to_string(), SerializedParamValue::Float { value: 1.0 });
     def.wires.retain(|w| !(w.from_node == 3 && w.to_node == 2 && w.to_port == "camera"));
 
-    // The app's load order (ENDLESS_CORRIDOR D7).
-    assert!(
-        manifold_renderer::node_graph::scene_modifier::migrate_fixed_row_scene_loops(&mut def),
-        "the pre-corridor fixture migrates"
-    );
-    let _ = manifold_renderer::node_graph::scene_modifier::migrate_loop_exposure_rows(&mut def);
+    // The app's load-only migration seam (ENDLESS_CORRIDOR D7).
+    let report = migrate_legacy_scene_modifiers(&mut def, &PrimitiveRegistry::with_builtin());
+    assert!(report.changed, "the pre-corridor fixture migrates: {:?}", report.diagnostics);
     def
 }
 
@@ -565,8 +664,8 @@ fn wrap_parity_near_seam_measurement() {
 }
 
 /// INV-EC5: a saved pre-corridor loop migrated at load wraps pure — the
-/// migrated graph (corridor params + the D2 camera wire landed by
-/// migrate_fixed_row_scene_loops) renders phase 0 vs phase 1
+/// migrated graph (corridor params + the D2 camera wire landed by the
+/// load-only migration) renders phase 0 vs phase 1
 /// pixel-identical. Unclipped far, same demand as the corridor mint gate.
 #[test]
 fn wrap_parity_migrated_pre_corridor_loop() {
@@ -657,4 +756,3 @@ fn fog_density_swings_over_loop() {
          (max diff = 0) — fog density driver is not affecting the render"
     );
 }
-

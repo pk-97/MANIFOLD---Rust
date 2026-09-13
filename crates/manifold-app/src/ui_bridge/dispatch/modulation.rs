@@ -492,7 +492,11 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                 ctx.selection, true,
             ) {
                 let param_id = &param_id;
-                let env_allowed = match &target {
+                let Some(env_target) = target.host_target() else {
+                    return DispatchResult::structural();
+                };
+                let env_allowed = match env_target {
+                    manifold_core::GraphTarget::SceneModifier { .. } => false,
                     manifold_core::GraphTarget::Generator(_) => true,
                     manifold_core::GraphTarget::Effect(_) => {
                         matches!(effective_tab, InspectorTab::Layer)

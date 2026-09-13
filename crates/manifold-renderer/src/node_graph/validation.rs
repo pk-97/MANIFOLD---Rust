@@ -15,6 +15,7 @@ use crate::node_graph::ports::{
 /// Errors produced by graph mutation and validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
+    PreparedParameterChanged { node: NodeInstanceId },
     NodeNotFound(NodeInstanceId),
     PortNotFound {
         node: NodeInstanceId,
@@ -175,6 +176,7 @@ pub enum TextureChannelMismatchReason {
 impl std::fmt::Display for GraphError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PreparedParameterChanged { node } => write!(f, "prepared source/mode on {node:?} changed; restore it or reapply the scene modifier"),
             Self::NodeNotFound(id) => write!(f, "node {:?} not found", id),
             Self::PortNotFound { node, port } => {
                 write!(f, "port `{port}` not found on node {node:?}")
@@ -1285,6 +1287,7 @@ mod tests {
 
     fn error_variant_label(e: &GraphError) -> &'static str {
         match e {
+            GraphError::PreparedParameterChanged { .. } => "PreparedParameterChanged",
             GraphError::NodeNotFound(_) => "NodeNotFound",
             GraphError::PortNotFound { .. } => "PortNotFound",
             GraphError::PortKindMismatch { .. } => "PortKindMismatch",

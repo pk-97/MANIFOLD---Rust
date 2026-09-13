@@ -57,6 +57,7 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
     // `is_file_path` flag). The per-clip override carries the broken GLB path —
     // the home `resolve_all` writes the re-linked path back into.
     let meta = PresetMetadata {
+        scene_modifier: None,
         id: PresetTypeId::new("p2_glb"),
         display_name: "P2 GLB".to_string(),
         category: "Geometry".to_string(),
@@ -91,6 +92,7 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
     let embedded = EmbeddedPreset {
         kind: PresetKind::Generator,
         def: EffectGraphDef {
+            scene_modifiers: Vec::new(),
             version: 1,
             name: Some("P2 GLB".to_string()),
             description: None,

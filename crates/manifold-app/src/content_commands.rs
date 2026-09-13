@@ -63,6 +63,17 @@ fn get_existing_mapping(
 }
 
 impl ContentThread {
+    fn modifier_budget_device(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
+        #[cfg(target_os = "macos")]
+        {
+            self.content_pipeline.native_device_handle()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
     /// Re-install the renderer's project-preset catalog overlay if an editing
     /// command changed the project's embedded ("forked") presets — a fork mint
     /// or an in-place recalibration of an embedded preset. Guarded by a cheap
@@ -549,6 +560,12 @@ impl ContentThread {
         manifold_core::cold_touch::reset_cold_touch_counts();
     }
 
+    fn report_graph_edit_rejection(&mut self, message: String) {
+        log::warn!("{message}");
+        let sequence = self.graph_edit_diagnostic.as_ref().map_or(1, |event| event.sequence.wrapping_add(1));
+        self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+    }
+
     /// Apply finished recording takes through the same undo service as edits.
     pub(crate) fn commit_automation_recording(&mut self, finish_active: bool) {
         commit_recording(&mut self.engine, &mut self.editing_service, finish_active);
@@ -564,10 +581,26 @@ impl ContentThread {
                 self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
                 // Switching what's watched invalidates any node preview.
                 self.preview_graph_node = None;
+                self.modifier_preview_context = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
                 self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
                 self.preview_graph_node = None;
+                self.modifier_preview_context = None;
+            }
+            ContentCommand::WatchGraphTarget(target) => {
+                self.watched_graph_target = target.filter(|target|target.host_target().is_some());
+                self.preview_graph_node = None;
+                self.modifier_preview_context = None;
+            }
+            ContentCommand::SetModifierPreviewContext { scope, object } => {
+                self.modifier_preview_context = match &self.watched_graph_target {
+                    Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
+                        Some(std::sync::Arc::new(manifold_renderer::preset_runtime::ModifierPreviewContext {
+                            modifier_id: modifier_id.clone(), scope, object,
+                        })),
+                    _ => None,
+                };
             }
             ContentCommand::SetGraphPreviewNode(node_id) => {
                 self.preview_graph_node = node_id;
@@ -737,17 +770,31 @@ impl ContentThread {
             }
 
             // ── Editing ────────────────────────────────────────────
+            ContentCommand::GraphEditRejected(message) => self.report_graph_edit_rejection(message),
+            ContentCommand::SceneModifier(action) => {
+                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::scene_modifier_edit::build_action(project, action));
+                match result {
+                    Ok(command) => { self.handle_command(ContentCommand::Execute(command)); },
+                    Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
             ContentCommand::PreviewAutomationLane { target, param_id, points } => {
                 self.engine.set_automation_lane_preview(target, param_id, points);
             }
             ContentCommand::ClearAutomationPreviews => {
                 self.engine.clear_automation_previews();
             }
-            ContentCommand::Execute(cmd) => {
+            ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
                 self.engine.clear_automation_previews();
+                let cmd = crate::scene_modifier_edit::with_admission_device(
+                    cmd,
+                    self.modifier_budget_device(),
+                );
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute(cmd, p);
                 }
+                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 // Refresh the compositor even while paused: a blend-mode change,
                 // effect edit, or reorder that doesn't alter clip membership
                 // won't be picked up by the sync path alone.
@@ -762,10 +809,16 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
+                let budget_device = self.modifier_budget_device();
                 self.engine.clear_automation_previews();
                 if let Some(p) = self.engine.project_mut() {
-                    self.editing_service.execute_batch(cmds, desc, p);
+                    let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
+                    self.editing_service.execute(
+                        crate::scene_modifier_edit::with_admission_device(command, budget_device),
+                        p,
+                    );
                 }
+                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 self.engine.mark_compositor_dirty_now();
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
@@ -857,6 +910,7 @@ impl ContentThread {
                         });
                     }
                 }
+                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
                 self.engine.mark_compositor_dirty_now();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {

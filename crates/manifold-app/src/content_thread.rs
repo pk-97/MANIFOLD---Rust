@@ -150,6 +150,7 @@ pub struct ContentThread {
     /// any. Combined with `watched_graph_target` each frame to drive the
     /// per-node output capture. `None` = no preview.
     pub preview_graph_node: Option<manifold_core::NodeId>,
+    pub modifier_preview_context: Option<std::sync::Arc<manifold_renderer::preset_runtime::ModifierPreviewContext>>,
     /// Whether the node-output preview applies auto-gain/normalization. Off by
     /// default; toggled from the editor's preview pane ("Smart preview"). Pushed
     /// to the pipeline each frame. Node preview only — never affects the live
@@ -197,6 +198,9 @@ pub struct ContentThread {
     /// per-tick state construction). Rides the regular per-tick snapshot rather
     /// than a separate out-of-band send — see `UndoRedoEvent`'s doc comment.
     pub pending_undo_redo_event: Option<crate::content_state::UndoRedoEvent>,
+    /// Most recent rejected graph edit, retained until a newer rejection so
+    /// every regular snapshot carries the diagnostic to the UI.
+    pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -804,12 +808,23 @@ impl ContentThread {
             Some(manifold_core::GraphTarget::Generator(lid)) => {
                 (None, Some((lid.clone(), self.preview_graph_node.clone())))
             }
+            Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) => {
+                match target.host_target() {
+                    Some(manifold_core::GraphTarget::Generator(lid)) =>
+                        (None, Some((lid.clone(), self.preview_graph_node.clone()))),
+                    _ => (None, None),
+                }
+            }
             None => (None, None),
         };
         self.content_pipeline
             .set_node_preview_request(effect_preview);
         self.content_pipeline
             .set_node_preview_generator(generator_preview);
+        self.content_pipeline.set_modifier_preview_context(
+            matches!(self.watched_graph_target, Some(manifold_core::GraphTarget::SceneModifier { .. })),
+            self.modifier_preview_context.clone(),
+        );
         self.content_pipeline
             .set_node_preview_normalize(self.node_preview_normalize);
 
@@ -1427,6 +1442,7 @@ impl ContentThread {
             export_finished: None,
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
+            graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),
             ableton_session: if self.ableton_bridge.session_changed() {
                 Some(Arc::new(self.ableton_bridge.session().clone()))
             } else {
@@ -1510,6 +1526,10 @@ impl ContentThread {
                 }
                 (gp.generator_type().clone(), gp.graph_version)
             }
+            GraphTarget::SceneModifier { .. } => {
+                let owner = project.graph_target_owner(target)?;
+                (project.instance_preset_id(target)?, owner.graph_version)
+            }
         };
 
         // Cache hit: identical target / type / version / catalog → clone Arc.
@@ -1585,7 +1605,7 @@ impl ContentThread {
                                         source: OuterParamSource::Static,
                                     })
                                 }
-                                BindingTarget::Composite { .. } => None,
+                                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
                             })
                             .collect();
                     }
@@ -1601,6 +1621,28 @@ impl ContentThread {
                     let view = manifold_renderer::node_graph::loaded_preset_view_by_id(gen_type)?;
                     manifold_renderer::node_graph::snapshot_for_view(view)?
                 }
+            }
+            GraphTarget::SceneModifier { .. } => {
+                let local = crate::graph_target::resolve(project, target)?;
+                let owner = project.graph_target_owner(target)?;
+                let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(local)?;
+                let mut projection = local.clone();
+                let metadata = projection.preset_metadata.as_mut()?;
+                metadata.bindings = crate::graph_target::modifier_bindings(project, target)?;
+                metadata.params = owner.params.iter().map(|param|param.spec.clone()).collect();
+                let mut handles = std::collections::HashMap::new();
+                manifold_renderer::node_graph::collect_node_handles(&local.nodes, &mut handles);
+                snap.outer_routings = metadata.bindings.iter().filter_map(|binding| {
+                    let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } = &binding.target else { return None; };
+                    Some(manifold_renderer::node_graph::OuterParamRouting {
+                        outer_label: binding.label.clone(), outer_param_id: binding.id.clone(),
+                        node_handle: handles.get(node_id.as_str())?.to_string(), inner_param:param.clone(),
+                        source: if binding.user_added { manifold_renderer::node_graph::OuterParamSource::User }
+                            else { manifold_renderer::node_graph::OuterParamSource::Static },
+                    })
+                }).collect();
+                apply_effective_bound_values(&mut snap, &projection, owner);
+                snap
             }
         };
 
