@@ -396,11 +396,11 @@ pub trait TimelineEditingHost {
     /// Live-preview an in-progress draw stroke: overwrites the WHOLE lane's
     /// point list, bypassing undo (creates the lane, enabled, if it doesn't
     /// exist yet — same as a click-add's implicit lane creation).
-    fn set_automation_draw_preview(
+    fn set_automation_lane_preview(
         &mut self,
         target: &UiGraphTarget,
         param_id: &ParamId,
-        points: Vec<(Beats, f32, UiSegmentShape)>,
+        points: &[(Beats, f32, UiSegmentShape)],
     );
 
     /// Commit a finished draw stroke as ONE undo entry — installs

@@ -404,6 +404,7 @@ pub(crate) struct MainUiPassInputs<'a> {
     pub markers: &'a [(f32, Color32)],
     pub landing_flash: Option<LandingFlash>,
     pub automation_lanes: &'a [AutomationLaneScreen],
+    pub automation_selection: Option<&'a manifold_ui::UIState>,
     pub cursor_pos: Vec2, // scrollbar hover
     // Pass 5 text-input overlay (card-drag ghost + overlay_draw come off
     // ui_root).
@@ -459,6 +460,7 @@ pub(crate) fn render_main_ui_passes(
         markers,
         landing_flash,
         automation_lanes,
+        automation_selection,
         cursor_pos,
         text_input,
         frame_timer,
@@ -590,7 +592,7 @@ pub(crate) fn render_main_ui_passes(
     // on top of the clip names, same overlay pass. Empty whenever
     // automation mode is off (the caller never populated any lanes this
     // frame), so this is a no-op cost in the common case.
-    manifold_renderer::automation_lane_draw::emit_automation_lanes(ui_renderer, automation_lanes, tracks);
+    manifold_renderer::automation_lane_draw::emit_automation_lanes(ui_renderer, automation_lanes, tracks, automation_selection);
 
     // Playhead — a red line spanning ruler + tracks, capped by a downward
     // triangle head at the top of the ruler (section 24 5e). The head is the

@@ -90,6 +90,13 @@ pub fn hit_test_automation(pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<
         }
         let mut nearest: Option<(usize, f32)> = None;
         for (dot_index, dot) in lane.dots.iter().enumerate() {
+            // `automation_lane_screens` includes edge-adjacent endpoints so
+            // crossing segments remain editable. They are renderer inputs,
+            // not point hit targets: only dots inside the strip's horizontal
+            // viewport may be grabbed.
+            if dot.x < lane.strip_rect.x || dot.x > lane.strip_rect.x_max() {
+                continue;
+            }
             let dx = pos.x - dot.x;
             let dy = pos.y - dot.y;
             let dist_sq = dx * dx + dy * dy;
@@ -139,6 +146,9 @@ pub fn dots_in_rect(rect: Rect, lanes: &[AutomationLaneScreen]) -> Vec<(usize, u
     let mut out = Vec::new();
     for (lane_index, lane) in lanes.iter().enumerate() {
         for (dot_index, dot) in lane.dots.iter().enumerate() {
+            if dot.x < lane.strip_rect.x || dot.x > lane.strip_rect.x_max() {
+                continue;
+            }
             if rect.contains(Vec2::new(dot.x, dot.y)) {
                 out.push((lane_index, dot_index));
             }
@@ -180,6 +190,9 @@ impl HitTargets for AutomationHitTargets<'_> {
                 payload: format!("{key}|{}", lane.param_id.as_ref()),
             });
             for (dot_index, dot) in lane.dots.iter().enumerate() {
+                if dot.x < lane.strip_rect.x || dot.x > lane.strip_rect.x_max() {
+                    continue;
+                }
                 let d = DOT_HIT_RADIUS_PX;
                 out.push(HitTargetEntry {
                     kind: "automation_point",
@@ -364,6 +377,35 @@ mod tests {
         assert_eq!(hit, Some(AutomationHit::Strip { lane_index: 0 }));
     }
 
+    #[test]
+    fn crossing_segment_remains_hit_testable_with_both_endpoints_offscreen() {
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            vec![
+                dot_v(-20.0, 1.0, UiSegmentShape::Curved(-0.5), 100.0),
+                dot_v(120.0, 0.0, UiSegmentShape::Curved(-1.0), 100.0),
+            ],
+        )];
+        // At x=50, the first curved segment's actual curve is below the
+        // straight midpoint; this point is inside the viewport even though
+        // both breakpoint endpoints are outside it.
+        let t = (50.0 + 20.0) / 140.0;
+        let shaped = automation_segment_bend(t, -0.5);
+        let y = 100.0 * (1.0 - (1.0 - shaped));
+        assert_eq!(hit_test_automation(Vec2::new(50.0, y), &lanes),
+            Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+    }
+
+    #[test]
+    fn offscreen_dot_is_never_a_point_hit() {
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            vec![dot(-1.0, 14.0)],
+        )];
+        assert_eq!(hit_test_automation(Vec2::new(0.0, 14.0), &lanes),
+            Some(AutomationHit::Strip { lane_index: 0 }));
+    }
+
     // ── Marquee-select (P4 Unit B) ───────────────────────────────────
 
     #[test]
@@ -400,6 +442,15 @@ mod tests {
         assert!(dots_in_rect(rect, &lanes).is_empty());
     }
 
+    #[test]
+    fn marquee_excludes_offscreen_edge_adjacent_points() {
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            vec![dot(-1.0, 14.0), dot(50.0, 14.0), dot(101.0, 14.0)],
+        )];
+        assert_eq!(dots_in_rect(Rect::new(-10.0, 0.0, 120.0, 28.0), &lanes), vec![(0, 1)]);
+    }
+
     // ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
 
     #[test]
@@ -419,5 +470,17 @@ mod tests {
         assert_eq!(out[1].kind, "automation_point");
         assert_eq!(out[1].payload, "effect:fx|amount|0");
         assert_eq!(out[2].payload, "effect:fx|amount|1");
+    }
+
+    #[test]
+    fn automation_hit_targets_excludes_edge_adjacent_offscreen_points() {
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            vec![dot(-1.0, 14.0), dot(50.0, 14.0), dot(101.0, 14.0)],
+        )];
+        let mut out = Vec::new();
+        AutomationHitTargets(&lanes).enumerate(&mut out);
+        assert_eq!(out.iter().filter(|entry| entry.kind == "automation_point").count(), 1);
+        assert_eq!(out[1].payload, "effect:fx|amount|1");
     }
 }

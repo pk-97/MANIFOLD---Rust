@@ -396,10 +396,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn undo(&mut self) {
+        self.selection.clear_automation_selection();
         crate::ui_bridge::undo(self.content_tx);
     }
 
     fn redo(&mut self) {
+        self.selection.clear_automation_selection();
         crate::ui_bridge::redo(self.content_tx);
     }
 
@@ -1500,6 +1502,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         use std::collections::HashMap;
 
         let refs = std::mem::take(&mut self.selection.selected_automation_points);
+        self.selection.selected_automation_point = None;
         if refs.is_empty() {
             return;
         }
@@ -1571,6 +1574,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // semantics: it changes the Y-layout (lane strips appear/disappear),
         // so both dirty flags are needed, not just `needs_rebuild`.
         self.selection.automation_mode_visible = !self.selection.automation_mode_visible;
+        self.selection.clear_automation_selection();
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
     }

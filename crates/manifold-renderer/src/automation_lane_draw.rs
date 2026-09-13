@@ -16,7 +16,12 @@ use manifold_ui::panels::viewport::AutomationLaneScreen;
 /// lines + dots + labels on top. Scissored to `tracks` so a lane scrolled
 /// under the header column never draws over the layer controls (mirrors
 /// `clip_draw::emit_clip_names`'s tracks-rect clip).
-pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen], tracks: Rect) {
+pub fn emit_automation_lanes(
+    ui: &mut UIRenderer,
+    lanes: &[AutomationLaneScreen],
+    tracks: Rect,
+    selection: Option<&manifold_ui::UIState>,
+) {
     if lanes.is_empty() {
         return;
     }
@@ -45,15 +50,19 @@ pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen]
             ui.draw_line(x0, y0, x1, y1, color::AUTOMATION_LINE_THICKNESS, line_color);
         }
 
-        let d = color::AUTOMATION_DOT_RADIUS * 2.0;
         for dot in &l.dots {
+            let selected = selection.is_some_and(|state| {
+                state.automation_point_selected(&l.target, &l.param_id, dot.beat)
+            });
+            let radius = color::AUTOMATION_DOT_RADIUS + if selected { 1.5 } else { 0.0 };
+            let d = radius * 2.0;
             ui.draw_rounded_rect(
                 dot.x - d * 0.5,
                 dot.y - d * 0.5,
                 d,
                 d,
-                line_color,
-                color::AUTOMATION_DOT_RADIUS,
+                if selected { color::TEXT_WHITE_C32 } else { line_color },
+                radius,
             );
         }
 

@@ -959,15 +959,20 @@ impl TimelineViewportPanel {
                 // point at the param's current value so the flat-line
                 // polyline above samples correctly, but it isn't a real
                 // breakpoint yet — no dot, until the first click creates one.
-                let dots = if lane.placeholder {
+                let dots = if lane.placeholder || lane.points.is_empty() {
                     Vec::new()
                 } else {
-                    lane.points
+                    // Keep the adjacent point on either side of the visible
+                    // interval. Those endpoints are needed to identify and
+                    // drag a segment crossing the viewport edge, while the
+                    // binary-search bounds ensure allocation is proportional
+                    // to the visible points rather than the whole lane.
+                    let lower = lane.points.partition_point(|p| p.beat.as_f32() < min_beat);
+                    let upper = lane.points.partition_point(|p| p.beat.as_f32() <= max_beat);
+                    let first = lower.saturating_sub(1);
+                    let last = (upper + 1).min(lane.points.len());
+                    lane.points[first..last]
                         .iter()
-                        .filter(|p| {
-                            let b = p.beat.as_f32();
-                            b >= min_beat && b <= max_beat
-                        })
                         .map(|p| {
                             let x = self.beat_to_pixel(p.beat);
                             let y = strip_rect.y + strip_rect.height * (1.0 - p.value_norm);

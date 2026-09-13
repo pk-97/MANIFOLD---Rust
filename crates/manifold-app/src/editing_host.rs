@@ -829,7 +829,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             value: new.1,
             shape: to_segment_shape(new.2),
         };
-        // Already applied live by `set_automation_point_preview` during the
+        // Already applied locally by `set_automation_lane_preview` during the
         // drag — this only registers the undo entry, mirroring
         // `record_move`'s "commands already applied" comment.
         let cmd = MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
@@ -1000,26 +1000,28 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         )
     }
 
-    fn set_automation_draw_preview(
+    fn set_automation_lane_preview(
         &mut self,
         target: &UiGraphTarget,
         param_id: &ParamId,
-        points: Vec<(Beats, f32, UiSegmentShape)>,
+        points: &[(Beats, f32, UiSegmentShape)],
     ) {
         let target = to_graph_target(target);
         let param_id_str = param_id.as_ref();
-        let converted: Vec<AutomationPoint> = points
-            .into_iter()
-            .map(|(beat, value, shape)| AutomationPoint { beat, value, shape: to_segment_shape(shape) })
-            .collect();
         if let Some(inst) = self.project.preset_instance_mut(&target) {
             let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
+            let converted = || points.iter().map(|&(beat, value, shape)| {
+                AutomationPoint { beat, value, shape: to_segment_shape(shape) }
+            });
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id_str) {
-                Some(lane) => lane.points = converted,
+                Some(lane) => {
+                    lane.points.clear();
+                    lane.points.extend(converted());
+                }
                 None => lanes.push(manifold_core::effects::AutomationLane {
                     param_id: param_id.clone(),
                     enabled: true,
-                    points: converted,
+                    points: converted().collect(),
                 }),
             }
         }
@@ -1043,7 +1045,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         let new_converted = convert(new_points);
         let old_converted = old_points.map(convert);
-        // Already applied live by `set_automation_draw_preview` during the
+        // Already applied live by `set_automation_lane_preview` during the
         // stroke — this only registers the undo entry, reusing the SAME
         // command section 5's Automation Arm recording commits with
         // (`CommitRecordedGestureCommand`).
