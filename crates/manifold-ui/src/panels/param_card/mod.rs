@@ -55,9 +55,8 @@ const KEY_RELIGHT: u64 = 90_011;
 /// (right of the collapse chevron's left neighbor — the fixed-slot card's
 /// structural inverse, dispatching `SceneModifierRemove`).
 const KEY_MODIFIER_REMOVE: u64 = 90_012;
-/// SCENE_MODIFIER_FRAMEWORK section 3.7: the loop kind's wrap-debug chrome
-/// button (parks the camera at phase 0 by writing the beat_ramp's `bars`).
-const KEY_WRAP_DEBUG: u64 = 90_013;
+/// Scene modifier object-target and preview menu.
+const KEY_MODIFIER_OBJECTS: u64 = 90_015;
 
 /// D1 tab-ink slide: height of the sliding underline beneath the mod-config
 /// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
@@ -107,6 +106,7 @@ const CORNER_RADIUS: f32 = color::CARD_RADIUS;
 const CARD_BOTTOM_MARGIN: f32 = 0.0;
 const CHEVRON_W: f32 = 18.0;
 const COG_W: f32 = 18.0;
+const OBJECTS_W: f32 = 32.0;
 /// Width of the right-edge mapping-drawer chevron lane. Rows shrink their
 /// slider by this much so the chevron sits past the D/E buttons at the row's
 /// right edge.
@@ -202,7 +202,7 @@ pub(crate) use state::RELIGHT_FIELD_SPECS;
 
 /// The unified inspector parameter card. One struct presents both effect cards
 /// and generator cards; [`kind`](ParamCardKind) selects the shell furniture
-/// (effect: drag-handle + badges + ON/OFF toggle + hierarchical parenting;
+    /// (effect: drag-handle + badges + ON/OFF toggle + hierarchical parenting;
 /// generator: Change button + toggle/trigger/string rows + flat parenting)
 /// while the per-parameter row core — slider + trim/target/range handles + D/E
 /// buttons + driver/envelope/Ableton drawers — is shared verbatim via
@@ -332,24 +332,14 @@ pub struct ParamCardPanel {
     led_band_version: u64,
 
     // ── SCENE_MODIFIER_FRAMEWORK section 3.7: modifier-card shell ──
-    /// `Some` on a scene modifier card — kind identity, owning layer, and the
-    /// chrome flags (enable toggle for switch kinds, wrap-debug for the loop).
-    /// Drives `param_target` (`GeneratorOf(owning layer)` — INV-M4/BUG-292's
-    /// net), the header differences (no drag handle / cog / relight), and the
-    /// remove × / wrap-debug buttons. `None` on every effect/generator card.
+    /// `Some` on a scene modifier card — stable instance identity, owning
+    /// layer, authored enabled label, and ordered-stack position. Drives
+    /// `param_target` (`GeneratorOf(owning layer)` — INV-M4/BUG-292's net),
+    /// the header differences (no relight), and the stack/remove
+    /// controls. `None` on every effect/generator card.
     modifier: Option<crate::param_surface::ModifierCardInfo>,
     modifier_remove_btn_id: Option<NodeId>,
-    wrap_debug_btn_id: Option<NodeId>,
-    /// Wrap-debug resume stash: the pre-park `bars` value, kept UI-side so a
-    /// parked loop resumes to its real bars (the graph no longer carries it
-    /// once bars=0 lands). Relocated from the deleted `SceneLoopUi`
-    /// (SCENE_MODIFIER_FRAMEWORK P3) — the card state is its home.
-    wrap_debug_resume_bars: Option<f32>,
-    /// The row index of the wrap-debug target (the Bars row), resolved at
-    /// `configure` — the per-frame sync reads the row's live base value from
-    /// `base_values` here instead of re-scanning rows every frame.
-    wrap_debug_row: Option<usize>,
-    cached_wrap_debug_parked: bool,
+    modifier_objects_btn_id: Option<NodeId>,
 
     // ── Dirty-check cache (effect badges + enabled) ──
     cached_enabled: bool,
@@ -544,10 +534,7 @@ impl ParamCardPanel {
             led_band_version: 0,
             modifier: None,
             modifier_remove_btn_id: None,
-            wrap_debug_btn_id: None,
-            wrap_debug_resume_bars: None,
-            wrap_debug_row: None,
-            cached_wrap_debug_parked: false,
+            modifier_objects_btn_id: None,
             cached_enabled: true,
             cached_has_env: false,
             cached_has_drv: false,
@@ -621,6 +608,11 @@ impl ParamCardPanel {
         )
     }
 
+    /// Snapshot metadata used by the app's typed scene-modifier object menu.
+    pub(crate) fn modifier_info(&self) -> Option<&crate::param_surface::ModifierCardInfo> {
+        self.modifier.as_ref()
+    }
+
     /// The card ROOT's identity key (D4): cards are siblings under the
     /// inspector column, so the root's `View::key` — which now pins the
     /// durable WidgetId — must be the card's stable identity, never a
@@ -628,9 +620,11 @@ impl ParamCardPanel {
     /// cards on their layer (one generator card per layer scope).
     fn identity_key(&self) -> u64 {
         if let Some(m) = &self.modifier {
-            // One modifier card per kind per layer scope; the kind id is the
-            // identity (fixed slots, D2 — no per-instance id exists).
-            return crate::param_surface::stable_key(&format!("scene_modifier:{}", m.kind_id));
+            return crate::param_surface::stable_key(&format!(
+                "scene_modifier:{}:{}",
+                m.layer_id,
+                m.instance_id
+            ));
         }
         match self.kind {
             ParamCardKind::Effect => crate::param_surface::stable_key(self.effect_id.as_str()),
@@ -1059,6 +1053,11 @@ impl ParamCardPanel {
     /// Whether `node_id` is this card's drag handle (effect kind only).
     pub fn is_drag_handle(&self, node_id: NodeId) -> bool {
         self.is_live() && self.drag_icon_id == Some(node_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn card_header_node(&self) -> Option<NodeId> {
+        self.header_bg_id
     }
 
     /// Dim/undim the card border during a reorder drag (effect kind).
@@ -2209,10 +2208,13 @@ mod tests {
         let mut panel = ParamCardPanel::new();
         let mut config = effect_config();
         config.modifier = Some(crate::param_surface::ModifierCardInfo {
-            kind_id: "scene_loop".into(),
+            instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: LayerId::new("layer-1"),
-            show_enable_toggle: true,
-            wrap_debug: None,
+            enabled_label: "Camera Travel".into(),
+            stack_index: 0,
+            stack_len: 1,
+            targets_all: true,
+            objects: Vec::new(),
         });
         panel.configure(&config);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
@@ -3130,10 +3132,13 @@ mod tests {
         let mut c = effect_config();
         c.title = "Scene Loop".into();
         c.modifier = Some(crate::param_surface::ModifierCardInfo {
-            kind_id: "scene_loop".into(),
+            instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: manifold_foundation::LayerId::new("layer-a"),
-            show_enable_toggle: true,
-            wrap_debug: None,
+            enabled_label: "Camera Travel".into(),
+            stack_index: 1,
+            stack_len: 3,
+            targets_all: true,
+            objects: Vec::new(),
         });
         c
     }
@@ -3153,15 +3158,62 @@ mod tests {
         assert!(
             matches!(
                 actions.as_slice(),
-                [PanelAction::Root(RootAction::OpenGeneratorGraphEditor)]
+                [PanelAction::Root(RootAction::OpenGraphTarget(
+                    crate::view::UiGraphTarget::SceneModifier { owner, modifier_id },
+                ))]
+                    if owner.as_ref()
+                        == &crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"))
+                        && *modifier_id == manifold_foundation::NodeId::new("modifier-1")
             ),
             "modifier cog navigates to the generator graph, got {actions:?}"
         );
     }
 
     #[test]
-    fn modifier_header_layout_places_remove_left_of_cog() {
-        // Trailing order: chevron (rightmost), cog, remove ×, [DBG], [toggle].
+    fn modifier_cards_with_same_title_keep_independent_stable_ids() {
+        let mut first = ParamCardPanel::new();
+        first.configure(&modifier_config());
+
+        let mut second_config = modifier_config();
+        second_config
+            .modifier
+            .as_mut()
+            .expect("modifier metadata")
+            .instance_id = manifold_foundation::NodeId::new("modifier-2");
+        let mut second = ParamCardPanel::new();
+        second.configure(&second_config);
+
+        assert_eq!(first.name, second.name, "the cards intentionally share a title");
+        assert_ne!(first.identity_key(), second.identity_key(), "instance IDs salt card roots");
+    }
+
+    #[test]
+    fn modifier_card_controls_use_stable_instance_id() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&modifier_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let remove = panel.modifier_remove_btn_id.expect("remove built");
+        let objects = panel.modifier_objects_btn_id.expect("objects built");
+        assert!(panel.drag_icon_id.is_some(), "modifier cards use the shared drag handle");
+        assert!(matches!(
+            panel.handle_click(remove, &tree).as_slice(),
+            [PanelAction::Project(crate::panels::ProjectAction::SceneModifiersRemove(layer, instances))]
+                if *layer == LayerId::new("layer-a")
+                    && *instances == vec![manifold_foundation::NodeId::new("modifier-1")]
+        ));
+        assert!(matches!(
+            panel.handle_click(objects, &tree).as_slice(),
+            [PanelAction::Root(RootAction::SceneModifierObjectsClicked(layer, instance))]
+                if *layer == LayerId::new("layer-a")
+                    && *instance == manifold_foundation::NodeId::new("modifier-1")
+        ));
+    }
+
+    #[test]
+    fn modifier_header_layout_places_shared_controls_left_of_cog() {
+        // Trailing order: chevron (rightmost), cog, remove ×, objects, toggle.
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         panel.configure(&modifier_config());
@@ -3173,6 +3225,8 @@ mod tests {
         let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - GAP - COG_W;
         let remove_x = cog_x - GAP - CHEVRON_W;
+        let objects_x = remove_x - GAP - OBJECTS_W;
+        let toggle_x = objects_x - GAP - TOGGLE_W;
         let elem_y = rect.y + BORDER_W + (HEADER_HEIGHT - 16.0) * 0.5;
 
         let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
@@ -3185,6 +3239,12 @@ mod tests {
             .get_bounds(panel.modifier_remove_btn_id.expect("remove × built"));
         assert!((remove.x - remove_x).abs() < 0.01, "remove × left of cog: {remove:?}");
         assert!((remove.y - elem_y).abs() < 0.01, "remove × y: {remove:?}");
+        let objects = tree.get_bounds(panel.modifier_objects_btn_id.expect("objects built"));
+        assert!((objects.x - objects_x).abs() < 0.01, "objects left of remove: {objects:?}");
+        assert!((objects.y - elem_y).abs() < 0.01, "objects y: {objects:?}");
+        let toggle = tree.get_bounds(panel.toggle_btn_id.expect("modifier toggle built"));
+        assert!((toggle.x - toggle_x).abs() < 0.01, "toggle left of objects: {toggle:?}");
+        assert!((toggle.y - elem_y).abs() < 0.01, "toggle y: {toggle:?}");
     }
 
     #[test]

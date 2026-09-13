@@ -53,9 +53,10 @@ fn install(presets: &[EmbeddedPreset]) {
         match p.kind {
             PresetKind::Effect => effect.push((id.as_str().to_string(), json, p.origin)),
             PresetKind::Generator => generator.push((id.as_str().to_string(), json, p.origin)),
+            PresetKind::SceneModifier => panic!("this standalone runtime fixture requires an effect or generator"),
         }
     }
-    set_project_presets(effect, generator);
+    set_project_presets(effect, generator, Vec::new());
 }
 
 /// A real generator graph (Tesseract's) re-stamped with an overlay-only id —

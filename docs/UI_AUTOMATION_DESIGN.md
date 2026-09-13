@@ -156,7 +156,7 @@ before P2 touches the file (the miss-fallback currently sits near `interact.rs:6
 { "target": { "surface": "graph_canvas", "kind": "port", "label": "Source" } }
 ```
 
-Resolution: filter nodes by `name`/`text`/`type`; `under_text` walks ancestors until a node whose `text` matches (how "the mute button of the PLASMA row" works without per-row name allocation); `nth` disambiguates; exactly-one match required — zero or >1 is a hard failure listing the candidates (D6). Custom-surface targets resolve through the owning node's `targets` list.
+Resolution: filter nodes by `name`/`name_suffix`/`text`/`type`; `name_suffix` matches a stable control suffix when a name includes a runtime instance ID (and still requires exactly one match unless `nth` is supplied); `under_text` walks ancestors until a node whose `text` matches (how "the mute button of the PLASMA row" works without per-row name allocation); `nth` disambiguates; exactly-one match required — zero or >1 is a hard failure listing the candidates (D6). Custom-surface targets resolve through the owning node's `targets` list.
 
 **Naming pass scope (P1):** register names at high-value interaction points only — layer header controls, transport, inspector card controls, graph-editor chrome. Coverage grows organically; the selector language works unnamed via text/type/structure, so an unnamed widget is reachable, just less convenient. Do not attempt an exhaustive naming sweep.
 

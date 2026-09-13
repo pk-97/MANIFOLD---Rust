@@ -9,6 +9,15 @@ use crate::effects::RegistryParamDef;
 use crate::generator_registration::ParamSpec;
 use crate::preset_def::{PresetDef, PresetKind};
 
+/// JSON-loaded scene modifier preset metadata source. This inventory bucket
+/// stays separate from effect and generator sources so a modifier recipe is
+/// never interpreted as either kind during registry construction.
+pub struct LoadedSceneModifierPresetSource {
+    pub load: fn() -> Vec<crate::effect_graph_def::PresetMetadata>,
+}
+
+inventory::collect!(LoadedSceneModifierPresetSource);
+
 /// Declarative migration entry: an old `param_id` and its current
 /// replacement (`Some(new_id)`) or `None` if the param was dropped.
 ///

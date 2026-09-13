@@ -76,6 +76,12 @@ impl NodeInstance {
     }
 }
 
+struct PreparedParam {
+    name: String,
+    expected: ParamValue,
+    rejected: bool,
+}
+
 /// A directed graph of [`EffectNode`]s connected by [`NodeWire`]s.
 ///
 /// All mutation goes through this type's methods. Connection legality is
@@ -102,6 +108,10 @@ pub struct Graph {
     /// before the next frame executes (BUG-317: the stale plan had no
     /// `velocity` target, and the first temporal-upscale frame panicked).
     forced_outputs_epoch: u64,
+    /// Derived admission metadata follows this graph through every allocator.
+    modifier_buffer_budget: Option<super::scene_modifier_expand::PreparedModifierBufferBudget>,
+    prepared_params: AHashMap<NodeInstanceId, Vec<PreparedParam>>,
+    prepared_param_rejections: usize,
 }
 
 impl Graph {
@@ -112,7 +122,59 @@ impl Graph {
             next_id: 0,
             handles: AHashMap::default(),
             forced_outputs_epoch: 0,
+            modifier_buffer_budget: None,
+            prepared_params: AHashMap::default(),
+            prepared_param_rejections: 0,
         }
+    }
+
+    pub(crate) fn set_modifier_buffer_budget(
+        &mut self,
+        budget: super::scene_modifier_expand::PreparedModifierBufferBudget,
+    ) {
+        self.modifier_buffer_budget = Some(budget);
+    }
+
+    pub(crate) fn modifier_buffer_budget(&self) -> Option<&super::scene_modifier_expand::PreparedModifierBufferBudget> {
+        self.modifier_buffer_budget.as_ref()
+    }
+
+    /// Hold a source selector or admitted mode at its prepared value. This
+    /// policy is installed only after construction defaults have been applied.
+    pub(crate) fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
+        let inst = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let expected = inst.params.get(name).ok_or_else(|| GraphError::ParamNotFound {
+            node: id, param: name.into(),
+        })?.clone();
+        let guards = self.prepared_params.entry(id).or_default();
+        if !guards.iter().any(|guard| guard.name == name) {
+            guards.push(PreparedParam { name: name.into(), expected, rejected: false });
+        }
+        Ok(())
+    }
+
+    fn prepared_param_allows(&mut self, id: NodeInstanceId, name: &str, value: &ParamValue) -> bool {
+        let Some(guard) = self.prepared_params.get_mut(&id)
+            .and_then(|guards| guards.iter_mut().find(|guard| guard.name == name)) else { return true; };
+        let rejected = guard.expected != *value;
+        if rejected != guard.rejected {
+            if rejected {
+                self.prepared_param_rejections += 1;
+                log::warn!("prepared scene parameter {id:?}.{name} changed; reapply the modifier or restore its source/mode before rendering");
+            } else {
+                self.prepared_param_rejections -= 1;
+            }
+            guard.rejected = rejected;
+        }
+        !rejected
+    }
+
+    pub fn prepared_param_violation(&self) -> Option<(&manifold_core::NodeId, &str)> {
+        if self.prepared_param_rejections == 0 { return None; }
+        self.prepared_params.iter().find_map(|(id, guards)| {
+            let guard = guards.iter().find(|guard| guard.rejected)?;
+            Some((&self.nodes.get(id)?.node_id, guard.name.as_str()))
+        })
     }
 
     /// Current forced-outputs epoch — see the field doc. Consumers compare
@@ -218,6 +280,9 @@ impl Graph {
     /// [`NodeInstance`], or `None` if the id wasn't in the graph.
     pub fn remove_node(&mut self, id: NodeInstanceId) -> Option<NodeInstance> {
         let removed = self.nodes.remove(&id)?;
+        if let Some(guards) = self.prepared_params.remove(&id) {
+            self.prepared_param_rejections -= guards.iter().filter(|guard| guard.rejected).count();
+        }
         self.wires.retain(|w| w.from.0 != id && w.to.0 != id);
         // Drop any handle that pointed at this node — keeping it would
         // strand a stale handle->dead-id mapping that future
@@ -271,6 +336,9 @@ impl Graph {
         name: &str,
         value: ParamValue,
     ) -> Result<(), GraphError> {
+        if !self.prepared_param_allows(id, name, &value) {
+            return Err(GraphError::PreparedParameterChanged { node: id });
+        }
         let inst = self
             .nodes
             .get_mut(&id)
@@ -433,6 +501,7 @@ impl Graph {
         name: &'static str,
         value: ParamValue,
     ) {
+        if !self.prepared_param_allows(id, name, &value) { return; }
         if let Some(inst) = self.nodes.get_mut(&id) {
             // Same compare-on-write contract as `set_param` — see there.
             // Hot path: `name` is a `&'static str`, wrapped as a borrowed

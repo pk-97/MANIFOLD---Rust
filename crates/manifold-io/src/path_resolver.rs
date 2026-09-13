@@ -1,4 +1,5 @@
-use crate::collect::{collect_asset_paths, AssetTarget};
+use crate::collect::{collect_asset_paths, has_calibrated_scene_asset, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
+use manifold_core::file_loader::NodeFileLoad;
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use std::collections::HashSet;
@@ -94,6 +95,16 @@ impl PathResolver {
                         &mut result,
                     );
                 }
+                target @ AssetTarget::SceneModifierStringParam { .. } => {
+                    Self::resolve_scene_modifier_string_param(
+                        project,
+                        &target,
+                        &asset.path,
+                        &project_dir,
+                        &search_dirs,
+                        &mut result,
+                    );
+                }
             }
         }
 
@@ -152,6 +163,7 @@ impl PathResolver {
                     }
                 }
                 AssetTarget::StringParam { .. } => {}
+                AssetTarget::SceneModifierStringParam { .. } => {}
             }
         }
     }
@@ -347,10 +359,6 @@ impl PathResolver {
             return;
         }
 
-        let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
-            return;
-        };
-
         let resolved = Self::try_resolve(&path_str, None, -1, project_dir, search_dirs);
         let Some(resolved_path) = resolved else {
             result.unresolved_count += 1;
@@ -358,6 +366,18 @@ impl PathResolver {
             return;
         };
 
+        if has_calibrated_scene_asset(project, layer_id, key) {
+            if re_point_string_param(project, layer_id, key, &path_str, &resolved_path) {
+                result.resolved_count += 1;
+            } else {
+                result.unresolved_count += 1;
+                result.unresolved.push(path_str);
+            }
+            return;
+        }
+        let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
+            return;
+        };
         let mut written = 0;
         for clip in &mut layer.clips {
             let Some(params) = clip.string_params.as_mut() else {
@@ -377,6 +397,53 @@ impl PathResolver {
         } else {
             // The enumerated value had no per-clip override home to write back
             // into (it was the preset-def default) — nothing to re-point.
+            result.unresolved_count += 1;
+            result.unresolved.push(path_str);
+        }
+    }
+
+    fn resolve_scene_modifier_string_param(
+        project: &mut Project,
+        target: &AssetTarget,
+        path: &Path,
+        project_dir: &str,
+        search_dirs: &HashSet<String>,
+        result: &mut PathResolutionResult,
+    ) {
+        let AssetTarget::SceneModifierStringParam { load, .. } = target else {
+            return;
+        };
+        let path_str = path.to_string_lossy().to_string();
+        if path_str.is_empty() {
+            return;
+        }
+        if path.is_absolute() && match load {
+            NodeFileLoad::File(_) => path.is_file(),
+            NodeFileLoad::Folder(_) => path.is_dir(),
+        } {
+            result.already_valid_count += 1;
+            return;
+        }
+        let resolved = match load {
+            NodeFileLoad::File(_) => {
+                Self::try_resolve(&path_str, Some(&path_str), -1, project_dir, search_dirs)
+            }
+            NodeFileLoad::Folder(_) => Self::try_resolve_directory(
+                &path_str,
+                Some(&path_str),
+                project_dir,
+                search_dirs,
+            ),
+        };
+        let Some(resolved_path) = resolved else {
+            result.unresolved_count += 1;
+            result.unresolved.push(path_str);
+            return;
+        };
+        let changed = re_point_scene_modifier_asset(project, target, &path_str, &resolved_path);
+        if changed {
+            result.resolved_count += 1;
+        } else {
             result.unresolved_count += 1;
             result.unresolved.push(path_str);
         }

@@ -140,6 +140,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "bug060heavy"
         || scene == "paramsteps"
         || scene == "gltfscene"
+        || scene == "mushroomscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"
@@ -605,7 +606,10 @@ impl Runner {
         // undo stack so `Key`'s Cmd+Z/Cmd+Shift+Z arm has something real to
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
-        self.record_executed_commands();
+        if self.record_executed_commands(data) {
+            self.needs_structural_sync = true;
+            self.advance_frame(ui, data, zoom_ppb, render, false);
+        }
         outcome
     }
 
@@ -613,23 +617,54 @@ impl Runner {
     /// `ui_bridge::dispatch` calls sent over `content_tx` (the receiver is
     /// otherwise held only to keep the channel alive — see `Runner::new`)
     /// and folds the editing ones into the harness's `undo` stack. NEVER
-    /// re-executes: `AppEditingHost`/`ui_bridge` always mutate
+    /// re-executes ordinary Execute messages: `AppEditingHost`/`ui_bridge` mutate
     /// `data.project` synchronously before sending (mirroring the live
     /// app's `local_project` pattern, module doc), so by the time this runs
     /// the command has already taken effect — `record()`, not `execute()`.
+    /// SceneModifier messages are content-owned requests, so this harness
+    /// executes their shared authoring/admission path exactly once before recording.
     /// Non-editing variants (`SeekTo`, `Undo`, …) are inert here; the
     /// harness's headless `Key` arm drives `self.undo` directly instead of
     /// routing through this channel.
-    fn record_executed_commands(&mut self) {
+    fn record_executed_commands(&mut self, data: &mut SceneData) -> bool {
+        let mut changed = false;
         while let Ok(cmd) = self._content_rx.try_recv() {
             match cmd {
+                ContentCommand::SceneModifier(action) => {
+                    let error = match crate::scene_modifier_edit::build_action(&data.project, action) {
+                        Ok(command) => {
+                            changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                            self.undo.take_rejection()
+                        }
+                        Err(error) => Some(error),
+                    };
+                    if let Some(message) = error {
+                        let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        changed = true;
+                    }
+                }
+                ContentCommand::GraphEditRejected(message) => {
+                    let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                    data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                    changed = true;
+                }
                 ContentCommand::Execute(cmd) => self.undo.record(cmd),
+                ContentCommand::ExecuteOnContent(cmd) => {
+                    changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
+                    if let Some(message) = self.undo.take_rejection() {
+                        let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        changed = true;
+                    }
+                }
                 ContentCommand::ExecuteBatch(cmds, desc) => {
                     self.undo.record(Box::new(CompositeCommand::new(cmds, desc)));
                 }
                 _ => {}
             }
         }
+        changed
     }
 
     fn surfaces_owned(&self, ui: &UIRoot, data: &SceneData) -> (Vec<manifold_ui::panels::viewport::ClipScreenRect>, Vec<manifold_ui::panels::viewport::AutomationLaneScreen>) {

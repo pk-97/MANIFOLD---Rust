@@ -14,3 +14,10 @@
 pub struct GpuDevice {
     pub(crate) _reserved: (),
 }
+
+impl GpuDevice {
+    /// Vulkan admission limits are not exposed by this scaffold yet.
+    pub fn modifier_memory_snapshot(&self) -> Option<crate::GpuMemorySnapshot> {
+        None
+    }
+}

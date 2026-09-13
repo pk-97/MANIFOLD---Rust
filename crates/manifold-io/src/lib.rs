@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod collect;
+mod graph_schema;
 pub mod loader;
 pub mod manifest;
 pub mod migrate;

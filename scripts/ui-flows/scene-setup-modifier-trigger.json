@@ -70,7 +70,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.41_flow.trigger_btn"
+          "name_suffix": "\"flow\"].trigger_btn"
         }
       },
       "check": {
@@ -106,7 +106,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.41_flow"
+          "text": "Flow"
         }
       }
     }
@@ -115,7 +115,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.41_flow.trigger_btn"
+          "name_suffix": "\"flow\"].trigger_btn"
         }
       },
       "gesture": {
@@ -154,7 +154,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.41_zoom_pulse_amp.driver_btn"
+          "name_suffix": "\"zoom_pulse_amp\"].driver_btn"
         }
       }
     }
@@ -163,7 +163,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.41_zoom_pulse_amp.driver_btn"
+          "name_suffix": "\"zoom_pulse_amp\"].driver_btn"
         }
       },
       "gesture": {

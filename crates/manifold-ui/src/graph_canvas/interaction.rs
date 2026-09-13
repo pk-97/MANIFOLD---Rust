@@ -362,6 +362,15 @@ impl GraphCanvas {
             }
             return None;
         }
+        // Preparation-only rows remain editable through their normal value
+        // gesture, but a label-zone context click must not open card mapping.
+        if self
+            .find_node(node_id)
+            .and_then(|node| node.params.get(pi))
+            .is_some_and(|param| param.preparation_only)
+        {
+            return None;
+        }
         Some(hit)
     }
 
@@ -389,6 +398,13 @@ impl GraphCanvas {
         is_angle: bool,
         section: Option<String>,
     ) {
+        if self
+            .find_node(node_id)
+            .and_then(|node| node.params.get(pi))
+            .is_some_and(|param| param.preparation_only)
+        {
+            return;
+        }
         let Some(anchor) = self.param_row_rect(viewport, node_id, pi) else {
             return;
         };
@@ -1392,6 +1408,9 @@ impl GraphCanvas {
         let node = self.find_node(node_id)?;
         let handle = node.handle.clone()?;
         let p = node.params.get(pi)?;
+        if p.preparation_only {
+            return None;
+        }
         let (min, max) = p.range.unwrap_or((0.0, 1.0));
         Some(GraphEditCommand::ToggleNodeParamExpose {
             node_id: node.node_id.clone(),

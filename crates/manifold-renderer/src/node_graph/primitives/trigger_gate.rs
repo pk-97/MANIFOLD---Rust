@@ -12,6 +12,11 @@
 //! Pair with `system.generator_input.trigger_count` upstream and any
 //! number of consumers downstream — `cycle_table_row`,
 //! `scalar_array_accumulator`, `nested_cubes_geometry`, etc.
+//!
+//! Wiring `initial_count` supplies the counter immediately before a real
+//! pending event. It lets a fresh gate pass that event on its first sample.
+//! Unwired gates retain first-sample suppression. Disabled gates absorb the
+//! first event too; re-enabling never replays it.
 
 use std::borrow::Cow;
 
@@ -26,6 +31,7 @@ crate::primitive! {
     inputs: {
         trigger_count: ScalarF32 optional,
         enable: ScalarF32 optional,
+        initial_count: ScalarF32 optional,
     },
     outputs: {
         out: ScalarF32,
@@ -79,7 +85,14 @@ impl Primitive for TriggerGate {
 
         let delta = match self.last_input {
             Some(last) => input.saturating_sub(last),
-            None => 0,
+            None => ctx
+                .inputs
+                .scalar("initial_count")
+                .and_then(|value| value.as_scalar())
+                .filter(|value| value.is_finite())
+                .map_or(0, |baseline| {
+                    input.saturating_sub(baseline.round().max(0.0) as u32)
+                }),
         };
         if enabled {
             self.output_count = self.output_count.saturating_add(delta);
@@ -110,19 +123,24 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn declares_two_optional_inputs_and_scalar_output() {
+    fn declares_three_optional_inputs_and_scalar_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
         let inputs = TriggerGate::INPUTS;
-        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs.len(), 3);
         assert_eq!(inputs[0].name, "trigger_count");
         assert!(!inputs[0].required);
         assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(inputs[1].name, "enable");
         assert!(!inputs[1].required);
+        assert_eq!(inputs[2].name, "initial_count");
+        assert!(!inputs[2].required);
 
         assert_eq!(TriggerGate::OUTPUTS.len(), 1);
         assert_eq!(TriggerGate::OUTPUTS[0].name, "out");
-        assert_eq!(TriggerGate::OUTPUTS[0].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(
+            TriggerGate::OUTPUTS[0].ty,
+            PortType::Scalar(ScalarType::F32)
+        );
     }
 
     #[test]

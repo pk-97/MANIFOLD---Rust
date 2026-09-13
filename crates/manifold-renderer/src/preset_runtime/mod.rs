@@ -66,7 +66,7 @@ use crate::node_graph::{
 };
 use crate::node_graph::loaded_preset_view_by_id;
 use crate::preset_context::PresetContext;
-use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef};
+use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef};
 use manifold_core::params::ParamManifest;
 use manifold_core::{Beats, Seconds};
 use crate::render_target::RenderTarget;
@@ -113,6 +113,9 @@ use core::assert_manifest_gate;
 use core::GRAPH_FORMAT;
 
 mod instrumentation;
+mod modifier_preview;
+mod modifier_runtime;
+pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/multi_segment.rs"]
@@ -153,6 +156,9 @@ mod amount_zero_passthrough_tests;
 #[cfg(test)]
 #[path = "tests/generator_runtime.rs"]
 mod generator_runtime_tests;
+#[cfg(test)]
+#[path = "tests/trigger_initialization.rs"]
+mod trigger_initialization;
 
 #[cfg(test)]
 #[path = "tests/bool_convert_heal.rs"]
@@ -173,6 +179,10 @@ mod segment_prewarm_tests;
 #[cfg(test)]
 #[path = "tests/bound_param_survives_rebuild.rs"]
 mod bound_param_survives_rebuild_tests;
+
+#[cfg(test)]
+#[path = "tests/modifier_events.rs"]
+mod modifier_events_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/blob_grain_probe.rs"]

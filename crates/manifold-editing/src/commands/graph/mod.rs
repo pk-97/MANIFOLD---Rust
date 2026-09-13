@@ -29,6 +29,7 @@ use manifold_core::project::Project;
 
 mod card_owned_write;
 mod node_edit;
+mod param_sections;
 pub use node_edit::*;
 mod expose;
 pub use expose::*;
@@ -36,8 +37,10 @@ mod groups;
 pub use groups::*;
 mod scene;
 pub use scene::*;
-mod scene_modifier;
-pub use scene_modifier::*;
+mod instance_snapshot;
+pub(crate) use instance_snapshot::{InstanceLayerSnapshot, prune_instance_params};
+mod modifier_stack;
+pub use modifier_stack::*;
 mod layer_plane;
 pub use layer_plane::*;
 mod modifiers;
@@ -77,18 +80,7 @@ pub(super) fn with_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    project.with_preset_graph_mut(target, |host| {
-        let def = host
-            .graph_def_mut()
-            .get_or_insert_with(|| catalog_default.clone());
-        let r = f(def);
-        if structural {
-            host.bump_graph_structure_version();
-        } else {
-            host.bump_graph_version();
-        }
-        r
-    })
+    project.with_graph_for_target_mut(target, Some(catalog_default), structural, f)
 }
 
 /// Variant of [`with_target_graph_mut`] that doesn't lift the graph
@@ -105,18 +97,7 @@ pub(super) fn with_existing_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    project
-        .with_preset_graph_mut(target, |host| {
-            let def = host.graph_def_mut().as_mut()?;
-            let r = f(def);
-            if structural {
-                host.bump_graph_structure_version();
-            } else {
-                host.bump_graph_version();
-            }
-            Some(r)
-        })
-        .flatten()
+    project.with_graph_for_target_mut(target, None, structural, f)
 }
 
 /// Refresh the target's live `ParamManifest` from its just-mutated graph
@@ -130,7 +111,61 @@ where
 /// touches `preset_metadata` at runtime — see call sites below. A no-op if
 /// the target no longer resolves (effect/layer deleted).
 pub(super) fn refresh_target_manifest(project: &mut Project, target: &GraphTarget) {
+    if let GraphTarget::SceneModifier { modifier_id, .. } = target {
+        let Some(owner_target) = target.host_target() else {
+            eprintln!(
+                "[manifold-editing] cannot refresh invalid scene modifier target {}",
+                target.label()
+            );
+            return;
+        };
+        let Some(owner) = project.graph_target_owner(owner_target) else {
+            eprintln!(
+                "[manifold-editing] cannot refresh missing scene modifier owner {}",
+                target.label()
+            );
+            return;
+        };
+        let Some(owner_graph) = owner.graph.clone() else {
+            eprintln!(
+                "[manifold-editing] cannot refresh scene modifier without owner graph {}",
+                target.label()
+            );
+            return;
+        };
+        let edit = match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &owner_graph,
+            modifier_id,
+        ) {
+            Ok(edit) => edit,
+            Err(error) => {
+                eprintln!(
+                    "[manifold-editing] scene modifier metadata refresh failed for {}: {error}",
+                    target.label()
+                );
+                return;
+            }
+        };
+        if let Some(host) = project.graph_target_owner_mut(owner_target) {
+            host.graph = Some(edit.graph);
+            prune_instance_params(host, &edit.removed_param_ids);
+            host.refresh_manifest_from_graph();
+        }
+        return;
+    }
     project.with_preset_graph_mut(target, |host| host.refresh_manifest_from_graph());
+}
+
+/// Borrow the complete authored graph selected by `target`, including a
+/// modifier-local graph nested in its owning generator. The host instance
+/// remains the owner of storage and the runtime manifest.
+pub(super) fn with_target_graph_def_mut<R>(
+    project: &mut Project,
+    target: &GraphTarget,
+    f: impl FnOnce(&mut EffectGraphDef) -> R,
+) -> Option<R> {
+    let host = project.graph_target_owner_mut(target)?;
+    Some(f(target.graph_in_mut(host.graph.as_mut()?)?))
 }
 
 /// Helper for the Revert command: take the target's current
@@ -164,7 +199,6 @@ pub(super) fn install_target_graph(
 // Add Graph Node
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Group / Ungroup
 // ---------------------------------------------------------------------------
@@ -196,7 +230,10 @@ pub(super) fn descend_level<'a>(
 /// any hop doesn't resolve to a named group (an anonymous boundary node has
 /// `handle: None` — matches D5's "top-level nodes get `None`" for that edge
 /// case too, rather than a panic).
-pub(super) fn innermost_group_display_name(nodes: &[EffectGraphNode], scope: &[u32]) -> Option<String> {
+pub(super) fn innermost_group_display_name(
+    nodes: &[EffectGraphNode],
+    scope: &[u32],
+) -> Option<String> {
     let mut level = nodes;
     let mut name = None;
     for gid in scope {
@@ -223,7 +260,6 @@ pub(super) fn collect_node_ids(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>)
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Add Scene Object / Add Scene Light
 // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D7/D7a, P5)
@@ -233,7 +269,12 @@ pub(super) fn collect_node_ids(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>)
 /// below — same 12-field shape `AddGraphNodeCommand`/`group_edit::group_selection`
 /// use, factored out so the two commands below don't repeat the struct literal
 /// four times.
-pub(super) fn scene_build_node(id: u32, type_id: &str, handle: Option<String>, params: BTreeMap<String, SerializedParamValue>) -> EffectGraphNode {
+pub(super) fn scene_build_node(
+    id: u32,
+    type_id: &str,
+    handle: Option<String>,
+    params: BTreeMap<String, SerializedParamValue>,
+) -> EffectGraphNode {
     EffectGraphNode {
         id,
         node_id: NodeId::new(manifold_core::short_id()),
@@ -250,7 +291,12 @@ pub(super) fn scene_build_node(id: u32, type_id: &str, handle: Option<String>, p
     }
 }
 
-pub(super) fn scene_build_wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+pub(super) fn scene_build_wire(
+    from_node: u32,
+    from_port: &str,
+    to_node: u32,
+    to_port: &str,
+) -> EffectGraphWire {
     EffectGraphWire {
         from_node,
         from_port: from_port.to_string(),
@@ -272,12 +318,13 @@ pub(super) fn resolve_target_instance<'p>(
 ) -> Option<&'p mut manifold_core::effects::PresetInstance> {
     match target {
         GraphTarget::Effect(effect_id) => project.find_effect_by_id_mut(effect_id),
-        GraphTarget::Generator(layer_id) => {
-            project.timeline.find_layer_by_id_mut(layer_id).map(|(_, layer)| layer.gen_params_or_init())
-        }
+        GraphTarget::Generator(layer_id) => project
+            .timeline
+            .find_layer_by_id_mut(layer_id)
+            .map(|(_, layer)| layer.gen_params_or_init()),
+        GraphTarget::SceneModifier { .. } => None,
     }
 }
-
 
 /// `base`, else `base_2`, `base_3`, … — the first form not already in `taken`.
 /// Inserts the chosen handle into `taken` so a batch paste stays collision-free.

@@ -242,6 +242,12 @@ long as every wire is remapped consistently.
 The output is a `EffectGraphDef` containing **no** group nodes and no `group_input`/`group_output`
 nodes — structurally identical to a hand-authored flat document.
 
+Direct input-to-output aliases are also folded during flattening, including nested
+groups and fanout. The input and output must declare the same port type. An
+unwired input stays unwired; multiple producers and alias cycles produce typed
+errors. This shares the original resource without adding a runtime node, buffer
+or copy pass. A pure alias has no inner node for the group's preview map.
+
 ### Worked example — a `soft_focus` group (Blur + Mix(source, blurred))
 
 Authoring form (the body lives inline; this is the whole document an author or AI writes):

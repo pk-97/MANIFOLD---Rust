@@ -73,6 +73,12 @@ pub struct BoundGraph {
     /// the same repoint the card + user bindings already go through. Populated by
     /// the chain builder from `view.fused_retarget` right after construction.
     pub fused_retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// Authored host/modifier sources resolved to this generator's runtime
+    /// nodes during preparation. No expansion belongs on the value-edit path.
+    prepared_value_writes: Option<super::scene_modifier_expand::PreparedGraphValueWrites>,
+    /// Aligned with resolved numeric bindings; retains local mapping factors
+    /// when a host macro changes its scale or offset.
+    modifier_binding_sources: Vec<Option<super::scene_modifier_expand::SceneModifierBindingSource>>,
     /// Every def-baked node param this graph's card bindings threw away at
     /// construction (see [`find_shadowed_def_params`]). Non-empty means someone
     /// wrote a value into a node param that a card owns, and the card won. The
@@ -158,6 +164,8 @@ impl BoundGraph {
             bindings,
             cache,
             fused_retarget: AHashMap::default(),
+            prepared_value_writes: None,
+            modifier_binding_sources: Vec::new(),
             shadowed_def_params,
         }
     }
@@ -166,6 +174,24 @@ impl BoundGraph {
     /// outer value hasn't changed since last frame. The per-frame hot call.
     pub fn apply(&mut self, graph: &mut Graph, values: &ParamManifest) {
         apply_bindings(&self.bindings, graph, None, values, &mut self.cache);
+    }
+
+    /// Install both prepared routes only after the runtime binding list has
+    /// resolved. A dropped binding must never shift another macro's mapping.
+    pub fn install_prepared_routes(
+        &mut self,
+        values: super::scene_modifier_expand::PreparedGraphValueWrites,
+        sources: Vec<Option<super::scene_modifier_expand::SceneModifierBindingSource>>,
+    ) -> Result<(), super::scene_modifier_expand::SceneModifierExpandError> {
+        if sources.len() != self.bindings.len() {
+            return Err(super::scene_modifier_expand::SceneModifierExpandError::InvalidBinding {
+                path: "preparedBindingSources".into(),
+                detail: "prepared sources must align with the resolved binding list".into(),
+            });
+        }
+        self.prepared_value_writes = Some(values);
+        self.modifier_binding_sources = sources;
+        Ok(())
     }
 
     /// Push `def`'s inner-node param values into the live `graph` for every node
@@ -207,7 +233,17 @@ impl BoundGraph {
         def: Option<&EffectGraphDef>,
         prefix: &str,
     ) {
-        apply_inner_param_overrides(def, node_map, graph, &self.fused_retarget, prefix);
+        if let Some(prepared) = &self.prepared_value_writes {
+            if !prefix.is_empty() {
+                log::error!("prepared generator value routes cannot be used as a prefixed effect segment");
+            } else if let Some(def) = def
+                && let Err(error) = prepared.apply(def, graph)
+            {
+                log::error!("prepared generator value update refused: {error}");
+            }
+        } else {
+            apply_inner_param_overrides(def, node_map, graph, &self.fused_retarget, prefix);
+        }
         self.cache.clear();
     }
 
@@ -232,14 +268,28 @@ impl BoundGraph {
                     .collect()
             })
             .unwrap_or_default();
-        for b in &mut self.bindings {
+        // Validate every macro route before changing any live reshape.
+        if let Some(def) = def {
+            for source in self.modifier_binding_sources.iter().flatten() {
+                if let Err(error) = source.scale_offset(def) {
+                    log::error!("modifier mapping update refused: {error}");
+                    return;
+                }
+            }
+        }
+        for (index, b) in self.bindings.iter_mut().enumerate() {
             // Manifest-wins-per-id, mirroring the build-time overlay: a
             // binding whose id the manifest doesn't carry keeps the reshape
             // baked at build (from the def shadow).
             let Some(entry) = manifest.get(b.id.as_ref()) else {
                 continue;
             };
-            b.rebake_reshape(&entry.spec, scale_offset.get(b.id.as_ref()).copied());
+            let mapping = match (self.modifier_binding_sources.get(index).and_then(Option::as_ref), def) {
+                (Some(source), Some(def)) => Some(source.scale_offset(def).expect("all sources validated before mutation")),
+                (Some(_), None) => None, // retain the installed composed mapping
+                (None, _) => scale_offset.get(b.id.as_ref()).copied(),
+            };
+            b.rebake_reshape(&entry.spec, mapping);
         }
         self.cache.clear();
     }
@@ -591,6 +641,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: NodeId::new("feedback"),

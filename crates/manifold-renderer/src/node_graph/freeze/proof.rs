@@ -2884,6 +2884,7 @@ fn flow_field_noise_fused_region_animates_over_time() {
         name: Some("flow-time".to_string()),
         description: None,
         preset_metadata: Default::default(),
+        scene_modifiers: Vec::new(),
         nodes: vec![
             manifold_core::effect_graph_def::EffectGraphNode {
                 id: 0,

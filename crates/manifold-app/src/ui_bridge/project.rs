@@ -3,7 +3,6 @@
 
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 use manifold_ui::ProjectAction;
@@ -223,7 +222,8 @@ pub(super) fn dispatch_project(
             let old_settings = project.settings.rt_quality;
             if *new_settings != old_settings {
                 let cmd = manifold_editing::commands::settings::ChangeRtQualityCommand::new(
-                    old_settings, *new_settings,
+                    old_settings,
+                    *new_settings,
                 );
                 {
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
@@ -257,15 +257,14 @@ pub(super) fn dispatch_project(
                     let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
                     let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
                     let layer_id = layer.layer_id.clone();
-                    let cmd =
-                        manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                            layer_id.clone(),
-                            old_type,
-                            new_type.clone(),
-                            old_params,
-                            old_drivers,
-                            old_envelopes,
-                        );
+                    let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
+                        layer_id.clone(),
+                        old_type,
+                        new_type.clone(),
+                        old_params,
+                        old_drivers,
+                        old_envelopes,
+                    );
                     {
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
@@ -290,50 +289,32 @@ pub(super) fn dispatch_project(
         // `Application::watch_generator_graph` does, then dispatch the SAME
         // command a card/node-face/group-face write would — no new mutation
         // path (section 4).
-        ProjectAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
-            if let Some(cmd) =
-                apply_scene_param_write(project, layer_id, scope_path.clone(), *node_doc_id, param_id, *value)
-            {
-                // P4 coupled rows (Stride/Spacing): the secondaries land in
-                // the SAME undo unit — one CompositeCommand. Uncoupled rows
-                // take the single-command path unchanged.
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let coupled = coupled_write_targets(project, &target, *node_doc_id, param_id);
-                let Some(default) = generator_catalog_default(project, layer_id) else {
-                    // A layer with no generator catalog default (the
-                    // SetGraphNodeParamCommand requirement) takes the
-                    // single-command path.
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                    return DispatchResult::handled();
-                };
-                if coupled.is_empty() {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                } else {
-                    let mut cmds: Vec<Box<dyn manifold_editing::command::Command + Send>> =
-                        vec![cmd];
-                    for t in &coupled {
-                        let new_value = (t.value_fn)(*value);
-                        if (new_value - t.baseline).abs() <= f32::EPSILON {
-                            continue;
-                        }
-                        apply_coupled_write_live(project, &target, t, new_value);
-                        cmds.push(coupled_write_command(&target, t, new_value, default.clone()));
-                    }
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        if cmds.len() == 1 {
-                            cmds.into_iter().next().expect("one command")
-                        } else {
-                            let batch: Vec<Box<dyn manifold_editing::command::Command>> = cmds
-                                .into_iter()
-                                .map(|c| c as Box<dyn manifold_editing::command::Command>)
-                                .collect();
-                            Box::new(manifold_editing::command::CompositeCommand::new(
-                                batch,
-                                "Scene Loop coupled row write".to_string(),
-                            ))
-                        };
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
+        ProjectAction::SceneSetupParamChanged(
+            layer_id,
+            scope_path,
+            node_doc_id,
+            param_id,
+            value,
+        ) => {
+            if let Some(reason) = crate::scene_modifier_edit::node_parameter_lock_reason(
+                project,
+                &manifold_core::GraphTarget::Generator(layer_id.clone()),
+                scope_path,
+                *node_doc_id,
+                param_id,
+            ) {
+                ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.into()));
+                return DispatchResult::handled();
+            }
+            if let Some(cmd) = apply_scene_param_write(
+                project,
+                layer_id,
+                scope_path.clone(),
+                *node_doc_id,
+                param_id,
+                *value,
+            ) {
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::handled()
         }
@@ -345,7 +326,9 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.bake_environment"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.bake_environment",
+                    ),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -362,7 +345,9 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.atmosphere"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.atmosphere",
+                    ),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -372,105 +357,116 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
 
-        // SCENE_MODIFIER_FRAMEWORK P3 (section 3.7): the generic modifier
-        // actions — apply/remove/toggle by kind id through the same generic
-        // command pair P1 shipped (the loop-specific arms they replace were
-        // the same dispatch with the kind pinned to `scene_loop`).
-        ProjectAction::SceneModifierApply(layer_id, kind_id) => {
-            let Some(default) = generator_catalog_default(project, layer_id) else {
-                return DispatchResult::handled();
-            };
-            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-            let Some(plan) = modifier_plan_for(project, layer_id, kind_id) else {
-                return DispatchResult::handled();
-            };
-            let cmd = manifold_editing::commands::graph::ApplySceneModifierCommand::new(
-                target,
-                Vec::new(),
-                plan,
-                default,
-            );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            DispatchResult::structural()
-        }
-        ProjectAction::SceneModifierRemove(layer_id, kind_id) => {
-            if generator_catalog_default(project, layer_id).is_none() {
-                return DispatchResult::handled();
-            }
-            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-            let Some(plan) = modifier_plan_for(project, layer_id, kind_id) else {
-                return DispatchResult::handled();
-            };
-            let cmd = manifold_editing::commands::graph::RemoveSceneModifierCommand::new(
-                target,
-                Vec::new(),
-                plan,
-            );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            DispatchResult::structural()
-        }
-        // D5/INV-M7: the enable toggle is ONE param write on the kind's
-        // enable target, resolved app-side from the descriptor + trace —
-        // never a graph rebuild. Switch kinds write the camera switch's
-        // `select` (an Enum param — the write preserves its storage variant);
-        // gate kinds write the enabled value atom's `value` through the
-        // standard scene write path (it IS a stamped exposure).
-        ProjectAction::SceneModifierToggleEnabled(layer_id, kind_id) => {
-            let Some(default) = generator_catalog_default(project, layer_id) else {
-                return DispatchResult::handled();
-            };
-            let Some((doc_id, param, current)) =
-                modifier_enable_target(project, layer_id, kind_id)
-            else {
-                return DispatchResult::handled();
-            };
-            let next = if current > 0.5 { 0.0 } else { 1.0 };
-            let enable_decl_switch = manifold_renderer::node_graph::scene_modifier::descriptor_for(kind_id)
-                .is_some_and(|d| {
-                    matches!(
-                        d.enable,
-                        manifold_renderer::node_graph::scene_modifier::EnableDecl::Switch { .. }
-                    )
-                });
-            if enable_decl_switch {
-                // The switch's `select` is internal (never an exposure), so
-                // the f32-only scene write path can't be used — write the
-                // node param directly, preserving its Enum storage variant.
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let (_, layer) = match project.timeline.find_layer_by_id(layer_id) {
-                    Some(pair) => pair,
-                    None => return DispatchResult::handled(),
-                };
-                let is_enum = layer
-                    .generator_graph()
-                    .and_then(|def| def.nodes.iter().find(|n| n.id == doc_id))
-                    .and_then(|n| n.params.get(param))
-                    .is_some_and(|v| matches!(v, SerializedParamValue::Enum { .. }));
-                let value = if is_enum {
-                    SerializedParamValue::Enum { value: next as u32 }
-                } else {
-                    SerializedParamValue::Float { value: next }
-                };
-                let mut cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                    manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                        target,
-                        doc_id,
-                        param.to_string(),
-                        value,
-                        default,
+        ProjectAction::SceneModifierApply(layer, preset) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Add(
+                        layer.clone(),
+                        preset.clone(),
                     ),
-                );
-                cmd.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-            } else if let Some(cmd) =
-                apply_scene_param_write(project, layer_id, Vec::new(), doc_id, param, next)
-            {
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-            }
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifierRemove(layer, id) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Remove(
+                        layer.clone(),
+                        id.clone(),
+                    ),
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifierMove(layer, id, index) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Move(
+                        layer.clone(),
+                        id.clone(),
+                        *index,
+                    ),
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifiersReorder(layer, order) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Reorder(
+                        layer.clone(),
+                        order.clone(),
+                    ),
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifiersDuplicate(layer, selected) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Duplicate(
+                        layer.clone(),
+                        selected.clone(),
+                    ),
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifiersRemove(layer, selected) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::RemoveMany(
+                        layer.clone(),
+                        selected.clone(),
+                    ),
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifierSetTargets(layer, id, objects) => {
+            let targets = objects.as_ref().map_or(
+                manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
+                |objects| manifold_core::scene_modifier_preset::SceneTargetSelection::Explicit {
+                    objects: objects
+                        .iter()
+                        .map(
+                            |object| manifold_core::scene_modifier_preset::SceneNodeRef {
+                                scope: object.scope.clone(),
+                                node: object.node.clone(),
+                            },
+                        )
+                        .collect(),
+                },
+            );
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Retarget(
+                        layer.clone(),
+                        id.clone(),
+                        targets,
+                    ),
+                ),
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifierToggleEnabled(layer, id) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Toggle(
+                        layer.clone(),
+                        id.clone(),
+                    ),
+                ),
+            );
             DispatchResult::handled()
         }
 
@@ -490,9 +486,15 @@ pub(super) fn dispatch_project(
                     *render_scene_node_id,
                     *next_index,
                     centroid,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.phong_material",
+                    ),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.transform_3d",
+                    ),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.scene_object",
+                    ),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -521,9 +523,15 @@ pub(super) fn dispatch_project(
                     centroid,
                     aspect,
                     1.0,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.unlit_material"),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.unlit_material",
+                    ),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.transform_3d",
+                    ),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.scene_object",
+                    ),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -542,7 +550,9 @@ pub(super) fn dispatch_project(
                     *render_scene_node_id,
                     *next_index,
                     pos,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.light",
+                    ),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -626,14 +636,15 @@ pub(super) fn dispatch_project(
         } => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let cmd = manifold_editing::commands::graph::SetSceneObjectSkinTargetMapCommand::new(
-                    target,
-                    scope_path.clone(),
-                    *scene_object_id,
-                    *source_node_id,
-                    map_skin_target_map(*target_map),
-                    default,
-                );
+                let cmd =
+                    manifold_editing::commands::graph::SetSceneObjectSkinTargetMapCommand::new(
+                        target,
+                        scope_path.clone(),
+                        *scene_object_id,
+                        *source_node_id,
+                        map_skin_target_map(*target_map),
+                        default,
+                    );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(project);
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
@@ -727,13 +738,19 @@ pub(super) fn dispatch_project(
                     let pf = |name: &str, dflt: f32| {
                         node.and_then(|n| n.params.get(name))
                             .and_then(|v| match v {
-                                manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
+                                manifold_core::effect_graph_def::SerializedParamValue::Float {
+                                    value,
+                                } => Some(*value),
                                 _ => None,
                             })
                             .unwrap_or(dflt)
                     };
                     let cur_pos = (pf("pos_x", 0.0), pf("pos_y", 0.0), pf("pos_z", 0.0));
-                    let cur_tgt = (pf("target_x", 0.0), pf("target_y", 0.0), pf("target_z", 0.0));
+                    let cur_tgt = (
+                        pf("target_x", 0.0),
+                        pf("target_y", 0.0),
+                        pf("target_z", 0.0),
+                    );
                     let mut dir = (
                         cur_tgt.0 - cur_pos.0,
                         cur_tgt.1 - cur_pos.1,
@@ -742,7 +759,11 @@ pub(super) fn dispatch_project(
                     let len = (dir.0 * dir.0 + dir.1 * dir.1 + dir.2 * dir.2).sqrt();
                     // Degenerate view (camera sitting on its target): fall
                     // back to looking down -Z rather than producing NaNs.
-                    dir = if len > 1e-6 { (dir.0 / len, dir.1 / len, dir.2 / len) } else { (0.0, 0.0, -1.0) };
+                    dir = if len > 1e-6 {
+                        (dir.0 / len, dir.1 / len, dir.2 / len)
+                    } else {
+                        (0.0, 0.0, -1.0)
+                    };
                     let new_pos = (
                         pos.0 - dir.0 * distance,
                         pos.1 - dir.1 * distance,
@@ -768,7 +789,10 @@ pub(super) fn dispatch_project(
                         }
                     }
                 }
-                CameraVm::Free(_) | CameraVm::Custom { .. } | CameraVm::None | CameraVm::Loop(_) => {
+                CameraVm::Free(_)
+                | CameraVm::Custom { .. }
+                | CameraVm::None
+                | CameraVm::Loop(_) => {
                     eprintln!("[Scene] frame-selected unsupported for this camera type");
                     return DispatchResult::handled();
                 }
@@ -779,8 +803,10 @@ pub(super) fn dispatch_project(
             // One undo unit for the whole camera move (ExecuteBatch records
             // the batch; the local write already happened per-param inside
             // apply_scene_param_write, same as the single-slider path).
-            let batch: Vec<Box<dyn manifold_editing::command::Command>> =
-                writes.into_iter().map(|c| c as Box<dyn manifold_editing::command::Command>).collect();
+            let batch: Vec<Box<dyn manifold_editing::command::Command>> = writes
+                .into_iter()
+                .map(|c| c as Box<dyn manifold_editing::command::Command>)
+                .collect();
             ContentCommand::send(
                 content_tx,
                 ContentCommand::ExecuteBatch(batch, "Frame camera on object".to_string()),
@@ -807,7 +833,9 @@ pub(super) fn dispatch_project(
                 .and_then(|(_, layer)| layer.generator_graph().cloned())
                 .unwrap_or_else(|| default.clone());
 
-            let Some(path) = rfd::FileDialog::new().add_filter("glTF", &["glb", "gltf"]).pick_file()
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("glTF", &["glb", "gltf"])
+                .pick_file()
             else {
                 return DispatchResult::handled();
             };
@@ -847,7 +875,10 @@ pub(super) fn dispatch_project(
             boxed.execute(project);
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             if !plan.report_lines.is_empty() {
-                log::info!("[Scene Setup] Import Model… report: {}", plan.report_lines.join("; "));
+                log::info!(
+                    "[Scene Setup] Import Model… report: {}",
+                    plan.report_lines.join("; ")
+                );
             }
             DispatchResult::structural()
         }
@@ -890,7 +921,12 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        ProjectAction::SceneSetupMoveModifier(layer_id, group_node_id, modifier_node_id, new_position) => {
+        ProjectAction::SceneSetupMoveModifier(
+            layer_id,
+            group_node_id,
+            modifier_node_id,
+            new_position,
+        ) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::MoveMeshModifierCommand::new(
@@ -933,12 +969,16 @@ pub(super) fn dispatch_project(
                         old_drivers,
                         old_envelopes,
                     );
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
                     boxed.execute(project);
                     ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     ContentCommand::send(
                         content_tx,
-                        ContentCommand::GeneratorTypeChanged { layer_id: layer_id.clone(), new_type },
+                        ContentCommand::GeneratorTypeChanged {
+                            layer_id: layer_id.clone(),
+                            new_type,
+                        },
                     );
                 }
             }
@@ -963,9 +1003,11 @@ pub(super) fn dispatch_project(
             let graph_target = crate::editing_host::to_graph_target(target);
             let param_id_str = param_id.as_ref();
             let index = project.preset_instance(&graph_target).and_then(|inst| {
-                inst.automation_lanes
-                    .as_ref()
-                    .and_then(|lanes| lanes.iter().position(|l| l.param_id.as_ref() == param_id_str))
+                inst.automation_lanes.as_ref().and_then(|lanes| {
+                    lanes
+                        .iter()
+                        .position(|l| l.param_id.as_ref() == param_id_str)
+                })
             });
             if let Some(index) = index {
                 let mut cmd = manifold_editing::commands::automation::RemoveLaneCommand::new(
@@ -1015,14 +1057,21 @@ pub(super) fn dispatch_project(
                 .find_layer_by_id(layer_id)
                 .and_then(|(_, layer)| layer.generator_graph().cloned())
                 .unwrap_or_else(|| default.clone());
-            if manifold_renderer::node_graph::scene_vm::is_param_exposed(&effective_def, *node_doc_id, param_id) {
+            if manifold_renderer::node_graph::scene_vm::is_param_exposed(
+                &effective_def,
+                *node_doc_id,
+                param_id,
+            ) {
                 return DispatchResult::handled();
             }
             let Some(node) = find_node_by_scope(&effective_def, scope_path, *node_doc_id) else {
                 return DispatchResult::handled();
             };
             let node_id = node.node_id.clone();
-            let node_handle = node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
+            let node_handle = node
+                .handle
+                .clone()
+                .unwrap_or_else(|| format!("node{node_doc_id}"));
             let target = manifold_core::GraphTarget::Generator(layer_id.clone());
             let cmd = manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
                 target,
@@ -1046,7 +1095,6 @@ pub(super) fn dispatch_project(
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-
     }
 }
 
@@ -1100,7 +1148,9 @@ fn apply_scene_param_write(
     let default = generator_catalog_default(project, layer_id)?;
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
     let bound = project
-        .with_preset_graph_mut(&target, |inst| inst.binding_id_for_node_param(node_doc_id, param_id))
+        .with_preset_graph_mut(&target, |inst| {
+            inst.binding_id_for_node_param(node_doc_id, param_id)
+        })
         .flatten()
         // Tracking instance (graph: None — fresh imports).
         .or_else(|| {
@@ -1122,7 +1172,9 @@ fn apply_scene_param_write(
             inst.set_base_param(pid.as_ref(), value);
         });
         return Some(Box::new(
-            manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, pid, old_val, value),
+            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                target, pid, old_val, value,
+            ),
         ));
     }
     let mut cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(
@@ -1137,275 +1189,6 @@ fn apply_scene_param_write(
     );
     cmd.execute(project);
     Some(cmd)
-}
-
-// ── SCENE_MODIFIER_FRAMEWORK P4: coupled row writes ─────────────────────
-//
-// A coupled modifier row (Stride, Spacing) writes its secondaries in the
-// SAME undo unit as the primary — declared renderer-side in the kind's
-// `coupled_writes`, resolved here at write time. The UI never learns about
-// coupling: rows stay pure data, the scrub/type-in wires are unchanged.
-
-/// One resolved secondary write of a coupled row. `binding` is `Some` when
-/// the secondary param is itself stamped (the Home binding for
-/// loop_camera.home) — the write lands on the instance manifest AND mirrors
-/// the def node param: the stamped binding owns the live value (it shadows
-/// the def param at eval), but the def is the durable record the card-path
-/// contract reads, so the two must not drift. `None` writes the def node
-/// param directly (cell_size, loop_camera.pattern_length — internal
-/// params). `value_fn` derives the secondary value from the primary's new
-/// value; `live` tracks the latest applied value across scrub Moves.
-#[derive(Debug, Clone)]
-pub(crate) struct CoupledWriteTarget {
-    pub binding: Option<manifold_core::effects::ParamId>,
-    pub node_doc_id: u32,
-    pub param: String,
-    pub value_fn: fn(f32) -> f32,
-    pub baseline: f32,
-    /// The def node's current value for `param` — the undo seed for the def
-    /// mirror of a bound write (the card slot and the def can diverge when
-    /// the performer edits the stamped row manually). `None` when the def
-    /// has no value for the param — then there is nothing to mirror.
-    pub def_baseline: Option<f32>,
-    pub live: f32,
-}
-
-/// Resolve the coupled secondaries for a scene write addressed by
-/// `(node_doc_id, param)`. Returns an empty vec for uncoupled rows, non-
-/// modifier writes, and writes on graphs without the kind applied.
-pub(crate) fn coupled_write_targets(
-    project: &mut manifold_core::project::Project,
-    target: &manifold_core::GraphTarget,
-    node_doc_id: u32,
-    param: &str,
-) -> Vec<CoupledWriteTarget> {
-    use manifold_core::effect_graph_def::BindingTarget;
-    use manifold_renderer::node_graph::scene_modifier::{coupled_writes_for, descriptor_for, trace_modifier};
-
-    let manifold_core::GraphTarget::Generator(layer_id) = target else {
-        return Vec::new();
-    };
-    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) else {
-        return Vec::new();
-    };
-    // Cloned: the binding lookups below need `&mut Project` (the instance
-    // manifest read rides `with_preset_graph_mut`), so the layer borrow
-    // can't stay live. Edit-time path — the clone is not hot.
-    let Some(def) = layer.generator_graph().cloned() else {
-        return Vec::new();
-    };
-    let Some(node) = def.nodes.iter().find(|n| n.id == node_doc_id) else {
-        return Vec::new();
-    };
-    let node_id = node.node_id.clone();
-    let mut out = Vec::new();
-    for (kind_id, sec_node_id, sec_param, value_fn) in
-        coupled_writes_for(&def, node_id.as_str(), param)
-    {
-        let Some(descriptor) = descriptor_for(kind_id) else { continue };
-        let trace = trace_modifier(descriptor, &def.nodes);
-        let Some(&sec_doc_id) = trace.doc_ids.get(sec_node_id) else { continue };
-        let Some(meta) = def.preset_metadata.as_ref() else { continue };
-        let sec_binding = meta.bindings.iter().find(|b| {
-            matches!(
-                &b.target,
-                BindingTarget::Node { node_id: n, param: p }
-                    if n.as_str() == sec_node_id && p == sec_param
-            )
-        });
-        let def_value = def
-            .nodes
-            .iter()
-            .find(|n| n.id == sec_doc_id)
-            .and_then(|n| n.params.get(sec_param))
-            .and_then(|v| match v {
-                manifold_core::effect_graph_def::SerializedParamValue::Float { value } => {
-                    Some(*value)
-                }
-                _ => None,
-            });
-        let (binding, old_value) = if let Some(sb) = sec_binding {
-            let pid = manifold_core::effects::ParamId::from(sb.id.clone());
-            let old = project
-                .with_preset_graph_mut(target, |inst| {
-                    inst.params
-                        .contains(pid.as_ref())
-                        .then(|| inst.get_base_param(pid.as_ref()))
-                })
-                .flatten();
-            (Some(pid), old)
-        } else {
-            (None, def_value)
-        };
-        let Some(baseline) = old_value else { continue };
-        out.push(CoupledWriteTarget {
-            binding,
-            node_doc_id: sec_doc_id,
-            param: sec_param.to_string(),
-            value_fn,
-            baseline,
-            def_baseline: def_value,
-            live: baseline,
-        });
-    }
-    out
-}
-
-/// The same resolution for a write addressed by BINDING id (the scrub wire
-/// carries `ValueRef::Param(target, binding_id)`).
-pub(crate) fn coupled_write_targets_for_binding(
-    project: &mut manifold_core::project::Project,
-    target: &manifold_core::GraphTarget,
-    binding_id: &str,
-) -> Vec<CoupledWriteTarget> {
-    use manifold_core::effect_graph_def::BindingTarget;
-    let manifold_core::GraphTarget::Generator(layer_id) = target else {
-        return Vec::new();
-    };
-    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) else {
-        return Vec::new();
-    };
-    let Some(def) = layer.generator_graph().cloned() else {
-        return Vec::new();
-    };
-    let Some(meta) = def.preset_metadata.as_ref() else {
-        return Vec::new();
-    };
-    let Some(binding) = meta.bindings.iter().find(|b| b.id == binding_id) else {
-        return Vec::new();
-    };
-    let BindingTarget::Node { node_id, param } = &binding.target else {
-        return Vec::new();
-    };
-    let Some(doc_id) = def
-        .nodes
-        .iter()
-        .find(|n| n.node_id.as_str() == node_id.as_str())
-        .map(|n| n.id)
-    else {
-        return Vec::new();
-    };
-    coupled_write_targets(project, target, doc_id, param)
-}
-
-/// Apply one coupled secondary live (the same local write the scrub Move
-/// uses). A bound secondary writes its card slot AND mirrors the def node
-/// param — the slot owns the live value (the stamped binding shadows the
-/// def param at eval, so a def-only write would be a no-op), but the def
-/// is the durable record the card-path contract reads (home = −cell/2 must
-/// be observable in the def's node params). An unbound secondary writes the
-/// def only.
-pub(crate) fn apply_coupled_write_live(
-    project: &mut manifold_core::project::Project,
-    target: &manifold_core::GraphTarget,
-    t: &CoupledWriteTarget,
-    value: f32,
-) {
-    if let Some(pid) = &t.binding {
-        let pid = pid.clone();
-        project.with_preset_graph_mut(target, |inst| {
-            inst.set_base_param(pid.as_ref(), value);
-        });
-    }
-    if t.def_baseline.is_some() {
-        write_coupled_def_param(project, target, t.node_doc_id, &t.param, value);
-    }
-}
-
-/// Write one coupled secondary straight into the layer's graph def — no
-/// card-slot redirect (that redirect exists for lone writes to card-owned
-/// params; a coupled secondary dual-writes slot + def on purpose).
-fn write_coupled_def_param(
-    project: &mut manifold_core::project::Project,
-    target: &manifold_core::GraphTarget,
-    node_doc_id: u32,
-    param: &str,
-    value: f32,
-) {
-    let manifold_core::GraphTarget::Generator(layer_id) = target else {
-        return;
-    };
-    let Some(layer) = project.timeline.layers.iter_mut().find(|l| l.layer_id == *layer_id) else {
-        return;
-    };
-    let Some(gen_params) = layer.gen_params_mut() else {
-        return;
-    };
-    let changed = {
-        let Some(graph) = gen_params.graph.as_mut() else {
-            return;
-        };
-        if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == node_doc_id) {
-            let next = manifold_core::effect_graph_def::SerializedParamValue::Float { value };
-            if node.params.get(param) == Some(&next) {
-                false
-            } else {
-                node.params.insert(param.to_string(), next);
-                true
-            }
-        } else {
-            false
-        }
-    };
-    if changed {
-        gen_params.bump_graph_version();
-    }
-}
-
-/// Build the undo-tracked command for one coupled secondary at its final
-/// value. Bound → the card-slot write (ChangeGraphParamCommand) plus the
-/// def mirror (a forced-def SetGraphNodeParamCommand) batched into one
-/// composite, so undo restores both stores — the live value and the
-/// durable def record move together. Unbound → SetGraphNodeParamCommand
-/// with the pre-gesture value seeded (drag-cadence commit — self-capture
-/// would record new == new, BUG-1l7f's shape).
-pub(crate) fn coupled_write_command(
-    target: &manifold_core::GraphTarget,
-    t: &CoupledWriteTarget,
-    value: f32,
-    catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
-) -> Box<dyn manifold_editing::command::Command + Send> {
-    if let Some(pid) = &t.binding {
-        let slot_write = manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-            target.clone(),
-            pid.clone(),
-            t.baseline,
-            value,
-        );
-        let Some(def_baseline) = t.def_baseline else {
-            return Box::new(slot_write);
-        };
-        let def_write = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-            target.clone(),
-            t.node_doc_id,
-            t.param.clone(),
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
-            catalog_default,
-        )
-        .with_previous(Some(
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value: def_baseline },
-        ))
-        .with_forced_def_write();
-        return Box::new(manifold_editing::command::CompositeCommand::new(
-            vec![
-                Box::new(slot_write) as Box<dyn manifold_editing::command::Command>,
-                Box::new(def_write) as Box<dyn manifold_editing::command::Command>,
-            ],
-            format!("Coupled write {} (card slot + def)", t.param),
-        ));
-    }
-    Box::new(
-        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-            target.clone(),
-            t.node_doc_id,
-            t.param.clone(),
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
-            catalog_default,
-        )
-        .with_previous(Some(
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value: t.baseline },
-        )),
-    )
 }
 
 pub(crate) fn generator_catalog_default(
@@ -1430,74 +1213,6 @@ fn map_skin_target_map(
         Ui::Emissive => manifold_editing::commands::graph::SkinTargetMap::Emissive,
         Ui::BaseColor => manifold_editing::commands::graph::SkinTargetMap::BaseColor,
     }
-}
-
-// ── SCENE_MODIFIER_FRAMEWORK P1: plan builder (renderer-side, D1) ─────
-
-/// Build a `SceneModifierPlan` for `kind_id` against `layer_id`'s scene
-/// graph. The plan is built RENDERER-side by the kind descriptor's
-/// `plan_builder` (D1 — it can read the primitive manifests the exposure
-/// stamping needs), so this app-side helper only resolves the current
-/// effective `EffectGraphDef` + the `render_scene` node id and delegates
-/// through the registry. The plan is built even when the modifier is already
-/// applied (the remove arm reuses this builder to know the shape it
-/// inverts), so nothing here assumes a pre-modifier graph.
-fn modifier_plan_for(
-    project: &Project,
-    layer_id: &LayerId,
-    kind_id: &str,
-) -> Option<manifold_core::scene_modifier::SceneModifierPlan> {
-    let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
-    let def = match layer.generator_graph().cloned() {
-        Some(d) => d,
-        None => generator_catalog_default(project, layer_id)?,
-    };
-    let render_scene_node_id = def
-        .nodes
-        .iter()
-        .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
-        .map(|n| n.id)?;
-    manifold_renderer::node_graph::scene_modifier::build_plan(kind_id, &def, render_scene_node_id)
-}
-
-/// D5/INV-M7: resolve the kind's enable toggle target to
-/// `(node_doc_id, param, current_value)` — the descriptor's `enable` decl
-/// names the node, the generic trace resolves its live doc id, and the
-/// node's stored param gives the current value to flip.
-fn modifier_enable_target(
-    project: &Project,
-    layer_id: &LayerId,
-    kind_id: &str,
-) -> Option<(u32, &'static str, f32)> {
-    let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
-    let def = match layer.generator_graph().cloned() {
-        Some(d) => d,
-        None => generator_catalog_default(project, layer_id)?,
-    };
-    let descriptor = manifold_renderer::node_graph::scene_modifier::descriptor_for(kind_id)?;
-    let trace = manifold_renderer::node_graph::scene_modifier::trace_modifier(descriptor, &def.nodes);
-    if !trace.applied(descriptor) {
-        return None;
-    }
-    let (node_key, param) = match descriptor.enable {
-        manifold_renderer::node_graph::scene_modifier::EnableDecl::Switch { node_id } => {
-            (node_id, "select")
-        }
-        manifold_renderer::node_graph::scene_modifier::EnableDecl::Gate { enabled_node, .. } => {
-            (enabled_node, "value")
-        }
-        manifold_renderer::node_graph::scene_modifier::EnableDecl::Value { node_id } => {
-            (node_id, "value")
-        }
-    };
-    let doc_id = *trace.doc_ids.get(node_key)?;
-    let node = def.nodes.iter().find(|n| n.id == doc_id)?;
-    let current = match node.params.get(param) {
-        Some(SerializedParamValue::Enum { value }) => *value as f32,
-        Some(SerializedParamValue::Float { value }) => *value,
-        _ => return None,
-    };
-    Some((doc_id, param, current))
 }
 
 #[cfg(test)]
@@ -1538,7 +1253,10 @@ mod tests {
     /// beforehand (pre-edit: a fresh `SceneStarter` layer has no override
     /// yet, exactly why `AddSceneObjectCommand` needs a `catalog_default` to
     /// lift one — same resolution `state_sync.rs`'s panel-Vm builder uses).
-    fn effective_def(project: &Project, layer_id: &LayerId) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn effective_def(
+        project: &Project,
+        layer_id: &LayerId,
+    ) -> manifold_core::effect_graph_def::EffectGraphDef {
         let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
         layer.generator_graph().cloned().unwrap_or_else(|| {
             manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
@@ -1549,7 +1267,11 @@ mod tests {
 
     fn objects_param(project: &Project, layer_id: &LayerId, render_scene_id: u32) -> f32 {
         let graph = effective_def(project, layer_id);
-        let scene = graph.nodes.iter().find(|n| n.id == render_scene_id).unwrap();
+        let scene = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == render_scene_id)
+            .unwrap();
         match scene.params.get("objects") {
             Some(SerializedParamValue::Float { value }) => *value,
             _ => 0.0,
@@ -1558,7 +1280,11 @@ mod tests {
 
     fn lights_param(project: &Project, layer_id: &LayerId, render_scene_id: u32) -> f32 {
         let graph = effective_def(project, layer_id);
-        let scene = graph.nodes.iter().find(|n| n.id == render_scene_id).unwrap();
+        let scene = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == render_scene_id)
+            .unwrap();
         match scene.params.get("lights") {
             Some(SerializedParamValue::Float { value }) => *value,
             _ => 0.0,
@@ -1605,8 +1331,14 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        assert!(result.structural_change, "adding an object is a structural graph edit");
-        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+        assert!(
+            result.structural_change,
+            "adding an object is a structural graph edit"
+        );
+        assert_eq!(
+            objects_param(&project, &layer_id, render_scene_id),
+            before + 1.0
+        );
     }
 
     #[test]
@@ -1628,8 +1360,14 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        assert!(result.structural_change, "adding a light is a structural graph edit");
-        assert_eq!(lights_param(&project, &layer_id, render_scene_id), before + 1.0);
+        assert!(
+            result.structural_change,
+            "adding a light is a structural graph edit"
+        );
+        assert_eq!(
+            lights_param(&project, &layer_id, render_scene_id),
+            before + 1.0
+        );
     }
 
     /// BUG-hlw8: the "+ Plane" button dispatches `AddSceneLayerPlaneCommand`
@@ -1643,8 +1381,11 @@ mod tests {
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
 
-        let action =
-            ProjectAction::SceneSetupAddLayerPlane(layer_id.clone(), render_scene_id, before as u32);
+        let action = ProjectAction::SceneSetupAddLayerPlane(
+            layer_id.clone(),
+            render_scene_id,
+            before as u32,
+        );
         let result = dispatch_project(
             &action,
             &mut project,
@@ -1655,8 +1396,14 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        assert!(result.structural_change, "adding a layer plane is a structural graph edit");
-        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+        assert!(
+            result.structural_change,
+            "adding a layer plane is a structural graph edit"
+        );
+        assert_eq!(
+            objects_param(&project, &layer_id, render_scene_id),
+            before + 1.0
+        );
 
         let def = effective_def(&project, &layer_id);
         let added_group = def
@@ -1678,10 +1425,11 @@ mod tests {
             .iter()
             .find(|n| n.type_id == "node.scene_object")
             .expect("scene_object inside group");
-        assert!(body
-            .wires
-            .iter()
-            .any(|w| w.from_node == scene_object.id && w.from_port == "object"));
+        assert!(
+            body.wires
+                .iter()
+                .any(|w| w.from_node == scene_object.id && w.from_port == "object")
+        );
     }
 
     /// scene-panel-ux gate: the properties-header "Frame" button drives the
@@ -1703,7 +1451,9 @@ mod tests {
             .objects
             .iter()
             .find_map(|o| match o {
-                SceneObjectVm::Known(r) if r.index == 0 => r.transform.as_ref().map(|t| t.pos_value),
+                SceneObjectVm::Known(r) if r.index == 0 => {
+                    r.transform.as_ref().map(|t| t.pos_value)
+                }
                 _ => None,
             })
             .expect("SceneStarter object 0 has a transform");
@@ -1721,7 +1471,10 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        assert!(result.structural_change, "framing the camera is a param write");
+        assert!(
+            result.structural_change,
+            "framing the camera is a param write"
+        );
 
         let def_after = effective_def(&project, &layer_id);
         let cam = def_after
@@ -1783,8 +1536,14 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        assert!(result.structural_change, "removing an object is a structural graph edit");
-        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before - 1.0);
+        assert!(
+            result.structural_change,
+            "removing an object is a structural graph edit"
+        );
+        assert_eq!(
+            objects_param(&project, &layer_id, render_scene_id),
+            before - 1.0
+        );
     }
 
     /// BUG-193 gate: the light-row twin of the object-removal gate above.
@@ -1811,8 +1570,14 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        assert!(result.structural_change, "removing a light is a structural graph edit");
-        assert_eq!(lights_param(&project, &layer_id, render_scene_id), before - 1.0);
+        assert!(
+            result.structural_change,
+            "removing a light is a structural graph edit"
+        );
+        assert_eq!(
+            lights_param(&project, &layer_id, render_scene_id),
+            before - 1.0
+        );
     }
 
     /// "rename emits the sweep command": `generator_catalog_default` +
@@ -1825,7 +1590,8 @@ mod tests {
     #[test]
     fn generator_catalog_default_plus_rename_group_command_renames_the_object() {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let def = generator_catalog_default(&project, &layer_id).expect("resolves for a live layer");
+        let def =
+            generator_catalog_default(&project, &layer_id).expect("resolves for a live layer");
         let group_node_id = def
             .nodes
             .iter()
@@ -1880,7 +1646,9 @@ mod tests {
             group_node_id,
             "node.twist_mesh".to_string(),
             None,
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.twist_mesh"),
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                "node.twist_mesh",
+            ),
             def,
         );
         use manifold_editing::command::Command;
@@ -1901,7 +1669,10 @@ mod tests {
         // inserted modifier's params land in the def's top-level
         // `preset_metadata`, targeting its bare NodeId — an app-level
         // round-trip proof, not just the hand-built editing-crate fixtures.
-        let meta = graph.preset_metadata.as_ref().expect("P1 stamped exposures into preset_metadata");
+        let meta = graph
+            .preset_metadata
+            .as_ref()
+            .expect("P1 stamped exposures into preset_metadata");
         assert!(
             meta.bindings.iter().any(|b| matches!(
                 &b.target,
@@ -1935,12 +1706,15 @@ mod tests {
     fn scene_setup_param_changed_writes_light_intensity_to_def() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
         let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
+        let vm =
+            manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
         let light_node_id = vm
             .lights
             .iter()
             .find_map(|l| match l {
-                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => Some(r.node_doc_id),
+                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => {
+                    Some(r.node_doc_id)
+                }
                 _ => None,
             })
             .expect("SceneStarter ships with at least one known light");
@@ -1955,16 +1729,32 @@ mod tests {
             7.77,
         );
         let result = dispatch_project(
-            &action, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
             &mut user_prefs,
         );
-        assert!(!result.structural_change, "a param scrub is not a structural graph edit");
+        assert!(
+            !result.structural_change,
+            "a param scrub is not a structural graph edit"
+        );
 
         let after_def = effective_def(&project, &layer_id);
-        let node = after_def.nodes.iter().find(|n| n.id == light_node_id).unwrap();
+        let node = after_def
+            .nodes
+            .iter()
+            .find(|n| n.id == light_node_id)
+            .unwrap();
         match node.params.get("intensity") {
             Some(SerializedParamValue::Float { value }) => {
-                assert_eq!(*value, 7.77, "light intensity should have changed in the def")
+                assert_eq!(
+                    *value, 7.77,
+                    "light intensity should have changed in the def"
+                )
             }
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1975,7 +1765,8 @@ mod tests {
     fn scene_setup_param_changed_writes_camera_orbit_to_def() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
         let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
+        let vm =
+            manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
         let camera_node_id = match vm.camera {
             manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => c.node_doc_id,
             other => panic!("SceneStarter's default camera should be Orbit, got {other:?}"),
@@ -1991,13 +1782,26 @@ mod tests {
             2.5,
         );
         let result = dispatch_project(
-            &action, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
             &mut user_prefs,
         );
-        assert!(!result.structural_change, "a param scrub is not a structural graph edit");
+        assert!(
+            !result.structural_change,
+            "a param scrub is not a structural graph edit"
+        );
 
         let after_def = effective_def(&project, &layer_id);
-        let node = after_def.nodes.iter().find(|n| n.id == camera_node_id).unwrap();
+        let node = after_def
+            .nodes
+            .iter()
+            .find(|n| n.id == camera_node_id)
+            .unwrap();
         match node.params.get("orbit") {
             Some(SerializedParamValue::Float { value }) => {
                 assert_eq!(*value, 2.5, "camera orbit should have changed in the def")
@@ -2018,12 +1822,19 @@ mod tests {
 
         let add_fog = ProjectAction::SceneSetupAddFog(layer_id.clone(), render_scene_id);
         dispatch_project(
-            &add_fog, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &add_fog,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
             &mut user_prefs,
         );
 
         let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
+        let vm =
+            manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
         let fog_node_id = match vm.atmosphere {
             manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => a.node_doc_id,
             manifold_renderer::node_graph::scene_vm::AtmosphereVm::None => {
@@ -2039,13 +1850,26 @@ mod tests {
             0.42,
         );
         let result = dispatch_project(
-            &action, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
             &mut user_prefs,
         );
-        assert!(!result.structural_change, "a param scrub is not a structural graph edit");
+        assert!(
+            !result.structural_change,
+            "a param scrub is not a structural graph edit"
+        );
 
         let after_def = effective_def(&project, &layer_id);
-        let node = after_def.nodes.iter().find(|n| n.id == fog_node_id).unwrap();
+        let node = after_def
+            .nodes
+            .iter()
+            .find(|n| n.id == fog_node_id)
+            .unwrap();
         match node.params.get("fog_density") {
             Some(SerializedParamValue::Float { value }) => {
                 assert_eq!(*value, 0.42, "fog density should have changed in the def")
@@ -2054,495 +1878,87 @@ mod tests {
         }
     }
 
-    /// INV-M4 (SCENE_MODIFIER_FRAMEWORK): a modifier row write lands on
-    /// `GeneratorOf(owning layer)`. Apply the `scene_loop` kind through the
-    /// dispatch arm, then write the Bars row through the SAME
-    /// `SceneSetupParamChanged` wire the modifier card's toggle row rides —
-    /// the value must land in the OWNING layer's graph, addressed by the
-    /// trace's beat_ramp doc id (the BUG-292/INV-5 net, extended to
-    /// modifiers). Value-level, like the BUG-229 dispatch tests above —
-    /// reads the def's real params after dispatch.
-    #[test]
-    fn modifier_row_write_targets_generator_of_owning_layer() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-
-        // Apply the loop via the generic dispatch arm.
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let apply = ProjectAction::SceneModifierApply(
-            layer_id.clone(),
-            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
-        );
-        dispatch_project(
-            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-
-        // The modifier card's Bars row address: the trace's beat_ramp doc id
-        // on the OWNING layer — exactly what the row's ParamAddr sidecar
-        // carries (binding id → Node target → trace doc id).
-        let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
-            .expect("looped graph traces");
-        let loop_vm = vm
-            .modifiers
-            .iter()
-            .find(|m| {
-                m.kind_id
-                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
-                    && m.applied
-            })
-            .expect("the loop kind traces applied");
-        let beat_ramp_doc = loop_vm.doc_ids["loop_phase"];
-
-        let write = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            beat_ramp_doc,
-            "bars".to_string(),
-            16.0,
-        );
-        let result = dispatch_project(
-            &write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        assert!(!result.structural_change, "a modifier row write is not structural");
-
-        // Bound-row write truth (SCENE_PANEL_CARD_CONVERGENCE): the Bars row
-        // is a stamped exposure, so the write LIVES in the binding's instance
-        // slot on the OWNING layer's generator — never the def's node param
-        // (the def keeps the minted default; the manifest slot is the live
-        // value). Asserting the slot is the GeneratorOf(owning layer) net.
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        let binding = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(beat_ramp_doc, "bars")
-            })
-            .flatten()
-            .expect("the Bars row is a stamped exposure on the owning layer");
-        let slot = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.get_base_param(manifold_core::effects::ParamId::from(binding).as_ref())
-            })
-            .expect("the bound slot exists on the owning layer's manifest");
-        assert_eq!(
-            slot, 16.0,
-            "the Bars row write lands on GeneratorOf(owning layer)'s manifest"
-        );
-    }
-
-    /// INV-M7 (SCENE_MODIFIER_FRAMEWORK D5): the enable toggle is exactly ONE
-    /// param write — the graph's node/wire sets are byte-identical across the
-    /// toggle, and the switch's `select` flips (Enum storage preserved —
-    /// the camera_switch's select is internal, never an exposure).
-    #[test]
-    fn modifier_enable_toggle_is_one_param_write_no_structural_change() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let apply = ProjectAction::SceneModifierApply(
-            layer_id.clone(),
-            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
-        );
-        dispatch_project(
-            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-
-        let def_before = effective_def(&project, &layer_id);
-        let node_count = def_before.nodes.len();
-        let wire_count = def_before.wires.len();
-
-        // Toggle OFF.
-        let toggle = ProjectAction::SceneModifierToggleEnabled(
-            layer_id.clone(),
-            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
-        );
-        dispatch_project(
-            &toggle, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        let def_off = effective_def(&project, &layer_id);
-        assert_eq!(def_off.nodes.len(), node_count, "toggle adds no nodes");
-        assert_eq!(def_off.wires.len(), wire_count, "toggle adds no wires");
-        let switch_off = def_off
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "loop_cam_switch")
-            .expect("the camera switch is traced");
-        assert!(
-            matches!(
-                switch_off.params.get("select"),
-                Some(SerializedParamValue::Enum { value: 0 })
-            ),
-            "toggle OFF writes select = A (the original camera)"
-        );
-
-        // Toggle back ON.
-        dispatch_project(
-            &toggle, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        let def_on = effective_def(&project, &layer_id);
-        assert_eq!(def_on.nodes.len(), node_count, "toggle adds no nodes");
-        assert_eq!(def_on.wires.len(), wire_count, "toggle adds no wires");
-        let switch_on = def_on
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "loop_cam_switch")
-            .expect("the camera switch is traced");
-        assert!(
-            matches!(
-                switch_on.params.get("select"),
-                Some(SerializedParamValue::Enum { value: 1 })
-            ),
-            "toggle ON writes select = B (the loop camera)"
-        );
-    }
-
-    /// Corridor coupled writes (ENDLESS_CORRIDOR D3): the Stride row
-    /// (patterns_per_loop) is a SINGLE write — the old count/jitter_period
-    /// secondaries patched a desync the corridor dissolves, and any
-    /// integer K is wrap-pure by construction. Through the SAME
-    /// SceneSetupParamChanged wire: the write lands in the Stride binding's
-    /// instance slot (bound row), scene_array is untouched, and the def's
-    /// stamped params stay at the minted defaults (bound writes never touch
-    /// the def). The Pattern row is the coupled one: it writes
-    /// one shared slot consumed by scene_array and loop_camera in one undo unit.
-    #[test]
-    fn stride_row_write_is_single_and_pattern_row_couples() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let apply = ProjectAction::SceneModifierApply(
-            layer_id.clone(),
-            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
-        );
-        dispatch_project(
-            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-
-        let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
-            .expect("looped graph traces");
-        let loop_vm = vm
-            .modifiers
-            .iter()
-            .find(|m| {
-                m.kind_id
-                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
-                    && m.applied
-            })
-            .expect("the loop kind traces applied");
-        let stride_doc = loop_vm.doc_ids["loop_camera"];
-        let count_doc = loop_vm.doc_ids["scene_array"];
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-
-        let write = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            stride_doc,
-            "patterns_per_loop".to_string(),
-            4.0,
-        );
-        let result = dispatch_project(
-            &write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        assert!(!result.structural_change, "a coupled row write is not structural");
-
-        // Primary: the Stride binding slot == 4.
-        let stride_binding = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(stride_doc, "patterns_per_loop")
-            })
-            .flatten()
-            .expect("the Stride row is stamped");
-        let stride_slot = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.get_base_param(manifold_core::effects::ParamId::from(stride_binding).as_ref())
-            })
-            .expect("stride slot exists");
-        assert_eq!(stride_slot, 4.0, "the Stride row write lands on its binding");
-
-        // No secondary: the corridor deleted the count coupling — the
-        // scene_array def params keep the mint exactly.
-        let after_def = effective_def(&project, &layer_id);
-        let array_node = after_def
-            .nodes
-            .iter()
-            .find(|n| n.id == count_doc)
-            .expect("scene_array");
-        assert_eq!(
-            array_node.params.get("pattern_length"),
-            Some(&SerializedParamValue::Float { value: 1.0 }),
-            "Stride couples nothing under the corridor — scene_array keeps the mint"
-        );
-        let stride_node = after_def
-            .nodes
-            .iter()
-            .find(|n| n.id == stride_doc)
-            .expect("loop_camera");
-        assert_eq!(
-            stride_node.params.get("patterns_per_loop"),
-            Some(&SerializedParamValue::Float { value: 1.0 }),
-            "the def keeps the minted patterns_per_loop default; the binding is the live value"
-        );
-
-        // Both Pattern consumers resolve to the same live slot. Def defaults
-        // are not the value authority for a bound parameter.
-        let pattern_write = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            count_doc,
-            "pattern_length".to_string(),
-            3.0,
-        );
-        dispatch_project(
-            &pattern_write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        project.with_preset_graph_mut(&target, |inst| {
-            let array = inst.binding_id_for_node_param(count_doc, "pattern_length").unwrap();
-            let camera = inst.binding_id_for_node_param(stride_doc, "pattern_length").unwrap();
-            assert_eq!(array, camera, "Pattern has one value owner for both consumers");
-            assert_eq!(inst.get_base_param(&array), 3.0);
-        }).expect("instance reachable");
-    }
-
-    /// P4 coupled write, Spacing flavor: ONE write to loop_camera.cell_size
-    /// also writes scene_array.cell_size (INV-4, same value) AND
-    /// loop_camera.home (−cell/2 tracks). Both cell_size consumers share the
-    /// Spacing slot; the Home convenience write also preserves its def mirror.
-    #[test]
-    fn spacing_row_write_couples_both_cells_and_home() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let apply = ProjectAction::SceneModifierApply(
-            layer_id.clone(),
-            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
-        );
-        dispatch_project(
-            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-
-        let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
-            .expect("looped graph traces");
-        let loop_vm = vm
-            .modifiers
-            .iter()
-            .find(|m| {
-                m.kind_id
-                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
-                    && m.applied
-            })
-            .expect("the loop kind traces applied");
-        let camera_doc = loop_vm.doc_ids["loop_camera"];
-        let array_doc = loop_vm.doc_ids["scene_array"];
-
-        let write = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            camera_doc,
-            "cell_size".to_string(),
-            16.0,
-        );
-        dispatch_project(
-            &write, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-
-        // Primary: cell_size is a STAMPED row (Spacing), so the write lives
-        // in the binding's instance slot — the def keeps the minted default.
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        let spacing_binding = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(camera_doc, "cell_size")
-            })
-            .flatten()
-            .expect("the Spacing row is stamped");
-        let spacing_slot = project
-            .with_preset_graph_mut(&target, |inst| {
-                let array_binding = inst.binding_id_for_node_param(array_doc, "cell_size").unwrap();
-                assert_eq!(array_binding, spacing_binding, "Spacing has one value owner");
-                inst.get_base_param(&spacing_binding)
-            })
-            .expect("spacing slot exists");
-        assert_eq!(spacing_slot, 16.0, "the Spacing row write lands on its binding");
-
-        let after_def = effective_def(&project, &layer_id);
-        let stamped = |doc: u32, param: &str| {
-            after_def
-                .nodes
-                .iter()
-                .find(|n| n.id == doc)
-                .unwrap_or_else(|| panic!("node {doc}"))
-                .params
-                .get(param)
-                .cloned()
-        };
-        assert_eq!(
-            stamped(camera_doc, "cell_size"),
-            Some(SerializedParamValue::Float { value: 10.0 }),
-            "the def keeps the minted cell_size default; the binding is the live value"
-        );
-        assert_eq!(
-            stamped(array_doc, "cell_size"),
-            Some(SerializedParamValue::Float { value: 10.0 }),
-            "the array also keeps its default; both consumers read the shared Spacing slot"
-        );
-        assert_eq!(
-            stamped(camera_doc, "home"),
-            Some(SerializedParamValue::Float { value: -8.0 }),
-            "home = −cell/2 tracks the Spacing write"
-        );
-    }
-
-    /// Live scrub Moves must advance the generator graph value version for
-    /// every def-level coupled secondary, while preserving the structure
-    /// version used to decide whether the graph needs recompilation.
-    #[test]
-    fn coupled_live_secondaries_advance_value_version_without_structure_change() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        let apply = ProjectAction::SceneModifierApply(
-            layer_id.clone(),
-            manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID.to_string(),
-        );
-        dispatch_project(
-            &apply, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-
-        let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
-            .expect("looped graph traces");
-        let loop_vm = vm
-            .modifiers
-            .iter()
-            .find(|m| {
-                m.kind_id
-                    == manifold_renderer::node_graph::scene_modifier::LOOP_KIND_ID
-                    && m.applied
-            })
-            .expect("the loop kind traces applied");
-        let camera_doc = loop_vm.doc_ids["loop_camera"];
-        let array_doc = loop_vm.doc_ids["scene_array"];
-
-        let pattern_binding = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(array_doc, "pattern_length")
-            })
-            .flatten()
-            .expect("the Pattern row is stamped");
-        let spacing_binding = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(camera_doc, "cell_size")
-            })
-            .flatten()
-            .expect("the Spacing row is stamped");
-
-        let versions_before = project.timeline.find_layer_by_id(&layer_id).unwrap().1;
-        let value_before = versions_before.generator_graph_version();
-        let structure_before = versions_before.generator_graph_structure_version();
-
-        let pattern_targets = coupled_write_targets_for_binding(
-            &mut project,
-            &target,
-            pattern_binding.as_str(),
-        );
-        assert!(!pattern_targets.is_empty(), "Pattern resolves live secondaries");
-        for t in &pattern_targets {
-            apply_coupled_write_live(&mut project, &target, t, (t.value_fn)(3.0));
-        }
-
-        let spacing_targets = coupled_write_targets_for_binding(
-            &mut project,
-            &target,
-            spacing_binding.as_str(),
-        );
-        assert!(!spacing_targets.is_empty(), "Spacing resolves live secondaries");
-        for t in &spacing_targets {
-            apply_coupled_write_live(&mut project, &target, t, (t.value_fn)(16.0));
-        }
-
-        let layer = project.timeline.find_layer_by_id(&layer_id).unwrap().1;
-        assert!(
-            layer.generator_graph_version() > value_before,
-            "live coupled writes advance graph value version"
-        );
-        assert_eq!(
-            layer.generator_graph_structure_version(),
-            structure_before,
-            "live coupled writes preserve graph structure version"
-        );
-        let after = effective_def(&project, &layer_id);
-        for t in pattern_targets.iter().chain(spacing_targets.iter()) {
-            if t.def_baseline.is_some() {
-                let node = after.nodes.iter().find(|n| n.id == t.node_doc_id).unwrap();
-                let actual = match node.params.get(&t.param) {
-                    Some(SerializedParamValue::Float { value }) => *value,
-                    other => panic!("unexpected coupled value for {}: {other:?}", t.param),
-                };
-                assert_eq!(actual, (t.value_fn)(if t.param == "pattern_length" { 3.0 } else { 16.0 }));
-            }
-        }
-        let same_before = layer.generator_graph_version();
-        for t in pattern_targets.iter().chain(spacing_targets.iter()) {
-            apply_coupled_write_live(&mut project, &target, t, (t.value_fn)(
-                if t.param == "pattern_length" { 3.0 } else { 16.0 },
-            ));
-        }
-        assert_eq!(
-            project.timeline.find_layer_by_id(&layer_id).unwrap().1.generator_graph_version(),
-            same_before,
-            "same-value coupled writes do not dirty the graph"
-        );
-
-        // Exercise the actual card wire too: the content thread must receive
-        // the primary and all linked values in one indivisible live update.
-        use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
+    fn dispatch_modifier_action(
+        action: ProjectAction,
+    ) -> crate::scene_modifier_edit::SceneModifierAction {
+        let (mut project, _layer_id, _) = scene_layer_project();
+        let before = serde_json::to_value(&project).expect("project serializes");
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let mut content_project = project.clone();
-        let mut scrub = super::super::ScrubState::default();
-        active_layer = Some(layer_id.clone());
-        for (binding, value) in [(spacing_binding, 12.0), (pattern_binding, 5.0)] {
-            let secondaries = coupled_write_targets_for_binding(&mut project, &target, binding.as_str());
-            let value_ref = ValueRef::Param(
-                GraphParamTarget::GeneratorOf(layer_id.clone()), binding.clone().into(),
-            );
-            for phase in [ScrubPhase::Begin, ScrubPhase::Move(ScrubValue::Scalar(value))] {
-                super::super::scrub::dispatch_scrub(&value_ref, &phase, &mut super::super::DispatchCtx {
-                    project: &mut project, content_tx: &content_tx, content_state: &content_state,
-                    ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
-                    user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub,
-                });
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = None;
+        let mut user_prefs = UserPrefs::load();
+        dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert_eq!(
+            serde_json::to_value(&project).expect("project serializes"),
+            before
+        );
+        let command = content_rx.try_recv().expect("modifier action is forwarded");
+        let crate::content_command::ContentCommand::SceneModifier(action) = command else {
+            panic!("modifier action must use the content command path");
+        };
+        action
+    }
+
+    #[test]
+    fn scene_modifier_add_dispatches_preset_id_without_ui_mutation() {
+        let action = dispatch_modifier_action(ProjectAction::SceneModifierApply(
+            LayerId::new("owner-layer"),
+            "scene_loop_preset".to_string(),
+        ));
+        assert!(matches!(action,
+            crate::scene_modifier_edit::SceneModifierAction::Add(layer, preset)
+                if layer == LayerId::new("owner-layer") && preset == "scene_loop_preset"));
+    }
+
+    #[test]
+    fn scene_modifier_instance_actions_dispatch_stable_id_and_owner() {
+        let owner = LayerId::new("owner-layer");
+        let instance = manifold_core::NodeId::new("modifier-instance");
+        for action in [
+            ProjectAction::SceneModifierRemove(owner.clone(), instance.clone()),
+            ProjectAction::SceneModifierMove(owner.clone(), instance.clone(), 2),
+            ProjectAction::SceneModifierToggleEnabled(owner.clone(), instance.clone()),
+            ProjectAction::SceneModifiersReorder(owner.clone(), vec![instance.clone()]),
+            ProjectAction::SceneModifiersDuplicate(owner.clone(), vec![instance.clone()]),
+            ProjectAction::SceneModifiersRemove(owner.clone(), vec![instance.clone()]),
+        ] {
+            let routed = dispatch_modifier_action(action);
+            match routed {
+                crate::scene_modifier_edit::SceneModifierAction::Remove(layer, id)
+                | crate::scene_modifier_edit::SceneModifierAction::Toggle(layer, id) => {
+                    assert_eq!(layer, owner);
+                    assert_eq!(id, instance);
+                }
+                crate::scene_modifier_edit::SceneModifierAction::Move(layer, id, index) => {
+                    assert_eq!(layer, owner);
+                    assert_eq!(id, instance);
+                    assert_eq!(index, 2);
+                }
+                crate::scene_modifier_edit::SceneModifierAction::Reorder(layer, ids)
+                | crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer, ids)
+                | crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids) => {
+                    assert_eq!(layer, owner);
+                    assert_eq!(ids, vec![instance.clone()]);
+                }
+                crate::scene_modifier_edit::SceneModifierAction::Add(..) => {
+                    panic!("instance action routed as preset add")
+                }
+                crate::scene_modifier_edit::SceneModifierAction::Preparation(..)
+                | crate::scene_modifier_edit::SceneModifierAction::Retarget(..) => {
+                    panic!("instance action routed as preparation")
+                }
             }
-            let commands: Vec<_> = content_rx.try_iter().collect();
-            assert_eq!(commands.len(), 1, "one atomic live command per card Move");
-            let before = content_project.timeline.find_layer_by_id(&layer_id).unwrap().1.generator_graph_version();
-            match commands.into_iter().next().unwrap() {
-                crate::content_command::ContentCommand::MutateProjectLive(apply) => apply(&mut content_project),
-                _ => panic!("Move must use the live content path"),
-            }
-            let layer = content_project.timeline.find_layer_by_id(&layer_id).unwrap().1;
-            assert_eq!(layer.gen_params().unwrap().get_base_param(binding.as_str()), value);
-            assert!(layer.generator_graph_version() > before);
-            assert_eq!(layer.generator_graph_structure_version(), structure_before);
-            let def = effective_def(&content_project, &layer_id);
-            for secondary in secondaries {
-                let node = def.nodes.iter().find(|n| n.id == secondary.node_doc_id).unwrap();
-                assert_eq!(node.params.get(&secondary.param), Some(&SerializedParamValue::Float {
-                    value: (secondary.value_fn)(value),
-                }));
-            }
-            scrub.active = None;
         }
     }
 }

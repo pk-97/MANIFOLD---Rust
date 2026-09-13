@@ -1,0 +1,1417 @@
+{
+  "version": 3,
+  "name": "Scene Loop",
+  "presetMetadata": {
+    "id": "SceneLoop",
+    "displayName": "Scene Loop",
+    "category": "Geometry",
+    "oscPrefix": "scene_loop",
+    "available": true,
+    "params": [
+      {
+        "id": "bars",
+        "name": "Bars",
+        "min": 0.0,
+        "max": 64.0,
+        "defaultValue": 8.0
+      },
+      {
+        "id": "pattern_length",
+        "name": "Pattern",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "height",
+        "name": "Height",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "lateral",
+        "name": "Lateral",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "near",
+        "name": "Near",
+        "min": 0.001,
+        "max": 10000.0,
+        "defaultValue": 0.02
+      },
+      {
+        "id": "far",
+        "name": "Far",
+        "min": 1.0,
+        "max": 10000.0,
+        "defaultValue": 40.0
+      },
+      {
+        "id": "fov_y",
+        "name": "FOV",
+        "min": 0.05,
+        "max": 2.5,
+        "defaultValue": 0.9,
+        "isAngle": true
+      },
+      {
+        "id": "home",
+        "name": "Home",
+        "min": -100000.0,
+        "max": 100000.0,
+        "defaultValue": -5.0
+      },
+      {
+        "id": "roll",
+        "name": "Roll",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "pitch",
+        "name": "Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "yaw",
+        "name": "Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "isAngle": true,
+        "wraps": true
+      },
+      {
+        "id": "flow",
+        "name": "Flow",
+        "min": 0.0,
+        "max": 0.95,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "patterns_per_loop",
+        "name": "Stride",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "sway_amp",
+        "name": "Sway",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "sway_cycles",
+        "name": "Sway Rate",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "look_sweep_amp",
+        "name": "Look Sway",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "zoom_pulse_amp",
+        "name": "Zoom Pulse",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "cell_size",
+        "name": "Spacing",
+        "min": 0.01,
+        "max": 1000.0,
+        "defaultValue": 10.0
+      },
+      {
+        "id": "jitter_amount",
+        "name": "Jitter",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "enabled",
+        "name": "Camera Travel",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "bars",
+        "label": "Bars",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_phase",
+          "param": "bars"
+        }
+      },
+      {
+        "id": "pattern_length",
+        "label": "Pattern",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "pattern_length"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "pattern_length",
+        "label": "Pattern",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "pattern_length"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "height",
+        "label": "Height",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "height"
+        }
+      },
+      {
+        "id": "lateral",
+        "label": "Lateral",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "lateral"
+        }
+      },
+      {
+        "id": "near",
+        "label": "Near",
+        "defaultValue": 0.02,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "near"
+        }
+      },
+      {
+        "id": "far",
+        "label": "Far",
+        "defaultValue": 40.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "far"
+        }
+      },
+      {
+        "id": "fov_y",
+        "label": "FOV",
+        "defaultValue": 0.9,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "fov_y"
+        }
+      },
+      {
+        "id": "home",
+        "label": "Home",
+        "defaultValue": -5.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "home"
+        }
+      },
+      {
+        "id": "roll",
+        "label": "Roll",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "roll"
+        }
+      },
+      {
+        "id": "pitch",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "pitch"
+        }
+      },
+      {
+        "id": "yaw",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "yaw"
+        }
+      },
+      {
+        "id": "flow",
+        "label": "Flow",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "flow"
+        }
+      },
+      {
+        "id": "patterns_per_loop",
+        "label": "Stride",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "patterns_per_loop"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "sway_amp",
+        "label": "Sway",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "sway_amp"
+        }
+      },
+      {
+        "id": "sway_cycles",
+        "label": "Sway Rate",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "sway_cycles"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "look_sweep_amp",
+        "label": "Look Sway",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "look_sweep_amp"
+        }
+      },
+      {
+        "id": "zoom_pulse_amp",
+        "label": "Zoom Pulse",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "zoom_pulse_amp"
+        }
+      },
+      {
+        "id": "cell_size",
+        "label": "Spacing",
+        "defaultValue": 10.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "cell_size"
+        }
+      },
+      {
+        "id": "cell_size",
+        "label": "Spacing",
+        "defaultValue": 10.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_camera",
+          "param": "cell_size"
+        }
+      },
+      {
+        "id": "jitter_amount",
+        "label": "Jitter",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "jitter_amount"
+        }
+      },
+      {
+        "id": "enabled",
+        "label": "Camera Travel",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_cam_switch",
+          "param": "select"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": true,
+      "enabledParam": "enabled",
+      "preparationParams": [],
+      "stages": [
+        {
+          "group": "loop_scene_stage",
+          "scope": "scene",
+          "inputs": [
+            {
+              "port": "camera",
+              "source": {
+                "previous": {
+                  "endpoint": "camera"
+                }
+              }
+            },
+            {
+              "port": "beat",
+              "source": {
+                "context": {
+                  "value": "beat"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "camera",
+              "endpoint": "camera"
+            }
+          ]
+        },
+        {
+          "group": "loop_instances_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "instances",
+              "source": {
+                "stageOutput": {
+                  "stage": "loop_scene_stage",
+                  "port": "instances"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "instances",
+              "endpoint": "instances"
+            }
+          ]
+        }
+      ],
+      "initializers": [
+        {
+          "target": {
+            "node": "scene_array",
+            "scope": [
+              "loop_scene_stage"
+            ]
+          },
+          "param": "cell_size",
+          "value": {
+            "multiply": {
+              "a": {
+                "subtract": {
+                  "a": {
+                    "boundsMax": {
+                      "axis": "z"
+                    }
+                  },
+                  "b": {
+                    "boundsMin": {
+                      "axis": "z"
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 2.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "target": {
+            "node": "loop_camera",
+            "scope": [
+              "loop_scene_stage"
+            ]
+          },
+          "param": "cell_size",
+          "value": {
+            "multiply": {
+              "a": {
+                "subtract": {
+                  "a": {
+                    "boundsMax": {
+                      "axis": "z"
+                    }
+                  },
+                  "b": {
+                    "boundsMin": {
+                      "axis": "z"
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 2.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "target": {
+            "node": "loop_camera",
+            "scope": [
+              "loop_scene_stage"
+            ]
+          },
+          "param": "home",
+          "value": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": -0.5
+                }
+              }
+            }
+          }
+        },
+        {
+          "target": {
+            "node": "loop_camera",
+            "scope": [
+              "loop_scene_stage"
+            ]
+          },
+          "param": "near",
+          "value": {
+            "max": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "multiply": {
+                      "a": {
+                        "subtract": {
+                          "a": {
+                            "boundsMax": {
+                              "axis": "z"
+                            }
+                          },
+                          "b": {
+                            "boundsMin": {
+                              "axis": "z"
+                            }
+                          }
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": 2.0
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 0.002
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 0.0001
+                }
+              }
+            }
+          }
+        },
+        {
+          "target": {
+            "node": "loop_camera",
+            "scope": [
+              "loop_scene_stage"
+            ]
+          },
+          "param": "far",
+          "value": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 4.0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "calibrations": [
+        {
+          "paramId": "cell_size",
+          "min": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 0.25
+                }
+              }
+            }
+          },
+          "max": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 4.0
+                }
+              }
+            }
+          },
+          "defaultValue": {
+            "multiply": {
+              "a": {
+                "subtract": {
+                  "a": {
+                    "boundsMax": {
+                      "axis": "z"
+                    }
+                  },
+                  "b": {
+                    "boundsMin": {
+                      "axis": "z"
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 2.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "paramId": "home",
+          "min": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": -2.0
+                }
+              }
+            }
+          },
+          "max": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 2.0
+                }
+              }
+            }
+          },
+          "defaultValue": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": -0.5
+                }
+              }
+            }
+          }
+        },
+        {
+          "paramId": "near",
+          "min": {
+            "multiply": {
+              "a": {
+                "max": {
+                  "a": {
+                    "multiply": {
+                      "a": {
+                        "constant": {
+                          "value": 0.001
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": -1
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "multiply": {
+                      "a": {
+                        "max": {
+                          "a": {
+                            "multiply": {
+                              "a": {
+                                "multiply": {
+                                  "a": {
+                                    "subtract": {
+                                      "a": {
+                                        "boundsMax": {
+                                          "axis": "z"
+                                        }
+                                      },
+                                      "b": {
+                                        "boundsMin": {
+                                          "axis": "z"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "b": {
+                                    "constant": {
+                                      "value": 2.0
+                                    }
+                                  }
+                                }
+                              },
+                              "b": {
+                                "constant": {
+                                  "value": 0.002
+                                }
+                              }
+                            }
+                          },
+                          "b": {
+                            "constant": {
+                              "value": 0.0001
+                            }
+                          }
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": -1
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": -1
+                }
+              }
+            }
+          },
+          "max": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 2.0
+                }
+              }
+            }
+          },
+          "defaultValue": {
+            "max": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "multiply": {
+                      "a": {
+                        "subtract": {
+                          "a": {
+                            "boundsMax": {
+                              "axis": "z"
+                            }
+                          },
+                          "b": {
+                            "boundsMin": {
+                              "axis": "z"
+                            }
+                          }
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": 2.0
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 0.002
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 0.0001
+                }
+              }
+            }
+          }
+        },
+        {
+          "paramId": "far",
+          "min": {
+            "constant": {
+              "value": 1.0
+            }
+          },
+          "max": {
+            "max": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "max": {
+                      "a": {
+                        "multiply": {
+                          "a": {
+                            "multiply": {
+                              "a": {
+                                "multiply": {
+                                  "a": {
+                                    "subtract": {
+                                      "a": {
+                                        "boundsMax": {
+                                          "axis": "z"
+                                        }
+                                      },
+                                      "b": {
+                                        "boundsMin": {
+                                          "axis": "z"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "b": {
+                                    "constant": {
+                                      "value": 2.0
+                                    }
+                                  }
+                                }
+                              },
+                              "b": {
+                                "constant": {
+                                  "value": 20.0
+                                }
+                              }
+                            }
+                          },
+                          "b": {
+                            "constant": {
+                              "value": -1
+                            }
+                          }
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": -10000.0
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": -1
+                    }
+                  }
+                }
+              },
+              "b": {
+                "multiply": {
+                  "a": {
+                    "multiply": {
+                      "a": {
+                        "subtract": {
+                          "a": {
+                            "boundsMax": {
+                              "axis": "z"
+                            }
+                          },
+                          "b": {
+                            "boundsMin": {
+                              "axis": "z"
+                            }
+                          }
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": 2.0
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 4.0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "defaultValue": {
+            "multiply": {
+              "a": {
+                "multiply": {
+                  "a": {
+                    "subtract": {
+                      "a": {
+                        "boundsMax": {
+                          "axis": "z"
+                        }
+                      },
+                      "b": {
+                        "boundsMin": {
+                          "axis": "z"
+                        }
+                      }
+                    }
+                  },
+                  "b": {
+                    "constant": {
+                      "value": 2.0
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": 4.0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "loop_scene_stage",
+      "typeId": "group",
+      "handle": "SceneLoopStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "beat",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_camera",
+            "typeId": "system.group_input",
+            "handle": "camera"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_beat",
+            "typeId": "system.group_input",
+            "handle": "beat"
+          },
+          {
+            "id": 3,
+            "nodeId": "loop_phase",
+            "typeId": "node.beat_ramp",
+            "handle": "loop_phase",
+            "params": {
+              "rate": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "bars": {
+                "type": "Int",
+                "value": 8
+              },
+              "attack": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "scene_array",
+            "typeId": "node.scene_array",
+            "handle": "scene_array",
+            "params": {
+              "pattern_length": {
+                "type": "Int",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 4
+              },
+              "cell_size": {
+                "type": "Float",
+                "value": 10.0
+              },
+              "jitter_seed": {
+                "type": "Int",
+                "value": 0
+              },
+              "jitter_amount": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 5,
+            "nodeId": "loop_camera",
+            "typeId": "node.loop_camera",
+            "handle": "loop_camera",
+            "params": {
+              "cell_size": {
+                "type": "Float",
+                "value": 10.0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 4
+              },
+              "home": {
+                "type": "Float",
+                "value": -5.0
+              },
+              "lateral": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "height": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "near": {
+                "type": "Float",
+                "value": 0.02
+              },
+              "far": {
+                "type": "Float",
+                "value": 40.0
+              },
+              "fov_y": {
+                "type": "Float",
+                "value": 0.9
+              },
+              "flow": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "patterns_per_loop": {
+                "type": "Int",
+                "value": 1
+              },
+              "pattern_length": {
+                "type": "Int",
+                "value": 1
+              },
+              "sway_amp": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "sway_cycles": {
+                "type": "Int",
+                "value": 1
+              },
+              "look_sweep_amp": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "look_sweep_cycles": {
+                "type": "Int",
+                "value": 1
+              },
+              "zoom_pulse_amp": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "roll": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "pitch": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "yaw": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 6,
+            "nodeId": "loop_cam_switch",
+            "typeId": "node.camera_switch",
+            "handle": "loop_cam_switch",
+            "params": {
+              "select": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 7,
+            "nodeId": "loop_scene_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "camera",
+            "toNode": 6,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "beat",
+            "toNode": 3,
+            "toPort": "beat"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "phase"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "instances"
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "loop_instances_stage",
+      "typeId": "group",
+      "handle": "SceneLoopInstancesStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_instances",
+            "typeId": "system.group_input",
+            "handle": "instances"
+          },
+          {
+            "id": 2,
+            "nodeId": "loop_instances_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "instances",
+            "toNode": 2,
+            "toPort": "instances"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

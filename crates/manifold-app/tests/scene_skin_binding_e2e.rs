@@ -42,6 +42,7 @@ fn gltf_fixture_project() -> manifold_core::project::Project {
     manifold_renderer::preset_loader::set_project_presets(
         Vec::new(),
         vec![(id.as_str().to_string(), json, embedded.origin)],
+        Vec::new(),
     );
     let mut project = manifold_core::project::Project::default();
     let mut cmd = ImportModelLayerCommand::new(display_name, embedded, 0, None);

@@ -191,6 +191,11 @@ pub struct UIRoot {
     /// undo/redo gets a distinct key even when the description repeats).
     pub last_undo_redo_toast_key: Option<u64>,
 
+    /// Last rejected graph-edit diagnostic shown by the UI. Rejections do not
+    /// bump `data_version`, so this guard keys directly on the content event's
+    /// sequence and remains stable across repeated snapshots.
+    pub last_graph_edit_diagnostic_sequence: Option<u64>,
+
     /// Load-time warmup progress shown as a centered overlay during project
     /// open. `None` when no warmup is active.
     pub warmup: Option<manifold_core::WarmupProgress>,
@@ -440,6 +445,7 @@ impl UIRoot {
             toast: manifold_ui::panels::toast::ToastPanel::new(),
             last_export_toast_key: None,
             last_undo_redo_toast_key: None,
+            last_graph_edit_diagnostic_sequence: None,
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
             built: false,
@@ -1811,7 +1817,6 @@ mod tick_parity_tests {
         );
     }
 }
-
 
 
 

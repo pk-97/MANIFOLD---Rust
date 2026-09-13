@@ -70,111 +70,21 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value",
-          "node_type": "Label"
+          "under_text": "Bars",
+          "type": "Label"
         }
       },
       "check": {
-        "TextEquals": "8"
+        "TextEquals": "8.00"
       }
     }
   },
   {
-    "Pointer": {
+    "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.39_bars.slider",
-          "node_type": "Button"
-        }
-      },
-      "gesture": {
-        "Drag": {
-          "to": {
-            "Point": {
-              "x": 1300.0,
-              "y": 1177.0
-            }
-          },
-          "steps": 8
-        }
-      }
-    }
-  },
-  "Snapshot",
-  "Dump",
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "name": "param_row.39_bars.value",
-          "node_type": "Label"
-        }
-      },
-      "check": {
-        "TextEquals": "44"
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Pattern"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Stride"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "name": "param_row.40_pattern_length.value"
-        }
-      },
-      "check": {
-        "TextEquals": "1"
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "name": "param_row.41_patterns_per_loop.value"
-        }
-      },
-      "check": {
-        "TextEquals": "1"
-      }
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "name": "param_row.40_pattern_length.slider"
-        }
-      },
-      "gesture": {
-        "Drag": {
-          "to": {
-            "Point": {
-              "x": 1310.0,
-              "y": 1177.0
-            }
-          },
-          "steps": 8
+          "under_text": "Bars",
+          "type": "Button"
         }
       }
     }
@@ -183,15 +93,16 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.41_patterns_per_loop.slider"
+          "under_text": "Bars",
+          "type": "Button"
         }
       },
       "gesture": {
         "Drag": {
           "to": {
-            "Point": {
-              "x": 1310.0,
-              "y": 1567.0
+            "Query": {
+              "under_text": "Bars",
+              "type": "Label"
             }
           },
           "steps": 8
@@ -199,22 +110,85 @@
       }
     }
   },
-  "Dump",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Bars",
+          "text": "8.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
   {
     "Step": {
-      "frames": 30
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Bars",
+          "type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "8.00"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Pattern",
+          "type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "under_text": "Pattern",
+          "type": "Button"
+        }
+      }
     }
   },
   {
     "Pointer": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.wrap_debug"
+          "under_text": "Pattern",
+          "type": "Button"
         }
       },
       "gesture": {
-        "Click": {
-          "modifiers": {}
+        "Drag": {
+          "to": {
+            "Query": {
+              "under_text": "Pattern",
+              "type": "Label"
+            }
+          },
+          "steps": 8
         }
       }
     }
@@ -223,11 +197,61 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value"
+          "under_text": "Pattern",
+          "text": "1.00"
         }
       },
       "check": {
-        "TextEquals": "0"
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Pattern",
+          "type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Stride",
+          "type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "under_text": "Stride",
+          "type": "Button"
+        }
       }
     }
   },
@@ -235,12 +259,19 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.wrap_debug"
+          "under_text": "Stride",
+          "type": "Button"
         }
       },
       "gesture": {
-        "Click": {
-          "modifiers": {}
+        "Drag": {
+          "to": {
+            "Query": {
+              "under_text": "Stride",
+              "type": "Label"
+            }
+          },
+          "steps": 8
         }
       }
     }
@@ -249,11 +280,47 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.39_bars.value"
+          "under_text": "Stride",
+          "text": "1.00"
         }
       },
       "check": {
-        "TextEquals": "8"
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Stride",
+          "type": "Label"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
       }
     }
   },
@@ -284,6 +351,41 @@
     }
   },
   {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
+    }
+  },
+  {
     "Pointer": {
       "target": {
         "Query": {
@@ -299,7 +401,7 @@
   },
   {
     "Step": {
-      "frames": 90
+      "frames": 12
     }
   },
   {

@@ -2338,6 +2338,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: def.scene_modifiers.clone(),
             nodes: vec![tex, sim],
             wires: vec![
                 EffectGraphWire {

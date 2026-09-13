@@ -2,7 +2,7 @@
 
 <!-- index: Baseline qualification and eight phases for unified photoscan presets, coordinates, migration, catalog, file-only authoring and release proof. -->
 
-**Status:** APPROVED · 2026-09-12 · Codex lead · F0/F1–F8 pending. The shipped photoscan slice supplies working inputs; it does not implement the unified foundation.
+**Status:** IN PROGRESS · 2026-09-12 · Codex lead · F1–F6 integrated in the leased worktree; F7 two-stage CPU proof passes and Surface Peel - Clip Hit is promoted as a variation. Peter confirmed release-app rendering and LFO operation. Shared card interaction/preset cleanup is integrated; F8 is narrowed to static review plus focused checks by explicit request, with full playback/performance qualification deferred. Main is unchanged.
 **Prerequisites:** [Preset Architecture](SCENE_MODIFIER_PRESET_ARCHITECTURE.md); existing graph/preset/editor infrastructure.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Architecture decisions A/D references below refer to the companion architecture; test policy is [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
 
@@ -10,7 +10,7 @@ The next release makes the existing photoscan journey reliable and generic: load
 
 ## 1. Audit and re-derivation
 
-Historical inventory: `28c8486f0`, 2026-09-10. Refresh it against the shipped photoscan implementation before F1; counts and line numbers below are historical. The architecture owns data definitions; this plan owns migration call sites. Current additions are `scene_modifier_mesh.rs`, core `MeshStageSplice`, generic editing preflight/removal, three JSON files, two GPU atoms and the photoscan plan/editing/UI fixtures. Preserve those tests as migration inputs.
+Historical inventory: `28c8486f0`, 2026-09-10. Refresh it against the shipped photoscan implementation before F1; counts and line numbers below are historical. The architecture owns data definitions; this plan owns migration call sites. At that audit, additions were `scene_modifier_mesh.rs`, core `MeshStageSplice`, generic editing preflight/removal, three JSON files, two GPU atoms and photoscan plan/editing/UI fixtures. The leased implementation replaces those factories and ports their meaningful assertions to file-based preparation and migration; immutable v2 fixtures remain unchanged.
 
 ```sh
 rg -n 'scene_modifier::(descriptors|descriptor_for|build_plan|trace_modifier)' crates/manifold-app/src crates/manifold-renderer/src
@@ -76,34 +76,40 @@ Replacement authoring address in core `graph_target.rs`:
 SceneModifier { owner: Box<GraphTarget>, modifier_id: NodeId }
 ```
 
-Only `owner = Generator(layer_id)` is accepted in v1. Nested SceneModifier owners and Effect owners fail target resolution. `preset_kind()` returns SceneModifier for this variant. Existing Effect/Generator variants retain their on-disk representation. Resolve the modifier snapshot in one shared graph-target resolver, not independent implementations in editor/export/fork.
+Only `owner = Generator(layer_id)` is accepted in v1. Nested SceneModifier owners and Effect owners fail target resolution. `preset_kind()` returns SceneModifier for this variant. The existing internally tagged GraphTarget derive cannot serialize its transparent string-ID newtypes; no working historical JSON representation was found. F3 establishes explicit `{kind: effect|generator, id}` objects and `{kind: sceneModifier, owner, modifierId}` while retaining the Rust enum API. This is an editor address, not a new persisted project owner. Add the variant with its working resolver in F3; F1 introduces the persisted data without temporary editor dispatch branches. Resolve the modifier snapshot in one shared graph-target resolver, not independent implementations in editor/export/fork.
 
-New editing commands in `commands/graph/scene_modifier.rs` use existing Command/EditingService and graph snapshot undo:
+New editing commands in `commands/graph/modifier_stack.rs` use existing Command/EditingService and graph snapshot undo. They receive the content-thread project and resolved owner default so preparation captures the exact owner graph and preset identity:
 
 ```rust
 pub struct InsertSceneModifierCommand {
     // private undo state; constructor is the public seam
 }
 impl InsertSceneModifierCommand {
-    pub fn new(owner: GraphTarget, index: usize,
-               instance: SceneModifierInstanceDef) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, index: usize,
+               instance: SceneModifierInstanceDef) -> Result<Self, SceneModifierStackError>;
 }
 pub struct DeleteSceneModifierCommand { /* private undo state */ }
 impl DeleteSceneModifierCommand {
-    pub fn new(owner: GraphTarget, modifier_id: NodeId) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, modifier_id: NodeId) -> Result<Self, SceneModifierStackError>;
 }
 pub struct MoveSceneModifierCommand { /* private undo state */ }
 impl MoveSceneModifierCommand {
-    pub fn new(owner: GraphTarget, modifier_id: NodeId, index: usize) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, modifier_id: NodeId,
+               index: usize) -> Result<Self, SceneModifierStackError>;
 }
 pub struct RetargetSceneModifierCommand { /* private undo state */ }
 impl RetargetSceneModifierCommand {
-    pub fn new(owner: GraphTarget, modifier_id: NodeId,
-               targets: SceneTargetSelection) -> Self;
+    pub fn new(project: &Project, owner: GraphTarget,
+               owner_default: &EffectGraphDef, modifier_id: NodeId,
+               targets: SceneTargetSelection,
+               mesh_frames: Vec<SceneMeshReferenceFrame>) -> Result<Self, SceneModifierStackError>;
 }
 ```
 
-`index` is the final zero-based position after removal for Move; out-of-range is an error, never clamped. Renderer validation happens during preparation before dispatch. Editing rechecks structural identity and source-order invariants from core data before mutation, so a stale UI plan cannot modify a different instance. Error transport reuses existing Command results; no renderer dependency in editing. Invalid commands have no undo entry and change no state.
+`index` is the final zero-based position after removal for Move; out-of-range is an error, never clamped. Each command exposes `prepared_graph()` for renderer admission before dispatch. Core candidate helpers preserve surviving saved frames; only the renderer captures frames for newly selected targets. Execute rechecks the expected owned graph and generator preset identity before mutation, so a stale plan cannot modify another snapshot. `Command::was_applied()` lets EditingService reject a stale or no-op edit without adding undo history, clearing redo, or marking the project dirty. Typed errors remain available on the prepared command; editing has no renderer dependency.
 
 **D3 — Generic defaults replace bespoke Loop callbacks.** Architecture section 3 defines bounded `SceneScalarExpr` initializers and calibrations for apply-time bounds-derived values/ranges. Implement them in F1/F2 and author their declarations in F6. Shared live values use ordinary bindings and graph arithmetic, never coupled UI writes. No per-preset callback survives.
 
@@ -111,7 +117,11 @@ impl RetargetSceneModifierCommand {
 
 ## 3. Phasing and common execution rules
 
+**Trigger integration addition:** F0 audits the existing layer trigger source, first-edge ordering, reset scope and audio routing alongside the baseline. F2 supports one modifier-owned control-only Scene stage feeding replicated geometry stages. F3/F5 preserve trigger-gate metadata and independent control identities; event state must not reset another modifier when one changes. F4 preserves existing trigger mappings and legacy semantics. F7 authors a Surface Peel hit/return variation through a file alone using the shared response vocabulary qualified in F2; F8 proves first/repeated clips, rapid retrigger, disabled gating, seek/stop and independent instances. The audit demonstrated two gaps: no beat-window hit/return envelope and no first-real-edge initialization distinct from loading a nonzero counter. F2 owns their shared implementation and tests; legacy preset semantics remain unchanged.
+
 **F0 — capture the baseline and close the narrow qualification gap.** Before changing schema, retain immutable v2 graph fixtures for each photoscan look and a three-stage stack, with non-default values, Enabled and representative saved mappings. Reuse `photoscan_modifier_plans`, `scene_mesh_modifier_roundtrip`, the nine `photoscan_modifier` GPU proofs and `scene-photoscan-modifiers.json`. Record fixture asset hashes and observed settings. Peter already reports visual/LFO success; do not describe that as untested or rerun a basic slider demo to replace it. Add one bounded production save → reopen → LFO/driver/audio gesture with a visible playing clip, plus V8's prepared performance sequence on the scan. Compare stored mappings and post-reload effective geometry. Audio observation uses a deterministic available input or records the missing input as a concrete gap. Record BUG-e3p6.5 results; no long-show soak. The lead resolves a failed baseline before claiming migration parity; dynamic RT BUG-e3p6.4 remains outside M1. This is an entry work package, not a ninth new framework subsystem.
+
+**F0 evidence, September 12:** immutable applied v2 graphs now cover each look and the actual three-stage stack in `crates/manifold-renderer/tests/fixtures/scene-modifiers/`. Their synthetic nested objects exercise different materials, texture routes, captured coordinates, non-default controls and disabled state. Production Apply output matches the snapshots and compiles through `PresetRuntime::from_def`; all six photoscan plan tests and five mesh editing tests pass. The real-import test uses mushroom SHA-256 `8240b0f97c24f248352af1606bcb1963f776aec2b3a63b92167db0e355180350`. This is structural/compiler evidence, not a new render or live modulation/reopen/performance qualification; BUG-e3p6.5 remains open.
 
 **Lane and landing schedule:** the lead owns schema/coordinate/migration decisions and review. Use Luna high-effort workers with prepared exact-path briefs. F1 schema/IO is one owner; after its interfaces settle, F2 expansion and independent negative-fixture authoring may run in parallel. F3 owns command/binding code; F4 migration and disjoint fixture work can then run separately. F5 owns the shared UI surface; F6 catalog conversion may run alongside independent validation tooling only after its loader interface is fixed. F4–F6 share one leased workstream until the activation gate is green. F7 is an independent recipe author lane with no permission to change runtime code. Do not dispatch all phases concurrently or split one shared module between workers. Each phase returns focused checks; the lead runs required landing gates once per coherent landing. Split an oversized phase at a named seam before dispatch, preserving its exit criteria.
 
@@ -123,15 +133,33 @@ Commands below run from the phase worktree with an explicit absolute `--manifest
 
 **Entry:** baseline audit commands; read architecture sections 2–4, core graph/preset/project types, `preset_file.rs` and version validation. No dependency on F2.
 
-**Deliverables:** architecture structs including preparationParams and typed coordinate contexts; graph v3 support; SceneModifier preset kind and metadata; BindingTarget variant; GraphTarget variant with typed errors at unresolved new targets. Update constructors compiler-first. File/project embedding preserves v3 and rejects recursive/unknown recipe versions. Add `scene_modifier_v3_roundtrip` and invalid-schema fixtures, including a held-out authored JSON preset. Validate unique preparation parameter names and their declared types. New enum paths may return explicit unsupported-execution errors until F2/F3; never masquerade as Generator. Reuse existing asset dependency traversal for nested local snapshots.
+**Deliverables:** architecture structs including preparationParams and typed coordinate contexts; graph v3 support; SceneModifier preset kind and metadata; BindingTarget variant. GraphTarget joins its working resolver in F3. Update constructors compiler-first. File/project embedding preserves v3 and rejects recursive/unknown recipe versions. Add `scene_modifier_v3_roundtrip` and invalid-schema fixtures, including a held-out authored JSON preset. Validate unique preparation parameter names and their declared types. New enum paths may return explicit unsupported-execution errors until F2/F3; never masquerade as Generator. Reuse existing asset dependency traversal for nested local snapshots.
 
 Include authored meshFrames roundtrip and validation. Calibration survives save/reopen and is excluded from exported bare preset recipes. The format distinguishes absent fresh-instance frames (creation resolver input) from an incomplete saved instance (load diagnostic); saved validation requires frames for every selected mesh target needing context.
 
 **Gate:** `cargo test -p manifold-core -p manifold-io scene_modifier_v3` and focused clippy for core/io with `--tests -- -D warnings`; serialize → reload → equal canonical definition. Negative: no new `Arc<Mutex`/`Arc<RwLock` in touched code. A1/A7 tests are deliverables. **Demo:** none — L1. **Scope fence:** data/file support only; no picker or GPU work.
 
+F1 verification in the leased branch: 20 focused core/IO tests cover schema rejection, standalone recipe roundtrip, local snapshots and mesh frames, collection/reload, path relocation and failure before file mutation. Core and downstream application clippy pass with test targets. The runtime test confirms attachment refusal before node installation and accepts ordinary v3 graphs. The required landing gate remains outstanding; no unified runtime, migration activation or new clip-edge behaviour is claimed here.
+
 ## 5. F2 — typed expansion
 
 **Entry:** F1 tests; read scene_object, graph_loader, bound_graph, freeze/install, generator registry. Re-derive all preparation entrances.
+
+The structural implementation in the leased branch has 54 passing renderer tests covering scoped attachment, saved coordinate frames, shared control-stage broadcast, Reference versus Previous, namespace stability, actual primitive ports, binding fan-out, source guards, control-state transfer and preparation limits. Ten core expression/initializer tests pass; a follow-up initializer check also verifies calibrated binding defaults, preventing the existing default-planting path from restoring stale values. These are CPU structural proofs, not observed geometry or production-path qualification. Canonical watched/fused preparation and shared prepared-buffer accounting are implemented. Focused renderer clippy passes. Modifier editor preview integration remains F3/F5 work.
+
+The shared core source identity now supports transactional same-asset path relocation. Collection and missing-path resolution use it to preserve saved offsets/radii while refreshing the corresponding hashes; stale hashes reject the entire rewrite. Four core relocation tests and three IO collection/save/reopen/resolution tests pass, with focused core/IO clippy. This is path relocation evidence, not permission to silently recalibrate a replacement mesh.
+
+Explicit first-event initialization adds `TriggerBaseline` to scene context and an optional `initial_count` input to `trigger_gate`; unwired legacy behavior stays unchanged. The runtime records the counter before a real clip/audio event and consumes that marker after evaluation. Eleven CPU runtime tests cover cold start, warmup, nonzero idle load, disabled gates, pending-event carry, preservation when another modifier is removed and resuming after a source guard is restored. The new `node.envelope_beats` passes six actual evaluation tests including beat duration at two tempos. All nine TriggerEaseTo tests pass with optional first-event glide inputs. Independent modifier event routing is now implemented: pulses retain the firing preset identity and an allocation-free gate token; prepared modifier counters are separate from the legacy host stream. Seven event-state tests and four canonical/control runtime tests cover isolated audio, shared clip launches, pending-event carry through reorder, beat-window output and watched/fused installation. Core clip-mode policy and four playback pulse tests pass. Focused core/playback/renderer/app clippy passes. Production clip/audio/transport observation remains open.
+
+Source/mode guards validate the calibrated host before expansion plants binding defaults, then protect prepared runtime parameters through both checked and unchecked writes. Four source tests cover watched/fused string routing, selector rejection before GPU work, raster-only mode protection and accepted same-asset relocation; ordinary geometry controls remain live. Invalid writes suspend rendering with a typed diagnostic until restored. The replacement editor must classify these fields as preparation-only and present the diagnostic through the existing parameter surface in F3/F5.
+
+The expander keeps the authored host nested and immutable, and returns a derived flat graph with original host handles restored. A bounded preflight counts copied group boundaries and context inputs before allocation as well as checking the final flattened node/wire limits. `node.compose_vec3` is the small CPU scalar constructor needed for typed SceneMin/SceneMax context; the inventory had an F32 constant and a texture-readback Vec3 bridge, but no direct vector constructor.
+
+The prepared result now carries explicit local-node/copy routes and numeric binding-source provenance. Cached value writes borrow live authored values, including nested group defaults and first edits of omitted parameters; they do not flatten or expand on the edit path. Tests cover per-object fanout, undo of a first edit, stale-path rejection, and actual fused mesh uniform destinations (including enum conversion). The generator fusion cache now retains its retarget map alongside the render definition. `BoundGraph` accepts these prepared caches and preserves composed host/local scale and offset during mapping edits. Production generator constructors now install these caches before watched or fused rendering; malformed attachments fail before node installation. The fusion cache also retains complete member identity, including parameterless nodes. Canonical host preview groups and explicit modifier copy routes survive preparation; modifier editor integration remains F3/F5 work.
+
+Buffer admission uses the same pure array-allocation plan as the GPU allocator, counting physical allocations once and aliases as shared storage. Each graph carries its allocation attribution, so native preparation cannot omit admission. The initial 256 MiB per-scene limit is superseded by the [device-aware aggregate policy](SCENE_MODIFIER_VALIDATION_PLAN.md#5-admission-and-timing-budgets); baseline buffers remain reported separately and count toward the candidate peak. Five allocator tests and the focused native Metal fluidsim_buffer_fusion_renders_like_unfused proof passed during foundation work. Runtime CPU tests cover watched/fused canonical loading, live copy writes and ray tracing enabled by the initial live manifest. These checks do not establish photoscan visual parity, live modulation, clip-event correctness or the full GPU landing gate.
+
+**Preparation boundary refinement:** `BoundGraph::apply_inner_overrides` is reached from generator value-only edits, despite its current internal call to `flatten_groups`. It must not call the structural expander. Prepare canonical-local-node → generated-leaf routes once, resolve them through the existing runtime node map/fusion retarget, and reuse those routes for value writes and preview lookup. Preserve the host's canonical group preview map before deriving the flat graph. `rebake_reshapes` must likewise retain the local leaf scale/offset when the host macro's mapping changes. The no-rebuild proof must cover these editor-value and mapping-spec paths as well as ordinary LFO/card writes.
 
 **Deliverables:** expansion and applicability functions; stable identity allocation; stage routing; reference/current distinction; admission limits; expanded binding fan-out. Use one shared preparation function at entrances that currently flatten directly: `graph_loader.rs:771`, `bound_graph.rs:290,495`, and pre-fusion generator entry (`generators/registry.rs:267`). Follow callers for viewport, thumbnail, warmup and export. Add A3/A4/A5/A10 tests, including two noncommuting stages, renamed groups, duplicate labels, reordered numeric IDs and explicit missing targets. Add neutral CPU fixture nodes for structural tests; do not introduce production test-only fallbacks.
 
@@ -142,6 +170,8 @@ Also deliver A11/A13: source-frame resolver, SceneRadius/SourceOffset context, a
 **Gate:** `cargo test -p manifold-renderer scene_modifier_expand` and renderer clippy; `scene_modifier_preparation_parity` explicitly exercises fused preparation, unfused preparation and preview resolution. Negative: expanded graphs contain no `sceneModifiers` and no modifier-only BindingTarget. These are parsed assertions, not a source-string guess. **Demo:** none — L1; geometry operation not introduced yet. **Forbidden:** new Object producer/consumer chain, direct RT writes, per-frame expansion.
 
 ## 6. F3 — commands and parameter identity
+
+The leased branch has nested graph targets, transactional insert/delete/move/retarget commands, exact instance cards and explicit object preview selection. Structural commands are admitted against a private candidate on the content thread. Source and unsupported RT edits reject before mutation; ordinary modulation remains live. Nineteen app tests cover instance independence, reorder/remove, retargeting, preparation, stable object duplication/removal, stale redo and clip-source overrides. Nine shared command/guard tests and focused app/editing/UI clippy pass. Native UI and production modulation/render qualification remain open; this is not a main landing.
 
 **Entry:** F2; read GraphTarget resolution, existing graph snapshot commands, host manifest/mapping pruning and param bindings. Inventory all new enum matches.
 
@@ -181,11 +211,15 @@ Metadata supplies all card controls; remove hardcoded photoscan row whitelists a
 
 **Deliverables:** `assets/scene-modifier-presets/SceneLoop.json` and `SceneFog.json`; adopt ElasticSculpture/SurfacePeel/VortexFragments JSON with explicit recipe/context ports; catalog discovery/validation; preserved names and control identities; graph-based shared values; old runtime descriptor/builders removed. Legacy recognisers move into a narrowly named migration module. check-presets gains modifier-specific boundary validation and host-fixture expansion, since modifier files intentionally have no final texture output. Preserve source restrictions rather than fabricating universal bypass.
 
+The file-based Loop keeps Pattern and Spacing shared through declarative binding fanout. Home remains an independent live control: changing Spacing no longer overwrites Home. This is an intentional change from the old UI callback, preserving a held or modulated Home value; saved initial framing remains unchanged. Periodic wrap still depends on matching camera and array period, not resetting Home on a slider gesture.
+
 **Gate:** focused `check-presets` scene-modifier mode (new CLI `--kind sceneModifier`, delivered here); `cargo test -p manifold-renderer --test scene_modifier_stock`; focused migration/legacy GPU proof after file conversion. Negative: production code has no `SceneModifierDescriptor`, `SceneModifierDescriptorEntry`, `build_scene_loop_plan`, `build_scene_fog_plan`, `RecipeKind`, photoscan row/trace tables or atom-name-specific attachment patching. Exact source searches exclude only the named load-time migration module where legacy constants are required; do not rename a runtime callback to make a grep pass. Existing tests move to file loading, not duplicated in a legacy runtime harness. **Demo:** all five kinds load from files through the same picker; saved photoscan controls still work — L3 via the F5 flow extended here. **Forbidden:** per-preset Rust callback or display-name switch.
 
 ## 10. F7 — independent file-only authoring proof
 
 **Entry:** F6, existing atom registry and documented recipe boundary. No new geometry algorithm is required. The wave pilot already shipped position/field/displacement primitives; photoscan atoms already supply shear and rigid patch motion. Audit reuse before any future primitive proposal.
+
+The concrete recipe-only assignment is a Surface Peel burst on a clip edge followed by return. Coordinate Lift/Curl through an authored envelope group built on the qualified shared response nodes, with Clip Trigger, Strength and beat-based Duration/Decay controls. Prove that manually held/LFO-driven base controls survive each hit. Keep it a variation/conformance preset unless the creative admission test justifies stock promotion.
 
 **Deliverables:** an independent worker authors one conformance preset from existing nodes, controls, typed context and attachment metadata using only a preset file. Freeze its runtime dependencies before dispatch. Add/import through the real user/project catalog and picker; duplicate, reorder, edit the local graph, Save As, export/import and reopen with a mapped control. It must produce a nonzero visible effect on an already loaded photoscan. No descriptor, per-kind enum, control table, include_str registration, shader or app change is permitted to make this particular file work. A discovered generic framework defect returns to the lead and the owning earlier phase.
 

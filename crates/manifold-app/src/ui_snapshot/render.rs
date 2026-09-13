@@ -387,11 +387,11 @@ pub fn render_graph_editor_to_png(
     // live `present_graph_editor_window` builds `ws.ui_root.tree`. This is
     // the topology fix: no more scratch `tree` + throwaway `editor_ui.tree`.
     let mut ui_root = crate::ui_root::UIRoot::new();
-    let active_idx = match target {
-        manifold_core::GraphTarget::Generator(lid) => {
+    let active_idx = match target.host_target() {
+        Some(manifold_core::GraphTarget::Generator(lid)) => {
             project.timeline.layers.iter().position(|l| &l.layer_id == lid)
         }
-        manifold_core::GraphTarget::Effect(_) => None,
+        _ => None,
     };
     crate::ui_bridge::sync_project_data(&mut ui_root, project, active_idx, selection);
     // No `ContentState` exists on this path (a bare fixture `Project`, no

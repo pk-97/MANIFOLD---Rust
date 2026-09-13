@@ -1,0 +1,558 @@
+{
+  "version": 2,
+  "name": "Nested Multi Material Scan Baseline",
+  "presetMetadata": {
+    "id": "PhotoscanBaseline",
+    "displayName": "Photoscan Baseline",
+    "category": "Geometry",
+    "oscPrefix": "photoscan_baseline",
+    "available": false,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "33_value",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "section": "Scene Fog",
+        "cardVisible": false
+      },
+      {
+        "id": "34_value",
+        "name": "Density",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Scene Fog",
+        "cardVisible": false
+      }
+    ],
+    "bindings": [
+      {
+        "id": "33_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "fog_enabled",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "34_value",
+        "label": "Density",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "fog_amount",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      }
+    ],
+    "sceneBounds": [
+      [
+        -2.0,
+        -1.0,
+        -2.0
+      ],
+      [
+        2.0,
+        2.0,
+        2.0
+      ]
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "scan_generator_input",
+      "typeId": "system.generator_input",
+      "handle": "Generator Input"
+    },
+    {
+      "id": 1,
+      "nodeId": "scan_render",
+      "typeId": "node.render_scene",
+      "handle": "Scan Render"
+    },
+    {
+      "id": 31,
+      "nodeId": "scan_camera",
+      "typeId": "node.orbit_camera",
+      "handle": "Scan Camera"
+    },
+    {
+      "id": 10,
+      "nodeId": "scan_left_group",
+      "typeId": "group",
+      "handle": "Scan Left",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "mesh_object",
+              "portType": "Object"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 11,
+            "nodeId": "left_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "Left Mesh"
+          },
+          {
+            "id": 12,
+            "nodeId": "left_transform",
+            "typeId": "node.transform_3d",
+            "handle": "Left Transform",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -0.75
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.2
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 0.1
+              },
+              "rot_y": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 1.1
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 0.9
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "left_pbr",
+            "typeId": "node.pbr_material",
+            "handle": "Left PBR",
+            "params": {
+              "color_b": {
+                "type": "Float",
+                "value": 0.12
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.31
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.73
+              },
+              "roughness": {
+                "type": "Float",
+                "value": 0.42
+              }
+            }
+          },
+          {
+            "id": 14,
+            "nodeId": "left_uv",
+            "typeId": "node.uv_field",
+            "handle": "Left UV"
+          },
+          {
+            "id": 15,
+            "nodeId": "left_uv_map",
+            "typeId": "node.brightness",
+            "handle": "Left UV Map"
+          },
+          {
+            "id": 16,
+            "nodeId": "left_object",
+            "typeId": "node.scene_object",
+            "handle": "Left Object",
+            "params": {
+              "visible": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 17,
+            "nodeId": "left_output",
+            "typeId": "system.group_output",
+            "handle": "Left Output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 11,
+            "fromPort": "vertices",
+            "toNode": 16,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "transform",
+            "toNode": 16,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "base_color_map"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "object",
+            "toNode": 17,
+            "toPort": "mesh_object"
+          }
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "scan_right_group",
+      "typeId": "group",
+      "handle": "Scan Right",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "mesh_object",
+              "portType": "Object"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 21,
+            "nodeId": "right_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "Right Mesh"
+          },
+          {
+            "id": 22,
+            "nodeId": "right_transform",
+            "typeId": "node.transform_3d",
+            "handle": "Right Transform",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": -0.15
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": -0.2
+              },
+              "rot_x": {
+                "type": "Float",
+                "value": -0.2
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.2
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 23,
+            "nodeId": "right_phong",
+            "typeId": "node.phong_material",
+            "handle": "Right Phong",
+            "params": {
+              "color_b": {
+                "type": "Float",
+                "value": 0.82
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.55
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.18
+              },
+              "specular_power": {
+                "type": "Float",
+                "value": 64.0
+              }
+            }
+          },
+          {
+            "id": 24,
+            "nodeId": "right_uv",
+            "typeId": "node.uv_field",
+            "handle": "Right UV"
+          },
+          {
+            "id": 25,
+            "nodeId": "right_uv_map",
+            "typeId": "node.brightness",
+            "handle": "Right UV Map"
+          },
+          {
+            "id": 26,
+            "nodeId": "right_object",
+            "typeId": "node.scene_object",
+            "handle": "Right Object",
+            "params": {
+              "visible": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 27,
+            "nodeId": "right_output",
+            "typeId": "system.group_output",
+            "handle": "Right Output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 26,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "transform",
+            "toNode": 26,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "base_color_map"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "object",
+            "toNode": 27,
+            "toPort": "mesh_object"
+          }
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "scan_output",
+      "typeId": "system.final_output",
+      "handle": "Output"
+    },
+    {
+      "id": 32,
+      "nodeId": "fog_atm",
+      "typeId": "node.atmosphere",
+      "handle": "fog_atm",
+      "params": {
+        "ambient_tint_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "ambient_tint_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "ambient_tint_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "fog_color_b": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "fog_color_g": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "fog_color_r": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "fog_density": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "height_falloff": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "shaft_anisotropy": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "shaft_intensity": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "shaft_quality": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 33,
+      "nodeId": "fog_enabled",
+      "typeId": "node.value",
+      "handle": "fog_enabled",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 34,
+      "nodeId": "fog_amount",
+      "typeId": "node.value",
+      "handle": "fog_amount",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.1
+        }
+      }
+    },
+    {
+      "id": 35,
+      "nodeId": "fog_mul",
+      "typeId": "node.math",
+      "handle": "fog_mul",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 10,
+      "fromPort": "mesh_object",
+      "toNode": 1,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "mesh_object",
+      "toNode": 1,
+      "toPort": "object_1"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "color",
+      "toNode": 30,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 33,
+      "fromPort": "out",
+      "toNode": 35,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 34,
+      "fromPort": "out",
+      "toNode": 35,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 35,
+      "fromPort": "out",
+      "toNode": 32,
+      "toPort": "fog_density"
+    },
+    {
+      "fromNode": 32,
+      "fromPort": "atmosphere",
+      "toNode": 1,
+      "toPort": "atmosphere"
+    }
+  ]
+}

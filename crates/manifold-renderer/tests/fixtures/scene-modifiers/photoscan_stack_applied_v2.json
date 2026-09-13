@@ -1,0 +1,2910 @@
+{
+  "version": 2,
+  "name": "Nested Multi Material Scan Baseline",
+  "presetMetadata": {
+    "id": "PhotoscanBaseline",
+    "displayName": "Photoscan Baseline",
+    "category": "Geometry",
+    "oscPrefix": "photoscan_baseline",
+    "available": false,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "34_value",
+        "name": "Bend",
+        "min": -0.7,
+        "max": 0.7,
+        "defaultValue": 0.18,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "35_value",
+        "name": "Cross Bend",
+        "min": -0.7,
+        "max": 0.7,
+        "defaultValue": 0.12,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "36_value",
+        "name": "Detail",
+        "min": 0.0,
+        "max": 6.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "37_value",
+        "name": "Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "38_value",
+        "name": "Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "wraps": true,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "39_value",
+        "name": "Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "wraps": true,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "40_value",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "section": "Elastic Sculpture",
+        "cardVisible": false
+      },
+      {
+        "id": "43_value",
+        "name": "Lift",
+        "min": 0.0,
+        "max": 0.8,
+        "defaultValue": 0.18,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "44_value",
+        "name": "Curl",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "45_value",
+        "name": "Spread",
+        "min": -0.5,
+        "max": 0.5,
+        "defaultValue": 0.03,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "46_value",
+        "name": "Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "47_value",
+        "name": "Detail",
+        "min": 0.0,
+        "max": 6.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "48_value",
+        "name": "Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "wraps": true,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "49_value",
+        "name": "Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "wraps": true,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "50_value",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "section": "Surface Peel",
+        "cardVisible": false
+      },
+      {
+        "id": "53_value",
+        "name": "Orbit",
+        "min": -6.2831855,
+        "max": 6.2831855,
+        "defaultValue": 2.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "54_value",
+        "name": "Rise",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.16,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "55_value",
+        "name": "Separation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.12,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "56_value",
+        "name": "Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "57_value",
+        "name": "Detail",
+        "min": 0.0,
+        "max": 6.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "58_value",
+        "name": "Yaw",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "wraps": true,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "59_value",
+        "name": "Pitch",
+        "min": -3.1415927,
+        "max": 3.1415927,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "isAngle": true,
+        "wraps": true,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      },
+      {
+        "id": "60_value",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "section": "Vortex Fragments",
+        "cardVisible": false
+      }
+    ],
+    "bindings": [
+      {
+        "id": "34_value",
+        "label": "Bend",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/bend",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "35_value",
+        "label": "Cross Bend",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/cross_bend",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "36_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/detail",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "37_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/phase",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "38_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/yaw",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "39_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/pitch",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "40_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/enabled",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "34_value",
+        "label": "Bend",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+          "param": "amplitude"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "35_value",
+        "label": "Cross Bend",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+          "param": "amplitude"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "36_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "36_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "37_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "37_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "38_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "38_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "39_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "39_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "40_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "40_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "34_value",
+        "label": "Bend",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+          "param": "amplitude"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "35_value",
+        "label": "Cross Bend",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+          "param": "amplitude"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "36_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "36_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "37_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "37_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "38_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "38_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "39_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "39_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "40_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "40_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "43_value",
+        "label": "Lift",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/lift",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "44_value",
+        "label": "Curl",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/curl",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "45_value",
+        "label": "Spread",
+        "defaultValue": 0.03,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/spread",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "46_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/phase",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "47_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/detail",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "48_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/yaw",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "49_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/pitch",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "50_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/enabled",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "43_value",
+        "label": "Lift",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "separation"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "44_value",
+        "label": "Curl",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "45_value",
+        "label": "Spread",
+        "defaultValue": 0.03,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "spread"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "46_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "47_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "48_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "49_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "50_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/left_object/patch",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "43_value",
+        "label": "Lift",
+        "defaultValue": 0.18,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "separation"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "44_value",
+        "label": "Curl",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "45_value",
+        "label": "Spread",
+        "defaultValue": 0.03,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "spread"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "46_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "47_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "48_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "49_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "50_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/surface_peel/right_object/patch",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "53_value",
+        "label": "Orbit",
+        "defaultValue": 2.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/orbit",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "54_value",
+        "label": "Rise",
+        "defaultValue": 0.16,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/rise",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "55_value",
+        "label": "Separation",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/separation",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "56_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/phase",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "57_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/detail",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "58_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/yaw",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "59_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/pitch",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "60_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/enabled",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "53_value",
+        "label": "Orbit",
+        "defaultValue": 2.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "orbit"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "54_value",
+        "label": "Rise",
+        "defaultValue": 0.16,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "spread"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "55_value",
+        "label": "Separation",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "separation"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "56_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "57_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "58_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "59_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "60_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/left_object/patch",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "53_value",
+        "label": "Orbit",
+        "defaultValue": 2.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "orbit"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "54_value",
+        "label": "Rise",
+        "defaultValue": 0.16,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "spread"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "55_value",
+        "label": "Separation",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "separation"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "56_value",
+        "label": "Phase",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "57_value",
+        "label": "Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "frequency"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "58_value",
+        "label": "Yaw",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "yaw"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "59_value",
+        "label": "Pitch",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "pitch"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "60_value",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "photoscan/vortex_fragments/right_object/patch",
+          "param": "enabled"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      }
+    ],
+    "sceneBounds": [
+      [
+        -2.0,
+        -1.0,
+        -2.0
+      ],
+      [
+        2.0,
+        2.0,
+        2.0
+      ]
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "scan_generator_input",
+      "typeId": "system.generator_input",
+      "handle": "Generator Input"
+    },
+    {
+      "id": 1,
+      "nodeId": "scan_render",
+      "typeId": "node.render_scene",
+      "handle": "Scan Render"
+    },
+    {
+      "id": 31,
+      "nodeId": "scan_camera",
+      "typeId": "node.orbit_camera",
+      "handle": "Scan Camera"
+    },
+    {
+      "id": 10,
+      "nodeId": "scan_left_group",
+      "typeId": "group",
+      "handle": "Scan Left",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "mesh_object",
+              "portType": "Object"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 11,
+            "nodeId": "left_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "Left Mesh"
+          },
+          {
+            "id": 12,
+            "nodeId": "left_transform",
+            "typeId": "node.transform_3d",
+            "handle": "Left Transform",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -0.75
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.2
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 0.1
+              },
+              "rot_y": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 1.1
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 0.9
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "left_pbr",
+            "typeId": "node.pbr_material",
+            "handle": "Left PBR",
+            "params": {
+              "color_b": {
+                "type": "Float",
+                "value": 0.12
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.31
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.73
+              },
+              "roughness": {
+                "type": "Float",
+                "value": 0.42
+              }
+            }
+          },
+          {
+            "id": 14,
+            "nodeId": "left_uv",
+            "typeId": "node.uv_field",
+            "handle": "Left UV"
+          },
+          {
+            "id": 15,
+            "nodeId": "left_uv_map",
+            "typeId": "node.brightness",
+            "handle": "Left UV Map"
+          },
+          {
+            "id": 16,
+            "nodeId": "left_object",
+            "typeId": "node.scene_object",
+            "handle": "Left Object",
+            "params": {
+              "visible": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 17,
+            "nodeId": "left_output",
+            "typeId": "system.group_output",
+            "handle": "Left Output"
+          },
+          {
+            "id": 32,
+            "nodeId": "photoscan/elastic_sculpture/left_object/stage",
+            "typeId": "group",
+            "handle": "Photoscan_elastic_sculpture_left_object_stage",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "current",
+                    "portType": "Array(MeshVertex)"
+                  },
+                  {
+                    "name": "reference",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "vertices",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 1,
+                  "nodeId": "photoscan/elastic_sculpture/left_object/group_current",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_elastic_sculpture_left_object_current"
+                },
+                {
+                  "id": 2,
+                  "nodeId": "photoscan/elastic_sculpture/left_object/group_reference",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_elastic_sculpture_left_object_reference"
+                },
+                {
+                  "id": 3,
+                  "nodeId": "photoscan/elastic_sculpture/left_object/shear_x",
+                  "typeId": "node.wave_shear_mesh",
+                  "handle": "photoscan_elastic_sculpture_left_object_shear_x",
+                  "params": {
+                    "axis": {
+                      "type": "Enum",
+                      "value": 0
+                    },
+                    "origin_x": {
+                      "type": "Float",
+                      "value": 0.75
+                    },
+                    "origin_y": {
+                      "type": "Float",
+                      "value": -0.2
+                    },
+                    "origin_z": {
+                      "type": "Float",
+                      "value": -0.1
+                    },
+                    "phase_offset": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "nodeId": "photoscan/elastic_sculpture/left_object/shear_z",
+                  "typeId": "node.wave_shear_mesh",
+                  "handle": "photoscan_elastic_sculpture_left_object_shear_z",
+                  "params": {
+                    "axis": {
+                      "type": "Enum",
+                      "value": 1
+                    },
+                    "origin_x": {
+                      "type": "Float",
+                      "value": 0.75
+                    },
+                    "origin_y": {
+                      "type": "Float",
+                      "value": -0.2
+                    },
+                    "origin_z": {
+                      "type": "Float",
+                      "value": -0.1
+                    },
+                    "phase_offset": {
+                      "type": "Float",
+                      "value": 0.25
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    }
+                  }
+                },
+                {
+                  "id": 5,
+                  "nodeId": "photoscan/elastic_sculpture/left_object/group_output",
+                  "typeId": "system.group_output",
+                  "handle": "photoscan_elastic_sculpture_left_object_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "current",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 4,
+                  "fromPort": "out",
+                  "toNode": 5,
+                  "toPort": "vertices"
+                }
+              ]
+            }
+          },
+          {
+            "id": 41,
+            "nodeId": "photoscan/surface_peel/left_object/stage",
+            "typeId": "group",
+            "handle": "Photoscan_surface_peel_left_object_stage",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "current",
+                    "portType": "Array(MeshVertex)"
+                  },
+                  {
+                    "name": "reference",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "vertices",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 1,
+                  "nodeId": "photoscan/surface_peel/left_object/group_current",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_surface_peel_left_object_current"
+                },
+                {
+                  "id": 2,
+                  "nodeId": "photoscan/surface_peel/left_object/group_reference",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_surface_peel_left_object_reference"
+                },
+                {
+                  "id": 3,
+                  "nodeId": "photoscan/surface_peel/left_object/patch",
+                  "typeId": "node.transform_mesh_patches",
+                  "handle": "photoscan_surface_peel_left_object_patch",
+                  "params": {
+                    "cell_size": {
+                      "type": "Float",
+                      "value": 0.15
+                    },
+                    "enabled": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "frequency": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "orbit": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "phase": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "pitch": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "rotation": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    },
+                    "separation": {
+                      "type": "Float",
+                      "value": 0.18
+                    },
+                    "source_offset_x": {
+                      "type": "Float",
+                      "value": -0.75
+                    },
+                    "source_offset_y": {
+                      "type": "Float",
+                      "value": 0.2
+                    },
+                    "source_offset_z": {
+                      "type": "Float",
+                      "value": 0.1
+                    },
+                    "spread": {
+                      "type": "Float",
+                      "value": 0.03
+                    },
+                    "yaw": {
+                      "type": "Float",
+                      "value": 0.0
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "nodeId": "photoscan/surface_peel/left_object/group_output",
+                  "typeId": "system.group_output",
+                  "handle": "photoscan_surface_peel_left_object_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "current",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "reference",
+                  "toNode": 3,
+                  "toPort": "reference"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "vertices"
+                }
+              ]
+            }
+          },
+          {
+            "id": 51,
+            "nodeId": "photoscan/vortex_fragments/left_object/stage",
+            "typeId": "group",
+            "handle": "Photoscan_vortex_fragments_left_object_stage",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "current",
+                    "portType": "Array(MeshVertex)"
+                  },
+                  {
+                    "name": "reference",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "vertices",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 1,
+                  "nodeId": "photoscan/vortex_fragments/left_object/group_current",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_vortex_fragments_left_object_current"
+                },
+                {
+                  "id": 2,
+                  "nodeId": "photoscan/vortex_fragments/left_object/group_reference",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_vortex_fragments_left_object_reference"
+                },
+                {
+                  "id": 3,
+                  "nodeId": "photoscan/vortex_fragments/left_object/patch",
+                  "typeId": "node.transform_mesh_patches",
+                  "handle": "photoscan_vortex_fragments_left_object_patch",
+                  "params": {
+                    "cell_size": {
+                      "type": "Float",
+                      "value": 0.15
+                    },
+                    "enabled": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "frequency": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "orbit": {
+                      "type": "Float",
+                      "value": 2.2
+                    },
+                    "phase": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "pitch": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "rotation": {
+                      "type": "Float",
+                      "value": 0.25
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    },
+                    "separation": {
+                      "type": "Float",
+                      "value": 0.12
+                    },
+                    "source_offset_x": {
+                      "type": "Float",
+                      "value": -0.75
+                    },
+                    "source_offset_y": {
+                      "type": "Float",
+                      "value": 0.2
+                    },
+                    "source_offset_z": {
+                      "type": "Float",
+                      "value": 0.1
+                    },
+                    "spread": {
+                      "type": "Float",
+                      "value": 0.16
+                    },
+                    "yaw": {
+                      "type": "Float",
+                      "value": 0.0
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "nodeId": "photoscan/vortex_fragments/left_object/group_output",
+                  "typeId": "system.group_output",
+                  "handle": "photoscan_vortex_fragments_left_object_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "current",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "reference",
+                  "toNode": 3,
+                  "toPort": "reference"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "vertices"
+                }
+              ]
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 11,
+            "fromPort": "vertices",
+            "toNode": 32,
+            "toPort": "current"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "vertices",
+            "toNode": 32,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "vertices",
+            "toNode": 41,
+            "toPort": "current"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "vertices",
+            "toNode": 41,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "vertices",
+            "toNode": 51,
+            "toPort": "current"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "vertices",
+            "toNode": 51,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 51,
+            "fromPort": "vertices",
+            "toNode": 16,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "transform",
+            "toNode": 16,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "base_color_map"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "object",
+            "toNode": 17,
+            "toPort": "mesh_object"
+          }
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "scan_right_group",
+      "typeId": "group",
+      "handle": "Scan Right",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "mesh_object",
+              "portType": "Object"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 21,
+            "nodeId": "right_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "Right Mesh"
+          },
+          {
+            "id": 22,
+            "nodeId": "right_transform",
+            "typeId": "node.transform_3d",
+            "handle": "Right Transform",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": -0.15
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": -0.2
+              },
+              "rot_x": {
+                "type": "Float",
+                "value": -0.2
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.2
+              },
+              "scale_z": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 23,
+            "nodeId": "right_phong",
+            "typeId": "node.phong_material",
+            "handle": "Right Phong",
+            "params": {
+              "color_b": {
+                "type": "Float",
+                "value": 0.82
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.55
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.18
+              },
+              "specular_power": {
+                "type": "Float",
+                "value": 64.0
+              }
+            }
+          },
+          {
+            "id": 24,
+            "nodeId": "right_uv",
+            "typeId": "node.uv_field",
+            "handle": "Right UV"
+          },
+          {
+            "id": 25,
+            "nodeId": "right_uv_map",
+            "typeId": "node.brightness",
+            "handle": "Right UV Map"
+          },
+          {
+            "id": 26,
+            "nodeId": "right_object",
+            "typeId": "node.scene_object",
+            "handle": "Right Object",
+            "params": {
+              "visible": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 27,
+            "nodeId": "right_output",
+            "typeId": "system.group_output",
+            "handle": "Right Output"
+          },
+          {
+            "id": 33,
+            "nodeId": "photoscan/elastic_sculpture/right_object/stage",
+            "typeId": "group",
+            "handle": "Photoscan_elastic_sculpture_right_object_stage",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "current",
+                    "portType": "Array(MeshVertex)"
+                  },
+                  {
+                    "name": "reference",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "vertices",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 1,
+                  "nodeId": "photoscan/elastic_sculpture/right_object/group_current",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_elastic_sculpture_right_object_current"
+                },
+                {
+                  "id": 2,
+                  "nodeId": "photoscan/elastic_sculpture/right_object/group_reference",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_elastic_sculpture_right_object_reference"
+                },
+                {
+                  "id": 3,
+                  "nodeId": "photoscan/elastic_sculpture/right_object/shear_x",
+                  "typeId": "node.wave_shear_mesh",
+                  "handle": "photoscan_elastic_sculpture_right_object_shear_x",
+                  "params": {
+                    "axis": {
+                      "type": "Enum",
+                      "value": 0
+                    },
+                    "origin_x": {
+                      "type": "Float",
+                      "value": -0.8
+                    },
+                    "origin_y": {
+                      "type": "Float",
+                      "value": 0.15
+                    },
+                    "origin_z": {
+                      "type": "Float",
+                      "value": 0.2
+                    },
+                    "phase_offset": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "nodeId": "photoscan/elastic_sculpture/right_object/shear_z",
+                  "typeId": "node.wave_shear_mesh",
+                  "handle": "photoscan_elastic_sculpture_right_object_shear_z",
+                  "params": {
+                    "axis": {
+                      "type": "Enum",
+                      "value": 1
+                    },
+                    "origin_x": {
+                      "type": "Float",
+                      "value": -0.8
+                    },
+                    "origin_y": {
+                      "type": "Float",
+                      "value": 0.15
+                    },
+                    "origin_z": {
+                      "type": "Float",
+                      "value": 0.2
+                    },
+                    "phase_offset": {
+                      "type": "Float",
+                      "value": 0.25
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    }
+                  }
+                },
+                {
+                  "id": 5,
+                  "nodeId": "photoscan/elastic_sculpture/right_object/group_output",
+                  "typeId": "system.group_output",
+                  "handle": "photoscan_elastic_sculpture_right_object_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "current",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 4,
+                  "fromPort": "out",
+                  "toNode": 5,
+                  "toPort": "vertices"
+                }
+              ]
+            }
+          },
+          {
+            "id": 42,
+            "nodeId": "photoscan/surface_peel/right_object/stage",
+            "typeId": "group",
+            "handle": "Photoscan_surface_peel_right_object_stage",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "current",
+                    "portType": "Array(MeshVertex)"
+                  },
+                  {
+                    "name": "reference",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "vertices",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 1,
+                  "nodeId": "photoscan/surface_peel/right_object/group_current",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_surface_peel_right_object_current"
+                },
+                {
+                  "id": 2,
+                  "nodeId": "photoscan/surface_peel/right_object/group_reference",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_surface_peel_right_object_reference"
+                },
+                {
+                  "id": 3,
+                  "nodeId": "photoscan/surface_peel/right_object/patch",
+                  "typeId": "node.transform_mesh_patches",
+                  "handle": "photoscan_surface_peel_right_object_patch",
+                  "params": {
+                    "cell_size": {
+                      "type": "Float",
+                      "value": 0.15
+                    },
+                    "enabled": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "frequency": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "orbit": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "phase": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "pitch": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "rotation": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    },
+                    "separation": {
+                      "type": "Float",
+                      "value": 0.18
+                    },
+                    "source_offset_x": {
+                      "type": "Float",
+                      "value": 0.8
+                    },
+                    "source_offset_y": {
+                      "type": "Float",
+                      "value": -0.15
+                    },
+                    "source_offset_z": {
+                      "type": "Float",
+                      "value": -0.2
+                    },
+                    "spread": {
+                      "type": "Float",
+                      "value": 0.03
+                    },
+                    "yaw": {
+                      "type": "Float",
+                      "value": 0.0
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "nodeId": "photoscan/surface_peel/right_object/group_output",
+                  "typeId": "system.group_output",
+                  "handle": "photoscan_surface_peel_right_object_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "current",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "reference",
+                  "toNode": 3,
+                  "toPort": "reference"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "vertices"
+                }
+              ]
+            }
+          },
+          {
+            "id": 52,
+            "nodeId": "photoscan/vortex_fragments/right_object/stage",
+            "typeId": "group",
+            "handle": "Photoscan_vortex_fragments_right_object_stage",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "current",
+                    "portType": "Array(MeshVertex)"
+                  },
+                  {
+                    "name": "reference",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "vertices",
+                    "portType": "Array(MeshVertex)"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 1,
+                  "nodeId": "photoscan/vortex_fragments/right_object/group_current",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_vortex_fragments_right_object_current"
+                },
+                {
+                  "id": 2,
+                  "nodeId": "photoscan/vortex_fragments/right_object/group_reference",
+                  "typeId": "system.group_input",
+                  "handle": "photoscan_vortex_fragments_right_object_reference"
+                },
+                {
+                  "id": 3,
+                  "nodeId": "photoscan/vortex_fragments/right_object/patch",
+                  "typeId": "node.transform_mesh_patches",
+                  "handle": "photoscan_vortex_fragments_right_object_patch",
+                  "params": {
+                    "cell_size": {
+                      "type": "Float",
+                      "value": 0.15
+                    },
+                    "enabled": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "frequency": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "orbit": {
+                      "type": "Float",
+                      "value": 2.2
+                    },
+                    "phase": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "pitch": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "rotation": {
+                      "type": "Float",
+                      "value": 0.25
+                    },
+                    "scale": {
+                      "type": "Float",
+                      "value": 3.2015622
+                    },
+                    "separation": {
+                      "type": "Float",
+                      "value": 0.12
+                    },
+                    "source_offset_x": {
+                      "type": "Float",
+                      "value": 0.8
+                    },
+                    "source_offset_y": {
+                      "type": "Float",
+                      "value": -0.15
+                    },
+                    "source_offset_z": {
+                      "type": "Float",
+                      "value": -0.2
+                    },
+                    "spread": {
+                      "type": "Float",
+                      "value": 0.16
+                    },
+                    "yaw": {
+                      "type": "Float",
+                      "value": 0.0
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "nodeId": "photoscan/vortex_fragments/right_object/group_output",
+                  "typeId": "system.group_output",
+                  "handle": "photoscan_vortex_fragments_right_object_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "current",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "reference",
+                  "toNode": 3,
+                  "toPort": "reference"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "vertices"
+                }
+              ]
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 33,
+            "toPort": "current"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 33,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 33,
+            "fromPort": "vertices",
+            "toNode": 42,
+            "toPort": "current"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 42,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 42,
+            "fromPort": "vertices",
+            "toNode": 52,
+            "toPort": "current"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 52,
+            "toPort": "reference"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "vertices",
+            "toNode": 26,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "transform",
+            "toNode": 26,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "base_color_map"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "object",
+            "toNode": 27,
+            "toPort": "mesh_object"
+          }
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "scan_output",
+      "typeId": "system.final_output",
+      "handle": "Output"
+    },
+    {
+      "id": 34,
+      "nodeId": "photoscan/elastic_sculpture/bend",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_bend",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.41
+        }
+      }
+    },
+    {
+      "id": 35,
+      "nodeId": "photoscan/elastic_sculpture/cross_bend",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_cross_bend",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.12
+        }
+      }
+    },
+    {
+      "id": 36,
+      "nodeId": "photoscan/elastic_sculpture/detail",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_detail",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 37,
+      "nodeId": "photoscan/elastic_sculpture/phase",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_phase",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 38,
+      "nodeId": "photoscan/elastic_sculpture/yaw",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_yaw",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 39,
+      "nodeId": "photoscan/elastic_sculpture/pitch",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_pitch",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 40,
+      "nodeId": "photoscan/elastic_sculpture/enabled",
+      "typeId": "node.value",
+      "handle": "photoscan_elastic_sculpture_enabled",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 43,
+      "nodeId": "photoscan/surface_peel/lift",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_lift",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.22
+        }
+      }
+    },
+    {
+      "id": 44,
+      "nodeId": "photoscan/surface_peel/curl",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_curl",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 45,
+      "nodeId": "photoscan/surface_peel/spread",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_spread",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.03
+        }
+      }
+    },
+    {
+      "id": 46,
+      "nodeId": "photoscan/surface_peel/phase",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_phase",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 47,
+      "nodeId": "photoscan/surface_peel/detail",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_detail",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 48,
+      "nodeId": "photoscan/surface_peel/yaw",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_yaw",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 49,
+      "nodeId": "photoscan/surface_peel/pitch",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_pitch",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 50,
+      "nodeId": "photoscan/surface_peel/enabled",
+      "typeId": "node.value",
+      "handle": "photoscan_surface_peel_enabled",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 53,
+      "nodeId": "photoscan/vortex_fragments/orbit",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_orbit",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.7
+        }
+      }
+    },
+    {
+      "id": 54,
+      "nodeId": "photoscan/vortex_fragments/rise",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_rise",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.16
+        }
+      }
+    },
+    {
+      "id": 55,
+      "nodeId": "photoscan/vortex_fragments/separation",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_separation",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.12
+        }
+      }
+    },
+    {
+      "id": 56,
+      "nodeId": "photoscan/vortex_fragments/phase",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_phase",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 57,
+      "nodeId": "photoscan/vortex_fragments/detail",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_detail",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 58,
+      "nodeId": "photoscan/vortex_fragments/yaw",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_yaw",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 59,
+      "nodeId": "photoscan/vortex_fragments/pitch",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_pitch",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 60,
+      "nodeId": "photoscan/vortex_fragments/enabled",
+      "typeId": "node.value",
+      "handle": "photoscan_vortex_fragments_enabled",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 10,
+      "fromPort": "mesh_object",
+      "toNode": 1,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "mesh_object",
+      "toNode": 1,
+      "toPort": "object_1"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "color",
+      "toNode": 30,
+      "toPort": "in"
+    }
+  ]
+}

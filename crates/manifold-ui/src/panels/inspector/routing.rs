@@ -37,6 +37,85 @@ impl InspectorCompositePanel {
         }
     }
 
+    fn on_modifier_card_clicked(&mut self, card_index: usize, modifiers: Modifiers) {
+        let Some(id) = self
+            .modifier_cards
+            .get(card_index)
+            .and_then(ParamCardPanel::modifier_info)
+            .map(|info| info.instance_id.clone())
+        else {
+            return;
+        };
+        let cmd = modifiers.ctrl || modifiers.command;
+        let shift = modifiers.shift;
+        if shift {
+            self.range_select_modifiers(card_index);
+        } else if cmd {
+            self.toggle_modifier_selection(card_index);
+        } else {
+            self.select_modifier(card_index);
+        }
+        self.last_clicked_modifier = Some(id);
+    }
+
+    pub(super) fn select_modifier(&mut self, card_index: usize) {
+        let Some(id) = self
+            .modifier_cards
+            .get(card_index)
+            .and_then(ParamCardPanel::modifier_info)
+            .map(|info| info.instance_id.clone())
+        else {
+            return;
+        };
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+        self.selected_modifier_ids.clear();
+        self.selected_modifier_ids.insert(id.clone());
+        self.last_clicked_modifier = Some(id);
+    }
+
+    fn toggle_modifier_selection(&mut self, card_index: usize) {
+        let Some(id) = self
+            .modifier_cards
+            .get(card_index)
+            .and_then(ParamCardPanel::modifier_info)
+            .map(|info| info.instance_id.clone())
+        else {
+            return;
+        };
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+        if !self.selected_modifier_ids.remove(&id) {
+            self.selected_modifier_ids.insert(id.clone());
+        }
+        self.last_clicked_modifier = Some(id);
+    }
+
+    fn range_select_modifiers(&mut self, card_index: usize) {
+        if card_index >= self.modifier_cards.len() {
+            return;
+        }
+        let anchor = self
+            .last_clicked_modifier
+            .as_ref()
+            .and_then(|id| {
+                self.modifier_cards.iter().position(|card| {
+                    card.modifier_info().is_some_and(|info| &info.instance_id == id)
+                })
+            })
+            .unwrap_or(0);
+        let lo = anchor.min(card_index);
+        let hi = anchor.max(card_index);
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+        self.selected_modifier_ids.clear();
+        for card in &self.modifier_cards[lo..=hi] {
+            if let Some(info) = card.modifier_info() {
+                self.selected_modifier_ids.insert(info.instance_id.clone());
+            }
+        }
+    }
+
     /// Unity EffectSelectionManager.SelectCard (lines 89-100)
     /// Select a single card, clearing all others across ALL tabs.
     /// Note: does NOT update card visuals — call apply_selection_visuals() after.
@@ -50,6 +129,8 @@ impl InspectorCompositePanel {
         // Clear all tabs so only one card is selected globally
         self.selected_master_ids.clear();
         self.selected_layer_ids.clear();
+        self.selected_modifier_ids.clear();
+        self.last_clicked_modifier = None;
 
         let set = self.selection_set_mut(tab);
         set.insert(id.clone());
@@ -66,6 +147,8 @@ impl InspectorCompositePanel {
         }
         let id = cards[card_index].effect_id().clone();
 
+        self.selected_modifier_ids.clear();
+        self.last_clicked_modifier = None;
         let set = self.selection_set_mut(tab);
         if set.contains(&id) {
             set.remove(&id);
@@ -86,6 +169,8 @@ impl InspectorCompositePanel {
         let ids: Vec<EffectId> = cards.iter().map(|c| c.effect_id().clone()).collect();
         let first_id = ids[0].clone();
 
+        self.selected_modifier_ids.clear();
+        self.last_clicked_modifier = None;
         let set = self.selection_set_mut(tab);
         set.clear();
         for id in ids {
@@ -95,10 +180,84 @@ impl InspectorCompositePanel {
         true
     }
 
+    pub fn select_all_modifiers(&mut self) -> bool {
+        if self.modifier_cards.is_empty() {
+            return false;
+        }
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+        self.selected_modifier_ids.clear();
+        for card in &self.modifier_cards {
+            if let Some(info) = card.modifier_info() {
+                self.selected_modifier_ids.insert(info.instance_id.clone());
+            }
+        }
+        self.last_clicked_modifier = self
+            .modifier_cards
+            .first()
+            .and_then(ParamCardPanel::modifier_info)
+            .map(|info| info.instance_id.clone());
+        !self.selected_modifier_ids.is_empty()
+    }
+
     /// How many effects are selected in the active tab.
     pub fn selected_effect_count(&self) -> usize {
         let (set, _) = self.selection_for_tab(self.last_effect_tab);
         set.len()
+    }
+
+    pub fn selected_modifier_count(&self) -> usize {
+        self.selected_modifier_ids.len()
+    }
+
+    pub fn has_modifier_selection(&self) -> bool {
+        !self.selected_modifier_ids.is_empty()
+    }
+
+    pub fn selected_modifier_ids(&self) -> Vec<manifold_foundation::NodeId> {
+        self.modifier_cards
+            .iter()
+            .filter_map(ParamCardPanel::modifier_info)
+            .filter(|info| self.selected_modifier_ids.contains(&info.instance_id))
+            .map(|info| info.instance_id.clone())
+            .collect()
+    }
+
+    /// Return the selected modifier ids in stack order for a captured menu
+    /// target. A menu opened on an unselected card acts on that card alone;
+    /// a menu opened on a selected card keeps the complete multi-selection.
+    pub fn selected_modifier_ids_for(
+        &self,
+        layer_id: &LayerId,
+        clicked: &manifold_foundation::NodeId,
+    ) -> Vec<manifold_foundation::NodeId> {
+        let clicked_is_selected = self
+            .modifier_cards
+            .iter()
+            .filter_map(ParamCardPanel::modifier_info)
+            .any(|info| &info.layer_id == layer_id
+                && &info.instance_id == clicked
+                && self.selected_modifier_ids.contains(&info.instance_id));
+        self.modifier_cards
+            .iter()
+            .filter_map(ParamCardPanel::modifier_info)
+            .filter(|info| &info.layer_id == layer_id)
+            .filter(|info| !clicked_is_selected || self.selected_modifier_ids.contains(&info.instance_id))
+            .filter(|info| clicked_is_selected || &info.instance_id == clicked)
+            .map(|info| info.instance_id.clone())
+            .collect()
+    }
+
+    pub fn modifier_has_graph_mod(
+        &self,
+        layer_id: &LayerId,
+        id: &manifold_foundation::NodeId,
+    ) -> bool {
+        self.modifier_cards.iter().any(|card| {
+            card.modifier_info().is_some_and(|info| {
+                &info.layer_id == layer_id && &info.instance_id == id
+            }) && card.has_graph_mod()
+        })
     }
 
     /// Resolve a double-clicked node to a numeric param's value cell across the
@@ -365,13 +524,23 @@ impl InspectorCompositePanel {
                     .as_mut()
                     .map(|gp| gp.handle_click(node_id, tree))
                     .unwrap_or_default(),
-                // Modifier cards: plain click routing — no selection set, no
-                // drag-reorder (fixed slots, D2), no EffectCardClicked.
-                PressedTarget::Modifier(i) => self
-                    .modifier_cards
-                    .get_mut(i)
-                    .map(|c| c.handle_click(node_id, tree))
-                    .unwrap_or_default(),
+                // Modifier cards share effect selection and card drag routing,
+                // while retaining their own stable-id stack.
+                PressedTarget::Modifier(i) => {
+                    let actions = self
+                        .modifier_cards
+                        .get_mut(i)
+                        .map(|c| c.handle_click(node_id, tree))
+                        .unwrap_or_default();
+                    if actions.iter().any(|a| {
+                        matches!(a, PanelAction::Params(ParamsAction::ModifierCardClicked(_)))
+                    }) {
+                        self.on_modifier_card_clicked(i, modifiers);
+                    } else if !self.is_card_target_selected(&PressedTarget::Modifier(i)) {
+                        self.auto_select_card(&PressedTarget::Modifier(i));
+                    }
+                    actions
+                }
                 PressedTarget::Scrollbar => Vec::new(),
             }
         } else {
@@ -398,9 +567,9 @@ impl InspectorCompositePanel {
             if !modifiers.shift
                 && !modifiers.ctrl
                 && !modifiers.command
-                && !self.is_effect_target_selected(t)
+                && !self.is_card_target_selected(t)
             {
-                self.auto_select_effect(t);
+                self.auto_select_card(t);
             }
         }
 

@@ -7,13 +7,13 @@
 //!
 //! ## Scan roots
 //!
-//! For each kind (`effects` / `generators`) two roots are scanned:
+//! For each kind (`effects` / `generators` / `scene-modifiers`) two roots are scanned:
 //!
 //! - **STOCK** — resolved in this order, first existing wins:
-//!   1. Packaged macOS bundle: `<dir-of-exe>/../Resources/presets/{effects,generators}`
-//!   2. Dev workspace: `<CARGO_MANIFEST_DIR>/assets/{effect-presets,generator-presets}`
+//!   1. Packaged macOS bundle: `<dir-of-exe>/../Resources/presets/{effects,generators,scene-modifiers}`
+//!   2. Dev workspace: `<CARGO_MANIFEST_DIR>/assets/{effect-presets,generator-presets,scene-modifier-presets}`
 //!      (manifold-renderer's manifest dir, baked at compile time).
-//! - **USER** — `~/Library/Application Support/MANIFOLD/presets/{effects,generators}`
+//! - **USER** — `~/Library/Application Support/MANIFOLD/presets/{effects,generators,scene-modifiers}`
 //!   (same base dir as `prefs.json`). Optional; absent is fine.
 //!
 //! ## Type ids
@@ -149,7 +149,7 @@ impl PresetCatalog {
     }
 
     /// Whether this id should appear in the stock/user Add browser.
-    fn is_browser_visible(&self, type_id: &str) -> bool {
+    pub fn is_browser_visible(&self, type_id: &str) -> bool {
         self.browser_ids.contains(type_id)
     }
 }
@@ -178,6 +178,12 @@ const GENERATOR_DIRS: KindDirs = KindDirs {
     dev_subdir: "assets/generator-presets",
 };
 
+const SCENE_MODIFIER_DIRS: KindDirs = KindDirs {
+    label: "scene modifier",
+    bundle_subdir: "scene-modifiers",
+    dev_subdir: "assets/scene-modifier-presets",
+};
+
 /// The effect preset catalog. Built once on first access; fail-loud if
 /// the stock root is missing or empty. Lives behind an [`ArcSwap`] so the
 /// watcher thread can swap in a freshly-scanned snapshot at authoring time
@@ -188,6 +194,10 @@ pub static EFFECT_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
 /// The generator preset catalog. Same shape as [`EFFECT_CATALOG`].
 pub static GENERATOR_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
     LazyLock::new(|| ArcSwap::from(load_catalog(&GENERATOR_DIRS)));
+
+/// The scene modifier preset catalog. Same shape as [`EFFECT_CATALOG`].
+pub static SCENE_MODIFIER_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
+    LazyLock::new(|| ArcSwap::from(load_catalog(&SCENE_MODIFIER_DIRS)));
 
 /// Project-scoped preset overlay (Phase 4; split into two origin tiers by
 /// PRESET_LIBRARY_DESIGN D5/P2). `(type_id, json)` for the currently-loaded
@@ -216,6 +226,10 @@ static PROJECT_EFFECT_PRESETS_SNAPSHOT: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 static PROJECT_GENERATOR_PRESETS_SNAPSHOT: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+static PROJECT_SCENE_MODIFIER_PRESETS_SAVED: LazyLock<ArcSwap<OverlayEntries>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+static PROJECT_SCENE_MODIFIER_PRESETS_SNAPSHOT: LazyLock<ArcSwap<OverlayEntries>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
 /// Install the loaded project's embedded presets as the catalog overlay and
 /// re-derive both catalogs + the core registry. Call on project load; call
@@ -229,6 +243,7 @@ static PROJECT_GENERATOR_PRESETS_SNAPSHOT: LazyLock<ArcSwap<OverlayEntries>> =
 pub fn set_project_presets(
     effect: Vec<(String, String, EmbeddedOrigin)>,
     generator: Vec<(String, String, EmbeddedOrigin)>,
+    scene_modifier: Vec<(String, String, EmbeddedOrigin)>,
 ) -> u64 {
     fn split(v: Vec<(String, String, EmbeddedOrigin)>) -> (OverlayEntries, OverlayEntries) {
         let mut saved = Vec::new();
@@ -244,17 +259,20 @@ pub fn set_project_presets(
     }
     let (effect_saved, effect_snapshot) = split(effect);
     let (generator_saved, generator_snapshot) = split(generator);
+    let (scene_modifier_saved, scene_modifier_snapshot) = split(scene_modifier);
     PROJECT_EFFECT_PRESETS_SAVED.store(Arc::new(effect_saved));
     PROJECT_EFFECT_PRESETS_SNAPSHOT.store(Arc::new(effect_snapshot));
     PROJECT_GENERATOR_PRESETS_SAVED.store(Arc::new(generator_saved));
     PROJECT_GENERATOR_PRESETS_SNAPSHOT.store(Arc::new(generator_snapshot));
+    PROJECT_SCENE_MODIFIER_PRESETS_SAVED.store(Arc::new(scene_modifier_saved));
+    PROJECT_SCENE_MODIFIER_PRESETS_SNAPSHOT.store(Arc::new(scene_modifier_snapshot));
     apply_reload()
 }
 
 /// Clear the project overlay (project close / switch). Equivalent to
 /// [`set_project_presets`] with empty lists.
 pub fn clear_project_presets() -> u64 {
-    set_project_presets(Vec::new(), Vec::new())
+    set_project_presets(Vec::new(), Vec::new(), Vec::new())
 }
 
 /// The `Saved`-tier project overlay entries for a catalog kind (by
@@ -262,8 +280,10 @@ pub fn clear_project_presets() -> u64 {
 fn project_saved_overlay_for(label: &str) -> Arc<OverlayEntries> {
     if label == EFFECT_DIRS.label {
         PROJECT_EFFECT_PRESETS_SAVED.load_full()
-    } else {
+    } else if label == GENERATOR_DIRS.label {
         PROJECT_GENERATOR_PRESETS_SAVED.load_full()
+    } else {
+        PROJECT_SCENE_MODIFIER_PRESETS_SAVED.load_full()
     }
 }
 
@@ -272,8 +292,10 @@ fn project_saved_overlay_for(label: &str) -> Arc<OverlayEntries> {
 fn project_snapshot_overlay_for(label: &str) -> Arc<OverlayEntries> {
     if label == EFFECT_DIRS.label {
         PROJECT_EFFECT_PRESETS_SNAPSHOT.load_full()
-    } else {
+    } else if label == GENERATOR_DIRS.label {
         PROJECT_GENERATOR_PRESETS_SNAPSHOT.load_full()
+    } else {
+        PROJECT_SCENE_MODIFIER_PRESETS_SNAPSHOT.load_full()
     }
 }
 
@@ -291,6 +313,11 @@ pub fn reload_effect_catalog() -> bool {
 /// crash-safe last-good-snapshot contract as [`reload_effect_catalog`].
 pub fn reload_generator_catalog() -> bool {
     reload_into(&GENERATOR_CATALOG, &GENERATOR_DIRS)
+}
+
+/// Re-scan the scene modifier preset dirs and swap in a fresh snapshot.
+pub fn reload_scene_modifier_catalog() -> bool {
+    reload_into(&SCENE_MODIFIER_CATALOG, &SCENE_MODIFIER_DIRS)
 }
 
 /// Shared reload body. Re-runs the same resolve+scan as startup but, on a
@@ -640,7 +667,7 @@ static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
 /// currently exist.
 fn watched_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    for kind in [&EFFECT_DIRS, &GENERATOR_DIRS] {
+    for kind in [&EFFECT_DIRS, &GENERATOR_DIRS, &SCENE_MODIFIER_DIRS] {
         if let (Some(stock), _) = resolve_stock_root(kind) {
             dirs.push(stock);
         }
@@ -691,7 +718,8 @@ fn snapshot_fingerprint(dirs: &[PathBuf]) -> Vec<(usize, u128)> {
 fn apply_reload() -> u64 {
     let effect_changed = reload_effect_catalog();
     let generator_changed = reload_generator_catalog();
-    if !effect_changed && !generator_changed {
+    let scene_modifier_changed = reload_scene_modifier_catalog();
+    if !effect_changed && !generator_changed && !scene_modifier_changed {
         // Every reload attempt failed (transient empty/broken edit); the
         // last-good snapshots were kept. Don't bump — nothing changed for
         // consumers, and bumping would force a needless rebuild against
@@ -708,12 +736,14 @@ fn apply_reload() -> u64 {
     let effect_meta = crate::node_graph::loaded_presets_from_bundled();
     let generator_meta =
         crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled();
+    let scene_modifier_meta = crate::node_graph::loaded_scene_modifier_presets_from_bundled();
     // ONE atomic swap of the merged store — both kinds' metadata in a single
     // rebuild so a reader observing the new generation never sees a
     // half-merged registry.
     manifold_core::preset_definition_registry::rebuild_preset_definitions(
         &effect_meta,
         &generator_meta,
+        &scene_modifier_meta,
     );
     // the Add-effect/Add-generator
     // browser popup reads `preset_type_registry`, a SEPARATE store from
@@ -761,6 +791,7 @@ pub fn start_preset_watcher() {
     // root is missing) so the watcher baseline reflects a valid catalog.
     LazyLock::force(&EFFECT_CATALOG);
     LazyLock::force(&GENERATOR_CATALOG);
+    LazyLock::force(&SCENE_MODIFIER_CATALOG);
 
     let dirs = watched_dirs();
     if dirs.is_empty() {
@@ -810,6 +841,14 @@ mod tests {
         assert!(
             !GENERATOR_CATALOG.load().is_empty(),
             "generator catalog must load from the dev assets dir",
+        );
+    }
+
+    #[test]
+    fn dev_scene_modifier_catalog_discovers_hidden_stock_files() {
+        assert!(
+            !SCENE_MODIFIER_CATALOG.load().is_empty(),
+            "scene modifier catalog must load from the dev assets dir",
         );
     }
 

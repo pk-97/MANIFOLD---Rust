@@ -264,25 +264,14 @@ impl GeneratorRegistry {
             // path — only the def changed (fused kernels + bindings retargeted onto
             // them) — so modulation keeps flowing. Same decision as the effect
             // rule, via the one shared `should_render_fused`.
-            let render_def = if crate::node_graph::freeze::install::should_render_fused(is_watched)
-            {
-                match crate::node_graph::freeze::install::fused_generator_def_for(&def_for_fusion)
-                {
-                    Some(fused) => (*fused).clone(),
-                    None => def_for_fusion,
-                }
-            } else {
-                def_for_fusion
-            };
-            match PresetRuntime::from_def_with_device(
-                render_def,
+            match PresetRuntime::from_def_for_render(
+                def_for_fusion,
                 &registry,
-                std::sync::Arc::clone(&device),
-                width,
-                height,
-                self.target_format,
                 manifest,
-            ) {
+                crate::node_graph::freeze::install::should_render_fused(is_watched),
+            ).and_then(|runtime| runtime.with_generator_device(
+                std::sync::Arc::clone(&device), width, height, self.target_format,
+            )) {
                 Ok(g) => return Some(Box::new(g)),
                 Err(e) => {
                     log::warn!(
@@ -299,7 +288,11 @@ impl GeneratorRegistry {
             // effective def in the non-override case, so this only runs for
             // overrides. Resolves through the migrated def cache, same invariant
             // as the non-override path above (BUG-7k1z).
-            if is_override && let Some(def) = bundled_preset_def(gen_type) {
+            // A refused authored stack must surface its failure; falling back
+            // to the bundle here would discard its applied modifiers.
+            if is_override
+                && override_def.is_none_or(|def| def.scene_modifiers.is_empty())
+                && let Some(def) = bundled_preset_def(gen_type) {
                 match PresetRuntime::from_def_with_device(
                     def.clone(),
                     &registry,

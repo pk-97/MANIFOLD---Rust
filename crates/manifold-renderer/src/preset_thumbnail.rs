@@ -53,6 +53,9 @@ pub fn render_preset_thumbnail(
     match kind {
         PresetKind::Generator => render_generator(device, def, width, height, linear),
         PresetKind::Effect => render_effect(device, def, width, height, linear),
+        PresetKind::SceneModifier => {
+            Err("scene modifier thumbnails require an attached host scene".to_string())
+        }
     }
 }
 
@@ -95,10 +98,11 @@ pub fn render_preset_thumbnail_to_file_linear(
 /// Sub-directory name for `kind` under the thumbnails root — mirrors
 /// `preset_loader`'s effects/generators split so a same-named effect and
 /// generator (different namespaces) can never collide on one PNG.
-fn kind_subdir(kind: PresetKind) -> &'static str {
+fn kind_subdir(kind: PresetKind) -> Option<&'static str> {
     match kind {
-        PresetKind::Effect => "effects",
-        PresetKind::Generator => "generators",
+        PresetKind::Effect => Some("effects"),
+        PresetKind::Generator => Some("generators"),
+        PresetKind::SceneModifier => None,
     }
 }
 
@@ -107,7 +111,8 @@ fn kind_subdir(kind: PresetKind) -> &'static str {
 /// `assets/preset-thumbnails/<kind>` (this crate's `CARGO_MANIFEST_DIR`) —
 /// same two-tier resolution shape as `preset_loader::resolve_stock_root`,
 /// specialised to thumbnails (a sibling asset kind, not a preset JSON root).
-fn factory_thumbnail_root(kind: PresetKind) -> PathBuf {
+fn factory_thumbnail_root(kind: PresetKind) -> Option<PathBuf> {
+    let subdir = kind_subdir(kind)?;
     if let Ok(exe) = std::env::current_exe()
         && let Some(exe_dir) = exe.parent()
     {
@@ -115,14 +120,14 @@ fn factory_thumbnail_root(kind: PresetKind) -> PathBuf {
             .join("..")
             .join("Resources")
             .join("preset-thumbnails")
-            .join(kind_subdir(kind));
+            .join(subdir);
         if bundle.is_dir() {
-            return bundle;
+            return Some(bundle);
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/preset-thumbnails")
-        .join(kind_subdir(kind))
+        .join(subdir))
 }
 
 /// Path a factory preset's committed thumbnail lives at for `id`. The caller
@@ -130,7 +135,7 @@ fn factory_thumbnail_root(kind: PresetKind) -> PathBuf {
 /// that hasn't shipped through the dev bin) simply resolves to a path that
 /// doesn't exist, and the browser falls back to text (D7's clean fallback).
 pub fn factory_thumbnail_path(kind: PresetKind, id: &str) -> Option<PathBuf> {
-    Some(factory_thumbnail_root(kind).join(format!("{id}.png")))
+    Some(factory_thumbnail_root(kind)?.join(format!("{id}.png")))
 }
 
 // ---------------------------------------------------------------------------

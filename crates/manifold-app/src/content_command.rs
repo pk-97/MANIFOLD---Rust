@@ -19,6 +19,11 @@ pub enum ContentCommand {
 
     // ── Editing (commands cross thread boundary) ───────────────────
     Execute(Box<dyn Command + Send>),
+    /// An unexecuted command; UI snapshots wait for content publication. Unlike
+    /// legacy optimistic Execute producers, headless UI must execute this too.
+    ExecuteOnContent(Box<dyn Command + Send>),
+    SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
+    GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
     /// Runtime envelope preview; never installs points into the project.
     PreviewAutomationLane {
@@ -302,6 +307,8 @@ pub enum ContentCommand {
     /// identity. Per-layer graph overrides are pending the edit-side
     /// follow-up; today the snapshot is the bundled JSON unchanged.
     WatchGeneratorGraph(Option<manifold_core::LayerId>),
+    /// Watch any authored graph, including an applied modifier's local snapshot.
+    WatchGraphTarget(Option<manifold_core::GraphTarget>),
 
     /// Set the node whose output the graph editor is previewing, within the
     /// currently-watched effect/generator. `None` clears the preview. The
@@ -309,6 +316,10 @@ pub enum ContentCommand {
     /// `WatchGeneratorGraph` to drive the per-node output capture. Sent when
     /// the editor's node selection changes.
     SetGraphPreviewNode(Option<manifold_core::NodeId>),
+    SetModifierPreviewContext {
+        scope: Vec<manifold_core::NodeId>,
+        object: Option<manifold_core::scene_modifier_preset::SceneNodeRef>,
+    },
 
     /// Toggle auto-gain/normalization on the graph editor's node-output
     /// preview. On by default; remaps the previewed texture's min..max to 0..1

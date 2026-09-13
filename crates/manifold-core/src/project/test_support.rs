@@ -44,6 +44,7 @@ use super::*;
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -55,6 +56,7 @@ use super::*;
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
             }),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         }

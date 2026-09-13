@@ -128,6 +128,7 @@ mod sections_for_doc_ids_tests {
     /// fan-out targets).
     fn azalea_like_fixture() -> EffectGraphDef {
         let meta = PresetMetadata {
+            scene_modifier: None,
             id: PresetTypeId::new("gltf_import_fixture"),
             display_name: "glTF Import Fixture".to_string(),
             category: "Diagnostic".to_string(),
@@ -200,6 +201,7 @@ mod sections_for_doc_ids_tests {
             name: None,
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         }

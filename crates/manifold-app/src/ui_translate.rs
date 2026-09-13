@@ -339,6 +339,10 @@ fn push_chosen_placeholder_lane(
             .as_ref()
             .and_then(|fx| fx.iter().find(|f| f.id == *eid)),
         UiGraphTarget::Generator(_) => layer.gen_params(),
+        UiGraphTarget::SceneModifier { owner, .. } => match owner.as_ref() {
+            UiGraphTarget::Generator(id) if id == &layer.layer_id => layer.gen_params(),
+            _ => None,
+        },
     };
     let Some(instance) = instance else {
         return;
@@ -619,6 +623,7 @@ fn graph_param_to_ui(type_id: &str, p: &rg::ParamSnapshot) -> gv::ParamSnapshot 
         range: p.range,
         enum_labels: p.enum_labels.clone(),
         exposed: p.exposed,
+        preparation_only: false,
         summary: p.summary.clone(),
         vec_value: p.vec_value,
         string_value: p.string_value.clone(),

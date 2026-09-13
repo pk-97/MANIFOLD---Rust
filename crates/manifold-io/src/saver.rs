@@ -18,6 +18,8 @@ pub fn save_project(
     label: Option<&str>,
     is_auto: bool,
 ) -> Result<(), SaveError> {
+    crate::graph_schema::validate_project_graphs(project)
+        .map_err(|e| SaveError::Serialize(e.to_string()))?;
     let path_str = path.to_string_lossy().to_string();
 
     // Create parent directory if needed (Unity line 139-141)
@@ -52,6 +54,8 @@ pub fn save_project(
 
 /// Save a project as plain JSON (V1 format, for backwards compatibility or testing).
 pub fn save_project_v1(project: &Project, path: &Path) -> Result<(), SaveError> {
+    crate::graph_schema::validate_project_graphs(project)
+        .map_err(|e| SaveError::Serialize(e.to_string()))?;
     // Create parent directory if needed
     if let Some(directory) = path.parent()
         && !directory.as_os_str().is_empty()

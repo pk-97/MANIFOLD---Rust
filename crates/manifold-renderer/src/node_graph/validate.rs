@@ -57,6 +57,8 @@ const VALIDATE_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 pub enum ValidateKind {
     Effect,
     Generator,
+    /// Scene-modifier recipes require a loaded host scene before GPU work.
+    SceneModifier,
 }
 
 impl From<PresetKind> for ValidateKind {
@@ -64,6 +66,7 @@ impl From<PresetKind> for ValidateKind {
         match kind {
             PresetKind::Effect => ValidateKind::Effect,
             PresetKind::Generator => ValidateKind::Generator,
+            PresetKind::SceneModifier => ValidateKind::SceneModifier,
         }
     }
 }
@@ -134,7 +137,7 @@ impl From<&LoadError> for ValidationIssue {
             // `BindingConvertTypeMismatch`'s field docs) — left out of
             // the structured field, kept in the message text.
             BindingConvertTypeMismatch { param, .. } => (None, None, Some(param.clone())),
-            Flatten(_) => (None, None, None),
+            SceneModifier(_) | Flatten(_) => (None, None, None),
         };
         ValidationIssue {
             node_id,
@@ -150,6 +153,7 @@ impl From<&GraphError> for ValidationIssue {
         use GraphError::*;
         let (node_id, port) = match e {
             NodeNotFound(id) => (Some(id.0), None),
+            PreparedParameterChanged { node } => (Some(node.0), None),
             PortNotFound { node, port } => (Some(node.0), Some(port.clone())),
             PortKindMismatch { node, port, .. } => (Some(node.0), Some(port.clone())),
             PortTypeMismatch { .. } => (None, None),
@@ -212,7 +216,7 @@ impl From<&JsonGeneratorLoadError> for ValidationIssue {
                 port: Some(producer_port.clone()),
                 message: e.to_string(),
             },
-            Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
+            SceneModifier(_) | Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
                 ValidationIssue {
                     node_id: None,
                     type_id: None,
@@ -236,6 +240,17 @@ pub fn validate_def(
     device: &std::sync::Arc<GpuDevice>,
 ) -> ValidationReport {
     let mut report = ValidationReport::default();
+
+    if kind == ValidateKind::SceneModifier {
+        report.errors.push(ValidationIssue {
+            node_id: None,
+            type_id: None,
+            port: None,
+            message: "scene modifier validation requires an attached host scene before GPU work"
+                .to_string(),
+        });
+        return report;
+    }
 
     report.errors.extend(check_bindings_resolve(def));
 

@@ -214,6 +214,7 @@ mod tests {
             category: "Test".to_string(),
             osc_prefix: String::new(),
             legacy_discriminant: None,
+            scene_modifier: None,
             scene_bounds: None,
             available: true,
             is_line_based: false,

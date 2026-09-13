@@ -40,7 +40,7 @@ pub const FINAL_OUTPUT_TYPE_ID: &str = "system.final_output";
 /// Stable type ID for [`GeneratorInput`].
 pub const GENERATOR_INPUT_TYPE_ID: &str = "system.generator_input";
 
-const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
+const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 10] = [
     NodePort {
         name: Cow::Borrowed("time"),
         ty: PortType::Scalar(ScalarType::F32),
@@ -101,6 +101,12 @@ const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
     },
     NodePort {
         name: Cow::Borrowed("output_height"),
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: Cow::Borrowed("trigger_baseline"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -238,7 +244,7 @@ inventory::submit! {
     }
 }
 
-const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
+const GENERATOR_INPUT_PARAMS: [ParamDef; 8] = [
     ParamDef {
         name: Cow::Borrowed("time"),
         label: "Time (s)",
@@ -295,14 +301,22 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         range: None,
         enum_values: &[],
     },
+    ParamDef {
+        name: Cow::Borrowed("trigger_baseline"),
+        label: "Trigger Baseline",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: None,
+        enum_values: &[],
+    },
 ];
 
 /// Boundary node at the input edge of a generator graph. Surfaces the
 /// host's per-frame timing + trigger state as scalar outputs that
 /// generator primitives can wire into.
 ///
-/// Nine scalar outputs. Seven (`time`, `beat`, `aspect`, `trigger_count`,
-/// `anim_progress`, `output_width`, `output_height`) are each driven by a
+/// Ten scalar outputs. Eight (`time`, `beat`, `aspect`, `trigger_count`,
+/// `anim_progress`, `output_width`, `output_height`, `trigger_baseline`) are each driven by a
 /// same-named float parameter the host updates each frame via the standard
 /// [`Graph::set_param`](crate::node_graph::Graph::set_param) path; `evaluate`
 /// reads them and writes the matching output slots. Two (`frame_delta`,
@@ -372,6 +386,8 @@ impl EffectNode for GeneratorInput {
         ctx.outputs.set_scalar("aspect", ParamValue::Float(aspect));
         ctx.outputs
             .set_scalar("trigger_count", ParamValue::Float(trigger_count));
+        let trigger_baseline = read_f(ctx, "trigger_baseline", trigger_count);
+        ctx.outputs.set_scalar("trigger_baseline", ParamValue::Float(trigger_baseline));
         ctx.outputs
             .set_scalar("anim_progress", ParamValue::Float(anim_progress));
         ctx.outputs
@@ -464,11 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn generator_input_declares_nine_scalar_outputs() {
+    fn generator_input_declares_ten_scalar_outputs() {
         let g = GeneratorInput::new();
         assert_eq!(g.inputs().len(), 0);
         let outs = g.outputs();
-        assert_eq!(outs.len(), 9);
+        assert_eq!(outs.len(), 10);
         let names: Vec<&str> = outs.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
@@ -482,6 +498,7 @@ mod tests {
                 "anim_progress",
                 "output_width",
                 "output_height",
+                "trigger_baseline",
             ]
         );
         for out in outs {
@@ -519,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn generator_input_declares_seven_float_params() {
+    fn generator_input_declares_eight_float_params() {
         let g = GeneratorInput::new();
         let names: Vec<&str> = g.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
@@ -532,6 +549,7 @@ mod tests {
                 "anim_progress",
                 "output_width",
                 "output_height",
+                "trigger_baseline",
             ]
         );
         for p in g.parameters() {

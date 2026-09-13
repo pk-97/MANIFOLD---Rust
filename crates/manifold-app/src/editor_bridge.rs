@@ -40,29 +40,9 @@ pub(crate) fn seed_def_for_project(
     project: &manifold_core::project::Project,
     target: &manifold_core::GraphTarget,
 ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-    match target {
-        manifold_core::GraphTarget::Effect(eid) => {
-            let fx = project.find_effect_by_id(eid)?;
-            if fx.graph.is_some() {
-                return None;
-            }
-            let view = manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-            Some((*view.canonical_def).clone())
-        }
-        manifold_core::GraphTarget::Generator(lid) => {
-            let layer = project
-                .timeline
-                .layers
-                .iter()
-                .find(|l| &l.layer_id == lid)?;
-            if layer.generator_graph().is_some() {
-                return None;
-            }
-            let gp = layer.gen_params()?;
-            manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
-                .map(|v| (*v.canonical_def).clone())
-        }
-    }
+    let owner = project.graph_target_owner(target)?;
+    if owner.graph.is_some() { return None; }
+    crate::graph_target::owner_default(project, target)
 }
 
 /// Drag-commit variant: the command carries the EXPLICIT pre-drag reverse
@@ -193,7 +173,7 @@ fn binding_for_node_param(
         BindingTarget::Node { node_id: nid, param } => {
             *nid == node.node_id && param == param_name
         }
-        BindingTarget::Composite { .. } => false,
+        BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
     })?;
     let spec = &params.get(&binding.id)?.spec;
     Some((
@@ -384,6 +364,41 @@ fn resolve_producer(
     non_empty_node_id(&producer.node_id)
 }
 
+/// Resolve a selected node and retain the authored group scope alongside its
+/// stable id. This follows the numeric canvas path at every boundary hop, so
+/// identical node ids in sibling groups cannot be confused by a global search.
+fn resolve_preview_target_with_scope(
+    snap: &manifold_ui::graph_view::GraphSnapshot,
+    scope: &[u32],
+    selected: u32,
+) -> Option<(manifold_core::NodeId, Vec<manifold_core::NodeId>)> {
+    use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID};
+    let (nodes, wires) = crate::graph_canvas::resolve_level(snap, scope)?;
+    let stable_scope = stable_scope_path(snap, scope)?;
+    let node = nodes.iter().find(|node| node.id == selected)?;
+    match node.type_id.as_str() {
+        GROUP_OUTPUT_TYPE_ID => {
+            let (group_id, parent_scope) = scope.split_last()?;
+            let (parent_nodes, _) = crate::graph_canvas::resolve_level(snap, parent_scope)?;
+            let group = parent_nodes.iter().find(|node| node.id == *group_id)?;
+            Some((non_empty_node_id(&group.node_id)?, stable_scope_path(snap, parent_scope)?))
+        }
+        GROUP_INPUT_TYPE_ID => {
+            let port = primary_texture_port(&node.outputs)?;
+            let (group_id, parent_scope) = scope.split_last()?;
+            let (parent_nodes, parent_wires) = crate::graph_canvas::resolve_level(snap, parent_scope)?;
+            let producer = producer_into(*group_id, port, parent_nodes, parent_wires)?;
+            resolve_preview_target_with_scope(snap, parent_scope, producer.id)
+        }
+        "system.final_output" => {
+            let port = primary_texture_port(&node.inputs)?;
+            let producer = producer_into(node.id, port, nodes, wires)?;
+            resolve_preview_target_with_scope(snap, scope, producer.id)
+        }
+        _ => Some((non_empty_node_id(&node.node_id)?, stable_scope)),
+    }
+}
+
 /// The node feeding `(to_node, to_port)`, or any wire into `to_node` as a
 /// fallback when the exact port name doesn't match.
 fn producer_into<'a>(
@@ -420,6 +435,38 @@ fn non_empty_node_id(id: &manifold_core::NodeId) -> Option<manifold_core::NodeId
     } else {
         Some(id.clone())
     }
+}
+
+/// Translate the canvas's numeric group path to the authored stable group
+/// identities used by modifier preview routes. The numeric ids are local to a
+/// snapshot level and must never cross the editor/runtime boundary.
+fn stable_scope_path(
+    snap: &manifold_ui::graph_view::GraphSnapshot,
+    scope: &[u32],
+) -> Option<Vec<manifold_core::NodeId>> {
+    let mut level = snap.nodes.as_slice();
+    let mut out = Vec::with_capacity(scope.len());
+    for &group_id in scope {
+        let group = level.iter().find(|node| node.id == group_id)?;
+        if group.node_id.is_empty() {
+            return None;
+        }
+        out.push(group.node_id.clone());
+        level = &group.group.as_ref()?.nodes;
+    }
+    Some(out)
+}
+
+fn modifier_preview_selection(
+    snap: &manifold_ui::graph_view::GraphSnapshot,
+    canvas_scope: &[u32],
+    selected: Option<u32>,
+) -> (Option<manifold_core::NodeId>, Vec<manifold_core::NodeId>) {
+    let fallback = stable_scope_path(snap, canvas_scope).unwrap_or_default();
+    let Some(selected) = selected else { return (None, fallback); };
+    resolve_preview_target_with_scope(snap, canvas_scope, selected)
+        .map(|(node, scope)| (Some(node), scope))
+        .unwrap_or((None, fallback))
 }
 
 /// Resolve an on-canvas param row `(node_id, inner_param)` to the
@@ -474,6 +521,33 @@ pub(crate) fn resolve_canvas_binding(
         .iter()
         .find(|p| p.name == inner_param)
         .is_some_and(|p| p.kind == manifold_renderer::node_graph::ParamSnapshotKind::Angle);
+    if matches!(target?, manifold_core::GraphTarget::SceneModifier { .. }) {
+        let target = target.expect("scene modifier target was checked above");
+        let owner = project.graph_target_owner(target)?;
+        let local = crate::graph_target::resolve(project, target)?;
+        let local_meta = local.preset_metadata.as_ref()?;
+        let local_binding = local_meta.bindings.iter().find(|binding| {
+            matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if *node_id == node.node_id && param == inner_param)
+        })?;
+        let outer = project
+            .graph_target_owner(target)?
+            .graph
+            .as_ref()
+            .and_then(|graph| graph.preset_metadata.as_ref())?
+            .bindings
+            .iter()
+            .find(|binding| matches!(&binding.target,
+                manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id }
+                    if target_modifier_id(target) == Some(modifier_id) && param_id == &local_binding.id))?;
+        let outer = crate::graph_target::modifier_host_binding(project, target, &outer.id)?;
+        let spec = owner.params.get(&outer.id)?.spec.clone();
+        return Some((
+            outer.id.clone(), outer.label.clone(), spec.min, spec.max,
+            spec.invert, spec.curve, outer.scale, outer.offset,
+            range, is_angle, spec.section,
+        ));
+    }
     let instance = project.preset_instance(target?)?;
     let view;
     let def = if let Some(def) = instance.graph.as_ref() {
@@ -492,6 +566,61 @@ pub(crate) fn resolve_canvas_binding(
         range, is_angle, instance.params.get(&binding.id)?.spec.section.clone()))
 }
 
+fn target_modifier_id(target: &manifold_core::GraphTarget) -> Option<&manifold_core::NodeId> {
+    match target {
+        manifold_core::GraphTarget::SceneModifier { modifier_id, .. } => Some(modifier_id),
+        _ => None,
+    }
+}
+
+fn modifier_binding_for_node_param(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    scope_path: &[u32],
+    node_id: u32,
+    param_name: &str,
+) -> Option<(
+    String,
+    f32,
+    f32,
+    bool,
+    manifold_core::macro_bank::MacroCurve,
+    f32,
+    f32,
+)> {
+    let modifier_id = target_modifier_id(target)?;
+    let owner = project.graph_target_owner(target)?;
+    let local = crate::graph_target::resolve(project, target)?;
+    let nodes = descend_level_ref(&local.nodes, scope_path)?;
+    let node = nodes.iter().find(|node| node.id == node_id)?;
+    if node.node_id.is_empty() {
+        return None;
+    }
+    let local_binding = local
+        .preset_metadata
+        .as_ref()?
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if *node_id == node.node_id && param == param_name))?;
+    let owner_binding = owner
+        .graph
+        .as_ref()
+        .and_then(|graph| graph.preset_metadata.as_ref())?
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target,
+            manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id: id, param_id }
+                if id == modifier_id && param_id == &local_binding.id))?;
+    let spec = &owner.params.get(&owner_binding.id)?.spec;
+    Some((
+        owner_binding.id.clone(), spec.min, spec.max, spec.invert, spec.curve,
+        owner_binding.scale * local_binding.scale,
+        owner_binding.offset * local_binding.scale + local_binding.offset,
+    ))
+}
+
 impl Application {
     /// Open from the emitting card using the shared target resolver and its
     /// clicked node geometry. Canvas selection is not an input.
@@ -503,27 +632,30 @@ impl Application {
         clip: manifold_ui::graph_canvas::Rect,
     ) -> bool {
         let Some(ed) = self.graph_editor.as_ref() else { return false; };
-        let Some(owner) = crate::ui_bridge::resolve_graph_target(
+        let Some(resolved_owner) = crate::ui_bridge::resolve_graph_target(
             target, None, ed.ui_root.inspector.last_effect_tab(),
             &self.active_layer_id, &self.selection, &self.local_project,
         ) else { return false; };
+        let owner = self
+            .watched_graph_target
+            .as_ref()
+            .filter(|watched| watched.host_target() == Some(&resolved_owner))
+            .cloned()
+            .unwrap_or(resolved_owner);
         let Some((label, min, max, invert, curve, scale, offset)) = self.target_full_reshape(&owner, param_id)
         else { return false; };
         let is_angle = self.local_project
-            .preset_instance(&owner)
+            .graph_target_owner(&owner)
             .and_then(|instance| instance.params.get(param_id))
             .is_some_and(|param| param.spec.is_angle);
         if ed.ui_root.tree.get_node(anchor_node_id).is_none() { return false; }
         let anchor = ed.ui_root.tree.get_bounds(anchor_node_id);
-        let section = self.local_project.preset_instance(&owner)
+        let section = self.local_project.graph_target_owner(&owner)
             .and_then(|inst| inst.params.get(param_id)).and_then(|p| p.spec.section.clone());
         // Modifiers have no card selection-follow action. Bring their graph
         // into view through the same watched-target path as other cards.
         if self.watched_graph_target.as_ref() != Some(&owner) {
-            match &owner {
-                manifold_core::GraphTarget::Effect(id) => self.watch_effect_graph(id.clone()),
-                manifold_core::GraphTarget::Generator(id) => self.watch_generator_graph(id.clone()),
-            }
+            self.watch_graph_target(owner.clone());
         }
         self.editor_mapping_popover.open(
             crate::editing_host::to_ui_graph_target(&owner), param_id.to_owned(), label,
@@ -694,6 +826,15 @@ impl Application {
         target: &manifold_core::GraphTarget,
         param_id: &str,
     ) -> Option<(String, f32, f32, bool, manifold_core::macro_bank::MacroCurve, f32, f32)> {
+        if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
+            let owner = self.local_project.graph_target_owner(target)?;
+            let binding = crate::graph_target::modifier_host_binding(&self.local_project, target, param_id)?;
+            let spec = &owner.params.get(param_id)?.spec;
+            return Some((
+                spec.name.clone(), spec.min, spec.max, spec.invert, spec.curve,
+                binding.scale, binding.offset,
+            ));
+        }
         let instance = self.local_project.preset_instance(target)?;
         if let Some(def) = instance.graph.as_ref() {
             return full_reshape_from_instance(instance, def, param_id);
@@ -722,6 +863,13 @@ impl Application {
         f32,
         f32,
     )> {
+        if let Some(target) = self.watched_graph_target.as_ref()
+            && matches!(target, manifold_core::GraphTarget::SceneModifier { .. })
+        {
+            return modifier_binding_for_node_param(
+                &self.local_project, target, scope_path, node_id, param_name,
+            );
+        }
         let instance = self.local_project.preset_instance(self.watched_graph_target.as_ref()?)?;
         if let Some(def) = instance.graph.as_ref() {
             return binding_for_node_param(&instance.params, def, scope_path, node_id, param_name);
@@ -745,21 +893,7 @@ impl Application {
         catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
     ) -> Option<manifold_core::effect_graph_def::SerializedParamValue> {
         let target = self.watched_graph_target.as_ref()?;
-        let def = match target {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                fx.graph.as_ref().unwrap_or(catalog_default)
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let layer = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?;
-                layer.generator_graph().unwrap_or(catalog_default)
-            }
-        };
+        let def = self.local_project.graph_for_target(target, Some(catalog_default))?;
         node_param_value(def, scope_path, node_id, param_name)
     }
 
@@ -772,36 +906,8 @@ impl Application {
         let Some(target) = self.watched_graph_target.as_ref() else {
             return false;
         };
-        match target {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let Some(fx) = self.local_project.find_effect_by_id(eid) else {
-                    return false;
-                };
-                if let Some(def) = fx.graph.as_ref()
-                    && node_param_is_wired(def, scope_path, node_id, param_name)
-                {
-                    return true;
-                }
-                manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
-                    .is_some_and(|view| node_param_is_wired(&view.canonical_def, scope_path, node_id, param_name))
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let Some(layer) = self.local_project.timeline.layers.iter().find(|l| &l.layer_id == lid)
-                else {
-                    return false;
-                };
-                if let Some(def) = layer.generator_graph()
-                    && node_param_is_wired(def, scope_path, node_id, param_name)
-                {
-                    return true;
-                }
-                let Some(gp) = layer.gen_params() else {
-                    return false;
-                };
-                manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
-                    .is_some_and(|view| node_param_is_wired(&view.canonical_def, scope_path, node_id, param_name))
-            }
-        }
+        crate::graph_target::resolve(&self.local_project, target)
+            .is_some_and(|def|node_param_is_wired(def, scope_path, node_id, param_name))
     }
 
     /// The catalog graph def to seed the instance's per-instance graph
@@ -822,33 +928,7 @@ impl Application {
     /// default. Cloned (copy is a rare authoring action). `None` when nothing is
     /// watched.
     pub(crate) fn watched_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        match self.watched_graph_target.as_ref()? {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                if let Some(d) = fx.graph.as_ref() {
-                    Some(d.clone())
-                } else {
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
-                        .map(|v| (*v.canonical_def).clone())
-                }
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let layer = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?;
-                if let Some(d) = layer.generator_graph() {
-                    Some(d.clone())
-                } else {
-                    manifold_renderer::node_graph::bundled_preset_def(
-                        layer.gen_params()?.generator_type(),
-                    )
-                    .cloned()
-                }
-            }
-        }
+        crate::graph_target::resolve(&self.local_project, self.watched_graph_target.as_ref()?).cloned()
     }
 
     /// Resolve the canvas's current selection into copy-ready data: the selected
@@ -919,10 +999,10 @@ impl Application {
         param_id: &str,
         edit: BindingMappingEdit,
     ) {
-        let seed_def = self.seed_def_for(target);
-        build_mapping_command(target, param_id, edit.clone(), seed_def.clone())
+        let Some(target) = self.mapping_write_target(target, param_id) else { return; };
+        let seed_def = self.seed_def_for(&target);
+        build_mapping_command(&target, param_id, edit.clone(), seed_def.clone())
             .execute(&mut self.local_project);
-        let target = target.clone();
         let pid = param_id.to_string();
         // The lean preview arm: this runs once per mouse-move, and a mapping
         // reshape never touches the video library or the Ableton mapping
@@ -942,9 +1022,10 @@ impl Application {
         param_id: &str,
         edit: BindingMappingEdit,
     ) {
-        let seed_def = self.seed_def_for(target);
+        let Some(target) = self.mapping_write_target(target, param_id) else { return; };
+        let seed_def = self.seed_def_for(&target);
         self.send_content_cmd(ContentCommand::Execute(build_mapping_command(
-            target, param_id, edit, seed_def,
+            &target, param_id, edit, seed_def,
         )));
     }
 
@@ -958,10 +1039,27 @@ impl Application {
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
     ) {
-        let seed_def = self.seed_def_for(target);
+        let Some(target) = self.mapping_write_target(target, param_id) else { return; };
+        let seed_def = self.seed_def_for(&target);
         self.send_content_cmd(ContentCommand::Execute(build_mapping_command_with_reverse(
-            target, param_id, new, reverse, seed_def,
+            &target, param_id, new, reverse, seed_def,
         )));
+    }
+
+    /// Mapping controls on a modifier are read through the local snapshot but
+    /// always write the owning generator's public manifest. Validate the local
+    /// binding first so stale or preparation-only rows cannot materialize an
+    /// unrelated host graph.
+    fn mapping_write_target(
+        &self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+    ) -> Option<manifold_core::GraphTarget> {
+        if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
+            self.target_full_reshape(target, param_id)?;
+            return Some(target.host_target()?.clone());
+        }
+        Some(target.clone())
     }
 
     /// Resolve an effect card's row index (in the active inspector tab) to its
@@ -1000,30 +1098,28 @@ impl Application {
     /// edit). Does NOT open the window — shared by the card cog (which also
     /// sets `pending_open_graph_editor`) and selection-follows (retarget-only).
     pub(crate) fn watch_effect_graph(&mut self, effect_id: manifold_core::EffectId) {
-        self.close_mapping_on_target_change(&manifold_core::GraphTarget::Effect(effect_id.clone()));
-        self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(effect_id.clone())));
-        self.watched_catalog_default = self.local_project.find_effect_by_id(&effect_id).and_then(
-            |instance| manifold_renderer::node_graph::catalog_graph_def_for(instance.effect_type()),
-        );
-        self.watched_graph_target = Some(manifold_core::GraphTarget::Effect(effect_id));
+        self.watch_graph_target(manifold_core::GraphTarget::Effect(effect_id));
     }
 
-    /// Point the graph editor at a layer's generator graph. Caches the bundled
-    /// preset JSON for the layer's generator type as the catalog default. Does
-    /// NOT open the window — shared by the generator-card cog and
-    /// selection-follows.
     pub(crate) fn watch_generator_graph(&mut self, layer_id: manifold_core::LayerId) {
-        self.close_mapping_on_target_change(&manifold_core::GraphTarget::Generator(layer_id.clone()));
-        self.send_content_cmd(ContentCommand::WatchGeneratorGraph(Some(layer_id.clone())));
-        self.watched_catalog_default = self
-            .local_project
-            .timeline
-            .find_layer_by_id(&layer_id)
-            .map(|(_, l)| l.generator_type().clone())
-            .filter(|gt| !gt.is_none())
-            .and_then(|gt| manifold_renderer::node_graph::bundled_preset_json(&gt))
-            .and_then(|json| serde_json::from_str(&json).ok());
-        self.watched_graph_target = Some(manifold_core::GraphTarget::Generator(layer_id));
+        self.watch_graph_target(manifold_core::GraphTarget::Generator(layer_id));
+    }
+
+    pub(crate) fn watch_graph_target(&mut self, target: manifold_core::GraphTarget) {
+        if target.host_target().is_none() { return; }
+        self.close_mapping_on_target_change(&target);
+        if self.modifier_preview_object.as_ref().is_some_and(|(owner, _)| owner != &target) {
+            self.modifier_preview_object = None;
+        }
+        self.watched_catalog_default = crate::graph_target::catalog_default(&self.local_project, &target);
+        // The content thread clears both preview requests when the watched
+        // target changes; drop the dedup caches with it so a same-named node
+        // in the next graph is sent again rather than leaving stale output.
+        self.last_preview_node = None;
+        self.last_modifier_preview_context = None;
+        self.last_modifier_preview_selection = None;
+        self.send_content_cmd(ContentCommand::WatchGraphTarget(Some(target.clone())));
+        self.watched_graph_target = Some(target);
     }
 
     fn close_mapping_on_target_change(&mut self, target: &manifold_core::GraphTarget) {
@@ -1130,8 +1226,12 @@ impl Application {
         let fresh =
             matches!(&self.editor_ui_graph, Some((cached, _)) if std::sync::Arc::ptr_eq(cached, src));
         if !fresh {
-            let ui = std::sync::Arc::new(crate::ui_translate::graph_snapshot_to_ui(src));
-            self.editor_ui_graph = Some((src.clone(), ui));
+            let mut ui = crate::ui_translate::graph_snapshot_to_ui(src);
+            if let Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) = self.watched_graph_target.as_ref()
+                && let Some(local) = crate::graph_target::resolve(&self.local_project, target) {
+                annotate_preparation_controls(&mut ui.nodes, local);
+            }
+            self.editor_ui_graph = Some((src.clone(), std::sync::Arc::new(ui)));
         }
         self.editor_ui_graph.as_ref().map(|(_, ui)| ui.clone())
     }
@@ -1149,11 +1249,46 @@ impl Application {
         // (Phase 8). Translated once (cached by Arc identity); the renderer
         // snapshot stays the source for the binding/exposure helpers below.
         let editor_ui_snap = self.editor_ui_snapshot();
-        let preview_node = match (self.graph_canvas.as_ref(), editor_ui_snap.as_deref()) {
-            (Some(canvas), Some(snap)) => canvas
-                .selected_node_id()
-                .and_then(|id| resolve_preview_target(snap, canvas.scope_path(), id)),
-            _ => None,
+        let scene_modifier_watched = matches!(
+            self.watched_graph_target.as_ref(),
+            Some(manifold_core::GraphTarget::SceneModifier { .. })
+        );
+        let preview_object = self.modifier_preview_object.as_ref()
+            .filter(|(target, _)| Some(target) == self.watched_graph_target.as_ref())
+            .map(|(_, object)| object.clone());
+        let (preview_node, modifier_context) = match (self.graph_canvas.as_ref(), editor_ui_snap.as_ref()) {
+            (Some(canvas), Some(snap)) if scene_modifier_watched => {
+                let selected = canvas.selected_node_id();
+                let canvas_scope = canvas.scope_path();
+                let unchanged = self.last_modifier_preview_selection.as_ref().is_some_and(
+                    |(cached_snap, cached_scope, cached_selected)| {
+                        std::sync::Arc::ptr_eq(cached_snap, snap)
+                            && cached_scope.as_slice() == canvas_scope
+                            && *cached_selected == selected
+                    },
+                );
+                if unchanged {
+                    (self.last_preview_node.clone(), None)
+                } else {
+                    let (node, scope) = modifier_preview_selection(snap, canvas_scope, selected);
+                    self.last_modifier_preview_selection = Some((snap.clone(), canvas_scope.to_vec(), selected));
+                    (node, Some((scope, preview_object)))
+                }
+            }
+            (Some(canvas), Some(snap)) => (
+                canvas
+                    .selected_node_id()
+                    .and_then(|id| resolve_preview_target(snap, canvas.scope_path(), id)),
+                None,
+            ),
+            _ if scene_modifier_watched => {
+                self.last_modifier_preview_selection = None;
+                (None, Some((Vec::new(), None)))
+            }
+            _ => {
+                self.last_modifier_preview_selection = None;
+                (None, None)
+            }
         };
         if preview_node != self.last_preview_node {
             if let Some(tx) = self.content_tx.as_ref() {
@@ -1165,6 +1300,12 @@ impl Application {
                 );
             }
             self.last_preview_node = preview_node;
+        }
+        if let Some(context) = modifier_context
+            && self.last_modifier_preview_context.as_ref() != Some(&context) {
+                let (scope, object) = context.clone();
+                self.send_content_cmd(ContentCommand::SetModifierPreviewContext { scope, object });
+                self.last_modifier_preview_context = Some(context);
         }
 
         // P5c (`docs/REALTIME_3D_DESIGN.md`): resolve whether `preview_node`
@@ -1237,7 +1378,7 @@ impl Application {
         // window state mutably. Its owner may differ from the watched graph.
         let popover_live_value = if self.editor_mapping_popover.is_open() {
             self.editor_mapping_popover.target()
-                .and_then(|target| self.local_project.preset_instance(&crate::editing_host::to_graph_target(target)))
+                .and_then(|target| self.local_project.graph_target_owner(&crate::editing_host::to_graph_target(target)))
                 .and_then(|instance| instance.params.get(self.editor_mapping_popover.binding_id()))
                 .map(|param| param.value)
         } else {
@@ -1522,17 +1663,19 @@ impl Application {
                     .map(|n| n.title.clone())
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| info.node_id.to_string());
-                let description = snap_node
-                    .and_then(|n| {
-                        manifold_renderer::node_graph::descriptor_for(&n.type_id)
-                    })
-                    .map(|d| {
-                        if !d.summary.is_empty() {
-                            d.summary.to_string()
-                        } else {
-                            // First sentence of the technical purpose keeps it short.
-                            d.purpose.split(". ").next().unwrap_or(d.purpose).to_string()
-                        }
+                let description = info.diagnostic
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        snap_node
+                            .and_then(|n| manifold_renderer::node_graph::descriptor_for(&n.type_id))
+                            .map(|d| {
+                                if !d.summary.is_empty() {
+                                    d.summary.to_string()
+                                } else {
+                                    // First sentence of the technical purpose keeps it short.
+                                    d.purpose.split(". ").next().unwrap_or(d.purpose).to_string()
+                                }
+                            })
                     })
                     .unwrap_or_default();
                 manifold_ui::panels::graph_editor::NodeInspector {
@@ -1916,7 +2059,7 @@ impl Application {
 
 #[cfg(test)]
 mod preview_target_tests {
-    use super::resolve_preview_target;
+    use super::{modifier_preview_selection, resolve_preview_target, stable_scope_path};
     use manifold_core::NodeId;
     use manifold_ui::graph_view::{
         GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GraphSnapshot, GroupSnapshot,
@@ -2037,6 +2180,37 @@ mod preview_target_tests {
         );
         assert_eq!(resolve_preview_target(&s, &[], 2), Some(NodeId::new("inv")));
     }
+
+    #[test]
+    fn modifier_preview_scope_uses_stable_groups_and_resolved_boundary_scope() {
+        let s = snap(
+            vec![
+                node(10, "source", "system.source", vec![], vec![tex("out")]),
+                group_container(),
+            ],
+            vec![wire(10, "out", 5, "src")],
+        );
+        assert_eq!(stable_scope_path(&s, &[5]), Some(vec![NodeId::new("grp")]));
+        // The group-output boundary resolves to the group container, which
+        // lives at the parent scope rather than inside the canvas scope.
+        let resolved = resolve_preview_target(&s, &[5], 2).unwrap();
+        assert_eq!(resolved, NodeId::new("grp"));
+        assert_eq!(modifier_preview_selection(&s, &[5], Some(2)), (Some(resolved), Vec::<NodeId>::new()));
+        // A normal inner node retains the enclosing stable group path.
+        assert_eq!(
+            modifier_preview_selection(&s, &[5], Some(1)),
+            (Some(NodeId::new("inner")), vec![NodeId::new("grp")])
+        );
+
+        let mut sibling = group_container();
+        sibling.id = 6;
+        sibling.node_id = NodeId::new("sibling");
+        let siblings = snap(vec![group_container(), sibling], vec![]);
+        assert_eq!(
+            modifier_preview_selection(&siblings, &[6], Some(1)),
+            (Some(NodeId::new("inner")), vec![NodeId::new("sibling")])
+        );
+    }
 }
 
 /// `PARAM_TWO_WAY_BINDING_DESIGN.md` P1: the dispatch-layer binding lookup
@@ -2060,6 +2234,9 @@ mod binding_reroute_tests {
         PresetMetadata,
     };
     use manifold_core::macro_bank::MacroCurve;
+    use manifold_core::scene_modifier_preset::{
+        SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+    };
     use std::collections::{BTreeMap, BTreeSet};
 
     fn node(id: u32, node_id: &str) -> EffectGraphNode {
@@ -2090,6 +2267,7 @@ mod binding_reroute_tests {
                 category: "Test".into(),
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -2133,6 +2311,7 @@ mod binding_reroute_tests {
                 string_params: vec![],
                 string_bindings: vec![],
             }),
+            scene_modifiers: Vec::new(),
             nodes: vec![node(1, "blur1")],
             wires: vec![],
         }
@@ -2164,6 +2343,48 @@ mod binding_reroute_tests {
         app.local_project.timeline.layers.push(layer);
         app.watched_graph_target = Some(a.clone());
         (app, a, b)
+    }
+
+    fn scene_mapping_test_project() -> (manifold_core::project::Project, manifold_core::GraphTarget) {
+        use manifold_core::{layer::Layer, GraphTarget, PresetTypeId};
+        let local = def_with_binding();
+        let mut host = def_with_binding();
+        let metadata = host.preset_metadata.as_mut().unwrap();
+        metadata.params[0].id = "macro".into();
+        metadata.params[0].name = "Macro".into();
+        metadata.bindings[0] = BindingDef {
+            id: "macro".into(),
+            label: "Macro".into(),
+            default_value: 0.25,
+            target: BindingTarget::SceneModifier {
+                modifier_id: NodeId::new("modifier"),
+                param_id: "amount".into(),
+            },
+            convert: Default::default(),
+            user_added: false,
+            scale: 3.0,
+            offset: 4.0,
+            default_mirrors_node_param: false,
+        };
+        host.scene_modifiers.push(SceneModifierInstanceDef {
+            id: NodeId::new("modifier"),
+            scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            graph: Box::new(local),
+        });
+        let mut layer = Layer::new_generator("Generator".into(), PresetTypeId::new("Test"), 0);
+        layer.layer_id = manifold_core::LayerId::new("layer");
+        let target = GraphTarget::SceneModifier {
+            owner: Box::new(GraphTarget::Generator(layer.layer_id.clone())),
+            modifier_id: NodeId::new("modifier"),
+        };
+        let generator = layer.gen_params_mut().unwrap();
+        generator.params = manifest_for(&host);
+        generator.graph = Some(host);
+        let mut project = manifold_core::project::Project::default();
+        project.timeline.layers.push(layer);
+        (project, target)
     }
 
     #[test]
@@ -2224,7 +2445,9 @@ mod binding_reroute_tests {
         for command in rx.try_iter() {
             match command {
                 ContentCommand::MutateProjectPreview(edit) => edit(&mut content_project),
-                ContentCommand::Execute(command) => undo.execute(command, &mut content_project),
+                ContentCommand::Execute(command) => {
+                    undo.execute(command, &mut content_project);
+                }
                 _ => panic!("unexpected mapping command"),
             }
         }
@@ -2252,6 +2475,69 @@ mod binding_reroute_tests {
         assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().5, 2.0);
         assert_eq!(app.target_full_reshape(&other, "amount").unwrap().5, 2.0);
         assert!(rx.try_iter().all(|cmd| matches!(cmd, ContentCommand::MutateProjectPreview(_))));
+    }
+
+    #[test]
+    fn scene_modifier_mapping_composes_and_writes_host_macro() {
+        use manifold_editing::commands::effects::BindingMappingEdit;
+        let (project, target) = scene_mapping_test_project();
+        let composed = super::modifier_binding_for_node_param(&project, &target, &[], 1, "amount")
+            .expect("local binding resolves through outer macro");
+        assert_eq!(composed.0, "macro");
+        assert_eq!(composed.5, 6.0);
+        assert_eq!(composed.6, 8.5);
+
+        let mut app = Application::new();
+        app.local_project = project.clone();
+        // The mapping surface edits the public macro affine once; node-face
+        // inversion above alone uses the composed leaf affine.
+        assert_eq!(app.target_full_reshape(&target, "macro").unwrap().5, 3.0);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.content_tx = Some(tx);
+        app.commit_mapping(&target, "macro", BindingMappingEdit {
+            max: Some(7.0), scale: Some(4.0), ..Default::default()
+        });
+        let mut content_project = project;
+        let command = rx
+            .try_iter()
+            .find_map(|cmd| match cmd {
+                ContentCommand::Execute(command) => Some(command),
+                _ => None,
+            })
+            .expect("valid local mapping queues a host command");
+        let mut undo = manifold_editing::undo::UndoRedoManager::new();
+        undo.execute(command, &mut content_project);
+        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().spec.max, 7.0);
+        assert_eq!(super::modifier_binding_for_node_param(&content_project, &target, &[], 1, "amount").unwrap().5, 8.0);
+        assert!(undo.undo(&mut content_project));
+        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().spec.max, 1.0);
+    }
+
+    #[test]
+    fn scene_modifier_mapping_rejects_missing_local_binding_without_queueing() {
+        use manifold_editing::commands::effects::BindingMappingEdit;
+        let (mut project, target) = scene_mapping_test_project();
+        project
+            .graph_target_owner_mut(&target)
+            .unwrap()
+            .graph
+            .as_mut()
+            .unwrap()
+            .scene_modifiers[0]
+            .graph
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .bindings
+            .clear();
+        let mut app = Application::new();
+        app.local_project = project;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.content_tx = Some(tx);
+        app.commit_mapping(&target, "macro", BindingMappingEdit {
+            max: Some(9.0), ..Default::default()
+        });
+        assert!(rx.try_iter().next().is_none(), "invalid local mapping must be atomic");
     }
 
     #[test]
@@ -2345,5 +2631,32 @@ mod binding_reroute_tests {
         });
         assert!(node_param_is_wired(&def, &[], 1, "amount"));
         assert!(!node_param_is_wired(&def, &[], 1, "other_param"));
+    }
+}
+
+/// Preparation controls keep the shared numeric editor, with an explicit
+/// setup label and no exposure or mapping affordance.
+fn annotate_preparation_controls(
+    nodes: &mut [manifold_ui::graph_view::NodeSnapshot],
+    local: &manifold_core::effect_graph_def::EffectGraphDef,
+) {
+    let Some(metadata) = local.preset_metadata.as_ref() else { return; };
+    let Some(recipe) = metadata.scene_modifier.as_ref() else { return; };
+    for node in nodes {
+        for param in &mut node.parameters {
+            let preparation = metadata.bindings.iter().any(|binding|
+                recipe.preparation_params.contains(&binding.id)
+                    && matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                        if node_id == &node.node_id && name == &param.name));
+            if preparation {
+                param.preparation_only = true;
+                param.exposed = false;
+                param.label.push_str(" · Setup");
+                param.tooltip = Some("Applies when released and rebuilds the scene. This control cannot be modulated; editing it stores a fixed default.".into());
+            }
+        }
+        if let Some(group) = &mut node.group {
+            annotate_preparation_controls(&mut group.nodes, local);
+        }
     }
 }

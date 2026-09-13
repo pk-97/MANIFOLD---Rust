@@ -262,6 +262,10 @@ pub struct UiAutomationPoint {
 pub enum UiGraphTarget {
     Effect(EffectId),
     Generator(LayerId),
+    SceneModifier {
+        owner: Box<UiGraphTarget>,
+        modifier_id: manifold_foundation::NodeId,
+    },
 }
 
 /// One lane strip's read-only render data: which param, whether it draws

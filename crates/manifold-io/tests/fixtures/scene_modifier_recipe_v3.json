@@ -1,0 +1,141 @@
+{
+  "version": 3,
+  "name": "Fixture Scene Modifier",
+  "description": "Authored v3 recipe with live controls and staged metadata.",
+  "presetMetadata": {
+    "id": "fixture.sceneModifier.v3",
+    "displayName": "Fixture Scene Modifier",
+    "category": "Geometry",
+    "oscPrefix": "fixture_scene_modifier",
+    "params": [
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.8,
+        "isToggle": true
+      },
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.35
+      },
+      {
+        "id": "cellSize",
+        "name": "Cell Size",
+        "min": 0.1,
+        "max": 2.0,
+        "defaultValue": 0.42
+      }
+    ],
+    "bindings": [],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": true,
+      "enabledParam": "enabled",
+      "preparationParams": [
+        "cellSize"
+      ],
+      "stages": [
+        {
+          "group": "scene-control",
+          "scope": "scene",
+          "inputs": [
+            {
+              "port": "beat",
+              "source": {
+                "context": {
+                  "value": "beat"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "sceneValue",
+              "endpoint": "camera"
+            }
+          ]
+        },
+        {
+          "group": "object-deform",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "source",
+              "source": {
+                "previous": {
+                  "endpoint": "vertices"
+                }
+              }
+            },
+            {
+              "port": "radius",
+              "source": {
+                "context": {
+                  "value": "sceneRadius"
+                }
+              }
+            },
+            {
+              "port": "sceneValue",
+              "source": {
+                "stageOutput": {
+                  "stage": "scene-control",
+                  "port": "sceneValue"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "vertices",
+              "endpoint": "vertices"
+            }
+          ]
+        }
+      ],
+      "initializers": [
+        {
+          "target": {
+            "scope": [
+              "object-group"
+            ],
+            "node": "amount-control"
+          },
+          "param": "amount",
+          "value": {
+            "constant": {
+              "value": 0.35
+            }
+          }
+        }
+      ],
+      "calibrations": [
+        {
+          "paramId": "amount",
+          "min": {
+            "constant": {
+              "value": -0.75
+            }
+          },
+          "max": {
+            "constant": {
+              "value": 0.9
+            }
+          },
+          "defaultValue": {
+            "constant": {
+              "value": 0.4
+            }
+          }
+        }
+      ]
+    }
+  },
+  "nodes": [],
+  "wires": []
+}

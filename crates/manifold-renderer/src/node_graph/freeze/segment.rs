@@ -138,6 +138,7 @@ pub fn concat_defs(cards: &[&EffectGraphDef]) -> Option<EffectGraphDef> {
         // Anonymous: segment identity is the content key, and per-card outer
         // params / bindings stay on each card's own EffectSlot.
         preset_metadata: None,
+        scene_modifiers: Vec::new(),
         nodes,
         wires,
     })

@@ -205,6 +205,11 @@ pub fn load_project_from_json_with(
     let mut project: Project =
         serde_json::from_str(&migrated).map_err(|e| LoadError::Deserialize(format!("{e}")))?;
 
+    // Reject incompatible nested definitions before installing any file-owned
+    // presets in the catalog or reconciling their parameter manifests.
+    crate::graph_schema::validate_project_graphs(&project)
+        .map_err(|e| LoadError::Deserialize(e.to_string()))?;
+
     // Fold the pre-deserialize migrations' notes (skip-loudly signals,
     // upgrade summaries) into the load report so the "opened with repairs"
     // toast surfaces them (CINEMATIC_SCENE_TAIL D3's I5).

@@ -37,6 +37,9 @@ pub(crate) fn to_graph_target(target: &UiGraphTarget) -> GraphTarget {
     match target {
         UiGraphTarget::Effect(id) => GraphTarget::Effect(id.clone()),
         UiGraphTarget::Generator(id) => GraphTarget::Generator(id.clone()),
+        UiGraphTarget::SceneModifier { owner, modifier_id } => GraphTarget::SceneModifier {
+            owner: Box::new(to_graph_target(owner)), modifier_id: modifier_id.clone(),
+        },
     }
 }
 
@@ -48,6 +51,9 @@ pub(crate) fn to_ui_graph_target(target: &GraphTarget) -> UiGraphTarget {
     match target {
         GraphTarget::Effect(id) => UiGraphTarget::Effect(id.clone()),
         GraphTarget::Generator(id) => UiGraphTarget::Generator(id.clone()),
+        GraphTarget::SceneModifier { owner, modifier_id } => UiGraphTarget::SceneModifier {
+            owner: Box::new(to_ui_graph_target(owner)), modifier_id: modifier_id.clone(),
+        },
     }
 }
 

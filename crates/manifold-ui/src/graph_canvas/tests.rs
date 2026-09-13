@@ -360,12 +360,19 @@ fn float_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
         range: Some((0.0, 1.0)),
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: None,
         vec_value: None,
         string_value: None,
         table_value: None,
         tooltip: None,
     }
+}
+
+fn preparation_float_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
+    let mut param = float_param(name, current);
+    param.preparation_only = true;
+    param
 }
 
 /// One plain node (`id == 1`, given handle so its `node_id` is set) carrying
@@ -672,6 +679,7 @@ fn enum_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
         range: None,
         enum_labels: Some(vec!["A".into(), "B".into(), "C".into()]),
         exposed: false,
+        preparation_only: false,
         summary: None,
         vec_value: None,
         string_value: None,
@@ -690,6 +698,7 @@ fn bool_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
         range: None,
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: None,
         vec_value: None,
         string_value: None,
@@ -708,6 +717,7 @@ fn trigger_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
         range: None,
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: None,
         vec_value: None,
         string_value: None,
@@ -778,6 +788,32 @@ fn clicking_expose_glyph_when_exposed_unexposes() {
         _ => None,
     });
     assert_eq!(expose, Some(false), "was exposed → expose=false");
+}
+
+#[test]
+fn preparation_only_row_stays_editable_without_expose_or_mapping() {
+    let (mut canvas, vp) = expanded_canvas(preparation_float_param("amount", 0.25));
+    let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
+    let (gx, gy) = glyph_centre(&canvas, vp, 0);
+    assert!(canvas.expose_glyph_under(vp, gx, gy).is_none());
+
+    canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
+    assert!(matches!(
+        canvas.drag.payload(),
+        Some(CanvasDrag::ParamScrub { .. })
+    ));
+    canvas.on_pointer_move(vp, row.x + row.w * 0.8, row.y + row.h * 0.5);
+    canvas.on_left_button_up(vp, row.x + row.w * 0.8, row.y + row.h * 0.5);
+    let edits = canvas.drain_edits();
+    assert!(edits
+        .iter()
+        .any(|edit| matches!(edit, GraphEditCommand::SetGraphNodeParam { .. })));
+    assert!(edits
+        .iter()
+        .all(|edit| !matches!(edit, GraphEditCommand::ToggleNodeParamExpose { .. })));
+
+    let hit = canvas.on_right_button_down(vp, row.x + 4.0, row.y + row.h * 0.5);
+    assert!(hit.is_none(), "preparation-only rows cannot open mapping");
 }
 
 #[test]
@@ -972,6 +1008,7 @@ fn color_param(name: &str, rgba: [f32; 4]) -> crate::graph_view::ParamSnapshot {
         range: None,
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: None,
         vec_value: Some(rgba),
         string_value: None,
@@ -990,6 +1027,7 @@ fn vec2_param(name: &str, xy: [f32; 2]) -> crate::graph_view::ParamSnapshot {
         range: Some((-1.0, 1.0)),
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: None,
         vec_value: Some([xy[0], xy[1], 0.0, 0.0]),
         string_value: None,
@@ -1151,6 +1189,7 @@ fn string_param(name: &str, value: &str) -> crate::graph_view::ParamSnapshot {
         range: None,
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: Some(value.to_string()),
         vec_value: None,
         string_value: Some(value.to_string()),
@@ -1173,6 +1212,7 @@ fn table_param(name: &str, rows: Vec<Vec<f32>>) -> crate::graph_view::ParamSnaps
         range: None,
         enum_labels: None,
         exposed: false,
+        preparation_only: false,
         summary: Some(format!("{}×{}", rows.len(), cols)),
         vec_value: None,
         string_value: None,

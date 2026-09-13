@@ -538,6 +538,9 @@ pub(crate) struct ParamView {
     /// ([`crate::graph_view::ParamSnapshot::exposed`]). Drives the filled /
     /// hollow expose glyph at the row's left edge; a click on the glyph flips it.
     pub(crate) exposed: bool,
+    /// Preparation-only rows remain editable on the node face but cannot be
+    /// exposed or mapped onto the outer performance card.
+    pub(crate) preparation_only: bool,
     /// Declared default, carried so a click that exposes this param hands the
     /// new outer-card binding its default — parity with the sidebar's expose
     /// path (`ps.default_value`).
@@ -755,6 +758,7 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         // `tooltip_for`), so the formatter carries it straight through.
         tooltip: p.tooltip.clone(),
         exposed: p.exposed,
+        preparation_only: p.preparation_only,
         default_value: p.default_value,
         enum_labels: p.enum_labels.clone().unwrap_or_default(),
         vec_value: p.vec_value.unwrap_or([0.0; 4]),

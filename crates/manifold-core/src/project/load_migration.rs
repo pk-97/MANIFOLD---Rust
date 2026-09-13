@@ -1158,6 +1158,7 @@ mod tests {
             description: None,
             preset_metadata: None,
             // One handled node + one anonymous boundary node.
+            scene_modifiers: Vec::new(),
             nodes: vec![make_node(0, Some("softblur")), make_node(1, None)],
             wires: vec![],
         };
@@ -1184,6 +1185,7 @@ mod tests {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: vec![explicit],
             wires: vec![],
         });

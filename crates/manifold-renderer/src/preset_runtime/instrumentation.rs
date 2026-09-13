@@ -197,6 +197,15 @@ impl PresetRuntime {
     /// set, so they keep memoization and their textures recycle (sub-changes
     /// A + B).
     pub fn set_dump_visible(&mut self, effect_id: Option<&EffectId>, visible: &[NodeId]) {
+        self.set_dump_visible_with_context(effect_id, visible, None);
+    }
+
+    pub fn set_dump_visible_with_context(
+        &mut self,
+        effect_id: Option<&EffectId>,
+        visible: &[NodeId],
+        context: Option<&super::ModifierPreviewContext>,
+    ) {
         let mut set: ahash::AHashSet<NodeInstanceId> = ahash::AHashSet::new();
         let mut matched = effect_id.is_none();
         for slot in &self.effect_nodes {
@@ -207,6 +216,10 @@ impl PresetRuntime {
                 matched = true;
             }
             for nid in visible {
+                let nid = if let Some(context) = context {
+                    let Ok(resolved) = super::modifier_preview::resolve(&self.modifier_preview_routes, context, nid) else { continue; };
+                    resolved
+                } else { nid };
                 if let Some((_, instance)) =
                     slot.node_map.iter().find(|(mapped, _)| mapped == nid)
                 {

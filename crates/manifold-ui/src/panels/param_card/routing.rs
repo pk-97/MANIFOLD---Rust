@@ -40,28 +40,39 @@ impl ParamCardPanel {
                     // would emit OpenGraphEditor(0) — modifier surfaces are
                     // Effect-kind with a placeholder index.
                     if self.cog_btn_id == Some(id) {
-                        return vec![PanelAction::Root(RootAction::OpenGeneratorGraphEditor)];
+                        return vec![PanelAction::Root(RootAction::OpenGraphTarget(
+                            crate::view::UiGraphTarget::SceneModifier {
+                                owner: Box::new(crate::view::UiGraphTarget::Generator(
+                                    m.layer_id.clone(),
+                                )),
+                                modifier_id: m.instance_id.clone(),
+                            },
+                        ))];
                     }
                     if self.toggle_btn_id == Some(id) {
-                        // Switch-kind enable toggle: ONE param write on the
-                        // kind's enable target (INV-M7), resolved app-side.
+                        // Common modifier enable toggle: ONE param write on
+                        // the descriptor's enable target (INV-M7), resolved
+                        // app-side.
                         return vec![PanelAction::Project(
                             crate::panels::ProjectAction::SceneModifierToggleEnabled(
                                 m.layer_id.clone(),
-                                m.kind_id.clone(),
+                                m.instance_id.clone(),
                             ),
                         )];
                     }
-                    if self.wrap_debug_btn_id == Some(id) {
-                        return self.wrap_debug_action();
+                    if self.modifier_objects_btn_id == Some(id) {
+                        return vec![PanelAction::Root(RootAction::SceneModifierObjectsClicked(
+                            m.layer_id.clone(),
+                            m.instance_id.clone(),
+                        ))];
                     }
                     if self.modifier_remove_btn_id == Some(id) {
                         // The delete-collapse exit animation rides the
                         // inspector's reconcile machinery — this only mutates.
                         return vec![PanelAction::Project(
-                            crate::panels::ProjectAction::SceneModifierRemove(
+                            crate::panels::ProjectAction::SceneModifiersRemove(
                                 m.layer_id.clone(),
-                                m.kind_id.clone(),
+                                vec![m.instance_id.clone()],
                             ),
                         )];
                     }
@@ -69,9 +80,9 @@ impl ParamCardPanel {
                         || self.name_label_id == Some(id)
                         || self.border_id == Some(id)
                     {
-                        // No selection/reorder machinery for modifier cards
-                        // (fixed slots, D2) — the header is inert chrome.
-                        return Vec::new();
+                        return vec![PanelAction::Params(ParamsAction::ModifierCardClicked(
+                            m.instance_id.clone(),
+                        ))];
                     }
                 }
                 let ei = self.effect_index;
@@ -166,29 +177,6 @@ impl ParamCardPanel {
         }
 
         Vec::new()
-    }
-
-    /// The wrap-debug button's action (SCENE_MODIFIER_FRAMEWORK section 3.7):
-    /// park the loop at phase 0 by writing the beat_ramp's `bars` to 0, or
-    /// resume to the STASHED pre-park bars when already parked (the graph no
-    /// longer carries the real value once 0 lands). A real param write through
-    /// `SceneSetupParamChanged` — the same write path every scene row uses.
-    fn wrap_debug_action(&self) -> Vec<PanelAction> {
-        let (Some(m), Some(addr)) = (&self.modifier, self.modifier.as_ref().and_then(|m| m.wrap_debug.clone())) else {
-            return Vec::new();
-        };
-        let bars = if self.wrap_debug_parked() {
-            self.wrap_debug_resume_bars.unwrap_or(8.0)
-        } else {
-            0.0
-        };
-        vec![PanelAction::Project(crate::panels::ProjectAction::SceneSetupParamChanged(
-            m.layer_id.clone(),
-            addr.scope_path,
-            addr.node_doc_id,
-            addr.param_id,
-            bars,
-        ))]
     }
 
     /// The trim-handle node ids for a modulator kind. The three kinds keep
@@ -757,7 +745,15 @@ impl ParamCardPanel {
         // descendant without a more specific intent folds here.
         if let Some(border_id) = self.border_id {
             intents.claim_area(border_id);
-            intents.on(border_id, RightClick, PanelAction::Params(ParamsAction::CardRightClicked(target.clone())));
+            let menu = if let Some(m) = &self.modifier {
+                PanelAction::Root(RootAction::SceneModifierCardRightClicked(
+                    m.layer_id.clone(),
+                    m.instance_id.clone(),
+                ))
+            } else {
+                PanelAction::Params(ParamsAction::CardRightClicked(target.clone()))
+            };
+            intents.on(border_id, RightClick, menu);
         }
 
         // Every materialised slider's right-click reset — main rows AND every

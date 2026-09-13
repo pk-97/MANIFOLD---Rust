@@ -27,6 +27,8 @@ use crate::preset_definition_registry::StringParamDef;
 pub enum PresetKind {
     Effect,
     Generator,
+    #[serde(rename = "sceneModifier")]
+    SceneModifier,
 }
 
 impl PresetKind {
@@ -35,6 +37,10 @@ impl PresetKind {
     }
     pub fn is_generator(self) -> bool {
         matches!(self, PresetKind::Generator)
+    }
+
+    pub fn is_scene_modifier(self) -> bool {
+        matches!(self, PresetKind::SceneModifier)
     }
 }
 

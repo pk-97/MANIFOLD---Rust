@@ -12,18 +12,18 @@ use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
-    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
-    ParamSpecDef, PresetMetadata, SerializedParamValue, StringBindingDef,
+    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef,
+    PresetMetadata, SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
+use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
 
 use super::{
-    collect_node_ids, dedup_handle, descend_level, refresh_target_manifest,
-    resolve_target_instance, scene_build_node, scene_build_wire, with_existing_target_graph_mut,
-    with_target_graph_mut,
+    InstanceLayerSnapshot, collect_node_ids, dedup_handle, descend_level, prune_instance_params,
+    refresh_target_manifest, resolve_target_instance, scene_build_node, scene_build_wire,
+    with_existing_target_graph_mut, with_target_graph_def_mut, with_target_graph_mut,
 };
 
 /// The add-object gesture (D7): one undoable composite edit that (1) bumps
@@ -64,7 +64,11 @@ pub struct AddSceneObjectCommand {
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata` (P1 exposure stamping lands there, outside
     /// the scoped level). Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl AddSceneObjectCommand {
@@ -107,103 +111,25 @@ fn scene_object_tint(k: u32) -> manifold_core::Color {
 }
 
 impl Command for AddSceneObjectCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.next_index;
         let centroid = self.centroid;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let prev_metadata = def.preset_metadata.clone();
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let prev_metadata = def.preset_metadata.clone();
 
-            // Build the group + wire it in, entirely within a nested block so
-            // the `nodes`/`wires` borrows (from `descend_level`) end before
-            // the P1 exposure stamping below touches `def.preset_metadata` —
-            // same "metadata vs. nodes/wires never overlap" discipline
-            // `ImportModelIntoSceneCommand` documents.
-            let (mat_id, mat_node_id, mat_node_params, transform_id, transform_node_id, scene_object_id, scene_object_node_id, handle, prev) = {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let prev = (nodes.clone(), wires.clone());
-
-                nodes
-                    .iter_mut()
-                    .find(|n| n.id == render_id)?
-                    .params
-                    .insert(
-                        "objects".to_string(),
-                        SerializedParamValue::Float {
-                            value: (k + 1) as f32,
-                        },
-                    );
-
-                let mut next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                let mut fresh = move || {
-                    let v = next_id;
-                    next_id += 1;
-                    v
-                };
-                let mesh_id = fresh();
-                let mat_id = fresh();
-                let transform_id = fresh();
-                let scene_object_id = fresh();
-                let out_id = fresh();
-                let group_id = fresh();
-
-                let tint = scene_object_tint(k);
-                let mut mat_params = BTreeMap::new();
-                mat_params.insert("color_r".to_string(), SerializedParamValue::Float { value: tint.r });
-                mat_params.insert("color_g".to_string(), SerializedParamValue::Float { value: tint.g });
-                mat_params.insert("color_b".to_string(), SerializedParamValue::Float { value: tint.b });
-
-                let mesh_node = scene_build_node(mesh_id, "node.cube_mesh", Some(format!("mesh_{k}")), BTreeMap::new());
-                let mat_node = scene_build_node(mat_id, "node.phong_material", Some(format!("mat_{k}")), mat_params);
-                let mat_node_id = mat_node.node_id.clone();
-                let mat_node_params = mat_node.params.clone();
-                let transform_node = scene_build_node(
-                    transform_id,
-                    "node.transform_3d",
-                    Some(format!("transform_{k}")),
-                    BTreeMap::new(),
-                );
-                let transform_node_id = transform_node.node_id.clone();
-                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: binds the mesh/
-                // material/transform triple into a single Object wire —
-                // handle-stamped so the outliner shows this object's own name,
-                // not a producer's. render_scene v2 (D4) has no mesh_k/
-                // material_k/transform_k ports any more; it takes object_k only.
-                let handle = format!("Object {}", k + 1);
-                let scene_object_node =
-                    scene_build_node(scene_object_id, "node.scene_object", Some(handle.clone()), BTreeMap::new());
-                let scene_object_node_id = scene_object_node.node_id.clone();
-                let out_node = scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
-
-                let group_wires = vec![
-                    scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"),
-                    scene_build_wire(mat_id, "out", scene_object_id, "material"),
-                    scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
-                    scene_build_wire(scene_object_id, "object", out_id, "object"),
-                ];
-
-                let mut group_node =
-                    scene_build_node(group_id, GROUP_TYPE_ID, Some(handle.clone()), BTreeMap::new());
-                group_node.editor_pos = Some(centroid);
-                group_node.group = Some(Box::new(GroupDef {
-                    interface: GroupInterface {
-                        inputs: Vec::new(),
-                        outputs: vec![InterfacePortDef {
-                            name: "object".to_string(),
-                            port_type: "Object".to_string(),
-                        }],
-                        params: Vec::new(),
-                    },
-                    nodes: vec![mesh_node, mat_node, transform_node, scene_object_node, out_node],
-                    wires: group_wires,
-                    tint: Some([tint.r, tint.g, tint.b, 1.0]),
-                }));
-
-                nodes.push(group_node);
-                wires.push(scene_build_wire(group_id, "object", render_id, &format!("object_{k}")));
-
-                (
+                // Build the group + wire it in, entirely within a nested block so
+                // the `nodes`/`wires` borrows (from `descend_level`) end before
+                // the P1 exposure stamping below touches `def.preset_metadata` —
+                // same "metadata vs. nodes/wires never overlap" discipline
+                // `ImportModelIntoSceneCommand` documents.
+                let (
                     mat_id,
                     mat_node_id,
                     mat_node_params,
@@ -213,63 +139,192 @@ impl Command for AddSceneObjectCommand {
                     scene_object_node_id,
                     handle,
                     prev,
-                )
-            };
+                ) = {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let prev = (nodes.clone(), wires.clone());
 
-            // P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
-            // param of the freshly minted material/transform/scene_object
-            // nodes, into the def's TOP-LEVEL preset_metadata, targeting each
-            // node's bare NodeId — same convention the glTF importer uses.
-            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                display_name: "Scene".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "scene".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
+                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                        "objects".to_string(),
+                        SerializedParamValue::Float {
+                            value: (k + 1) as f32,
+                        },
+                    );
+
+                    let mut next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                    let mut fresh = move || {
+                        let v = next_id;
+                        next_id += 1;
+                        v
+                    };
+                    let mesh_id = fresh();
+                    let mat_id = fresh();
+                    let transform_id = fresh();
+                    let scene_object_id = fresh();
+                    let out_id = fresh();
+                    let group_id = fresh();
+
+                    let tint = scene_object_tint(k);
+                    let mut mat_params = BTreeMap::new();
+                    mat_params.insert(
+                        "color_r".to_string(),
+                        SerializedParamValue::Float { value: tint.r },
+                    );
+                    mat_params.insert(
+                        "color_g".to_string(),
+                        SerializedParamValue::Float { value: tint.g },
+                    );
+                    mat_params.insert(
+                        "color_b".to_string(),
+                        SerializedParamValue::Float { value: tint.b },
+                    );
+
+                    let mesh_node = scene_build_node(
+                        mesh_id,
+                        "node.cube_mesh",
+                        Some(format!("mesh_{k}")),
+                        BTreeMap::new(),
+                    );
+                    let mat_node = scene_build_node(
+                        mat_id,
+                        "node.phong_material",
+                        Some(format!("mat_{k}")),
+                        mat_params,
+                    );
+                    let mat_node_id = mat_node.node_id.clone();
+                    let mat_node_params = mat_node.params.clone();
+                    let transform_node = scene_build_node(
+                        transform_id,
+                        "node.transform_3d",
+                        Some(format!("transform_{k}")),
+                        BTreeMap::new(),
+                    );
+                    let transform_node_id = transform_node.node_id.clone();
+                    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: binds the mesh/
+                    // material/transform triple into a single Object wire —
+                    // handle-stamped so the outliner shows this object's own name,
+                    // not a producer's. render_scene v2 (D4) has no mesh_k/
+                    // material_k/transform_k ports any more; it takes object_k only.
+                    let handle = format!("Object {}", k + 1);
+                    let scene_object_node = scene_build_node(
+                        scene_object_id,
+                        "node.scene_object",
+                        Some(handle.clone()),
+                        BTreeMap::new(),
+                    );
+                    let scene_object_node_id = scene_object_node.node_id.clone();
+                    let out_node =
+                        scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
+
+                    let group_wires = vec![
+                        scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"),
+                        scene_build_wire(mat_id, "out", scene_object_id, "material"),
+                        scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
+                        scene_build_wire(scene_object_id, "object", out_id, "object"),
+                    ];
+
+                    let mut group_node = scene_build_node(
+                        group_id,
+                        GROUP_TYPE_ID,
+                        Some(handle.clone()),
+                        BTreeMap::new(),
+                    );
+                    group_node.editor_pos = Some(centroid);
+                    group_node.group = Some(Box::new(GroupDef {
+                        interface: GroupInterface {
+                            inputs: Vec::new(),
+                            outputs: vec![InterfacePortDef {
+                                name: "object".to_string(),
+                                port_type: "Object".to_string(),
+                            }],
+                            params: Vec::new(),
+                        },
+                        nodes: vec![
+                            mesh_node,
+                            mat_node,
+                            transform_node,
+                            scene_object_node,
+                            out_node,
+                        ],
+                        wires: group_wires,
+                        tint: Some([tint.r, tint.g, tint.b, 1.0]),
+                    }));
+
+                    nodes.push(group_node);
+                    wires.push(scene_build_wire(
+                        group_id,
+                        "object",
+                        render_id,
+                        &format!("object_{k}"),
+                    ));
+
+                    (
+                        mat_id,
+                        mat_node_id,
+                        mat_node_params,
+                        transform_id,
+                        transform_node_id,
+                        scene_object_id,
+                        scene_object_node_id,
+                        handle,
+                        prev,
+                    )
+                };
+
+                // P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
+                // param of the freshly minted material/transform/scene_object
+                // nodes, into the def's TOP-LEVEL preset_metadata, targeting each
+                // node's bare NodeId — same convention the glTF importer uses.
+                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                    display_name: "Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
                     layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                scene_bounds: None,
-            });
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                mat_id,
-                &mat_node_id,
-                "node.phong_material",
-                &format!("{handle} — Material"),
-                &self.material_metadata,
-                &mat_node_params,
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                transform_id,
-                &transform_node_id,
-                "node.transform_3d",
-                &format!("{handle} — Transform"),
-                &self.transform_metadata,
-                &BTreeMap::new(),
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                scene_object_id,
-                &scene_object_node_id,
-                "node.scene_object",
-                &handle,
-                &self.scene_object_metadata,
-                &BTreeMap::new(),
-            );
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_modifier: None,
+                    scene_bounds: None,
+                });
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    mat_id,
+                    &mat_node_id,
+                    "node.phong_material",
+                    &format!("{handle} — Material"),
+                    &self.material_metadata,
+                    &mat_node_params,
+                );
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    transform_id,
+                    &transform_node_id,
+                    "node.transform_3d",
+                    &format!("{handle} — Transform"),
+                    &self.transform_metadata,
+                    &BTreeMap::new(),
+                );
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    scene_object_id,
+                    &scene_object_node_id,
+                    "node.scene_object",
+                    &handle,
+                    &self.scene_object_metadata,
+                    &BTreeMap::new(),
+                );
 
-            Some((prev, prev_metadata))
-        });
+                Some((prev, prev_metadata))
+            });
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
@@ -318,7 +373,11 @@ pub struct AddSceneLightCommand {
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata`. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl AddSceneLightCommand {
@@ -345,101 +404,132 @@ impl AddSceneLightCommand {
 }
 
 impl Command for AddSceneLightCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.next_index;
         let pos = self.pos;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let prev_metadata = def.preset_metadata.clone();
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let prev_metadata = def.preset_metadata.clone();
 
-            let (light_id, light_node_id, light_node_params, prev) = {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let prev = (nodes.clone(), wires.clone());
+                let (light_id, light_node_id, light_node_params, prev) = {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let prev = (nodes.clone(), wires.clone());
 
-                nodes
-                    .iter_mut()
-                    .find(|n| n.id == render_id)?
-                    .params
-                    .insert(
+                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
                         "lights".to_string(),
                         SerializedParamValue::Float {
                             value: (k + 1) as f32,
                         },
                     );
 
-                let light_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                // D7a defaults, transcribed from `node.light`'s own param defs
-                // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
-                // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
-                // match the primitive's own defaults — set explicitly anyway so
-                // the gesture's contract doesn't silently drift if those defaults
-                // ever change. pos is overridden for ~45° elevation (the
-                // primitive's own default is pos_y=30 with pos_x=pos_z=0, i.e.
-                // straight overhead, which flattens the scene); aim stays at the
-                // primitive's (0,0,0) default.
-                let mut params = BTreeMap::new();
-                params.insert("mode".to_string(), SerializedParamValue::Enum { value: 0 }); // Sun
-                params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 0.0 });
-                params.insert("pos_y".to_string(), SerializedParamValue::Float { value: 7.0 });
-                params.insert("pos_z".to_string(), SerializedParamValue::Float { value: 7.0 });
-                params.insert("color_r".to_string(), SerializedParamValue::Float { value: 1.0 });
-                params.insert("color_g".to_string(), SerializedParamValue::Float { value: 1.0 });
-                params.insert("color_b".to_string(), SerializedParamValue::Float { value: 1.0 });
-                params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
-                params.insert("cast_shadows".to_string(), SerializedParamValue::Float { value: 1.0 });
+                    let light_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                    // D7a defaults, transcribed from `node.light`'s own param defs
+                    // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
+                    // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
+                    // match the primitive's own defaults — set explicitly anyway so
+                    // the gesture's contract doesn't silently drift if those defaults
+                    // ever change. pos is overridden for ~45° elevation (the
+                    // primitive's own default is pos_y=30 with pos_x=pos_z=0, i.e.
+                    // straight overhead, which flattens the scene); aim stays at the
+                    // primitive's (0,0,0) default.
+                    let mut params = BTreeMap::new();
+                    params.insert("mode".to_string(), SerializedParamValue::Enum { value: 0 }); // Sun
+                    params.insert(
+                        "pos_x".to_string(),
+                        SerializedParamValue::Float { value: 0.0 },
+                    );
+                    params.insert(
+                        "pos_y".to_string(),
+                        SerializedParamValue::Float { value: 7.0 },
+                    );
+                    params.insert(
+                        "pos_z".to_string(),
+                        SerializedParamValue::Float { value: 7.0 },
+                    );
+                    params.insert(
+                        "color_r".to_string(),
+                        SerializedParamValue::Float { value: 1.0 },
+                    );
+                    params.insert(
+                        "color_g".to_string(),
+                        SerializedParamValue::Float { value: 1.0 },
+                    );
+                    params.insert(
+                        "color_b".to_string(),
+                        SerializedParamValue::Float { value: 1.0 },
+                    );
+                    params.insert(
+                        "intensity".to_string(),
+                        SerializedParamValue::Float { value: 1.0 },
+                    );
+                    params.insert(
+                        "cast_shadows".to_string(),
+                        SerializedParamValue::Float { value: 1.0 },
+                    );
 
-                let mut light_node = scene_build_node(
-                    light_id,
-                    "node.light",
-                    Some(format!("light_{k}")),
-                    params,
-                );
-                light_node.editor_pos = Some(pos);
-                let light_node_id = light_node.node_id.clone();
-                let light_node_params = light_node.params.clone();
-                nodes.push(light_node);
-                wires.push(scene_build_wire(light_id, "out", render_id, &format!("light_{k}")));
+                    let mut light_node = scene_build_node(
+                        light_id,
+                        "node.light",
+                        Some(format!("light_{k}")),
+                        params,
+                    );
+                    light_node.editor_pos = Some(pos);
+                    let light_node_id = light_node.node_id.clone();
+                    let light_node_params = light_node.params.clone();
+                    nodes.push(light_node);
+                    wires.push(scene_build_wire(
+                        light_id,
+                        "out",
+                        render_id,
+                        &format!("light_{k}"),
+                    ));
 
-                (light_id, light_node_id, light_node_params, prev)
-            };
+                    (light_id, light_node_id, light_node_params, prev)
+                };
 
-            // P1: expose every param of the freshly minted light node, into
-            // the def's TOP-LEVEL preset_metadata, targeting its bare NodeId.
-            // Section mirrors the D7a display convention ("Light N", 1-based)
-            // — independent of the node's own internal `handle` (`light_{k}`,
-            // 0-based, used only for wire/lookup bookkeeping).
-            let section = format!("Light {}", k + 1);
-            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                display_name: "Scene".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "scene".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
+                // P1: expose every param of the freshly minted light node, into
+                // the def's TOP-LEVEL preset_metadata, targeting its bare NodeId.
+                // Section mirrors the D7a display convention ("Light N", 1-based)
+                // — independent of the node's own internal `handle` (`light_{k}`,
+                // 0-based, used only for wire/lookup bookkeeping).
+                let section = format!("Light {}", k + 1);
+                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                    display_name: "Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
                     layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                scene_bounds: None,
-            });
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                light_id,
-                &light_node_id,
-                "node.light",
-                &section,
-                &self.light_metadata,
-                &light_node_params,
-            );
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_modifier: None,
+                    scene_bounds: None,
+                });
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    light_id,
+                    &light_node_id,
+                    "node.light",
+                    &section,
+                    &self.light_metadata,
+                    &light_node_params,
+                );
 
-            Some((prev, prev_metadata))
-        });
+                Some((prev, prev_metadata))
+            });
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
@@ -474,7 +564,12 @@ impl Command for AddSceneLightCommand {
 /// `j > removed_index` down by one (`{prefix}_{j-1}`) — the renumbering half
 /// of a scene-object/light removal, so the surviving slots stay a dense
 /// `0..objects`/`0..lights` run with no gap left by the removed index.
-fn shift_indexed_ports_down(wires: &mut [EffectGraphWire], to_node: u32, prefix: &str, removed_index: u32) {
+fn shift_indexed_ports_down(
+    wires: &mut [EffectGraphWire],
+    to_node: u32,
+    prefix: &str,
+    removed_index: u32,
+) {
     let needle = format!("{prefix}_");
     for w in wires.iter_mut() {
         if w.to_node != to_node {
@@ -518,8 +613,18 @@ pub struct RemoveSceneObjectCommand {
     render_scene_node_id: u32,
     object_index: u32,
     catalog_default: EffectGraphDef,
-    /// The level's `(nodes, wires)` before this edit. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    rejection: Option<&'static str>,
+    /// The level and metadata before this edit, plus the host instance state
+    /// that is pruned when the removed object's exposures disappear.
+    prev: Option<RemovedObjectSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct RemovedObjectSnapshot {
+    nodes: Vec<EffectGraphNode>,
+    wires: Vec<EffectGraphWire>,
+    metadata: Option<PresetMetadata>,
+    instance: InstanceLayerSnapshot,
 }
 
 impl RemoveSceneObjectCommand {
@@ -536,63 +641,177 @@ impl RemoveSceneObjectCommand {
             render_scene_node_id,
             object_index,
             catalog_default,
+            rejection: None,
             prev: None,
         }
     }
 }
 
 impl Command for RemoveSceneObjectCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+            return;
+        };
+        if deletion_breaks_explicit_modifier_target(
+            def,
+            &self.scope_path,
+            self.render_scene_node_id,
+            self.object_index,
+        ) {
+            self.rejection = Some(
+                "Object is explicitly targeted by a scene modifier; retarget or remove that modifier first",
+            );
+            return;
+        }
+        let Some(previous_instance) = resolve_target_instance(&self.target, project)
+            .map(|instance| InstanceLayerSnapshot::capture(instance))
+        else {
+            return;
+        };
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.object_index;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let prev_metadata = def.preset_metadata.clone();
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
 
-            let object_port = format!("object_{k}");
-            let producer_id = wires
-                .iter()
-                .find(|w| w.to_node == render_id && w.to_port == object_port)
-                .map(|w| w.from_node)?;
+                let object_port = format!("object_{k}");
+                let producer_id = wires
+                    .iter()
+                    .find(|w| w.to_node == render_id && w.to_port == object_port)
+                    .map(|w| w.from_node)?;
 
-            let current_objects = match nodes.iter().find(|n| n.id == render_id)?.params.get("objects") {
-                Some(SerializedParamValue::Float { value }) => *value,
-                _ => return None,
-            };
+                let current_objects = match nodes
+                    .iter()
+                    .find(|n| n.id == render_id)?
+                    .params
+                    .get("objects")
+                {
+                    Some(SerializedParamValue::Float { value }) => *value,
+                    Some(SerializedParamValue::Int { value }) => *value as f32,
+                    _ => return None,
+                };
 
-            nodes.retain(|n| n.id != producer_id);
-            wires.retain(|w| !(w.to_node == render_id && w.to_port == object_port));
-            shift_indexed_ports_down(wires, render_id, "object", k);
+                let producer = nodes.iter().find(|node| node.id == producer_id)?;
+                let mut removed_ids = Vec::new();
+                collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
 
-            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                "objects".to_string(),
-                SerializedParamValue::Float {
-                    value: (current_objects - 1.0).max(0.0),
-                },
-            );
+                nodes.retain(|n| n.id != producer_id);
+                wires.retain(|w| !(w.to_node == render_id && w.to_port == object_port));
+                shift_indexed_ports_down(wires, render_id, "object", k);
 
-            Some(prev)
+                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Float {
+                        value: (current_objects - 1.0).max(0.0),
+                    },
+                );
+
+                let removed_params = prune_scene_object_metadata(def, &removed_ids);
+                Some((prev, prev_metadata, removed_params))
+            });
+        let Some((prev, prev_metadata, removed_param_ids)) = result.flatten() else {
+            return;
+        };
+        if let Some(instance) = resolve_target_instance(&self.target, project) {
+            prune_instance_params(instance, &removed_param_ids);
+        }
+        self.prev = Some(RemovedObjectSnapshot {
+            nodes: prev.0,
+            wires: prev.1,
+            metadata: prev_metadata,
+            instance: previous_instance,
         });
-        self.prev = result.flatten();
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some(snapshot) = self.prev.take() else {
             return;
         };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = snapshot.metadata;
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
-                *nodes = pn;
-                *wires = pw;
+                *nodes = snapshot.nodes;
+                *wires = snapshot.wires;
             }
         });
+        if let Some(instance) = resolve_target_instance(&self.target, project) {
+            snapshot.instance.restore(instance);
+        }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
         "Remove Object"
     }
+
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+}
+
+fn deletion_breaks_explicit_modifier_target(
+    def: &EffectGraphDef,
+    scope: &[u32],
+    render_id: u32,
+    object_index: u32,
+) -> bool {
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    if def.scene_modifiers.is_empty() {
+        return false;
+    }
+    let mut nodes = def.nodes.as_slice();
+    let mut wires = def.wires.as_slice();
+    let mut path = Vec::with_capacity(scope.len());
+    for id in scope {
+        let Some(node) = nodes.iter().find(|node| node.id == *id) else {
+            return false;
+        };
+        let Some(group) = node.group.as_deref() else {
+            return false;
+        };
+        path.push(node.node_id.clone());
+        nodes = &group.nodes;
+        wires = &group.wires;
+    }
+    let port = format!("object_{object_index}");
+    let Some(wire) = wires
+        .iter()
+        .find(|wire| wire.to_node == render_id && wire.to_port == port)
+    else {
+        return false;
+    };
+    let Some(producer) = nodes.iter().find(|node| node.id == wire.from_node) else {
+        return false;
+    };
+    let removed = SceneNodeRef {
+        scope: path,
+        node: producer.node_id.clone(),
+    };
+    def.scene_modifiers
+        .iter()
+        .any(|modifier| match &modifier.targets {
+            SceneTargetSelection::AllObjects => false,
+            SceneTargetSelection::Explicit { objects } => objects.iter().any(|object| {
+                object == &removed
+                    || (object.scope.starts_with(&removed.scope)
+                        && object.scope.get(removed.scope.len()) == Some(&removed.node))
+            }),
+        })
 }
 
 /// The remove-light gesture (BUG-193): the inverse of
@@ -631,38 +850,48 @@ impl RemoveSceneLightCommand {
 }
 
 impl Command for RemoveSceneLightCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.light_index;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
 
-            let light_port = format!("light_{k}");
-            let light_id = wires
-                .iter()
-                .find(|w| w.to_node == render_id && w.to_port == light_port)
-                .map(|w| w.from_node)?;
+                let light_port = format!("light_{k}");
+                let light_id = wires
+                    .iter()
+                    .find(|w| w.to_node == render_id && w.to_port == light_port)
+                    .map(|w| w.from_node)?;
 
-            let current_lights = match nodes.iter().find(|n| n.id == render_id)?.params.get("lights") {
-                Some(SerializedParamValue::Float { value }) => *value,
-                _ => return None,
-            };
+                let current_lights = match nodes
+                    .iter()
+                    .find(|n| n.id == render_id)?
+                    .params
+                    .get("lights")
+                {
+                    Some(SerializedParamValue::Float { value }) => *value,
+                    _ => return None,
+                };
 
-            nodes.retain(|n| n.id != light_id);
-            wires.retain(|w| !(w.to_node == render_id && w.to_port == format!("light_{k}")));
-            shift_indexed_ports_down(wires, render_id, "light", k);
+                nodes.retain(|n| n.id != light_id);
+                wires.retain(|w| !(w.to_node == render_id && w.to_port == format!("light_{k}")));
+                shift_indexed_ports_down(wires, render_id, "light", k);
 
-            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                "lights".to_string(),
-                SerializedParamValue::Float {
-                    value: (current_lights - 1.0).max(0.0),
-                },
-            );
+                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                    "lights".to_string(),
+                    SerializedParamValue::Float {
+                        value: (current_lights - 1.0).max(0.0),
+                    },
+                );
 
-            Some(prev)
-        });
+                Some(prev)
+            });
         self.prev = result.flatten();
     }
 
@@ -699,7 +928,11 @@ fn max_node_id_over(nodes: &[EffectGraphNode]) -> u32 {
     nodes
         .iter()
         .map(|n| {
-            let inner = n.group.as_ref().map(|g| max_node_id_over(&g.nodes)).unwrap_or(0);
+            let inner = n
+                .group
+                .as_ref()
+                .map(|g| max_node_id_over(&g.nodes))
+                .unwrap_or(0);
             n.id.max(inner)
         })
         .max()
@@ -768,7 +1001,13 @@ fn deep_clone_with_fresh_ids(
             id_map.push((old_id, cloned.id));
             new_nodes.push(cloned);
         }
-        let remap = |id: u32| id_map.iter().find(|(o, _)| *o == id).map(|(_, n)| *n).unwrap_or(id);
+        let remap = |id: u32| {
+            id_map
+                .iter()
+                .find(|(o, _)| *o == id)
+                .map(|(_, n)| *n)
+                .unwrap_or(id)
+        };
         let new_wires: Vec<EffectGraphWire> = group
             .wires
             .iter()
@@ -790,7 +1029,110 @@ fn deep_clone_with_fresh_ids(
 /// [`RemoveSceneObjectCommand`] uses.
 fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Option<u32> {
     let object_port = format!("object_{k}");
-    wires.iter().find(|w| w.to_node == render_id && w.to_port == object_port).map(|w| w.from_node)
+    wires
+        .iter()
+        .find(|w| w.to_node == render_id && w.to_port == object_port)
+        .map(|w| w.from_node)
+}
+
+fn graph_level<'a>(
+    def: &'a EffectGraphDef,
+    scope: &[u32],
+) -> Option<(&'a [EffectGraphNode], &'a [EffectGraphWire])> {
+    let mut nodes = def.nodes.as_slice();
+    let mut wires = def.wires.as_slice();
+    for group_id in scope {
+        let group = nodes
+            .iter()
+            .find(|node| node.id == *group_id)?
+            .group
+            .as_deref()?;
+        nodes = group.nodes.as_slice();
+        wires = group.wires.as_slice();
+    }
+    Some((nodes, wires))
+}
+
+fn target_string_bindings(
+    project: &Project,
+    target: &GraphTarget,
+    catalog_default: &EffectGraphDef,
+) -> Option<Option<Vec<StringBindingDef>>> {
+    let def = project.graph_for_target(target, Some(catalog_default))?;
+    Some(
+        def.preset_metadata
+            .as_ref()
+            .map(|meta| meta.string_bindings.clone()),
+    )
+}
+
+/// Remove exposure bindings whose stable target lives in a deleted object
+/// subtree. Shared binding ids are retained when another target still uses
+/// them (the importer deliberately fans out one outer control to many nodes).
+/// Return only ids that no longer have any surviving binding so the host
+/// manifest and its modulation collections can be pruned by the caller.
+fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> Vec<String> {
+    let Some(meta) = def.preset_metadata.as_mut() else {
+        return Vec::new();
+    };
+    let removed: std::collections::HashSet<&NodeId> = removed.iter().collect();
+    let removed_numeric: Vec<String> = meta
+        .bindings
+        .iter()
+        .filter_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, .. } if removed.contains(node_id) => {
+                Some(binding.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let removed_strings: Vec<String> = meta
+        .string_bindings
+        .iter()
+        .filter_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, .. } if removed.contains(node_id) => {
+                Some(binding.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    meta.bindings.retain(|binding| {
+        !matches!(&binding.target, BindingTarget::Node { node_id, .. } if removed.contains(node_id))
+    });
+    meta.string_bindings.retain(|binding| {
+        !matches!(&binding.target, BindingTarget::Node { node_id, .. } if removed.contains(node_id))
+    });
+
+    let surviving_numeric: std::collections::BTreeSet<&str> = meta
+        .bindings
+        .iter()
+        .map(|binding| binding.id.as_str())
+        .collect();
+    let surviving_strings: std::collections::BTreeSet<&str> = meta
+        .string_bindings
+        .iter()
+        .map(|binding| binding.id.as_str())
+        .collect();
+    let numeric_to_prune: std::collections::BTreeSet<&str> = removed_numeric
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !surviving_numeric.contains(id))
+        .collect();
+    let strings_to_prune: std::collections::BTreeSet<&str> = removed_strings
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !surviving_strings.contains(id))
+        .collect();
+    meta.params
+        .retain(|param| !numeric_to_prune.contains(param.id.as_str()));
+    meta.string_params
+        .retain(|param| !strings_to_prune.contains(param.id.as_str()));
+
+    numeric_to_prune
+        .into_iter()
+        .chain(strings_to_prune)
+        .map(str::to_string)
+        .collect()
 }
 
 /// The duplicate-object gesture (D11): one undoable composite edit that
@@ -820,9 +1162,13 @@ pub struct DuplicateSceneObjectCommand {
     prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
     /// BUG-212: the WHOLE `preset_metadata.string_bindings` vec before this
     /// edit's append — whole-snapshot undo, same convention as `prev` above.
-    /// `None` when the target has no `preset_metadata` at all (nothing to
-    /// snapshot, nothing to restore).
-    prev_string_bindings: Option<Vec<StringBindingDef>>,
+    prev_string_bindings: Option<Option<Vec<StringBindingDef>>>,
+    /// Cached successful result. Redo restores these exact ids after checking
+    /// that the graph and string bindings still match the pre-edit baseline.
+    after: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    after_string_bindings: Option<Option<Vec<StringBindingDef>>>,
+    rejection: Option<String>,
+    applied: bool,
 }
 
 impl DuplicateSceneObjectCommand {
@@ -841,83 +1187,160 @@ impl DuplicateSceneObjectCommand {
             catalog_default,
             prev: None,
             prev_string_bindings: None,
+            after: None,
+            after_string_bindings: None,
+            rejection: None,
+            applied: false,
         }
     }
 }
 
 impl Command for DuplicateSceneObjectCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
+        self.rejection = None;
+        self.applied = false;
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let src_k = self.source_index;
-        let mut node_id_map: Vec<(NodeId, NodeId)> = Vec::new();
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
 
-            let source_id = object_producer_id(wires, render_id, src_k)?;
-            let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
-
-            let mut next_id = max_node_id_over(nodes) + 1;
-            let mut taken = std::collections::HashSet::new();
-            collect_all_handles(nodes, &mut taken);
-            let mut clone = deep_clone_with_fresh_ids(&source_node, &mut next_id, &mut taken, &mut node_id_map);
-            // D11's exact top-level convention (handle + " 2") overrides
-            // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
-            // assigned to the TOP node — derived from the SOURCE's own
-            // handle, not the post-dedup one (the source's handle is
-            // already in `taken`, so a naive dedup on the clone would have
-            // produced e.g. "Object 1_2", not the D11 "Object 1 2" shape).
-            let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
-            clone.handle = cloned_handle.clone();
-            clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
-
-            // D6: the object's name is its scene_object's own handle — when
-            // the clone is a group, keep the inner scene_object's handle in
-            // sync with the group's (the same invariant Add/importer both
-            // maintain, and RenameSceneObjectCommand sweeps to preserve).
-            if let Some(body) = clone.group.as_deref_mut() {
-                if let Some(inner_object) =
-                    body.nodes.iter_mut().find(|n| n.type_id == "node.scene_object")
-                {
-                    inner_object.handle = cloned_handle;
-                }
-                // D11: offset the clone's transform_3d.pos_x by +0.5.
-                if let Some(transform_node) =
-                    body.nodes.iter_mut().find(|n| n.type_id == "node.transform_3d")
-                {
-                    let cur = match transform_node.params.get("pos_x") {
-                        Some(SerializedParamValue::Float { value }) => *value,
-                        _ => 0.0,
-                    };
-                    transform_node
-                        .params
-                        .insert("pos_x".to_string(), SerializedParamValue::Float { value: cur + 0.5 });
-                }
+        if let (Some(after), Some(after_strings)) =
+            (self.after.as_ref(), self.after_string_bindings.as_ref())
+        {
+            let current_level = project
+                .graph_for_target(&self.target, Some(&self.catalog_default))
+                .and_then(|def| graph_level(def, &scope))
+                .map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec()));
+            let baseline_level = self
+                .prev
+                .as_ref()
+                .map(|(nodes, wires)| (nodes.clone(), wires.clone()));
+            let current_strings =
+                target_string_bindings(project, &self.target, &self.catalog_default);
+            if current_level != baseline_level || current_strings != self.prev_string_bindings {
+                self.rejection = Some(
+                    "Duplicate Object redo rejected: graph or source bindings changed since undo"
+                        .into(),
+                );
+                return;
             }
+            let restored =
+                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    *nodes = after.0.clone();
+                    *wires = after.1.clone();
+                    Some(())
+                })
+                .flatten()
+                .is_some();
+            if !restored {
+                self.rejection = Some("Duplicate Object redo target is unavailable".into());
+                return;
+            }
+            let _ = with_target_graph_def_mut(project, &self.target, |def| {
+                if let Some(meta) = def.preset_metadata.as_mut() {
+                    meta.string_bindings = after_strings.clone().unwrap_or_default();
+                }
+            });
+            self.applied = true;
+            return;
+        }
 
-            let current_objects = match nodes.iter().find(|n| n.id == render_id)?.params.get("objects") {
-                Some(SerializedParamValue::Float { value }) => *value,
-                Some(SerializedParamValue::Int { value }) => *value as f32,
-                _ => 0.0,
-            };
-            let new_k = current_objects as u32;
-            let clone_id = clone.id;
-            nodes.push(clone);
-            wires.push(scene_build_wire(clone_id, "object", render_id, &format!("object_{new_k}")));
+        let baseline_strings = target_string_bindings(project, &self.target, &self.catalog_default);
+        let mut node_id_map: Vec<(NodeId, NodeId)> = Vec::new();
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
 
-            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                "objects".to_string(),
-                SerializedParamValue::Float { value: current_objects + 1.0 },
-            );
+                let source_id = object_producer_id(wires, render_id, src_k)?;
+                let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
 
-            Some(prev)
-        });
+                let mut next_id = max_node_id_over(nodes) + 1;
+                let mut taken = std::collections::HashSet::new();
+                collect_all_handles(nodes, &mut taken);
+                let mut clone = deep_clone_with_fresh_ids(
+                    &source_node,
+                    &mut next_id,
+                    &mut taken,
+                    &mut node_id_map,
+                );
+                // D11's exact top-level convention (handle + " 2") overrides
+                // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
+                // assigned to the TOP node — derived from the SOURCE's own
+                // handle, not the post-dedup one (the source's handle is
+                // already in `taken`, so a naive dedup on the clone would have
+                // produced e.g. "Object 1_2", not the D11 "Object 1 2" shape).
+                let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
+                clone.handle = cloned_handle.clone();
+                clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+
+                // D6: the object's name is its scene_object's own handle — when
+                // the clone is a group, keep the inner scene_object's handle in
+                // sync with the group's (the same invariant Add/importer both
+                // maintain, and RenameSceneObjectCommand sweeps to preserve).
+                if let Some(body) = clone.group.as_deref_mut() {
+                    if let Some(inner_object) = body
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.type_id == "node.scene_object")
+                    {
+                        inner_object.handle = cloned_handle;
+                    }
+                    // D11: offset the clone's transform_3d.pos_x by +0.5.
+                    if let Some(transform_node) = body
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.type_id == "node.transform_3d")
+                    {
+                        let cur = match transform_node.params.get("pos_x") {
+                            Some(SerializedParamValue::Float { value }) => *value,
+                            _ => 0.0,
+                        };
+                        transform_node.params.insert(
+                            "pos_x".to_string(),
+                            SerializedParamValue::Float { value: cur + 0.5 },
+                        );
+                    }
+                }
+
+                let current_objects = match nodes
+                    .iter()
+                    .find(|n| n.id == render_id)?
+                    .params
+                    .get("objects")
+                {
+                    Some(SerializedParamValue::Float { value }) => *value,
+                    Some(SerializedParamValue::Int { value }) => *value as f32,
+                    _ => 0.0,
+                };
+                let new_k = current_objects as u32;
+                let clone_id = clone.id;
+                nodes.push(clone);
+                wires.push(scene_build_wire(
+                    clone_id,
+                    "object",
+                    render_id,
+                    &format!("object_{new_k}"),
+                ));
+
+                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Float {
+                        value: current_objects + 1.0,
+                    },
+                );
+
+                Some(prev)
+            });
         self.prev = result.flatten();
         if self.prev.is_none() {
             // The clone itself was refused (unresolvable source/level) — no
             // subtree was cloned, so there's nothing to sweep bindings for.
-            self.prev_string_bindings = None;
+            self.rejection = Some("Duplicate Object source object is unavailable".into());
             return;
         }
 
@@ -935,42 +1358,54 @@ impl Command for DuplicateSceneObjectCommand {
         // Reached at the same undo-unit boundary `RenameSceneObjectCommand`'s
         // D5 sweep uses (`resolve_target_instance`, outside
         // `with_target_graph_mut`'s narrower graph-only view).
-        if !node_id_map.is_empty()
-            && let Some(inst) = resolve_target_instance(&self.target, project)
-            && let Some(meta) = inst.graph.as_mut().and_then(|g| g.preset_metadata.as_mut())
-        {
-            self.prev_string_bindings = Some(meta.string_bindings.clone());
-            let new_entries: Vec<StringBindingDef> = meta
-                .string_bindings
-                .iter()
-                .filter_map(|b| match &b.target {
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => node_id_map
-                        .iter()
-                        .find(|(old, _)| old == node_id)
-                        .map(|(_, new_id)| StringBindingDef {
-                            id: b.id.clone(),
-                            label: b.label.clone(),
-                            default_value: b.default_value.clone(),
-                            target: manifold_core::effect_graph_def::BindingTarget::Node {
-                                node_id: new_id.clone(),
-                                param: param.clone(),
-                            },
-                        }),
-                    manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
-                })
-                .collect();
-            meta.string_bindings.extend(new_entries);
-        } else {
-            self.prev_string_bindings = None;
+        if !node_id_map.is_empty() {
+            let _ = with_target_graph_def_mut(project, &self.target, |def| {
+                let meta = def.preset_metadata.as_mut()?;
+                let new_entries: Vec<StringBindingDef> = meta
+                    .string_bindings
+                    .iter()
+                    .filter_map(|b| match &b.target {
+                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => {
+                            node_id_map
+                                .iter()
+                                .find(|(old, _)| old == node_id)
+                                .map(|(_, new_id)| StringBindingDef {
+                                    id: b.id.clone(),
+                                    label: b.label.clone(),
+                                    default_value: b.default_value.clone(),
+                                    target: manifold_core::effect_graph_def::BindingTarget::Node {
+                                        node_id: new_id.clone(),
+                                        param: param.clone(),
+                                    },
+                                })
+                        }
+                        manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
+                        manifold_core::effect_graph_def::BindingTarget::SceneModifier {
+                            ..
+                        } => None,
+                    })
+                    .collect();
+                meta.string_bindings.extend(new_entries);
+                Some(())
+            });
         }
+        self.prev_string_bindings = baseline_strings;
+        self.after = with_target_graph_def_mut(project, &self.target, |def| {
+            graph_level(def, &scope).map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec()))
+        })
+        .flatten();
+        self.after_string_bindings =
+            target_string_bindings(project, &self.target, &self.catalog_default);
+        self.applied = self.after.is_some();
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(prev_sb) = self.prev_string_bindings.clone()
-            && let Some(inst) = resolve_target_instance(&self.target, project)
-            && let Some(meta) = inst.graph.as_mut().and_then(|g| g.preset_metadata.as_mut())
-        {
-            meta.string_bindings = prev_sb;
+        if let Some(prev_sb) = self.prev_string_bindings.clone() {
+            let _ = with_target_graph_def_mut(project, &self.target, |def| {
+                if let Some(meta) = def.preset_metadata.as_mut() {
+                    meta.string_bindings = prev_sb.unwrap_or_default();
+                }
+            });
         }
 
         let Some((pn, pw)) = self.prev.clone() else {
@@ -983,10 +1418,19 @@ impl Command for DuplicateSceneObjectCommand {
                 *wires = pw;
             }
         });
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Duplicate Object"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -1019,7 +1463,11 @@ pub struct AddSceneEnvironmentCommand {
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata`. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl AddSceneEnvironmentCommand {
@@ -1044,80 +1492,92 @@ impl AddSceneEnvironmentCommand {
 }
 
 impl Command for AddSceneEnvironmentCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let pos = self.pos;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let prev_metadata = def.preset_metadata.clone();
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let prev_metadata = def.preset_metadata.clone();
 
-            let (env_id, env_node_id, env_node_params, prev) = {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let prev = (nodes.clone(), wires.clone());
+                let (env_id, env_node_id, env_node_params, prev) = {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let prev = (nodes.clone(), wires.clone());
 
-                let env_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                // Primitive defaults (`node.bake_environment`) match the importer's
-                // OWN softbox default (F-P4) so a freshly-added environment reads
-                // as a sane, lit studio rather than a black void — explicit here
-                // anyway so the gesture's contract doesn't silently drift if the
-                // primitive's defaults ever change.
-                let mut params = BTreeMap::new();
-                params.insert("mode".to_string(), SerializedParamValue::Enum { value: 1 }); // Softbox
-                params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
-                params.insert("fill".to_string(), SerializedParamValue::Float { value: 0.0 });
+                    let env_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                    // Primitive defaults (`node.bake_environment`) match the importer's
+                    // OWN softbox default (F-P4) so a freshly-added environment reads
+                    // as a sane, lit studio rather than a black void — explicit here
+                    // anyway so the gesture's contract doesn't silently drift if the
+                    // primitive's defaults ever change.
+                    let mut params = BTreeMap::new();
+                    params.insert("mode".to_string(), SerializedParamValue::Enum { value: 1 }); // Softbox
+                    params.insert(
+                        "intensity".to_string(),
+                        SerializedParamValue::Float { value: 1.0 },
+                    );
+                    params.insert(
+                        "fill".to_string(),
+                        SerializedParamValue::Float { value: 0.0 },
+                    );
 
-                let mut env_node = scene_build_node(
-                    env_id,
-                    "node.bake_environment",
-                    Some("environment".to_string()),
-                    params,
-                );
-                env_node.editor_pos = Some(pos);
-                let env_node_id = env_node.node_id.clone();
-                let env_node_params = env_node.params.clone();
-                nodes.push(env_node);
-                wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
+                    let mut env_node = scene_build_node(
+                        env_id,
+                        "node.bake_environment",
+                        Some("environment".to_string()),
+                        params,
+                    );
+                    env_node.editor_pos = Some(pos);
+                    let env_node_id = env_node.node_id.clone();
+                    let env_node_params = env_node.params.clone();
+                    nodes.push(env_node);
+                    wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
 
-                (env_id, env_node_id, env_node_params, prev)
-            };
+                    (env_id, env_node_id, env_node_params, prev)
+                };
 
-            // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
-            // param of the freshly minted environment node — same P1 stamp
-            // AddSceneLightCommand performs for its own node, into the def's
-            // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
-            // this the panel's `world_sections` lookup (`state_sync.rs`'s
-            // `sections_for_doc_ids`) comes back empty and
-            // `build_filtered_properties` renders nothing for the row.
-            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                display_name: "Scene".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "scene".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
+                // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
+                // param of the freshly minted environment node — same P1 stamp
+                // AddSceneLightCommand performs for its own node, into the def's
+                // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
+                // this the panel's `world_sections` lookup (`state_sync.rs`'s
+                // `sections_for_doc_ids`) comes back empty and
+                // `build_filtered_properties` renders nothing for the row.
+                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                    display_name: "Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
                     layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                scene_bounds: None,
-            });
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                env_id,
-                &env_node_id,
-                "node.bake_environment",
-                "Environment",
-                &self.env_metadata,
-                &env_node_params,
-            );
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_modifier: None,
+                    scene_bounds: None,
+                });
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    env_id,
+                    &env_node_id,
+                    "node.bake_environment",
+                    "Environment",
+                    &self.env_metadata,
+                    &env_node_params,
+                );
 
-            Some((prev, prev_metadata))
-        });
+                Some((prev, prev_metadata))
+            });
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
@@ -1162,7 +1622,11 @@ pub struct AddSceneFogCommand {
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata`. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl AddSceneFogCommand {
@@ -1187,91 +1651,106 @@ impl AddSceneFogCommand {
 }
 
 impl Command for AddSceneFogCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let pos = self.pos;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let prev_metadata = def.preset_metadata.clone();
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let prev_metadata = def.preset_metadata.clone();
 
-            let (fog_id, fog_node_id, prev) = {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let prev = (nodes.clone(), wires.clone());
+                let (fog_id, fog_node_id, prev) = {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let prev = (nodes.clone(), wires.clone());
 
-                let fog_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                // A freshly-added fog node starts at density 0 (the primitive's own
-                // default — "subtle" is authored by hand in the starter preset, not
-                // stamped here) so adding it is never a visible surprise; the
-                // performer dials density up from the panel immediately after.
-                let params = BTreeMap::new();
+                    let fog_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                    // A freshly-added fog node starts at density 0 (the primitive's own
+                    // default — "subtle" is authored by hand in the starter preset, not
+                    // stamped here) so adding it is never a visible surprise; the
+                    // performer dials density up from the panel immediately after.
+                    let params = BTreeMap::new();
 
-                let mut fog_node =
-                    scene_build_node(fog_id, "node.atmosphere", Some("fog".to_string()), params);
-                fog_node.editor_pos = Some(pos);
-                let fog_node_id = fog_node.node_id.clone();
-                nodes.push(fog_node);
-                wires.push(scene_build_wire(fog_id, "atmosphere", render_id, "atmosphere"));
+                    let mut fog_node = scene_build_node(
+                        fog_id,
+                        "node.atmosphere",
+                        Some("fog".to_string()),
+                        params,
+                    );
+                    fog_node.editor_pos = Some(pos);
+                    let fog_node_id = fog_node.node_id.clone();
+                    nodes.push(fog_node);
+                    wires.push(scene_build_wire(
+                        fog_id,
+                        "atmosphere",
+                        render_id,
+                        "atmosphere",
+                    ));
 
-                (fog_id, fog_node_id, prev)
-            };
+                    (fog_id, fog_node_id, prev)
+                };
 
-            // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
-            // param of the freshly minted fog node — same P1 stamp
-            // AddSceneLightCommand performs for its own node, into the def's
-            // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
-            // this the panel's `world_sections` lookup (`state_sync.rs`'s
-            // `sections_for_doc_ids`) comes back empty and
-            // `build_filtered_properties` renders nothing for the row —
-            // the R1 bug: freshly-added fog was structurally invisible.
-            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                display_name: "Scene".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "scene".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
+                // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
+                // param of the freshly minted fog node — same P1 stamp
+                // AddSceneLightCommand performs for its own node, into the def's
+                // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
+                // this the panel's `world_sections` lookup (`state_sync.rs`'s
+                // `sections_for_doc_ids`) comes back empty and
+                // `build_filtered_properties` renders nothing for the row —
+                // the R1 bug: freshly-added fog was structurally invisible.
+                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                    display_name: "Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
                     layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                scene_bounds: None,
-            });
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                fog_id,
-                &fog_node_id,
-                "node.atmosphere",
-                "Atmosphere",
-                &self.fog_metadata,
-                &BTreeMap::new(),
-            );
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_modifier: None,
+                    scene_bounds: None,
+                });
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    fog_id,
+                    &fog_node_id,
+                    "node.atmosphere",
+                    "Atmosphere",
+                    &self.fog_metadata,
+                    &BTreeMap::new(),
+                );
 
-            // BUG-p6x7: fog density is per-world-unit — override the generic
-            // 0..1 band to (0, 2/radius) when scene_bounds are present so the
-            // slider covers the useful range for this scene's scale.
-            if let Some((new_min, new_max)) = fog_density_range(meta.scene_bounds)
-                && let Some(density_spec) = meta.params.iter_mut().find(|p| {
-                    meta.bindings.iter().any(|b| {
-                        b.id == p.id
-                            && matches!(
-                                &b.target,
-                                BindingTarget::Node { node_id, param }
-                                    if *node_id == fog_node_id && param == "fog_density"
-                            )
+                // BUG-p6x7: fog density is per-world-unit — override the generic
+                // 0..1 band to (0, 2/radius) when scene_bounds are present so the
+                // slider covers the useful range for this scene's scale.
+                if let Some((new_min, new_max)) = fog_density_range(meta.scene_bounds)
+                    && let Some(density_spec) = meta.params.iter_mut().find(|p| {
+                        meta.bindings.iter().any(|b| {
+                            b.id == p.id
+                                && matches!(
+                                    &b.target,
+                                    BindingTarget::Node { node_id, param }
+                                        if *node_id == fog_node_id && param == "fog_density"
+                                )
+                        })
                     })
-                })
-            {
-                density_spec.min = new_min.min(density_spec.default_value);
-                density_spec.max = new_max.max(density_spec.default_value);
-            }
+                {
+                    density_spec.min = new_min.min(density_spec.default_value);
+                    density_spec.max = new_max.max(density_spec.default_value);
+                }
 
-            Some((prev, prev_metadata))
-        });
+                Some((prev, prev_metadata))
+            });
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
@@ -1301,9 +1780,7 @@ impl Command for AddSceneFogCommand {
 /// BUG-p6x7: fog `density` is per-world-unit (`1 - exp(-density·distance)`),
 /// so the shared scene-scaled range table handles the radius derivation.
 /// Delegates to `manifold_core::scene_exposure::scene_scaled_range`.
-pub(crate) fn fog_density_range(
-    scene_bounds: Option<([f32; 3], [f32; 3])>,
-) -> Option<(f32, f32)> {
+pub(crate) fn fog_density_range(scene_bounds: Option<([f32; 3], [f32; 3])>) -> Option<(f32, f32)> {
     let bounds = scene_bounds?;
     let radius = manifold_core::scene_exposure::scene_radius_from_bounds(bounds);
     manifold_core::scene_exposure::scene_scaled_range("node.atmosphere", "fog_density", radius)
@@ -1375,25 +1852,34 @@ impl AddObjectTransformCommand {
 }
 
 impl Command for AddObjectTransformCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let object_id = self.scene_object_node_id;
         let pos = self.pos;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
 
-            let xf_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            let params = BTreeMap::new();
-            let mut xf_node =
-                scene_build_node(xf_id, "node.transform_3d", Some("transform".to_string()), params);
-            xf_node.editor_pos = Some(pos);
-            nodes.push(xf_node);
-            wires.retain(|w| !(w.to_node == object_id && w.to_port == "transform"));
-            wires.push(scene_build_wire(xf_id, "transform", object_id, "transform"));
+                let xf_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                let params = BTreeMap::new();
+                let mut xf_node = scene_build_node(
+                    xf_id,
+                    "node.transform_3d",
+                    Some("transform".to_string()),
+                    params,
+                );
+                xf_node.editor_pos = Some(pos);
+                nodes.push(xf_node);
+                wires.retain(|w| !(w.to_node == object_id && w.to_port == "transform"));
+                wires.push(scene_build_wire(xf_id, "transform", object_id, "transform"));
 
-            Some((prev, xf_id))
-        });
+                Some((prev, xf_id))
+            });
         match result.flatten() {
             Some((prev, xf_id)) => {
                 self.prev = Some(prev);
@@ -1456,7 +1942,11 @@ pub struct ImportModelIntoSceneCommand {
     /// Pre-edit `(nodes, wires)` at `scope_path`, plus the pre-edit
     /// `preset_metadata` (whole-def field, outside the scoped level) — set
     /// on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
 }
 
 impl ImportModelIntoSceneCommand {
@@ -1490,6 +1980,10 @@ impl ImportModelIntoSceneCommand {
 }
 
 impl Command for ImportModelIntoSceneCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
@@ -1499,57 +1993,63 @@ impl Command for ImportModelIntoSceneCommand {
         let new_card_params = self.new_card_params.clone();
         let new_card_bindings = self.new_card_bindings.clone();
         let new_string_bindings = self.new_string_bindings.clone();
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let prev_metadata = def.preset_metadata.clone();
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let prev_metadata = def.preset_metadata.clone();
 
-            // Card-spec additions land on the WHOLE def's preset_metadata
-            // (not the scoped level) — done before descending into scope so
-            // the two mutable borrows of `def` (metadata vs. nodes/wires)
-            // never overlap.
-            if !new_card_params.is_empty()
-                || !new_card_bindings.is_empty()
-                || !new_string_bindings.is_empty()
-            {
-                let meta = def.preset_metadata.get_or_insert_with(|| {
-                    // Safety net only: every real generator's catalog default
-                    // carries a `preset_metadata` (D9) — this arm exists so a
-                    // hand-built def with none doesn't silently drop the new
-                    // card entries rather than panic.
-                    PresetMetadata {
-                        id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
-                        display_name: "Scene".to_string(),
-                        category: "Geometry".to_string(),
-                        osc_prefix: "scene".to_string(),
-                        legacy_discriminant: None,
-                        available: true,
-                        is_line_based: false,
+                // Card-spec additions land on the WHOLE def's preset_metadata
+                // (not the scoped level) — done before descending into scope so
+                // the two mutable borrows of `def` (metadata vs. nodes/wires)
+                // never overlap.
+                if !new_card_params.is_empty()
+                    || !new_card_bindings.is_empty()
+                    || !new_string_bindings.is_empty()
+                {
+                    let meta = def.preset_metadata.get_or_insert_with(|| {
+                        // Safety net only: every real generator's catalog default
+                        // carries a `preset_metadata` (D9) — this arm exists so a
+                        // hand-built def with none doesn't silently drop the new
+                        // card entries rather than panic.
+                        PresetMetadata {
+                            id: manifold_core::PresetTypeId::from_string(
+                                "UnnamedScene".to_string(),
+                            ),
+                            display_name: "Scene".to_string(),
+                            category: "Geometry".to_string(),
+                            osc_prefix: "scene".to_string(),
+                            legacy_discriminant: None,
+                            available: true,
+                            is_line_based: false,
                             layer_types: None,
-                        params: Vec::new(),
-                        bindings: Vec::new(),
-                                param_aliases: Vec::new(),
-                        value_aliases: Vec::new(),
-                        string_params: Vec::new(),
-                        string_bindings: Vec::new(),
-                        scene_bounds: None,
-                    }
-                });
-                meta.params.extend(new_card_params);
-                meta.bindings.extend(new_card_bindings);
-                meta.string_bindings.extend(new_string_bindings);
-            }
+                            params: Vec::new(),
+                            bindings: Vec::new(),
+                            param_aliases: Vec::new(),
+                            value_aliases: Vec::new(),
+                            string_params: Vec::new(),
+                            string_bindings: Vec::new(),
+                            scene_modifier: None,
+                            scene_bounds: None,
+                        }
+                    });
+                    meta.params.extend(new_card_params);
+                    meta.bindings.extend(new_card_bindings);
+                    meta.string_bindings.extend(new_string_bindings);
+                }
 
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev_nodes_wires = (nodes.clone(), wires.clone());
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev_nodes_wires = (nodes.clone(), wires.clone());
 
-            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                "objects".to_string(),
-                SerializedParamValue::Float { value: objects as f32 },
-            );
-            nodes.extend(new_nodes);
-            wires.extend(new_wires);
+                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Float {
+                        value: objects as f32,
+                    },
+                );
+                nodes.extend(new_nodes);
+                wires.extend(new_wires);
 
-            Some((prev_nodes_wires, prev_metadata))
-        });
+                Some((prev_nodes_wires, prev_metadata))
+            });
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
@@ -1573,7 +2073,6 @@ impl Command for ImportModelIntoSceneCommand {
         "Import Model into Scene"
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Rename Scene Object / Rename Light (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6)
@@ -1624,7 +2123,15 @@ impl RenameSceneObjectCommand {
         new_handle: String,
         catalog_default: EffectGraphDef,
     ) -> Self {
-        Self { target, scope_path, object_node_id, new_handle, catalog_default, prev: None, swept: Vec::new() }
+        Self {
+            target,
+            scope_path,
+            object_node_id,
+            new_handle,
+            catalog_default,
+            prev: None,
+            swept: Vec::new(),
+        }
     }
 }
 
@@ -1635,45 +2142,54 @@ impl Command for RenameSceneObjectCommand {
         let new_handle = self.new_handle.clone();
         let first_time = self.prev.is_none();
 
-        let captured = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            if new_handle.is_empty() || new_handle.contains('/') {
-                return None;
-            }
-            // Reject a collision with any sibling's handle at this level
-            // (matching RenameGroupCommand's own guard).
-            if nodes
-                .iter()
-                .any(|n| n.id != producer_id && n.handle.as_deref() == Some(new_handle.as_str()))
-            {
-                return None;
-            }
-            let producer = nodes.iter_mut().find(|n| n.id == producer_id)?;
+        let captured =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                if new_handle.is_empty() || new_handle.contains('/') {
+                    return None;
+                }
+                // Reject a collision with any sibling's handle at this level
+                // (matching RenameGroupCommand's own guard).
+                if nodes.iter().any(|n| {
+                    n.id != producer_id && n.handle.as_deref() == Some(new_handle.as_str())
+                }) {
+                    return None;
+                }
+                let producer = nodes.iter_mut().find(|n| n.id == producer_id)?;
 
-            if producer.type_id == GROUP_TYPE_ID {
-                // Grouped shape (Add / importer / merge): rename the group
-                // AND the inner scene_object's own handle stays in sync
-                // (D6's single-writer-of-both posture).
-                let prev_group_handle = producer.handle.clone();
-                producer.handle = Some(new_handle.clone());
-                let body = producer.group.as_deref_mut()?;
-                let scene_object = body.nodes.iter_mut().find(|n| n.type_id == "node.scene_object")?;
-                let scene_object_id = scene_object.id;
-                let prev_object_handle = scene_object.handle.clone();
-                scene_object.handle = Some(new_handle.clone());
+                if producer.type_id == GROUP_TYPE_ID {
+                    // Grouped shape (Add / importer / merge): rename the group
+                    // AND the inner scene_object's own handle stays in sync
+                    // (D6's single-writer-of-both posture).
+                    let prev_group_handle = producer.handle.clone();
+                    producer.handle = Some(new_handle.clone());
+                    let body = producer.group.as_deref_mut()?;
+                    let scene_object = body
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.type_id == "node.scene_object")?;
+                    let scene_object_id = scene_object.id;
+                    let prev_object_handle = scene_object.handle.clone();
+                    scene_object.handle = Some(new_handle.clone());
 
-                let mut inside = Vec::new();
-                collect_node_ids(&body.nodes, &mut inside);
-                Some((scene_object_id, prev_object_handle, Some((producer_id, prev_group_handle)), inside))
-            } else {
-                // Ungrouped bare scene_object: just its own handle, no group
-                // to keep in sync, no card-section sweep possible.
-                let prev_object_handle = producer.handle.clone();
-                producer.handle = Some(new_handle.clone());
-                Some((producer_id, prev_object_handle, None, Vec::new()))
-            }
-        });
-        let Some((scene_object_id, prev_object_handle, prev_group, inside)) = captured.flatten() else {
+                    let mut inside = Vec::new();
+                    collect_node_ids(&body.nodes, &mut inside);
+                    Some((
+                        scene_object_id,
+                        prev_object_handle,
+                        Some((producer_id, prev_group_handle)),
+                        inside,
+                    ))
+                } else {
+                    // Ungrouped bare scene_object: just its own handle, no group
+                    // to keep in sync, no card-section sweep possible.
+                    let prev_object_handle = producer.handle.clone();
+                    producer.handle = Some(new_handle.clone());
+                    Some((producer_id, prev_object_handle, None, Vec::new()))
+                }
+            });
+        let Some((scene_object_id, prev_object_handle, prev_group, inside)) = captured.flatten()
+        else {
             return;
         };
         if first_time {
@@ -1690,6 +2206,15 @@ impl Command for RenameSceneObjectCommand {
             return;
         };
         let Some(inst) = resolve_target_instance(&self.target, project) else {
+            if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+                self.swept = super::param_sections::rename_modifier_sections(
+                    project,
+                    &self.target,
+                    &inside,
+                    &old_name,
+                    &self.new_handle,
+                );
+            }
             return;
         };
         let target_ids: Vec<String> = inst
@@ -1700,10 +2225,13 @@ impl Command for RenameSceneObjectCommand {
                 m.bindings
                     .iter()
                     .filter(|b| match &b.target {
-                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
-                            inside.contains(node_id)
-                        }
+                        manifold_core::effect_graph_def::BindingTarget::Node {
+                            node_id, ..
+                        } => inside.contains(node_id),
                         manifold_core::effect_graph_def::BindingTarget::Composite { .. } => false,
+                        manifold_core::effect_graph_def::BindingTarget::SceneModifier {
+                            ..
+                        } => false,
                     })
                     .map(|b| b.id.clone())
                     .collect()
@@ -1731,12 +2259,19 @@ impl Command for RenameSceneObjectCommand {
             }
         }
 
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            for (id, section) in self.swept.drain(..) {
+                super::param_sections::set_modifier_section(project, &self.target, &id, section);
+            }
+        }
+
         let Some((scene_object_id, prev_object_handle, prev_group)) = self.prev.clone() else {
             return;
         };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) else {
+            let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+            else {
                 return;
             };
             if let Some((group_id, prev_group_handle)) = prev_group {
@@ -1782,7 +2317,14 @@ impl SetNodeHandleCommand {
         new_handle: String,
         catalog_default: EffectGraphDef,
     ) -> Self {
-        Self { target, scope_path, node_doc_id, new_handle, catalog_default, prev: None }
+        Self {
+            target,
+            scope_path,
+            node_doc_id,
+            new_handle,
+            catalog_default,
+            prev: None,
+        }
     }
 }
 
@@ -1792,19 +2334,23 @@ impl Command for SetNodeHandleCommand {
         let id = self.node_doc_id;
         let new_handle = self.new_handle.clone();
         let first_time = self.prev.is_none();
-        let captured = with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
-            let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            if new_handle.is_empty() || new_handle.contains('/') {
-                return None;
-            }
-            if nodes.iter().any(|n| n.id != id && n.handle.as_deref() == Some(new_handle.as_str())) {
-                return None;
-            }
-            let node = nodes.iter_mut().find(|n| n.id == id)?;
-            let prev = node.handle.clone();
-            node.handle = Some(new_handle.clone());
-            Some(prev)
-        });
+        let captured =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                if new_handle.is_empty() || new_handle.contains('/') {
+                    return None;
+                }
+                if nodes
+                    .iter()
+                    .any(|n| n.id != id && n.handle.as_deref() == Some(new_handle.as_str()))
+                {
+                    return None;
+                }
+                let node = nodes.iter_mut().find(|n| n.id == id)?;
+                let prev = node.handle.clone();
+                node.handle = Some(new_handle.clone());
+                Some(prev)
+            });
         if first_time {
             self.prev = captured.flatten();
         }
@@ -1830,1508 +2376,5 @@ impl Command for SetNodeHandleCommand {
     }
 }
 
-
 #[cfg(test)]
-mod tests {
-    use super::super::*;
-    use super::super::test_support::*;
-    use manifold_core::LayerId;
-    use manifold_core::PresetTypeId;
-    use manifold_core::layer::Layer;
-    use manifold_core::types::LayerType;
-    use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
-    use manifold_core::effect_graph_def::{BindingDef, GROUP_TYPE_ID, ParamSpecDef, PresetMetadata, StringBindingDef};
-    use crate::command::Command;
-
-    /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
-    /// the given counts — the fixture `AddSceneObjectCommand`/
-    /// `AddSceneLightCommand` operate against.
-    fn render_scene_graph(objects: u32, lights: u32) -> EffectGraphDef {
-        let mut render = EffectGraphNode {
-            id: 0,
-            node_id: manifold_core::NodeId::new("render"),
-            type_id: "node.render_scene".to_string(),
-            handle: Some("render".to_string()),
-            params: BTreeMap::new(),
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        };
-        render
-            .params
-            .insert("objects".to_string(), SerializedParamValue::Float { value: objects as f32 });
-        render
-            .params
-            .insert("lights".to_string(), SerializedParamValue::Float { value: lights as f32 });
-        EffectGraphDef {
-            version: EFFECT_GRAPH_VERSION,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            nodes: vec![render],
-            wires: vec![],
-        }
-    }
-
-    /// A generator-hosted twin of [`project_with_graph`] (BUG-295 regression
-    /// coverage): production scene commands always target
-    /// `GraphTarget::Generator` — `is_generator()` gates
-    /// `gather_known_params`'s full-`meta.params`-authority branch, which is
-    /// what actually lets a freshly stamped exposure (whose binding carries
-    /// `user_added: false`, `scene_exposure.rs`) surface into the live
-    /// manifest. An `Effect`-target fixture like `project_with_graph` would
-    /// silently take the OTHER `gather_known_params` branch (registry
-    /// `param_defs` + `user_added`-flagged bindings only) and never see the
-    /// stamped param at all — not a proof of the live-refresh fix.
-    fn project_with_generator_graph(def: EffectGraphDef) -> (Project, LayerId) {
-        let mut project = Project::default();
-        let mut layer = Layer::new("Test Layer".to_string(), LayerType::Generator, 0);
-        let lid = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(def);
-        project.timeline.layers.push(layer);
-        (project, lid)
-    }
-
-    #[test]
-    fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = AddSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            2, // next_index — matches the fixture's current `objects` (2)
-            (100.0, 200.0),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-        assert_eq!(
-            render.params.get("objects"),
-            Some(&SerializedParamValue::Float { value: 3.0 }),
-            "objects bumped by one"
-        );
-
-        let group = def
-            .nodes
-            .iter()
-            .find(|n| n.handle.as_deref() == Some("Object 3"))
-            .expect("named group created");
-        assert_eq!(group.editor_pos, Some((100.0, 200.0)));
-        let body = group.group.as_deref().expect("is a group node");
-        assert_eq!(
-            body.nodes.len(),
-            5,
-            "cube + material + transform + scene_object bind + group_output boundary"
-        );
-        assert!(body.nodes.iter().any(|n| n.type_id == "node.cube_mesh"));
-        assert!(body.nodes.iter().any(|n| n.type_id == "node.phong_material"));
-        assert!(body.nodes.iter().any(|n| n.type_id == "node.transform_3d"));
-        assert!(body.nodes.iter().any(|n| n.type_id == "node.scene_object"));
-        assert_eq!(
-            body.wires.len(),
-            4,
-            "mesh/material/transform wired to scene_object, scene_object wired to the group_output"
-        );
-        assert_eq!(body.interface.outputs.len(), 1, "a single Object output");
-        assert_eq!(body.interface.outputs[0].name, "object");
-        assert_eq!(body.interface.outputs[0].port_type, "Object");
-
-        // SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D3/D4: the group's single
-        // `object` output wired to render_scene's new object_2 slot.
-        assert!(def.wires.iter().any(|w| w.from_node == group.id
-            && w.from_port == "object"
-            && w.to_node == 0
-            && w.to_port == "object_2"));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
-    }
-
-    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneObjectCommand`
-    /// stamps the material/transform/scene_object metadata the caller hands
-    /// it into the def's TOP-LEVEL `preset_metadata`, targeting each new
-    /// node's bare `NodeId`, with the section named per the convention
-    /// (`"{handle} — Material"` / `"{handle} — Transform"` / `handle`).
-    /// Undo restores `preset_metadata` verbatim; execute→undo→redo is stable.
-    #[test]
-    fn add_scene_object_command_stamps_exposures_and_undo_redo_are_stable() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-        let mut cmd = AddSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            vec![scene_param_meta("ambient", "Ambient")],
-            vec![scene_param_meta("pos_x", "X")],
-            vec![scene_param_meta("visible", "Visible")],
-            mirror_catalog_default(),
-        );
-
-        // Asserted after both the first execute and the redo: `execute`
-        // mints a fresh random NodeId every call (`scene_build_node` ->
-        // `manifold_core::short_id()`, pre-existing behavior, not a P1
-        // change), so graph IDENTITY isn't byte-stable across redo — only
-        // the STRUCTURE the stamping produces is. "Stable" here means the
-        // exposures always target whichever node currently sits in that
-        // role, not a frozen id.
-        let assert_stamped = |project: &Project| {
-            let def = graph_of(project, &fx);
-            let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1")).unwrap();
-            let body = group.group.as_deref().unwrap();
-            let mat_node = body.nodes.iter().find(|n| n.type_id == "node.phong_material").unwrap();
-            let transform_node = body.nodes.iter().find(|n| n.type_id == "node.transform_3d").unwrap();
-            let scene_object_node = body.nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
-
-            let meta = def.preset_metadata.as_ref().expect("P1 stamped into top-level preset_metadata");
-            assert_eq!(meta.params.len(), 3, "one ParamSpecDef per exposed param");
-            assert_eq!(meta.bindings.len(), 3);
-
-            let has_binding = |node_id: &NodeId, param: &str, section: &str| {
-                meta.bindings.iter().any(|b| {
-                    matches!(&b.target, BindingTarget::Node { node_id: nid, param: p } if nid == node_id && p == param)
-                }) && meta.params.iter().any(|p| p.section.as_deref() == Some(section))
-            };
-            assert!(
-                has_binding(&mat_node.node_id, "ambient", "Object 1 — Material"),
-                "material exposure targets the grouped node's bare NodeId, section 'Object 1 — Material'"
-            );
-            assert!(
-                has_binding(&transform_node.node_id, "pos_x", "Object 1 — Transform"),
-                "transform exposure targets the grouped node's bare NodeId, section 'Object 1 — Transform'"
-            );
-            assert!(
-                has_binding(&scene_object_node.node_id, "visible", "Object 1"),
-                "scene_object exposure targets the grouped node's bare NodeId, section 'Object 1'"
-            );
-        };
-
-        cmd.execute(&mut project);
-        assert_stamped(&project);
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
-
-        cmd.execute(&mut project); // redo
-        assert_stamped(&project);
-    }
-
-    #[test]
-    fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = AddSceneLightCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            1, // next_index — matches the fixture's current `lights` (1)
-            (-260.0, 50.0),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-        assert_eq!(
-            render.params.get("lights"),
-            Some(&SerializedParamValue::Float { value: 2.0 }),
-            "lights bumped by one"
-        );
-
-        let light = def
-            .nodes
-            .iter()
-            .find(|n| n.handle.as_deref() == Some("light_1"))
-            .expect("bare light node created");
-        assert!(light.group.is_none(), "D7a: no group around the light");
-        assert_eq!(light.type_id, "node.light");
-        assert_eq!(light.editor_pos, Some((-260.0, 50.0)));
-
-        // D7a defaults, transcribed.
-        assert_eq!(light.params.get("mode"), Some(&SerializedParamValue::Enum { value: 0 }));
-        assert_eq!(light.params.get("color_r"), Some(&SerializedParamValue::Float { value: 1.0 }));
-        assert_eq!(light.params.get("color_g"), Some(&SerializedParamValue::Float { value: 1.0 }));
-        assert_eq!(light.params.get("color_b"), Some(&SerializedParamValue::Float { value: 1.0 }));
-        assert_eq!(light.params.get("intensity"), Some(&SerializedParamValue::Float { value: 1.0 }));
-        assert_eq!(light.params.get("cast_shadows"), Some(&SerializedParamValue::Float { value: 1.0 }));
-
-        // Auto-wired into the new light_1 slot — "add means added," never a
-        // bumped count with a dead port.
-        assert!(def
-            .wires
-            .iter()
-            .any(|w| w.from_node == light.id && w.from_port == "out" && w.to_node == 0 && w.to_port == "light_1"));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
-    }
-
-    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneLightCommand`
-    /// stamps the caller-supplied light metadata into the def's TOP-LEVEL
-    /// `preset_metadata`, targeting the new light's bare `NodeId`, section
-    /// "Light N" (1-based display convention, independent of the node's own
-    /// internal `light_{k}` handle). Undo restores `preset_metadata`
-    /// verbatim; execute→undo→redo is structurally stable (see the
-    /// AddSceneObjectCommand sibling test for why redo isn't byte-identical:
-    /// `execute` mints a fresh random NodeId every call).
-    #[test]
-    fn add_scene_light_command_stamps_exposures_and_undo_redo_are_stable() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-        let mut cmd = AddSceneLightCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (-260.0, 50.0),
-            vec![scene_param_meta("intensity", "Intensity")],
-            mirror_catalog_default(),
-        );
-
-        let assert_stamped = |project: &Project| {
-            let def = graph_of(project, &fx);
-            let light = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
-
-            let meta = def.preset_metadata.as_ref().expect("P1 stamped into top-level preset_metadata");
-            assert_eq!(meta.params.len(), 1);
-            assert_eq!(meta.params[0].section.as_deref(), Some("Light 1"));
-            assert!(
-                meta.bindings.iter().any(|b| matches!(
-                    &b.target,
-                    BindingTarget::Node { node_id, param } if *node_id == light.node_id && param == "intensity"
-                )),
-                "light exposure targets the light's bare NodeId"
-            );
-        };
-
-        cmd.execute(&mut project);
-        assert_stamped(&project);
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
-
-        cmd.execute(&mut project); // redo
-        assert_stamped(&project);
-    }
-
-    /// A fixture with 3 objects wired as `AddSceneObjectCommand` builds them
-    /// (group + mesh_k/material_k/transform_k wires), so removal tests can
-    /// exercise the middle-object renumbering case (BUG-193's core claim).
-    /// Builds `count` bare `node.scene_object` producers wired directly to
-    /// `render_scene`'s `object_k` ports (the D3/D4 shape) — hand-built
-    /// rather than via `AddSceneObjectCommand`, whose `catalog_default` still
-    /// emits the pre-migration legacy-port shape (P3's job to retarget, see
-    /// docs/BUG_BACKLOG.md). Returns the def and each producer's node id.
-    fn render_scene_with_objects(count: u32) -> (EffectGraphDef, Vec<u32>) {
-        let mut def = render_scene_graph(0, 0);
-        def.nodes.iter_mut().find(|n| n.id == 0).unwrap().params.insert(
-            "objects".to_string(),
-            SerializedParamValue::Float { value: count as f32 },
-        );
-        let mut object_ids = Vec::new();
-        for k in 0..count {
-            let id = 100 + k;
-            def.nodes.push(EffectGraphNode {
-                id,
-                node_id: manifold_core::NodeId::new(format!("obj{k}")),
-                type_id: "node.scene_object".to_string(),
-                handle: Some(format!("Object {}", k + 1)),
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            });
-            def.wires.push(EffectGraphWire {
-                from_node: id,
-                from_port: "object".to_string(),
-                to_node: 0,
-                to_port: format!("object_{k}"),
-            });
-            object_ids.push(id);
-        }
-        (def, object_ids)
-    }
-
-    #[test]
-    fn remove_scene_object_middle_deletes_group_and_renumbers_survivors() {
-        let (fixture, object_ids) = render_scene_with_objects(3);
-        let (mut project, fx) = project_with_graph(fixture);
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = RemoveSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            1, // remove the MIDDLE object (index 1 of 0,1,2)
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-        assert_eq!(
-            render.params.get("objects"),
-            Some(&SerializedParamValue::Float { value: 2.0 }),
-            "objects decremented by one"
-        );
-        assert!(
-            !def.nodes.iter().any(|n| n.id == object_ids[1]),
-            "the removed object's scene_object node is gone"
-        );
-        assert!(
-            def.nodes.iter().any(|n| n.id == object_ids[0]),
-            "object 0 survives untouched"
-        );
-        assert!(
-            def.nodes.iter().any(|n| n.id == object_ids[2]),
-            "object 2 survives (renumbered)"
-        );
-        // Object 0 stays at slot 0.
-        assert!(def.wires.iter().any(|w| w.from_node == object_ids[0]
-            && w.from_port == "object"
-            && w.to_node == 0
-            && w.to_port == "object_0"));
-        // Object 2 (formerly slot 2) is renumbered down to slot 1.
-        assert!(def.wires.iter().any(|w| w.from_node == object_ids[2]
-            && w.from_port == "object"
-            && w.to_node == 0
-            && w.to_port == "object_1"));
-        // No dangling slot-2 wires left behind.
-        assert!(!def.wires.iter().any(|w| w.to_node == 0 && w.to_port == "object_2"));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-remove graph exactly (inverse-pair)");
-    }
-
-    #[test]
-    fn remove_scene_light_only_light_removes_node_and_zeroes_count() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 1));
-        // Wire the fixture's declared single light exactly like
-        // AddSceneLightCommand would (bare node, no group).
-        {
-            let mut cmd = AddSceneLightCommand::new(
-                GraphTarget::Effect(fx.clone()),
-                vec![],
-                0,
-                0,
-                (-260.0, 50.0),
-                Vec::new(),
-                mirror_catalog_default(),
-            );
-            cmd.execute(&mut project);
-        }
-        let before = graph_of(&project, &fx).clone();
-        let light_id = before
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.light")
-            .expect("light node present")
-            .id;
-
-        let mut cmd = RemoveSceneLightCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-        assert_eq!(
-            render.params.get("lights"),
-            Some(&SerializedParamValue::Float { value: 0.0 }),
-            "lights decremented to zero"
-        );
-        assert!(!def.nodes.iter().any(|n| n.id == light_id), "light node removed");
-        assert!(!def.wires.iter().any(|w| w.to_node == 0 && w.to_port == "light_0"), "wire removed");
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-remove graph exactly (inverse-pair)");
-    }
-
-    /// Every stable [`NodeId`] and doc `id` anywhere in `nodes`, recursively
-    /// through nested groups — test helper mirroring `collect_node_ids` +
-    /// `max_node_id_over`, used to prove a duplicate mints fresh identity
-    /// throughout its whole cloned subtree, not just the top node.
-    fn collect_ids(nodes: &[EffectGraphNode], doc_ids: &mut Vec<u32>, node_ids: &mut Vec<NodeId>) {
-        for n in nodes {
-            doc_ids.push(n.id);
-            if !n.node_id.is_empty() {
-                node_ids.push(n.node_id.clone());
-            }
-            if let Some(body) = n.group.as_deref() {
-                collect_ids(&body.nodes, doc_ids, node_ids);
-            }
-        }
-    }
-
-    #[test]
-    fn duplicate_scene_object_command_clones_grouped_object_with_fresh_ids_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        AddSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        )
-        .execute(&mut project);
-        let before = graph_of(&project, &fx).clone();
-        let (mut orig_doc_ids, mut orig_node_ids) = (Vec::new(), Vec::new());
-        collect_ids(&before.nodes, &mut orig_doc_ids, &mut orig_node_ids);
-
-        let mut cmd = DuplicateSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0, // duplicate object 0 (the only object)
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-        assert_eq!(
-            render.params.get("objects"),
-            Some(&SerializedParamValue::Float { value: 2.0 }),
-            "objects bumped by one"
-        );
-        let clone = def
-            .nodes
-            .iter()
-            .find(|n| n.handle.as_deref() == Some("Object 1 2"))
-            .expect("clone named with the D11 ' 2' suffix");
-        assert!(def.wires.iter().any(|w| w.from_node == clone.id
-            && w.from_port == "object"
-            && w.to_node == 0
-            && w.to_port == "object_1"), "clone wired to the next free object slot");
-
-        // D11: every id in the clone's subtree is fresh — no overlap with
-        // the original's doc ids or stable NodeIds anywhere.
-        let (mut all_doc_ids, mut all_node_ids) = (Vec::new(), Vec::new());
-        collect_ids(&def.nodes, &mut all_doc_ids, &mut all_node_ids);
-        let mut clone_doc_ids = Vec::new();
-        let mut clone_node_ids = Vec::new();
-        collect_ids(std::slice::from_ref(clone), &mut clone_doc_ids, &mut clone_node_ids);
-        for id in &clone_doc_ids {
-            assert!(!orig_doc_ids.contains(id), "clone doc id {id} must not reuse an original doc id");
-        }
-        for nid in &clone_node_ids {
-            assert!(!orig_node_ids.contains(nid), "clone NodeId {nid:?} must not reuse an original NodeId");
-        }
-        // No duplicate doc ids anywhere in the whole def (fresh minting is
-        // globally unique, not just locally).
-        let mut sorted = all_doc_ids.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), all_doc_ids.len(), "no doc id collisions anywhere in the def");
-
-        // No duplicate handles among SIBLINGS at any one scope — the real
-        // constraint the flattener's group-name-prefixing composite naming
-        // needs (`Graph::add_node_named` builds on the flattened, prefixed
-        // names; two DIFFERENT groups' identically-named inner leaves don't
-        // collide because the group name prefixes them, but two nodes in
-        // the SAME scope sharing a handle do). The clone's own group got a
-        // distinct top handle ("Object 1 2" vs the source's "Object 1"), so
-        // this must hold recursively through both subtrees.
-        fn assert_no_sibling_handle_collisions(nodes: &[EffectGraphNode]) {
-            let mut seen = std::collections::HashSet::new();
-            for n in nodes {
-                if let Some(h) = &n.handle {
-                    assert!(seen.insert(h.clone()), "sibling handle collision at this scope: {h:?}");
-                }
-                if let Some(body) = n.group.as_deref() {
-                    assert_no_sibling_handle_collisions(&body.nodes);
-                }
-            }
-        }
-        assert_no_sibling_handle_collisions(&def.nodes);
-
-        // D6: the clone's inner scene_object handle stays in sync with the
-        // group's handle.
-        let clone_body = clone.group.as_deref().expect("clone is a group");
-        let inner_object = clone_body.nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
-        assert_eq!(inner_object.handle.as_deref(), Some("Object 1 2"));
-
-        // D11: transform_3d.pos_x offset by +0.5 on the clone.
-        let clone_transform = clone_body.nodes.iter().find(|n| n.type_id == "node.transform_3d").unwrap();
-        assert_eq!(clone_transform.params.get("pos_x"), Some(&SerializedParamValue::Float { value: 0.5 }));
-
-        // D11: card exposes are not cloned.
-        assert!(clone_body.nodes.iter().all(|n| n.exposed_params.is_empty()));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-duplicate graph exactly (inverse-pair)");
-    }
-
-    /// BUG-212: `string_bindings` (the importer's "Model File" path
-    /// plumbing — one `StringBindingDef` per file-dependent node, fanned
-    /// out under a shared outer id) must follow a duplicated object's
-    /// cloned nodes, re-targeted at the clone's fresh `NodeId`, same
-    /// `id`/`label`/`default_value` — the same mechanism as D5's rename
-    /// sweep, exercised here for `DuplicateSceneObjectCommand`.
-    #[test]
-    fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_undo_restores() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        AddSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        )
-        .execute(&mut project);
-
-        // Simulate the importer's "Model File" binding: one string_bindings
-        // entry targeting the object's mesh node by its stable NodeId.
-        let mesh_node_id = {
-            let def = graph_of(&project, &fx);
-            let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1")).unwrap();
-            let mesh = group.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.cube_mesh").unwrap();
-            mesh.node_id.clone()
-        };
-        {
-            let effect = project.find_effect_by_id_mut(&fx).unwrap();
-            let def = effect.graph.as_mut().unwrap();
-            def.preset_metadata = Some(PresetMetadata {
-                id: PresetTypeId::new("test.scene"),
-                display_name: "Test Scene".into(),
-                category: String::new(),
-                osc_prefix: String::new(),
-                legacy_discriminant: None,
-                scene_bounds: None,
-                available: true,
-                is_line_based: false,
-                    layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: vec![StringBindingDef {
-                    id: "model_file".into(),
-                    label: "Model File".into(),
-                    default_value: "assets/hero.glb".into(),
-                    target: BindingTarget::Node { node_id: mesh_node_id.clone(), param: "path".into() },
-                }],
-            });
-        }
-        let before_meta = graph_of(&project, &fx).preset_metadata.clone().unwrap();
-
-        let mut cmd = DuplicateSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0, // duplicate object 0 (the only object)
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let clone = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1 2")).unwrap();
-        let clone_mesh = clone.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.cube_mesh").unwrap();
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        assert_eq!(meta.string_bindings.len(), 2, "the clone's mesh node gets its own string_bindings entry");
-        let clone_binding = meta
-            .string_bindings
-            .iter()
-            .find(|b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == clone_mesh.node_id))
-            .expect("a string_bindings entry targets the clone's fresh NodeId");
-        assert_eq!(clone_binding.id, "model_file");
-        assert_eq!(clone_binding.default_value, "assets/hero.glb", "same default_value as the source entry");
-        // The original entry (still targeting the SOURCE mesh's NodeId) is untouched.
-        assert!(meta.string_bindings.iter().any(
-            |b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == mesh_node_id)
-        ));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(
-            def.preset_metadata.as_ref().unwrap(),
-            &before_meta,
-            "undo restores string_bindings exactly (inverse-pair)"
-        );
-    }
-
-    #[test]
-    fn rename_scene_object_command_renames_group_and_sweeps_section_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        AddSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        )
-        .execute(&mut project);
-        let def = graph_of(&project, &fx).clone();
-        let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1")).unwrap();
-        let group_id = group.id;
-        let mat_node = group.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.phong_material").unwrap();
-        let (mat_node_id, mat_u32_id) = (mat_node.node_id.clone(), mat_node.id);
-
-        ToggleNodeParamExposeCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            mat_node_id,
-            mat_u32_id,
-            "mat_0".to_string(),
-            "ambient".to_string(),
-            true,
-            mirror_catalog_default(),
-            "Ambient".to_string(),
-            0.0,
-            1.0,
-            0.0,
-            manifold_core::effects::ParamConvert::Float,
-            false,
-            Vec::new(),
-        )
-        .with_scope(vec![group_id])
-        .execute(&mut project);
-        let ub_id = project.find_effect_by_id(&fx).unwrap().user_param_bindings()[0].id.clone();
-        assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
-            Some("Object 1"),
-            "setup: expose seeded the section from the group name"
-        );
-
-        let before = graph_of(&project, &fx).clone();
-        let mut cmd = RenameSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            group_id,
-            "Hero".to_string(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let group = def.nodes.iter().find(|n| n.id == group_id).unwrap();
-        assert_eq!(group.handle.as_deref(), Some("Hero"), "group handle renamed");
-        let inner_object =
-            group.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
-        assert_eq!(inner_object.handle.as_deref(), Some("Hero"), "scene_object handle kept in sync (D6)");
-        assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
-            Some("Hero"),
-            "D5: card section follows the rename"
-        );
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-rename graph exactly (inverse-pair)");
-        assert_eq!(
-            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
-            Some("Object 1"),
-            "undo restores the pre-rename section"
-        );
-    }
-
-    #[test]
-    fn rename_scene_object_command_ungrouped_renames_bare_node_and_undo_restores() {
-        let (fixture, object_ids) = render_scene_with_objects(2);
-        let (mut project, fx) = project_with_graph(fixture);
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = RenameSceneObjectCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            object_ids[0],
-            "Renamed".to_string(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let node = def.nodes.iter().find(|n| n.id == object_ids[0]).unwrap();
-        assert_eq!(node.handle.as_deref(), Some("Renamed"));
-        assert!(node.group.is_none(), "ungrouped node stays bare, no group is fabricated");
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-rename graph exactly (inverse-pair)");
-    }
-
-    #[test]
-    fn set_node_handle_command_renames_light_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        AddSceneLightCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            Vec::new(),
-            mirror_catalog_default(),
-        )
-        .execute(&mut project);
-        let before = graph_of(&project, &fx).clone();
-        let light_id = before.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
-
-        let mut cmd = SetNodeHandleCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            light_id,
-            "Key Light".to_string(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        assert_eq!(
-            def.nodes.iter().find(|n| n.id == light_id).unwrap().handle.as_deref(),
-            Some("Key Light")
-        );
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-rename graph exactly (inverse-pair)");
-    }
-
-    #[test]
-    fn add_scene_environment_command_spawns_bake_environment_and_wires_envmap() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = AddSceneEnvironmentCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            (10.0, 20.0),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let env = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.bake_environment")
-            .expect("environment node created");
-        assert_eq!(env.editor_pos, Some((10.0, 20.0)));
-        assert_eq!(env.params.get("intensity"), Some(&SerializedParamValue::Float { value: 1.0 }));
-        assert!(def
-            .wires
-            .iter()
-            .any(|w| w.from_node == env.id && w.from_port == "envmap" && w.to_node == 0 && w.to_port == "envmap"));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
-    }
-
-    #[test]
-    fn add_scene_fog_command_spawns_atmosphere_and_wires_atmosphere_port() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = AddSceneFogCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            (30.0, 40.0),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let fog = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.atmosphere")
-            .expect("fog node created");
-        assert_eq!(fog.editor_pos, Some((30.0, 40.0)));
-        assert!(def.wires.iter().any(|w| w.from_node == fog.id
-            && w.from_port == "atmosphere"
-            && w.to_node == 0
-            && w.to_port == "atmosphere"));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
-    }
-
-    /// R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneEnvironmentCommand`
-    /// stamps the caller-supplied environment metadata into the def's
-    /// TOP-LEVEL `preset_metadata`, targeting the new environment node's bare
-    /// `NodeId`, section "Environment" — same P1 stamp shape
-    /// `AddSceneLightCommand` performs for its own node. Regression coverage
-    /// for the R1 bug: a freshly-added environment was structurally invisible
-    /// in the scene panel because `world_sections` (`state_sync.rs`'s
-    /// `sections_for_doc_ids`) came back empty with nothing stamped. Undo
-    /// restores `preset_metadata` verbatim; execute→undo→redo is stable.
-    #[test]
-    fn add_scene_environment_command_stamps_exposures_and_undo_redo_are_stable() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-        let mut cmd = AddSceneEnvironmentCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            (10.0, 20.0),
-            vec![scene_param_meta("intensity", "Intensity")],
-            mirror_catalog_default(),
-        );
-
-        let assert_stamped = |project: &Project| {
-            let def = graph_of(project, &fx);
-            let env = def.nodes.iter().find(|n| n.type_id == "node.bake_environment").unwrap();
-
-            let meta = def.preset_metadata.as_ref().expect("R1 stamped into top-level preset_metadata");
-            assert_eq!(meta.params.len(), 1);
-            assert_eq!(meta.params[0].section.as_deref(), Some("Environment"));
-            assert!(
-                meta.bindings.iter().any(|b| matches!(
-                    &b.target,
-                    BindingTarget::Node { node_id, param } if *node_id == env.node_id && param == "intensity"
-                )),
-                "environment exposure targets the environment node's bare NodeId"
-            );
-        };
-
-        cmd.execute(&mut project);
-        assert_stamped(&project);
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
-
-        cmd.execute(&mut project); // redo
-        assert_stamped(&project);
-    }
-
-    /// R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneFogCommand`
-    /// stamps the caller-supplied fog metadata into the def's TOP-LEVEL
-    /// `preset_metadata`, targeting the new fog node's bare `NodeId`, section
-    /// "Atmosphere" — same P1 stamp shape `AddSceneLightCommand` performs for
-    /// its own node. Regression coverage for the R1 bug this lane fixes: a
-    /// freshly-added fog node was structurally invisible in the scene panel
-    /// (not even the fallback row rendered) because `world_sections`
-    /// (`state_sync.rs`'s `sections_for_doc_ids`) came back empty with
-    /// nothing stamped, and `build_filtered_properties` iterates an empty
-    /// section list. Undo restores `preset_metadata` verbatim; execute→undo→
-    /// redo is stable.
-    #[test]
-    fn add_scene_fog_command_stamps_exposures_and_undo_redo_are_stable() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-        let mut cmd = AddSceneFogCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            (30.0, 40.0),
-            vec![scene_param_meta("density", "Density")],
-            mirror_catalog_default(),
-        );
-
-        let assert_stamped = |project: &Project| {
-            let def = graph_of(project, &fx);
-            let fog = def.nodes.iter().find(|n| n.type_id == "node.atmosphere").unwrap();
-
-            let meta = def.preset_metadata.as_ref().expect("R1 stamped into top-level preset_metadata");
-            assert_eq!(meta.params.len(), 1);
-            assert_eq!(meta.params[0].section.as_deref(), Some("Atmosphere"));
-            assert!(
-                meta.bindings.iter().any(|b| matches!(
-                    &b.target,
-                    BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "density"
-                )),
-                "fog exposure targets the fog node's bare NodeId"
-            );
-        };
-
-        cmd.execute(&mut project);
-        assert_stamped(&project);
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
-
-        cmd.execute(&mut project); // redo
-        assert_stamped(&project);
-    }
-
-    /// BUG-295: `AddSceneFogCommand` stamps the fog exposure into
-    /// `def.preset_metadata.params` (proven above), but until
-    /// `refresh_manifest_from_graph` is ALSO wired to run post-stamp, that
-    /// stamp is invisible to the LIVE `PresetInstance.params` the panel
-    /// actually reads — the bug's own root-cause finding (`reconcile_manifest`
-    /// only fires from a load-time `pending_wire` stash, never from a runtime
-    /// graph edit). Regression coverage for the live-manifest half of the fix:
-    /// execute → the fog row is in `inst.params`, not just `preset_metadata`;
-    /// undo → the row is gone from `inst.params`; redo → it's back. Targets
-    /// `GraphTarget::Generator` (see `project_with_generator_graph`) so
-    /// `gather_known_params`'s generator branch actually picks up the
-    /// stamped `meta.params` entry regardless of the binding's `user_added`
-    /// flag (scene exposures are always `user_added: false`).
-    #[test]
-    fn add_scene_fog_command_refreshes_live_manifest_and_undo_redo_restore_it() {
-        let (mut project, lid) = project_with_generator_graph(render_scene_graph(0, 0));
-
-        let mut cmd = AddSceneFogCommand::new(
-            GraphTarget::Generator(lid.clone()),
-            vec![],
-            0,
-            (30.0, 40.0),
-            vec![scene_param_meta("density", "Density")],
-            mirror_catalog_default(),
-        );
-
-        let has_fog_row = |project: &Project| {
-            project
-                .timeline
-                .find_layer_by_id(&lid)
-                .unwrap()
-                .1
-                .gen_params()
-                .unwrap()
-                .params
-                .iter()
-                .any(|p| p.spec.section.as_deref() == Some("Atmosphere"))
-        };
-
-        cmd.execute(&mut project);
-        assert!(
-            has_fog_row(&project),
-            "BUG-295: freshly-stamped fog param must land in the live inst.params after execute"
-        );
-
-        cmd.undo(&mut project);
-        assert!(
-            !has_fog_row(&project),
-            "undo must remove the fog row from the live manifest, not just def.preset_metadata"
-        );
-
-        cmd.execute(&mut project); // redo
-        assert!(has_fog_row(&project), "redo must restore the live fog row");
-    }
-
-    /// BUG-p6x7: fog density slider range must scale with scene radius when
-    /// scene_bounds are present. A scene whose bbox diagonal is 20 units
-    /// (radius 10) gets density range (0, 0.2) — the slider covers the
-    /// useful per-world-unit range instead of the generic 0..1 band.
-    #[test]
-    fn add_scene_fog_scales_density_with_scene_bounds() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph({
-            let mut def = render_scene_graph(0, 0);
-            def.preset_metadata = Some(manifold_core::effect_graph_def::PresetMetadata {
-                id: manifold_core::PresetTypeId::from_string("TestScene".to_string()),
-                display_name: "Test".to_string(),
-                category: "Geometry".to_string(),
-                osc_prefix: "test".to_string(),
-                legacy_discriminant: None,
-                available: true,
-                is_line_based: false,
-                    layer_types: None,
-                params: Vec::new(),
-                bindings: Vec::new(),
-                param_aliases: Vec::new(),
-                value_aliases: Vec::new(),
-                string_params: Vec::new(),
-                string_bindings: Vec::new(),
-                // bbox diagonal = sqrt(20^2+20^2+20^2) = 34.64 -> radius = 17.32
-                scene_bounds: Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])),
-            });
-            def
-        });
-
-        let mut cmd = AddSceneFogCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            (30.0, 40.0),
-            vec![scene_param_meta("fog_density", "Density")],
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let fog = def.nodes.iter().find(|n| n.type_id == "node.atmosphere").unwrap();
-
-        let density_spec = meta.params.iter().find(|p| {
-            meta.bindings.iter().any(|b| {
-                b.id == p.id
-                    && matches!(
-                        &b.target,
-                        BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "fog_density"
-                    )
-            })
-        }).expect("fog density exposure must be stamped");
-
-        let (expected_min, expected_max) = super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])))
-            .unwrap();
-        assert_eq!(density_spec.min, expected_min, "density min must be 0.0");
-        // The widen rule expands the band to contain the stamped default (0.5
-        // from scene_param_meta) when it falls outside the derived range.
-        assert!(
-            density_spec.max >= expected_max,
-            "density max must be >= 2/radius ({}), got {}", expected_max, density_spec.max
-        );
-        assert!(
-            density_spec.default_value <= density_spec.max,
-            "density max must contain the stamped default"
-        );
-    }
-
-    /// BUG-p6x7: without scene_bounds (procedural scene), fog density keeps
-    /// the generic 0..1 band.
-    #[test]
-    fn add_scene_fog_keeps_generic_density_band_without_scene_bounds() {
-        use manifold_core::effect_graph_def::BindingTarget;
-
-        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-        let mut cmd = AddSceneFogCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            (30.0, 40.0),
-            vec![scene_param_meta("fog_density", "Density")],
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let fog = def.nodes.iter().find(|n| n.type_id == "node.atmosphere").unwrap();
-
-        let density_spec = meta.params.iter().find(|p| {
-            meta.bindings.iter().any(|b| {
-                b.id == p.id
-                    && matches!(
-                        &b.target,
-                        BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "fog_density"
-                    )
-            })
-        }).expect("fog density exposure must be stamped");
-
-        // scene_param_meta defaults: min=0.0, max=1.0 — generic band untouched.
-        assert_eq!(density_spec.min, 0.0, "density min must stay 0.0 without scene_bounds");
-        assert_eq!(density_spec.max, 1.0, "density max must stay 1.0 without scene_bounds");
-    }
-
-    /// Unit test for the fog_density_range helper.
-    #[test]
-    fn fog_density_range_unit() {
-        assert_eq!(super::super::fog_density_range(None), None);
-        let (min, max) = super::super::fog_density_range(Some(([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]))).unwrap();
-        assert_eq!(min, 0.0);
-        // radius = max(0, 0.01) = 0.01 → max = 2/0.01 = 200.0
-        assert!((max - 200.0).abs() < 1e-6);
-        let (_, max) = super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0]))).unwrap();
-        // bbox diagonal = sqrt(20^2+20^2+20^2) = sqrt(1200) = 20*sqrt(3)
-        // radius = diagonal/2 = 10*sqrt(3) ≈ 17.32 -> max = 2/(10*sqrt(3)) ≈ 0.11547
-        let expected_radius = 10.0 * (3.0_f32).sqrt();
-        assert!((max - 2.0 / expected_radius).abs() < 1e-4);
-    }
-
-    /// BUG-295 value-preservation proof: `refresh_manifest_from_graph`
-    /// round-trips the CURRENT manifest through the same wire encoding the
-    /// file serializer uses before overlaying the graph's descriptors, so a
-    /// pre-existing param's live (possibly non-default) value must survive a
-    /// LATER structural edit's refresh — not just the freshly-stamped one's
-    /// own default. Sets a light's Intensity to a hand-picked non-default
-    /// value, then executes `AddSceneFogCommand` (a second, unrelated
-    /// structural edit) and asserts Intensity kept its value rather than
-    /// resetting to the spec default a naive `build_param_manifest(..., None)`
-    /// resync would have produced.
-    #[test]
-    fn add_scene_fog_command_refresh_preserves_existing_param_values() {
-        let (mut project, lid) = project_with_generator_graph(render_scene_graph(0, 0));
-
-        let mut add_light = AddSceneLightCommand::new(
-            GraphTarget::Generator(lid.clone()),
-            vec![],
-            0,
-            0,
-            (0.0, 0.0),
-            vec![scene_param_meta("intensity", "Intensity")],
-            mirror_catalog_default(),
-        );
-        add_light.execute(&mut project);
-
-        let intensity_id = project
-            .timeline
-            .find_layer_by_id(&lid)
-            .unwrap()
-            .1
-            .gen_params()
-            .unwrap()
-            .params
-            .iter()
-            .find(|p| p.spec.name == "Intensity")
-            .expect("add-light's own refresh surfaced the stamped Intensity param live")
-            .id()
-            .to_string();
-
-        project
-            .timeline
-            .find_layer_by_id_mut(&lid)
-            .unwrap()
-            .1
-            .gen_params_or_init()
-            .params
-            .get_mut(&intensity_id)
-            .expect("intensity param resolves by its synthesized id")
-            .value = 0.42;
-
-        let mut add_fog = AddSceneFogCommand::new(
-            GraphTarget::Generator(lid.clone()),
-            vec![],
-            0,
-            (30.0, 40.0),
-            vec![scene_param_meta("density", "Density")],
-            mirror_catalog_default(),
-        );
-        add_fog.execute(&mut project);
-
-        let intensity_value = project
-            .timeline
-            .find_layer_by_id(&lid)
-            .unwrap()
-            .1
-            .gen_params()
-            .unwrap()
-            .params
-            .get(&intensity_id)
-            .expect("intensity param survives the fog add's refresh")
-            .value;
-        assert_eq!(
-            intensity_value, 0.42,
-            "BUG-295 refresh must preserve a pre-existing param's live value, not reset it to spec default"
-        );
-    }
-
-    fn scene_object_graph() -> EffectGraphDef {
-        let render = EffectGraphNode {
-            id: 0,
-            node_id: manifold_core::NodeId::new("render"),
-            type_id: "node.render_scene".to_string(),
-            handle: Some("render".to_string()),
-            params: BTreeMap::new(),
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        };
-        let object = EffectGraphNode {
-            id: 1,
-            node_id: manifold_core::NodeId::new("obj"),
-            type_id: "node.scene_object".to_string(),
-            handle: Some("Statue".to_string()),
-            params: BTreeMap::new(),
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        };
-        EffectGraphDef {
-            version: EFFECT_GRAPH_VERSION,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            nodes: vec![render, object],
-            wires: vec![EffectGraphWire {
-                from_node: 1,
-                from_port: "object".to_string(),
-                to_node: 0,
-                to_port: "object_0".to_string(),
-            }],
-        }
-    }
-
-    #[test]
-    fn add_object_transform_command_spawns_transform_3d_and_wires_it_into_scene_object() {
-        let (mut project, fx) = project_with_graph(scene_object_graph());
-        let before = graph_of(&project, &fx).clone();
-
-        let mut cmd = AddObjectTransformCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            1,
-            (5.0, 6.0),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-        let xf_id = cmd.created_node_id().expect("command should resolve and create a node");
-
-        let def = graph_of(&project, &fx);
-        let xf = def.nodes.iter().find(|n| n.id == xf_id).expect("transform node exists");
-        assert_eq!(xf.type_id, "node.transform_3d");
-        assert_eq!(xf.editor_pos, Some((5.0, 6.0)));
-        assert!(def
-            .wires
-            .iter()
-            .any(|w| w.from_node == xf_id && w.from_port == "transform" && w.to_node == 1 && w.to_port == "transform"));
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
-    }
-
-    #[test]
-    fn add_object_transform_then_gizmo_param_drag_round_trips_undo_redo() {
-        let (mut project, fx) = project_with_graph(scene_object_graph());
-        let before = graph_of(&project, &fx).clone();
-
-        let mut add_cmd = AddObjectTransformCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            1,
-            (0.0, 0.0),
-            mirror_catalog_default(),
-        );
-        add_cmd.execute(&mut project);
-        let xf_id = add_cmd.created_node_id().unwrap();
-        let after_create = graph_of(&project, &fx).clone();
-
-        // The gizmo's first move-axis drag: write pos_x on the freshly
-        // created transform atom (D8's drag-writes-the-transform-atom path).
-        let mut set_cmd = SetGraphNodeParamCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            xf_id,
-            "pos_x".to_string(),
-            SerializedParamValue::Float { value: 3.5 },
-            mirror_catalog_default(),
-        );
-        set_cmd.execute(&mut project);
-        let def = graph_of(&project, &fx);
-        let xf = def.nodes.iter().find(|n| n.id == xf_id).unwrap();
-        assert_eq!(xf.params.get("pos_x"), Some(&SerializedParamValue::Float { value: 3.5 }));
-
-        // Undo the drag: pos_x reverts (the transform atom itself, and its
-        // wire, stay — same as any other param undo).
-        set_cmd.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &after_create, "undo of the drag restores pre-drag graph");
-
-        // Redo the drag.
-        set_cmd.execute(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(
-            def.nodes.iter().find(|n| n.id == xf_id).unwrap().params.get("pos_x"),
-            Some(&SerializedParamValue::Float { value: 3.5 })
-        );
-
-        // Undo the drag AND the atom creation: back to the original,
-        // transform-less graph — the full round trip P6's gate names.
-        set_cmd.undo(&mut project);
-        add_cmd.undo(&mut project);
-        assert_eq!(graph_of(&project, &fx), &before, "full undo restores the original graph");
-    }
-
-    /// A plain, un-grouped merged object node (mesh source + material +
-    /// transform, no group wrapper) — this test exercises the COMMAND, not
-    /// the assembler, so a minimal top-level node stands in for the
-    /// (grouped) shape `merge_import_into_graph` would actually produce.
-    fn plain_merge_node(id: u32, handle: &str, type_id: &str) -> EffectGraphNode {
-        EffectGraphNode {
-            id,
-            node_id: manifold_core::NodeId::new(handle),
-            type_id: type_id.to_string(),
-            handle: Some(handle.to_string()),
-            params: BTreeMap::new(),
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        }
-    }
-
-    #[test]
-    fn import_model_into_scene_command_bumps_objects_adds_nodes_wires_and_undo_restores() {
-        let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
-        let before = graph_of(&project, &fx).clone();
-
-        let new_node = plain_merge_node(100, "MergedObject", GROUP_TYPE_ID);
-        let new_wire = EffectGraphWire {
-            from_node: 100,
-            from_port: "vertices".to_string(),
-            to_node: 0,
-            to_port: "mesh_2".to_string(),
-        };
-
-        let mut cmd = ImportModelIntoSceneCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            vec![new_node],
-            vec![new_wire],
-            3,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
-        assert_eq!(
-            render.params.get("objects"),
-            Some(&SerializedParamValue::Float { value: 3.0 }),
-            "objects bumped to existing(2) + incoming(1)"
-        );
-        assert!(
-            def.nodes.iter().any(|n| n.id == 100 && n.handle.as_deref() == Some("MergedObject")),
-            "the merged node must be present"
-        );
-        assert!(
-            def.wires.iter().any(|w| w.from_node == 100 && w.to_node == 0 && w.to_port == "mesh_2"),
-            "the merged wire must be present"
-        );
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-merge graph exactly (inverse-pair)");
-    }
-
-    #[test]
-    fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
-        let mut base = render_scene_graph(1, 0);
-        base.preset_metadata = Some(PresetMetadata {
-            id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
-            display_name: "Existing".to_string(),
-            category: "Geometry".to_string(),
-            osc_prefix: "existing".to_string(),
-            legacy_discriminant: None,
-            scene_bounds: None,
-            available: true,
-            is_line_based: false,
-                layer_types: None,
-            params: vec![],
-            bindings: vec![],
-            param_aliases: Vec::new(),
-            value_aliases: Vec::new(),
-            string_params: Vec::new(),
-            string_bindings: Vec::new(),
-        });
-        let (mut project, fx) = project_with_graph(base);
-        let before = graph_of(&project, &fx).clone();
-
-        let new_param = ParamSpecDef {
-            id: "opacity_1".to_string(),
-            name: "Opacity".to_string(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 1.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: manifold_core::macro_bank::MacroCurve::default(),
-            invert: false,
-            is_angle: false,
-            is_trigger_gate: false,
-            wraps: false,
-            section: Some("MergedGlass".to_string()),
-            card_visible: true,
-        };
-        let new_binding = BindingDef {
-            id: "opacity_1".to_string(),
-            label: "Opacity".to_string(),
-            default_value: 1.0,
-            target: manifold_core::effect_graph_def::BindingTarget::Node {
-                node_id: manifold_core::NodeId::new("mat_1"),
-                param: "color_a".to_string(),
-            },
-            convert: manifold_core::effects::ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: false,
-        };
-
-        let mut cmd = ImportModelIntoSceneCommand::new(
-            GraphTarget::Effect(fx.clone()),
-            vec![],
-            0,
-            vec![plain_merge_node(50, "MergedGlass", GROUP_TYPE_ID)],
-            vec![EffectGraphWire {
-                from_node: 50,
-                from_port: "vertices".to_string(),
-                to_node: 0,
-                to_port: "mesh_1".to_string(),
-            }],
-            2,
-            vec![new_param],
-            vec![new_binding],
-            Vec::new(),
-            mirror_catalog_default(),
-        );
-        cmd.execute(&mut project);
-
-        let def = graph_of(&project, &fx);
-        let meta = def.preset_metadata.as_ref().expect("metadata still present");
-        assert!(meta.params.iter().any(|p| p.id == "opacity_1"), "new card param appended");
-        assert!(meta.bindings.iter().any(|b| b.id == "opacity_1"), "new card binding appended");
-
-        cmd.undo(&mut project);
-        let def = graph_of(&project, &fx);
-        assert_eq!(def, &before, "undo restores the pre-merge graph AND metadata exactly");
-    }
-}
+mod tests;

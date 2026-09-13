@@ -440,6 +440,7 @@ mod tests {
                 is_file_path: false,
             }],
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         };
 
@@ -448,6 +449,7 @@ mod tests {
             name: Some("Test".to_string()),
             description: None,
             preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
             nodes: vec![EffectGraphNode {
                 id: 5,
                 node_id: "orbit".into(),

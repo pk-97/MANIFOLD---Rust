@@ -676,7 +676,7 @@ impl PresetInstance {
     /// the per-frame hot path, so the allocation is acceptable.
     pub fn user_param_bindings(&self) -> Vec<UserParamBinding> {
         self.user_added_bindings()
-            .map(|b| self.synth_user_binding(b))
+            .filter_map(|b| self.synth_user_binding(b))
             .collect()
     }
 
@@ -703,13 +703,16 @@ impl PresetInstance {
     /// Build one [`UserParamBinding`] from a `user_added` [`BindingDef`]
     /// plus its matching `ParamSpecDef` reshape. Shared by
     /// [`Self::user_param_bindings`] and the single-binding lookups.
-    fn synth_user_binding(&self, b: &crate::effect_graph_def::BindingDef) -> UserParamBinding {
+    fn synth_user_binding(&self, b: &crate::effect_graph_def::BindingDef) -> Option<UserParamBinding> {
         use crate::effect_graph_def::BindingTarget;
         let (node_id, inner_param) = match &b.target {
             BindingTarget::Node { node_id, param } => (node_id.clone(), param.clone()),
             BindingTarget::Composite { outer_name } => {
                 (NodeId::default(), outer_name.clone())
             }
+            // This legacy view addresses a node, not a modifier-local macro.
+            // Keep the authored binding intact; expansion resolves its leaves.
+            BindingTarget::SceneModifier { .. } => return None,
         };
         // The full slider surface (range + curve + invert + label) is the
         // manifest entry's live `spec` — so a recalibrated user param's range
@@ -717,7 +720,7 @@ impl PresetInstance {
         // from the binding recipe. Identity fallback when no manifest entry.
         let param = self.params.get(&b.id);
         let spec = param.map(|p| &p.spec);
-        UserParamBinding {
+        Some(UserParamBinding {
             id: b.id.clone(),
             label: spec.map(|s| s.name.clone()).unwrap_or_else(|| b.label.clone()),
             node_id,
@@ -734,7 +737,7 @@ impl PresetInstance {
             offset: b.offset,
             value_labels: spec.map(|s| s.value_labels.clone()).unwrap_or_default(),
             section: spec.and_then(|s| s.section.clone()),
-        }
+        })
     }
 
     /// Position of a user binding by stable id within the user-added tail, or
@@ -772,58 +775,15 @@ impl PresetInstance {
     /// `manifold-editing`) provides the canonical collision-free
     /// shape.
     pub fn append_user_binding(&mut self, binding: UserParamBinding) {
-        use crate::effect_graph_def::{
-            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
-        };
-        let whole_numbers = matches!(
-            binding.convert,
-            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
-        );
-        // The param descriptor: the manifest holds the live copy (the runtime
-        // authority), and `meta.params` keeps a consistent shadow so the graph
-        // def stays uniform with a bundled preset JSON.
-        let spec = ParamSpecDef {
-            id: binding.id.clone(),
-            name: binding.label.clone(),
-            min: binding.min,
-            max: binding.max,
-            default_value: binding.default_value,
-            whole_numbers,
-            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
-            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: binding.value_labels.clone(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: binding.curve,
-            invert: binding.invert,
-            // Captured from the inner param's `ParamType::Angle` at expose time
-            // (rides `UserParamBinding.is_angle`). The spec is now the single
-            // home for the flag, so the card reads it straight off the manifest.
-            is_angle: binding.is_angle,
-            // A user-exposed inner-graph param is never the trigger-gate card
-            // (that's the preset-authored `clip_trigger` outer card only).
-            is_trigger_gate: false,
-            wraps: false,
-            // Section seeding from the innermost enclosing group's display
-            // name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D5) — resolved
-            // by the expose command (`mirror_effect_side`) and carried on
-            // the `UserParamBinding` this fn receives.
-            section: binding.section.clone(),
-            // A user-added expose (the graph editor's checkbox) always shows
-            // on the card — `card_visible_for`'s curated hiding only applies
-            // to the P1 scene-vocabulary auto-stamping path.
-            card_visible: true,
-        };
+        use crate::effect_graph_def::PresetMetadata;
+        let spec = binding.param_spec();
 
-        // The per-instance graph is the single binding-storage list.
-        // The live expose command lifts the canonical graph before this
-        // runs; for graph-less callers (storage unit tests) we synthesize
-        // a metadata-only graph so the binding still has a home.
         let graph = self.graph.get_or_insert_with(|| EffectGraphDef {
             version: 0,
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         });
@@ -842,23 +802,11 @@ impl PresetInstance {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         });
         meta.params.push(spec.clone());
-        meta.bindings.push(BindingDef {
-            id: binding.id.clone(),
-            label: binding.label.clone(),
-            default_value: binding.default_value,
-            target: BindingTarget::Node {
-                node_id: binding.node_id.clone(),
-                param: binding.inner_param.clone(),
-            },
-            convert: binding.convert,
-            user_added: true,
-            scale: binding.scale,
-            offset: binding.offset,
-            default_mirrors_node_param: false,
-        });
+        meta.bindings.push(binding.binding_def());
 
         // The manifest entry (id as identity, order = card order). `push`
         // bumps topology (D8). base + value both seed from the spec default.
@@ -881,7 +829,7 @@ impl PresetInstance {
         // the binding + the manifest spec).
         let removed = {
             let b = self.user_added_bindings().nth(j)?;
-            self.synth_user_binding(b)
+            self.synth_user_binding(b)?
         };
 
         // Pull the binding + shadow spec from the graph metadata.
@@ -924,6 +872,7 @@ impl PresetInstance {
             name: None,
             description: None,
             preset_metadata: None,
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         });
@@ -942,6 +891,7 @@ impl PresetInstance {
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
+            scene_modifier: None,
             scene_bounds: None,
         });
 
@@ -1342,11 +1292,18 @@ impl PresetInstance {
     /// silently killing clip triggers on reload), now expressed with zero
     /// trigger-specific storage: a fire-mode mod is just a normal audio mod.
     pub fn clip_edge_enabled(&self) -> bool {
+        self.clip_edge_enabled_matching(|_| true)
+    }
+
+    /// Apply the existing clip-mode policy to a selected set of gate params.
+    /// Scene modifier macros use this to keep independent event owners.
+    pub fn clip_edge_enabled_matching(&self, matches_param: impl Fn(&str) -> bool) -> bool {
         let Some(mods) = self.audio_mods.as_ref() else {
             return true;
         };
         let gate_mod = mods.iter().find(|m| {
             m.enabled
+                && matches_param(m.param_id.as_ref())
                 && self
                     .params
                     .get(m.param_id.as_ref())
@@ -1746,6 +1703,7 @@ mod tests {
                 category: String::new(),
                 osc_prefix: String::new(),
                 legacy_discriminant: None,
+                scene_modifier: None,
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
@@ -1789,6 +1747,7 @@ mod tests {
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
             }),
+            scene_modifiers: Vec::new(),
             nodes: Vec::new(),
             wires: Vec::new(),
         });
@@ -2216,6 +2175,8 @@ mod tests {
 
         inst.audio_mods.as_mut().unwrap()[0].enabled = true;
         assert!(!inst.clip_edge_enabled(), "armed Transient mode gates the clip edge");
+        assert!(!inst.clip_edge_enabled_matching(|param| param == "clip_trigger"));
+        assert!(inst.clip_edge_enabled_matching(|param| param != "clip_trigger"), "another owner's transient gate cannot suppress this clip edge");
 
         inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
         assert!(inst.clip_edge_enabled());
@@ -2224,4 +2185,30 @@ mod tests {
         assert!(inst.clip_edge_enabled());
     }
 
+
+    #[test]
+    fn scene_modifier_binding_metadata_matches_append_output() {
+        let mut binding = sample_user_binding("user.rotate.angle.1", "rotate", "angle");
+        binding.min = -180.0;
+        binding.max = 180.0;
+        binding.default_value = 15.0;
+        binding.convert = ParamConvert::EnumRound;
+        binding.is_angle = true;
+        binding.invert = true;
+        binding.curve = crate::macro_bank::MacroCurve::SCurve;
+        binding.scale = 0.5;
+        binding.offset = 2.0;
+        binding.value_labels = vec!["Low".into(), "High".into()];
+        binding.section = Some("Motion Controls".into());
+
+        let expected_spec = binding.param_spec();
+        let expected_binding = binding.binding_def();
+        let mut instance = PresetInstance::new(PresetTypeId::BLOOM);
+        instance.append_user_binding(binding);
+
+        let graph = instance.graph.as_ref().expect("append creates graph");
+        let metadata = graph.preset_metadata.as_ref().expect("append creates metadata");
+        assert_eq!(metadata.params, vec![expected_spec]);
+        assert_eq!(metadata.bindings, vec![expected_binding]);
+    }
 }
