@@ -7902,7 +7902,7 @@ fn cached_type_id() -> &'static EffectNodeType {
 /// render_copies agree on what a given `(rot_x, rot_y, rot_z)` means.
 /// Non-uniform scale's normal skew is NOT corrected (no
 /// inverse-transpose) — v1 limitation, documented on the shader side.
-fn model_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> [[f32; 4]; 4] {
+pub(crate) fn model_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> [[f32; 4]; 4] {
     let r = euler_xyz_columns(rot);
     [
         [

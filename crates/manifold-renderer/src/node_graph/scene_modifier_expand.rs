@@ -6,14 +6,15 @@
 mod bindings;
 mod buffer_budget;
 mod event_state;
-pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use bindings::SceneModifierBindingSource;
 pub use buffer_budget::{
     MODIFIER_MEMORY_OVERRIDE_ENV, ModifierBufferUsage, PreparedModifierBufferBudget,
     admit_candidate_bytes,
 };
+pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 mod compiler;
 mod control_state;
+mod math_view;
 pub use control_state::PreparedModifierControlState;
 mod frames;
 mod index;
@@ -26,7 +27,13 @@ mod value_writes;
 pub use value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 pub use value_writes::PreparedGraphValueWrites;
 
-pub use compiler::{expand_scene_modifiers, prepare_scene_modifiers, validate_modifier_attachment, validate_modifier_runtime};
+pub use compiler::{
+    expand_scene_modifiers, prepare_scene_modifier_math_view, prepare_scene_modifiers,
+    validate_modifier_attachment, validate_modifier_runtime,
+};
+pub use math_view::MathViewScope;
+#[cfg(test)]
+pub(crate) use math_view::test_owner as math_view_test_owner;
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
 pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};

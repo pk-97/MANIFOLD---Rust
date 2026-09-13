@@ -370,6 +370,9 @@ impl PresetRuntime {
     /// column (realtime vs export). Forwards to the executor.
     pub fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
         self.executor.set_rt_quality(q);
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.set_rt_quality(q); }
+        }
     }
 
     /// Drain this chain's per-step CPU profiles recorded on the last profiled

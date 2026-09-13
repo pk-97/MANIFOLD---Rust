@@ -87,6 +87,8 @@ mod build;
 use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, OpenGroup};
 
 mod convert_heal;
+mod math_view;
+mod lifecycle;
 
 /// The production chain-topology key, exposed for load-time clip-topology
 /// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
@@ -183,6 +185,10 @@ mod bound_param_survives_rebuild_tests;
 #[cfg(test)]
 #[path = "tests/modifier_events.rs"]
 mod modifier_events_tests;
+
+#[cfg(test)]
+#[path = "tests/math_view.rs"]
+mod math_view_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/blob_grain_probe.rs"]

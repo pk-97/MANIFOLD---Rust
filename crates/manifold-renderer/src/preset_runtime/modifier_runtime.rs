@@ -54,11 +54,28 @@ impl PresetRuntime {
         manifest: Option<&ParamManifest>,
         render_fused: bool,
     ) -> Result<Self, JsonGeneratorLoadError> {
+        if !doc.scene_modifiers.iter().any(|modifier|
+            manifold_core::scene_modifier_math_view::has_math_view_controls(&modifier.graph)) {
+            return Self::from_def_for_render_view(doc, registry, manifest, render_fused, None);
+        }
+        let mut runtime = Self::from_def_for_render_view(doc.clone(), registry, manifest, render_fused, None)?;
+        runtime.math_views = super::math_view::prepare_views(&doc, registry, manifest, render_fused, &runtime)?;
+        Ok(runtime)
+    }
+
+    pub(super) fn from_def_for_render_view(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
+        render_fused: bool,
+        math_view: Option<(&manifold_core::NodeId, crate::node_graph::scene_modifier_expand::MathViewScope)>,
+    ) -> Result<Self, JsonGeneratorLoadError> {
         let (render_def, authoring) =
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc) {
-                let prepared = crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(
-                    &doc, registry,
-                )?;
+                let prepared = match math_view {
+                    Some((modifier_id, scope)) => crate::node_graph::scene_modifier_expand::prepare_scene_modifier_math_view(&doc, registry, modifier_id, scope)?,
+                    None => crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(&doc, registry)?,
+                };
                 // The generator resolver drops Composite bindings. Keep provenance
                 // in the same order before installing the resolved binding list.
                 let sources = prepared
@@ -163,10 +180,26 @@ impl PresetRuntime {
             canvas,
             &AHashMap::default(),
         )?;
-        budget
-            .account(&allocation)
-            .map(Some)
-            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
+        let mut usage = budget.account(&allocation)
+            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)?;
+        let add = |left: u64, right: u64| left.checked_add(right).ok_or_else(||
+            crate::node_graph::PreAllocationError::ModifierAdmission(
+                crate::node_graph::scene_modifier_expand::SceneModifierExpandError::CapacityExceeded {
+                    path: "mathViewBuffers".into(), detail: "prepared byte count overflow".into(),
+                }));
+        for view in &self.math_views {
+            for variant in &view.variants {
+                if let Some(extra) = variant.prepared_modifier_buffer_usage(canvas)? {
+                    usage.candidate_bytes = add(usage.candidate_bytes, extra.candidate_bytes)?;
+                    usage.baseline_bytes = add(usage.baseline_bytes, extra.baseline_bytes)?;
+                    for (scene, bytes) in extra.modifier_bytes {
+                        let entry = usage.modifier_bytes.entry(scene).or_default();
+                        *entry = add(*entry, bytes)?;
+                    }
+                }
+            }
+        }
+        Ok(Some(usage))
     }
 
     /// Account and admit a prepared-array candidate against a captured GPU
@@ -180,19 +213,12 @@ impl PresetRuntime {
         Option<crate::node_graph::scene_modifier_expand::ModifierBufferUsage>,
         crate::node_graph::PreAllocationError,
     > {
-        let Some(budget) = self.graph.modifier_buffer_budget() else {
+        let Some(usage) = self.prepared_modifier_buffer_usage(canvas)? else {
             return Ok(None);
         };
-        let allocation = crate::node_graph::resource_allocation::plan_array_allocations(
-            &self.graph,
-            &self.plan,
-            canvas,
-            &AHashMap::default(),
-        )?;
-        budget
-            .check_with_snapshot(&allocation, snapshot)
-            .map(Some)
-            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
+        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(snapshot, usage.candidate_bytes)
+            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)?;
+        Ok(Some(usage))
     }
 
     pub(crate) fn is_modifier_trigger_param(&self, param: &str) -> bool {
@@ -203,18 +229,27 @@ impl PresetRuntime {
 
     #[cfg(test)]
     pub(crate) fn note_modifier_audio_event(&mut self, param: &str) -> bool {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.note_modifier_audio_event(param); }
+        }
         self.modifier_events
             .as_mut()
             .is_some_and(|events| events.note_audio(param))
     }
 
     pub(crate) fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.note_modifier_audio_key(param_key); }
+        }
         self.modifier_events
             .as_mut()
             .is_some_and(|events| events.note_audio_key(param_key))
     }
 
     pub(crate) fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.note_modifier_clip_event(host); }
+        }
         if let Some(events) = &mut self.modifier_events {
             events.note_clip(|param| {
                 host.is_none_or(|host| {
@@ -235,6 +270,9 @@ impl PresetRuntime {
     /// Multiple events before an evaluation preserve the earliest baseline.
     pub fn note_trigger_event(&mut self, previous_count: u32) {
         self.pending_trigger_baseline.get_or_insert(previous_count);
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.note_trigger_event(previous_count); }
+        }
     }
 
     pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
@@ -242,6 +280,13 @@ impl PresetRuntime {
     }
 
     pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
+        for view in &mut self.math_views {
+            if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
+                for (variant, previous) in view.variants.iter_mut().zip(&mut previous.variants) {
+                    variant.carry_modifier_control_state_from(previous);
+                }
+            }
+        }
         self.carry_pending_trigger_from(prior);
         if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events)
         {

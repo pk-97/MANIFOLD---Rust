@@ -141,7 +141,7 @@ fn dispatch_tail_census_is_stable() {
         let shape: Vec<String> = sig.iter().map(|(b, r)| format!("{b}:{r:?}")).collect();
         eprintln!("{} [{}] {}", if *q { "QUALIFY" } else { "manual " }, shape.join(" "), id);
     }
-    // Ratchet: the codemod's qualifying set (measured 2026-09-13: 177
+    // Ratchet: the codemod's qualifying set (measured 2026-09-13: 178
     // standalone atoms, 89 canonical texture-path). A new atom landing here is
     // fine — it gets the helper by construction — but a drop means an atom's
     // kernel shape drifted out from under already-rewritten call sites.
@@ -152,7 +152,8 @@ fn dispatch_tail_census_is_stable() {
     // Photoscan slice adds wave_shear_mesh and transform_mesh_patches.
     // Structured modifiers add normal_wave_mesh, ordered_recon_mesh,
     // analytic_echo_instances, mesh_spatial_mask and mesh_stagger_envelope.
-    assert_eq!(total, 177, "standalone atom census drifted");
+    // Math View adds sample_triangle_grid, a buffer source (not texture-path).
+    assert_eq!(total, 178, "standalone atom census drifted");
     assert_eq!(
         qualifying, 89,
         "canonical texture-path population drifted"

@@ -100,6 +100,7 @@ pub struct PresetRuntime {
     /// `effects` slice.
     pub(super) effect_nodes: Vec<EffectSlot>,
     pub(super) modifier_preview_routes: Vec<crate::node_graph::scene_modifier_expand::SceneModifierNodeRoute>,
+    pub(super) math_views: Vec<super::math_view::MathViewRuntime>,
     /// One slot per Mix node introduced for a wet/dry group. The
     /// Mix's `amount` param is set to the group's `wet_dry` value
     /// every frame (so dragging a wet/dry slider in the UI doesn't
@@ -1284,6 +1285,7 @@ impl PresetRuntime {
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
             modifier_preview_routes: Vec::new(),
+            math_views: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
             modifier_events: None,
@@ -1826,31 +1828,6 @@ impl PresetRuntime {
         self.executor.backend().texture_2d(output_slot)
     }
 
-    /// Forwarded `clear_state` for each effect node — called on seek
-    /// / project load so trails, feedback, and mip pyramids don't
-    /// carry stale content across playback discontinuities. Also
-    /// wipes the chain's `StateStore` so primitives that key state
-    /// there (e.g. `temporal::Feedback`'s prev-frame buffer) reset
-    /// alongside instance-local state.
-    pub fn clear_state(&mut self) {
-        self.pending_trigger_baseline = None;
-        if let Some(events) = &mut self.modifier_events { events.clear(); }
-        // Collect node ids first so we can release the &self borrow
-        // before calling get_node_mut on each.
-        let mut nodes_to_clear: Vec<NodeInstanceId> = Vec::new();
-        for slot in &self.effect_nodes {
-            for (_, id) in &slot.handles {
-                nodes_to_clear.push(*id);
-            }
-        }
-        for node_id in nodes_to_clear {
-            if let Some(inst) = self.graph.get_node_mut(node_id) {
-                inst.node.clear_state();
-            }
-        }
-        self.state_store.cleanup_all();
-    }
-
     /// Stable identity for the `GeneratorRegistry`. Panics on an effect-chain
     /// runtime (which has no single type id).
     pub fn type_id(&self) -> &PresetTypeId {
@@ -1883,6 +1860,7 @@ impl PresetRuntime {
     /// their decode, so they report `false` and can't wedge the loop.
     pub fn io_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.io_pending())
+            || self.math_views.iter().any(|view| view.variants.iter().any(Self::io_pending))
     }
 
     /// Any node in this graph still has load-time warmup work pending
@@ -1890,6 +1868,7 @@ impl PresetRuntime {
     /// until this returns `false` for every generator layer.
     pub fn warmup_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.warmup_pending())
+            || self.math_views.iter().any(|view| view.variants.iter().any(Self::warmup_pending))
     }
 
     /// Push a value/position editor edit's inner-node values into the running
@@ -1899,6 +1878,9 @@ impl PresetRuntime {
         &mut self,
         def: &manifold_core::effect_graph_def::EffectGraphDef,
     ) {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.apply_inner_param_overrides(def); }
+        }
         if let Some(seg) = self.effect_nodes.first_mut() {
             // Disjoint borrows (same pattern as the chain's `run`):
             // seg.bound (mut) + seg.node_map (shared) + self.graph (mut).
@@ -1924,6 +1906,9 @@ impl PresetRuntime {
         manifest: &ParamManifest,
         def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     ) {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.apply_manifest_reshape(manifest, def); }
+        }
         if let Some(seg) = self.effect_nodes.first_mut() {
             seg.bound.rebake_reshapes(manifest, def);
         }
@@ -1959,6 +1944,7 @@ impl PresetRuntime {
     /// like [`Self::awaiting_segment_swap`].
     pub fn awaiting_forced_outputs_rebuild(&self) -> bool {
         self.forced_outputs_stale
+            || self.math_views.iter().any(|view| view.variants.iter().any(Self::awaiting_forced_outputs_rebuild))
     }
 
     fn refresh_prepared_parameter_error(&mut self) -> bool {
@@ -2074,6 +2060,10 @@ impl PresetRuntime {
             ctx.owner_key,
         );
 
+        for view in &mut self.math_views {
+            view.render(&self.graph, gpu, target, ctx, params);
+        }
+
         self.consume_trigger_markers();
         ctx.anim_progress
     }
@@ -2081,6 +2071,9 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.reset_state(_device); }
+        }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events { events.clear(); }
         for inst in self.graph.nodes_mut() {
@@ -2112,6 +2105,9 @@ impl PresetRuntime {
     /// `ContentThread::handle_command`'s `ContentCommand::Stop` /
     /// `ContentCommand::LoadProject` arms.
     pub fn clear_trigger_state(&mut self) {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants { variant.clear_trigger_state(); }
+        }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events { events.clear(); }
         let mut latch_ids: Vec<NodeInstanceId> = Vec::new();
@@ -2191,6 +2187,9 @@ impl PresetRuntime {
             inst.node.clear_state();
         }
         self.state_store.cleanup_all();
+        for view in &mut self.math_views {
+            view.resize(device, width, height, format);
+        }
     }
 
 }
