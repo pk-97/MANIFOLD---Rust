@@ -12,12 +12,13 @@ use manifold_core::scene_modifier_preset::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 use crate::node_graph::PortType;
+use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 
 use super::{
     SceneModifierExpandError, bindings, frames,
     index::FlatSceneIndex,
+    math_view::{MathViewRequest, MathViewScope},
     namespace,
     routes::{self, PreparedSceneModifierGraph},
 };
@@ -136,6 +137,28 @@ pub fn prepare_scene_modifiers(
     owner: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
+    prepare_scene_modifiers_impl(owner, registry, None)
+}
+
+/// Prepare the sparse Math View graph through the canonical modifier compiler.
+pub fn prepare_scene_modifier_math_view(
+    owner: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    modifier_id: &NodeId,
+    scope: MathViewScope,
+) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
+    prepare_scene_modifiers_impl(
+        owner,
+        registry,
+        Some(MathViewRequest { modifier_id, scope }),
+    )
+}
+
+fn prepare_scene_modifiers_impl(
+    owner: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    math_view: Option<MathViewRequest<'_>>,
+) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
     if owner.scene_modifiers.len() > 16 {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "sceneModifiers".into(),
@@ -162,8 +185,32 @@ pub fn prepare_scene_modifiers(
             binding_sources: Vec::new(),
         });
     }
+    if let Some(request) = math_view
+        && !owner
+            .scene_modifiers
+            .iter()
+            .any(|instance| instance.id == *request.modifier_id)
+        {
+            return Err(SceneModifierExpandError::MissingTarget {
+                path: request.modifier_id.to_string(),
+                detail: "Math View modifier was not found".into(),
+            });
+    }
     let index = FlatSceneIndex::build(owner)?;
     preflight_expansion(owner, &index)?;
+    let math_targets = if let Some(request) = math_view {
+        let requested = owner
+            .scene_modifiers
+            .iter()
+            .find(|instance| instance.id == *request.modifier_id)
+            .expect("Math View target was checked above");
+        Some((
+            requested.scene.clone(),
+            frames::selected_objects(&index, requested)?,
+        ))
+    } else {
+        None
+    };
     let mut builder = Builder {
         next_id: index
             .flat
@@ -183,6 +230,11 @@ pub fn prepare_scene_modifiers(
         camera_anchors: BTreeMap::new(),
         contexts: BTreeMap::new(),
         event_routes: Vec::new(),
+        math_view,
+        math_seeded: false,
+        math_targets,
+        math_captures: BTreeMap::new(),
+        math_samples: BTreeMap::new(),
     };
     let mut leaf_maps = BTreeMap::new();
     let mut target_maps = BTreeMap::new();
@@ -210,9 +262,50 @@ pub fn prepare_scene_modifiers(
         }
         frames::validate_saved_frames(owner, &index, instance)?;
         let targets = frames::selected_objects(&index, instance)?;
+        if let Some(request) = builder.math_view {
+            let should_seed = match request.scope {
+                MathViewScope::ThisModifier => instance.id == *request.modifier_id,
+                MathViewScope::WithinChain => {
+                    !builder.math_seeded
+                        && builder
+                            .math_targets
+                            .as_ref()
+                            .is_some_and(|(scene, _)| scene == &instance.scene)
+                }
+            };
+            if should_seed {
+                let requested_targets = builder
+                    .math_targets
+                    .as_ref()
+                    .map(|(_, targets)| targets.clone())
+                    .expect("Math View target list was prepared above");
+                let requested = owner.scene_modifiers.iter()
+                    .find(|candidate| candidate.id == *request.modifier_id)
+                    .expect("Math View request checked above");
+                builder.seed_math_view(requested, &requested_targets)?;
+                builder.math_seeded = true;
+            }
+        }
+        let capture_before = if builder
+            .math_view
+            .is_some_and(|request| instance.id == *request.modifier_id)
+        {
+            Some(builder.capture_math_view_input(instance, &targets)?)
+        } else {
+            None
+        };
         let leaves = builder.append_instance(owner, instance, &targets)?;
+        if let Some(before) = capture_before {
+            builder.capture_math_view_result(instance, &targets, before)?;
+        }
         leaf_maps.insert(instance.id.to_string(), leaves);
         target_maps.insert(instance.id.to_string(), targets);
+    }
+    if math_view.is_some() && !builder.math_seeded {
+        return Err(SceneModifierExpandError::MissingTarget {
+            path: "mathView".into(),
+            detail: "Math View modifier has no selected objects in its scene".into(),
+        });
     }
     for key in &builder.written {
         let target = *index
@@ -234,6 +327,9 @@ pub fn prepare_scene_modifiers(
             to_node: target,
             to_port: key.1.clone(),
         });
+    }
+    if math_view.is_some() {
+        builder.finish_math_view(owner, &leaf_maps)?;
     }
     builder.derived.name = owner.name.clone();
     builder.derived.description = owner.description.clone();
@@ -347,6 +443,20 @@ struct Builder<'a> {
     camera_anchors: BTreeMap<SceneNodeRef, EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
     event_routes: Vec<super::SceneModifierEventRoute>,
+    math_view: Option<MathViewRequest<'a>>,
+    math_seeded: bool,
+    math_targets: Option<(SceneNodeRef, Vec<SceneNodeRef>)>,
+    math_captures: BTreeMap<SceneNodeRef, MathViewCapture>,
+    math_samples: BTreeMap<SceneNodeRef, PortAddress>,
+}
+
+#[derive(Debug, Clone)]
+struct MathViewCapture {
+    reference: PortAddress,
+    incoming: PortAddress,
+    current: PortAddress,
+    radius: f64,
+    source_offset: [f64; 3],
 }
 
 fn preflight_expansion(
@@ -439,6 +549,459 @@ fn preflight_expansion(
 }
 
 impl Builder<'_> {
+    fn seed_math_view(
+        &mut self,
+        instance: &SceneModifierInstanceDef,
+        targets: &[SceneNodeRef],
+    ) -> Result<(), SceneModifierExpandError> {
+        if targets.is_empty() {
+            return Err(SceneModifierExpandError::MissingTarget {
+                path: instance.id.to_string(),
+                detail: "Math View requires at least one selected object".into(),
+            });
+        }
+        for target in targets {
+            let frame = instance
+                .mesh_frames
+                .iter()
+                .find(|frame| frame.target == *target)
+                .ok_or_else(|| SceneModifierExpandError::UnsupportedCoordinateFrame {
+                    path: instance.id.to_string(),
+                    detail: format!("Math View has no saved mesh frame for {target:?}"),
+                })?;
+            let key = self.attachment_key(instance, Some(target), SceneEndpoint::Vertices)?;
+            let id = self.next_id;
+            self.next_id = id
+                .checked_add(1)
+                .ok_or_else(|| invalid("mathView", "numeric node IDs exhausted"))?;
+            let mut namespace_parts = vec!["math_view", instance.id.as_str()];
+            namespace_parts.extend(target.scope.iter().map(NodeId::as_str));
+            namespace_parts.push(target.node.as_str());
+            let node_id = namespace::namespace_node_id(&namespace_parts);
+            let mut params = BTreeMap::new();
+            params.insert("density".into(), SerializedParamValue::Int { value: 4 });
+            params.insert(
+                "radius".into(),
+                SerializedParamValue::Float {
+                    value: frame.scene_radius as f32,
+                },
+            );
+            for (name, value) in [
+                // The source primitive subtracts this saved calibration
+                // offset before the authored graph evaluates the sample.
+                ("source_offset_x", frame.source_offset[0]),
+                ("source_offset_y", frame.source_offset[1]),
+                ("source_offset_z", frame.source_offset[2]),
+            ] {
+                params.insert(
+                    name.into(),
+                    SerializedParamValue::Float {
+                        value: value as f32,
+                    },
+                );
+            }
+            self.derived.nodes.push(EffectGraphNode {
+                id,
+                handle: Some(node_id.to_string()),
+                node_id,
+                type_id: "node.sample_triangle_grid".into(),
+                params,
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: Some("Math View Samples".into()),
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            });
+            self.current
+                .insert(key.clone(), Some((id, "vertices".into())));
+            self.reference.insert(key, Some((id, "vertices".into())));
+            self.math_samples
+                .insert(target.clone(), (id, "vertices".into()));
+        }
+        Ok(())
+    }
+
+    fn capture_math_view_input(
+        &mut self,
+        instance: &SceneModifierInstanceDef,
+        targets: &[SceneNodeRef],
+    ) -> Result<BTreeMap<SceneNodeRef, MathViewCapture>, SceneModifierExpandError> {
+        let mut captures = BTreeMap::new();
+        let requested_targets = self
+            .math_targets
+            .as_ref()
+            .map(|(_, targets)| targets.clone())
+            .ok_or_else(|| invalid("mathView", "Math View target list is unavailable"))?;
+        for target in &requested_targets {
+            if !targets.contains(target) {
+                continue;
+            }
+            let key = self.attachment_key(instance, Some(target), SceneEndpoint::Vertices)?;
+            let incoming = self
+                .current
+                .get(&key)
+                .and_then(|address| address.clone())
+                .ok_or_else(|| SceneModifierExpandError::MissingInput {
+                    path: format!("{:?}.vertices", target),
+                    detail: "Math View modifier has no incoming vertex producer".into(),
+                })?;
+            let reference = self
+                .reference
+                .get(&key)
+                .and_then(|address| address.clone())
+                .ok_or_else(|| SceneModifierExpandError::MissingInput {
+                    path: format!("{:?}.vertices", target),
+                    detail: "Math View modifier has no reference vertex producer".into(),
+                })?;
+            let frame = instance
+                .mesh_frames
+                .iter()
+                .find(|frame| frame.target == *target)
+                .ok_or_else(|| SceneModifierExpandError::UnsupportedCoordinateFrame {
+                    path: instance.id.to_string(),
+                    detail: format!("Math View has no saved mesh frame for {target:?}"),
+                })?;
+            captures.insert(
+                target.clone(),
+                MathViewCapture {
+                    reference,
+                    incoming: incoming.clone(),
+                    current: incoming,
+                    radius: frame.scene_radius,
+                    source_offset: frame.source_offset,
+                },
+            );
+        }
+        if captures.is_empty() {
+            return Err(SceneModifierExpandError::MissingTarget {
+                path: instance.id.to_string(),
+                detail: "Math View modifier has no selected target captures".into(),
+            });
+        }
+        Ok(captures)
+    }
+
+    fn capture_math_view_result(
+        &mut self,
+        instance: &SceneModifierInstanceDef,
+        targets: &[SceneNodeRef],
+        mut captures: BTreeMap<SceneNodeRef, MathViewCapture>,
+    ) -> Result<(), SceneModifierExpandError> {
+        for (target, capture) in &mut captures {
+            if !targets.contains(target) {
+                return Err(SceneModifierExpandError::MissingTarget {
+                    path: instance.id.to_string(),
+                    detail: format!("requested Math View target {target:?} is not selected"),
+                });
+            }
+            let key = self.attachment_key(instance, Some(target), SceneEndpoint::Vertices)?;
+            capture.current = self
+                .current
+                .get(&key)
+                .and_then(|address| address.clone())
+                .ok_or_else(|| SceneModifierExpandError::MissingInput {
+                    path: format!("{:?}.vertices", target),
+                    detail: "Math View modifier did not produce current vertices".into(),
+                })?;
+        }
+        self.math_captures = captures;
+        Ok(())
+    }
+
+    fn finish_math_view(
+        &mut self,
+        owner: &EffectGraphDef,
+        leaf_maps: &BTreeMap<String, LeafMap>,
+    ) -> Result<(), SceneModifierExpandError> {
+        let request = self
+            .math_view
+            .ok_or_else(|| invalid("mathView", "Math View request is unavailable"))?;
+        if self.math_captures.is_empty() {
+            return Err(SceneModifierExpandError::MissingTarget {
+                path: request.modifier_id.to_string(),
+                detail: "Math View has no captured modifier output".into(),
+            });
+        }
+        let modifier = owner
+            .scene_modifiers
+            .iter()
+            .find(|instance| instance.id == *request.modifier_id)
+            .ok_or_else(|| invalid("mathView", "Math View modifier definition is unavailable"))?;
+        let controls = self.math_control_sources(modifier, leaf_maps)?;
+        let scene_id = self.index.by_ref.get(&modifier.scene)
+            .ok_or_else(|| invalid("mathView.camera", "scene target missing"))?;
+        // Endpoint writes have already been applied. Follow the scene's final
+        // camera wire, preserving any lens/processor after the insertion point.
+        let camera = self.derived.wires.iter()
+            .find(|wire| wire.to_node == *scene_id && wire.to_port == "camera")
+            .map(|wire| (wire.from_node, wire.from_port.clone()))
+            .ok_or_else(|| SceneModifierExpandError::MissingInput {
+                path: format!("{:?}.camera", modifier.scene),
+                detail: "Math View requires the scene's resolved Camera input".into(),
+            })?;
+        let density = controls.get("density").cloned().ok_or_else(|| {
+            invalid(
+                "mathView.density",
+                "Math View density control is unavailable",
+            )
+        })?;
+        let samples: Vec<_> = self.math_samples.values().cloned().collect();
+        for sample in samples {
+            self.derived.wires.push(EffectGraphWire {
+                from_node: density.0,
+                from_port: density.1.clone(),
+                to_node: sample.0,
+                to_port: "density".into(),
+            });
+        }
+        let final_id = self
+            .derived
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "system.final_output")
+            .map(|node| node.id)
+            .ok_or_else(|| invalid("mathView", "Math View requires system.final_output"))?;
+        let mut diagrams = Vec::with_capacity(self.math_captures.len());
+        let captures: Vec<_> = self
+            .math_captures
+            .iter()
+            .map(|(target, capture)| (target.clone(), capture.clone()))
+            .collect();
+        for (target, capture) in captures {
+            let transform_key =
+                self.attachment_key(modifier, Some(&target), SceneEndpoint::Transform)?;
+            let transform = self
+                .current
+                .get(&transform_key)
+                .and_then(|address| address.clone());
+            let mut diagram_parts = vec!["math_view", request.modifier_id.as_str(), "diagram"];
+            diagram_parts.extend(target.scope.iter().map(NodeId::as_str));
+            diagram_parts.push(target.node.as_str());
+            let diagram_id = self.add_math_node(
+                &diagram_parts,
+                "node.render_mesh_diagram",
+                "Math View Diagram",
+                BTreeMap::from([
+                    (
+                        "radius".into(),
+                        SerializedParamValue::Float {
+                            value: capture.radius as f32,
+                        },
+                    ),
+                    (
+                        "source_offset_x".into(),
+                        SerializedParamValue::Float {
+                            value: capture.source_offset[0] as f32,
+                        },
+                    ),
+                    (
+                        "source_offset_y".into(),
+                        SerializedParamValue::Float {
+                            value: capture.source_offset[1] as f32,
+                        },
+                    ),
+                    (
+                        "source_offset_z".into(),
+                        SerializedParamValue::Float {
+                            value: capture.source_offset[2] as f32,
+                        },
+                    ),
+                ]),
+            )?;
+            let diagram = (diagram_id, "color".to_string());
+            for (from, to_port) in [
+                (Some(capture.current.clone()), "current"),
+                (Some(capture.reference.clone()), "reference"),
+                (Some(capture.incoming.clone()), "incoming"),
+                (Some(camera.clone()), "camera"),
+                (transform, "transform"),
+            ] {
+                let Some(from) = from else { continue; };
+                self.derived.wires.push(EffectGraphWire {
+                    from_node: from.0,
+                    from_port: from.1,
+                    to_node: diagram_id,
+                    to_port: to_port.into(),
+                });
+            }
+            self.wire_math_controls(diagram_id, &controls)?;
+            diagrams.push(diagram);
+        }
+        let composed = self.compose_math_diagrams(request.modifier_id, &diagrams)?;
+        let opaque = self.add_math_node(
+            &["math_view", request.modifier_id.as_str(), "opaque"],
+            "node.set_alpha",
+            "Math View Opaque",
+            BTreeMap::from([("alpha".into(), SerializedParamValue::Float { value: 1.0 })]),
+        )?;
+        self.derived.wires.push(EffectGraphWire {
+            from_node: composed.0,
+            from_port: composed.1,
+            to_node: opaque,
+            to_port: "in".into(),
+        });
+        self.derived
+            .wires
+            .retain(|wire| !(wire.to_node == final_id && wire.to_port == "in"));
+        self.derived.wires.push(EffectGraphWire {
+            from_node: opaque,
+            from_port: "out".into(),
+            to_node: final_id,
+            to_port: "in".into(),
+        });
+        Ok(())
+    }
+
+    fn math_control_sources(
+        &self,
+        modifier: &SceneModifierInstanceDef,
+        leaf_maps: &BTreeMap<String, LeafMap>,
+    ) -> Result<BTreeMap<String, PortAddress>, SceneModifierExpandError> {
+        let local_map = leaf_maps.get(modifier.id.as_str()).ok_or_else(|| {
+            invalid(
+                "mathView.controls",
+                "Math View modifier routes are unavailable",
+            )
+        })?;
+        let mut controls = BTreeMap::new();
+        for (suffix, _, _, _, _) in manifold_core::scene_modifier_math_view::CONTROLS {
+            let local_id = format!("__math_view_{suffix}");
+            let copies = local_map.get(&local_id).ok_or_else(|| {
+                SceneModifierExpandError::MissingInput {
+                    path: format!("mathView.{suffix}"),
+                    detail: "Math View control node is absent; enrich the modifier before preparing its view".into(),
+                }
+            })?;
+            if copies.len() != 1 {
+                return Err(SceneModifierExpandError::InvalidRecipe {
+                    path: format!("mathView.{suffix}"),
+                    detail: format!("expected one shared control node, found {}", copies.len()),
+                });
+            }
+            let node_id = &copies[0];
+            let node = self
+                .derived
+                .nodes
+                .iter()
+                .find(|node| node.node_id == *node_id)
+                .ok_or_else(|| {
+                    invalid(format!("mathView.{suffix}"), "control node copy is absent")
+                })?;
+            if node.type_id != "node.value" {
+                return Err(SceneModifierExpandError::InvalidRecipe {
+                    path: format!("mathView.{suffix}"),
+                    detail: "control must be a node.value producer".into(),
+                });
+            }
+            controls.insert(suffix.to_string(), (node.id, "out".into()));
+        }
+        Ok(controls)
+    }
+
+    fn wire_math_controls(
+        &mut self,
+        diagram_id: u32,
+        controls: &BTreeMap<String, PortAddress>,
+    ) -> Result<(), SceneModifierExpandError> {
+        for (suffix, _, _, _, _) in manifold_core::scene_modifier_math_view::CONTROLS {
+            if matches!(*suffix, "mode" | "scope") {
+                continue;
+            }
+            let source = controls.get(*suffix).ok_or_else(|| {
+                invalid(
+                    format!("mathView.{suffix}"),
+                    "presentation control source is unavailable",
+                )
+            })?;
+            self.derived.wires.push(EffectGraphWire {
+                from_node: source.0,
+                from_port: source.1.clone(),
+                to_node: diagram_id,
+                to_port: (*suffix).into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn add_math_node(
+        &mut self,
+        parts: &[&str],
+        type_id: &str,
+        title: &str,
+        params: BTreeMap<String, SerializedParamValue>,
+    ) -> Result<u32, SceneModifierExpandError> {
+        let node_id = namespace::namespace_node_id(parts);
+        if self
+            .derived
+            .nodes
+            .iter()
+            .any(|node| node.node_id == node_id)
+        {
+            return Err(SceneModifierExpandError::DuplicateIdentity {
+                path: node_id.to_string(),
+                detail: "generated Math View node collides with an existing node".into(),
+            });
+        }
+        let id = self.next_id;
+        self.next_id = id
+            .checked_add(1)
+            .ok_or_else(|| invalid("mathView", "numeric node IDs exhausted"))?;
+        self.derived.nodes.push(EffectGraphNode {
+            id,
+            handle: Some(node_id.to_string()),
+            node_id,
+            type_id: type_id.into(),
+            params,
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: Some(title.into()),
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        });
+        Ok(id)
+    }
+
+    fn compose_math_diagrams(
+        &mut self,
+        modifier_id: &NodeId,
+        diagrams: &[(u32, String)],
+    ) -> Result<PortAddress, SceneModifierExpandError> {
+        let Some(first) = diagrams.first() else {
+            return Err(invalid("mathView", "no diagram outputs were generated"));
+        };
+        let mut accumulated = (first.0, first.1.clone());
+        for (index, diagram) in diagrams.iter().enumerate().skip(1) {
+            let index_string = index.to_string();
+            let mix = self.add_math_node(
+                &["math_view", modifier_id.as_str(), "compose", &index_string],
+                "node.mix",
+                "Math View Compose",
+                BTreeMap::from([
+                    ("amount".into(), SerializedParamValue::Float { value: 1.0 }),
+                    ("mode".into(), SerializedParamValue::Enum { value: 2 }),
+                ]),
+            )?;
+            self.derived.wires.push(EffectGraphWire {
+                from_node: accumulated.0,
+                from_port: accumulated.1,
+                to_node: mix,
+                to_port: "a".into(),
+            });
+            self.derived.wires.push(EffectGraphWire {
+                from_node: diagram.0,
+                from_port: diagram.1.clone(),
+                to_node: mix,
+                to_port: "b".into(),
+            });
+            accumulated = (mix, "out".into());
+        }
+        Ok(accumulated)
+    }
+
     fn constant_node(
         &mut self,
         key: String,

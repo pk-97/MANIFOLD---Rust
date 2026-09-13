@@ -83,6 +83,7 @@ impl GeneratorRegistry {
         // with MSAA depth render-pipeline variants keyed on material kind /
         // blend / velocity+AO+denoise auxiliary outputs.
         RenderScene::prewarm_pipelines(device);
+        crate::node_graph::primitives::RenderMeshDiagram::prewarm_pipelines(device);
         // COMPILE_CONTRACT_DESIGN P1: the RT shadow-ray pipeline set (MSL
         // library + seven PSOs) is device-global code — populate it here so
         // even the first RenderScene construction compiles nothing.

@@ -70,6 +70,11 @@ fn builder<'a>(
         camera_anchors: BTreeMap::new(),
         contexts: BTreeMap::new(),
         event_routes: Vec::new(),
+        math_view: None,
+        math_seeded: false,
+        math_targets: None,
+        math_captures: BTreeMap::new(),
+        math_samples: BTreeMap::new(),
     }
 }
 

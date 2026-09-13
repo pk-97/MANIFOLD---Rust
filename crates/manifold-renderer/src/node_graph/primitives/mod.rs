@@ -108,6 +108,8 @@ mod facet_normals;
 mod fold_mesh;
 mod generate_cube_mesh;
 mod generate_grid_mesh;
+mod sample_triangle_grid;
+mod render_mesh_diagram;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod plane_mesh;
@@ -385,6 +387,8 @@ pub use ellipse_mask::EllipseMask;
 pub use fold_mesh::FoldMesh;
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
 pub use generate_grid_mesh::GenerateGridMesh;
+pub use sample_triangle_grid::{SampleTriangleGrid, SAMPLE_TRIANGLE_GRID_CAPACITY};
+pub use render_mesh_diagram::RenderMeshDiagram;
 pub use generate_grid_uv::{
     GRID_UV_DEFAULT_SIZE, GRID_UV_MAX_SIZE, GenerateGridUv,
 };

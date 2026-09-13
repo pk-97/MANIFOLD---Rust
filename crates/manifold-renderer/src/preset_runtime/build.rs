@@ -627,6 +627,7 @@ impl PresetRuntime {
             executor: Executor::with_mock(),
             effect_nodes: vec![segment],
             modifier_preview_routes: Vec::new(),
+            math_views: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
             modifier_events: None,
@@ -696,7 +697,18 @@ impl PresetRuntime {
         height: u32,
         format: GpuTextureFormat,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        let g = &mut self;
+        self.install_generator_device(device, width, height, format)?;
+        Ok(self)
+    }
+
+    pub(super) fn install_generator_device(
+        &mut self,
+        device: std::sync::Arc<GpuDevice>,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<(), JsonGeneratorLoadError> {
+        let g = self;
         g.width = width;
         g.height = height;
         let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), width, height, format);
@@ -728,7 +740,10 @@ impl PresetRuntime {
             .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
-        Ok(self)
+        for view in &mut g.math_views {
+            view.install_device(std::sync::Arc::clone(&device), width, height, format)?;
+        }
+        Ok(())
     }
 
 }

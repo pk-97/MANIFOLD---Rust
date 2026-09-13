@@ -205,6 +205,20 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
         let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
         notices.extend(report.diagnostics);
+        let mut enriched = Vec::new();
+        for instance in &mut graph.scene_modifiers {
+            match manifold_core::scene_modifier_math_view::enrich_math_view_controls(&mut instance.graph) {
+                Ok(true) => enriched.push(instance.id.clone()),
+                Ok(false) => {}
+                Err(reason) => notices.push(format!("Math View controls unavailable for {}: {reason}", instance.id)),
+            }
+        }
+        for id in enriched {
+            match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(graph, &id) {
+                Ok(reconciled) => *graph = reconciled.graph,
+                Err(reason) => notices.push(format!("Math View metadata reconciliation failed for {id}: {reason}")),
+            }
+        }
         host.refresh_manifest_from_graph();
     }
     notices

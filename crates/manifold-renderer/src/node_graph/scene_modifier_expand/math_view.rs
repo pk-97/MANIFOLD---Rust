@@ -1,0 +1,97 @@
+use manifold_core::NodeId;
+
+/// Which portion of an owner's modifier chain a Math View evaluates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathViewScope {
+    /// Evaluate the requested modifier against the sparse reference mesh.
+    ThisModifier,
+    /// Evaluate the chain up to and including the requested modifier.
+    WithinChain,
+}
+
+/// Internal request passed through the canonical scene-modifier builder.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MathViewRequest<'a> {
+    pub(super) modifier_id: &'a NodeId,
+    pub(super) scope: MathViewScope,
+}
+
+/// Deterministic saved-frame fixture: no asynchronous asset loading is needed
+/// to compare scene and diagram pixels. Fresh import capture is covered by the
+/// existing frame tests; these frames exercise the saved-project path.
+#[cfg(test)]
+pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
+    use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+    use manifold_core::scene_modifier_preset::{
+        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+    };
+    let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+    )))
+    .unwrap();
+    owner.version = 3;
+    let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/VortexFragments.json"
+    )))
+    .unwrap();
+    let mut frames = Vec::new();
+    for container in &owner.nodes {
+        let Some(group) = &container.group else {
+            continue;
+        };
+        let source = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.cube_mesh")
+            .unwrap();
+        let object = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.scene_object")
+            .unwrap();
+        let transform = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.transform_3d")
+            .unwrap();
+        let scope = vec![container.node_id.clone()];
+        frames.push(SceneMeshReferenceFrame {
+            target: SceneNodeRef {
+                scope: scope.clone(),
+                node: object.node_id.clone(),
+            },
+            source: SceneNodeRef {
+                scope,
+                node: source.node_id.clone(),
+            },
+            source_definition_hash:
+                manifold_core::scene_source_identity::scene_source_definition_hash(&owner, source)
+                    .unwrap(),
+            source_offset: ["pos_x", "pos_y", "pos_z"].map(|param| {
+                match transform.params.get(param) {
+                    Some(SerializedParamValue::Float { value }) => f64::from(*value),
+                    _ => 0.0,
+                }
+            }),
+            scene_radius: 3.0,
+        });
+    }
+    owner.scene_modifiers.push(SceneModifierInstanceDef {
+        id: NodeId::new("vortex_math_view"),
+        scene: SceneNodeRef {
+            scope: vec![],
+            node: NodeId::new("scan_render"),
+        },
+        targets: SceneTargetSelection::AllObjects,
+        mesh_frames: frames,
+        graph: Box::new(recipe),
+    });
+    manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner,
+        &NodeId::new("vortex_math_view"),
+    )
+    .unwrap()
+    .graph
+}

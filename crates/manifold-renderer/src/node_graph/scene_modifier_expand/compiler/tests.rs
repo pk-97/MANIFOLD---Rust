@@ -63,10 +63,7 @@ pub(super) fn fixture() -> EffectGraphDef {
 
 pub(super) fn fusion_fixture() -> EffectGraphDef {
     let mut owner = fixture();
-    let modifier = owner
-        .scene_modifiers
-        .first_mut()
-        .expect("fixture modifier");
+    let modifier = owner.scene_modifiers.first_mut().expect("fixture modifier");
 
     {
         let metadata = modifier
@@ -74,7 +71,9 @@ pub(super) fn fusion_fixture() -> EffectGraphDef {
             .preset_metadata
             .as_mut()
             .expect("recipe metadata");
-        metadata.params.retain(|param| !param.id.starts_with("mask_"));
+        metadata
+            .params
+            .retain(|param| !param.id.starts_with("mask_"));
         metadata
             .bindings
             .retain(|binding| !binding.id.starts_with("mask_"));
@@ -91,7 +90,10 @@ pub(super) fn fusion_fixture() -> EffectGraphDef {
         .find(|node| node.node_id == NodeId::new("elastic_stage"))
         .and_then(|node| node.group.as_mut())
         .expect("fixture stage group");
-    group.interface.inputs.retain(|port| port.name != "reference");
+    group
+        .interface
+        .inputs
+        .retain(|port| port.name != "reference");
     let removed_ids: Vec<u32> = group
         .nodes
         .iter()
@@ -148,24 +150,60 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
         let mut owner = fusion_fixture();
         let original = owner.clone();
         let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
-        let mut runtime = crate::preset_runtime::PresetRuntime::from_def_for_render(owner.clone(), &registry, None, fused_mode).unwrap();
+        let mut runtime = crate::preset_runtime::PresetRuntime::from_def_for_render(
+            owner.clone(),
+            &registry,
+            None,
+            fused_mode,
+        )
+        .unwrap();
         assert!(runtime.graph.modifier_buffer_budget().is_some());
-        let local = SceneNodeRef { scope: vec![NodeId::new("elastic_stage")], node: NodeId::new("shear_x") };
-        let copies = runtime.modifier_node_copies(&owner.scene_modifiers[0].id, &local).unwrap().to_vec();
+        let local = SceneNodeRef {
+            scope: vec![NodeId::new("elastic_stage")],
+            node: NodeId::new("shear_x"),
+        };
+        let copies = runtime
+            .modifier_node_copies(&owner.scene_modifiers[0].id, &local)
+            .unwrap()
+            .to_vec();
         assert_eq!(copies.len(), 2);
         assert!(copies.iter().all(|copy| copy.object.is_some()));
-        owner.scene_modifiers[0].graph.nodes[0].group.as_mut().unwrap().nodes.iter_mut()
-            .find(|node| node.node_id == local.node).unwrap().params
-            .insert("amplitude".into(), SerializedParamValue::Float { value: 0.27 });
+        owner.scene_modifiers[0].graph.nodes[0]
+            .group
+            .as_mut()
+            .unwrap()
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == local.node)
+            .unwrap()
+            .params
+            .insert(
+                "amplitude".into(),
+                SerializedParamValue::Float { value: 0.27 },
+            );
         runtime.apply_inner_param_overrides(&owner);
-        let fused = fused_mode.then(|| crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def).unwrap());
+        let fused = fused_mode.then(|| {
+            crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def).unwrap()
+        });
         for copy in copies {
             let (target, param) = match &fused {
-                Some(view) => view.retarget.get(&(copy.node_id.to_string(), "amplitude".into())).unwrap().clone(),
+                Some(view) => view
+                    .retarget
+                    .get(&(copy.node_id.to_string(), "amplitude".into()))
+                    .unwrap()
+                    .clone(),
                 None => (copy.node_id, "amplitude".into()),
             };
             let id = runtime.graph.instance_by_node_id(&target).unwrap();
-            assert_eq!(runtime.graph.get_node(id).unwrap().params.get(param.as_str()), Some(&ParamValue::Float(0.27)));
+            assert_eq!(
+                runtime
+                    .graph
+                    .get_node(id)
+                    .unwrap()
+                    .params
+                    .get(param.as_str()),
+                Some(&ParamValue::Float(0.27))
+            );
         }
         assert_eq!(
             original,
@@ -174,14 +212,21 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
         );
     }
     let graph = fusion_fixture().into_graph(&registry).unwrap();
-    assert!(graph.modifier_buffer_budget().is_some(), "direct host graph loads retain admission metadata too");
+    assert!(
+        graph.modifier_buffer_budget().is_some(),
+        "direct host graph loads retain admission metadata too"
+    );
 }
 
 #[test]
 fn scene_modifier_expand_runtime_rejects_ray_tracing_enabled_by_live_manifest() {
     use manifold_core::params::{Param, ParamManifest};
     let mut owner = fixture();
-    let local = owner.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap();
+    let local = owner.scene_modifiers[0]
+        .graph
+        .preset_metadata
+        .as_ref()
+        .unwrap();
     let mut spec = local.params[0].clone();
     spec.id = "rt_test".into();
     spec.default_value = 0.0;
@@ -192,18 +237,39 @@ fn scene_modifier_expand_runtime_rejects_ray_tracing_enabled_by_live_manifest() 
     binding.id = spec.id.clone();
     binding.default_value = 0.0;
     binding.convert = manifold_core::effects::ParamConvert::BoolThreshold;
-    binding.target = BindingTarget::Node { node_id: owner.scene_modifiers[0].scene.node.clone(), param: "rt_enabled".into() };
-    owner.preset_metadata.as_mut().unwrap().params.push(spec.clone());
-    owner.preset_metadata.as_mut().unwrap().bindings.push(binding);
+    binding.target = BindingTarget::Node {
+        node_id: owner.scene_modifiers[0].scene.node.clone(),
+        param: "rt_enabled".into(),
+    };
+    owner
+        .preset_metadata
+        .as_mut()
+        .unwrap()
+        .params
+        .push(spec.clone());
+    owner
+        .preset_metadata
+        .as_mut()
+        .unwrap()
+        .bindings
+        .push(binding);
     let mut parameter = Param::bundled(spec);
     parameter.value = 1.0;
     let manifest = ParamManifest::from_params(vec![parameter]);
     let registry = PrimitiveRegistry::with_builtin();
-    assert!(prepare_scene_modifiers(&owner, &registry).is_ok(), "authored RT default is off");
+    assert!(
+        prepare_scene_modifiers(&owner, &registry).is_ok(),
+        "authored RT default is off"
+    );
     let result = crate::preset_runtime::PresetRuntime::from_def(owner, &registry, Some(&manifest));
-    assert!(matches!(result, Err(crate::preset_runtime::JsonGeneratorLoadError::SceneModifier(
-        SceneModifierExpandError::UnsupportedRenderMode { .. }
-    ))));
+    assert!(matches!(
+        result,
+        Err(
+            crate::preset_runtime::JsonGeneratorLoadError::SceneModifier(
+                SceneModifierExpandError::UnsupportedRenderMode { .. }
+            )
+        )
+    ));
 }
 
 #[test]
@@ -683,4 +749,145 @@ fn scene_modifier_expand_compiler_rejects_invalid_endpoint_and_dynamic_rt_even_d
         expand_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()),
         Err(SceneModifierExpandError::UnsupportedEndpoint { .. })
     ));
+}
+
+fn math_view_fixture() -> EffectGraphDef {
+    super::super::math_view::test_owner()
+}
+
+#[test]
+fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage() {
+    let owner = math_view_fixture();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &registry,
+        &NodeId::new("vortex_math_view"),
+        MathViewScope::ThisModifier,
+    )
+    .unwrap();
+
+    assert_eq!(
+        prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.sample_triangle_grid")
+            .count(),
+        2
+    );
+    assert_eq!(
+        prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.render_mesh_diagram")
+            .count(),
+        2
+    );
+    let final_id = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "system.final_output")
+        .unwrap()
+        .id;
+    let final_source = prepared
+        .def
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == final_id && wire.to_port == "in")
+        .unwrap();
+    assert_eq!(
+        prepared
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.id == final_source.from_node)
+            .unwrap()
+            .type_id,
+        "node.set_alpha"
+    );
+
+    // The imported scene remains in the authoring snapshot, but is outside
+    // the final-output dependency closure, so its full mesh/material inputs
+    // cannot receive live execution-plan allocations.
+    let mut live = BTreeSet::from([final_id]);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for wire in &prepared.def.wires {
+            if live.contains(&wire.to_node) && live.insert(wire.from_node) {
+                changed = true;
+            }
+        }
+    }
+    assert!(
+        prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| live.contains(&node.id))
+            .all(|node| {
+                node.type_id != "node.render_scene" && node.type_id != "node.gltf_mesh_source"
+            })
+    );
+}
+
+#[test]
+fn scene_modifier_math_view_scope_changes_the_captured_incoming_route() {
+    let mut owner = math_view_fixture();
+    let mut earlier = owner.scene_modifiers[0].clone();
+    earlier.id = NodeId::new("earlier_vortex");
+    owner.scene_modifiers.insert(0, earlier);
+    let requested = NodeId::new("vortex_math_view");
+    let registry = PrimitiveRegistry::with_builtin();
+
+    let isolated = prepare_scene_modifier_math_view(
+        &owner,
+        &registry,
+        &requested,
+        MathViewScope::ThisModifier,
+    )
+    .unwrap();
+    let chain =
+        prepare_scene_modifier_math_view(&owner, &registry, &requested, MathViewScope::WithinChain)
+            .unwrap();
+
+    fn incoming_source(prepared: &PreparedSceneModifierGraph) -> (u32, String) {
+        let diagram = prepared
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.render_mesh_diagram")
+            .unwrap();
+        let wire = prepared
+            .def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == diagram.id && wire.to_port == "incoming")
+            .unwrap();
+        (
+            wire.from_node,
+            prepared
+                .def
+                .nodes
+                .iter()
+                .find(|node| node.id == wire.from_node)
+                .unwrap()
+                .type_id
+                .clone(),
+        )
+    }
+
+    let isolated_incoming = incoming_source(&isolated);
+    let chain_incoming = incoming_source(&chain);
+    assert_eq!(
+        isolated_incoming.1, "node.sample_triangle_grid",
+        "ThisModifier starts its incoming route at the sparse source"
+    );
+    assert_ne!(
+        chain_incoming.0, isolated_incoming.0,
+        "WithinChain includes the earlier modifier's vertex output"
+    );
 }
