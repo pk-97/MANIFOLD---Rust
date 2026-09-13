@@ -835,6 +835,41 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
 }
 
 #[test]
+fn scene_modifier_math_view_routes_one_shared_grid_control() {
+    for scope in [MathViewScope::ThisModifier, MathViewScope::WithinChain] {
+        let prepared = prepare_scene_modifier_math_view(
+            &math_view_fixture(),
+            &PrimitiveRegistry::with_builtin(),
+            &NodeId::new("vortex_math_view"),
+            scope,
+        )
+        .unwrap();
+        let diagrams: Vec<_> = prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.render_mesh_diagram")
+            .collect();
+        assert_eq!(diagrams.len(), 2);
+
+        assert!(diagrams.iter().all(|diagram| matches!(
+            diagram.params.get("grid"),
+            Some(SerializedParamValue::Bool { value: false })
+        )));
+        let grid_wires: Vec<_> = prepared
+            .def
+            .wires
+            .iter()
+            .filter(|wire| {
+                diagrams.iter().any(|diagram| diagram.id == wire.to_node)
+                    && wire.to_port == "grid"
+            })
+            .collect();
+        assert_eq!(grid_wires.len(), 1);
+    }
+}
+
+#[test]
 fn scene_modifier_math_view_scope_changes_the_captured_incoming_route() {
     let mut owner = math_view_fixture();
     let mut earlier = owner.scene_modifiers[0].clone();

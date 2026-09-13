@@ -18191,21 +18191,6 @@
           "name": "radius",
           "required": false,
           "type": "f32"
-        },
-        {
-          "name": "source_offset_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "source_offset_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "source_offset_z",
-          "required": false,
-          "type": "f32"
         }
       ],
       "label": "Mesh Diagram",
@@ -18294,24 +18279,6 @@
             "0.001",
             "100"
           ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Source Offset X",
-          "name": "source_offset_x",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Source Offset Y",
-          "name": "source_offset_y",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Source Offset Z",
-          "name": "source_offset_z",
           "type": "float"
         }
       ],

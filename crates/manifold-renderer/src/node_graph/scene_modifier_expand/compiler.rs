@@ -456,7 +456,6 @@ struct MathViewCapture {
     incoming: PortAddress,
     current: PortAddress,
     radius: f64,
-    source_offset: [f64; 3],
 }
 
 fn preflight_expansion(
@@ -670,7 +669,6 @@ impl Builder<'_> {
                     incoming: incoming.clone(),
                     current: incoming,
                     radius: frame.scene_radius,
-                    source_offset: frame.source_offset,
                 },
             );
         }
@@ -769,7 +767,7 @@ impl Builder<'_> {
             .iter()
             .map(|(target, capture)| (target.clone(), capture.clone()))
             .collect();
-        for (target, capture) in captures {
+        for (diagram_index, (target, capture)) in captures.into_iter().enumerate() {
             let transform_key =
                 self.attachment_key(modifier, Some(&target), SceneEndpoint::Transform)?;
             let transform = self
@@ -785,27 +783,13 @@ impl Builder<'_> {
                 "Math View Diagram",
                 BTreeMap::from([
                     (
+                        "grid".into(),
+                        SerializedParamValue::Bool { value: false },
+                    ),
+                    (
                         "radius".into(),
                         SerializedParamValue::Float {
                             value: capture.radius as f32,
-                        },
-                    ),
-                    (
-                        "source_offset_x".into(),
-                        SerializedParamValue::Float {
-                            value: capture.source_offset[0] as f32,
-                        },
-                    ),
-                    (
-                        "source_offset_y".into(),
-                        SerializedParamValue::Float {
-                            value: capture.source_offset[1] as f32,
-                        },
-                    ),
-                    (
-                        "source_offset_z".into(),
-                        SerializedParamValue::Float {
-                            value: capture.source_offset[2] as f32,
                         },
                     ),
                 ]),
@@ -826,7 +810,7 @@ impl Builder<'_> {
                     to_port: to_port.into(),
                 });
             }
-            self.wire_math_controls(diagram_id, &controls)?;
+            self.wire_math_controls(diagram_id, &controls, diagram_index == 0)?;
             diagrams.push(diagram);
         }
         let composed = self.compose_math_diagrams(request.modifier_id, &diagrams)?;
@@ -904,9 +888,10 @@ impl Builder<'_> {
         &mut self,
         diagram_id: u32,
         controls: &BTreeMap<String, PortAddress>,
+        include_grid: bool,
     ) -> Result<(), SceneModifierExpandError> {
         for (suffix, _, _, _, _) in manifold_core::scene_modifier_math_view::CONTROLS {
-            if matches!(*suffix, "mode" | "scope") {
+            if matches!(*suffix, "mode" | "scope") || (*suffix == "grid" && !include_grid) {
                 continue;
             }
             let source = controls.get(*suffix).ok_or_else(|| {

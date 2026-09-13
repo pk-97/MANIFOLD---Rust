@@ -7990,7 +7990,7 @@ fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
-fn mat4_inverse(m: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
+pub(crate) fn mat4_inverse(m: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     // Row-major augmented working copy [A | I] for elimination;
     // `m[col][row]` (column-major) -> `a[row][col]`.
     let mut a = [[0f32; 8]; 4];
