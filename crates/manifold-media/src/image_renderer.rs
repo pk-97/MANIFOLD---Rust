@@ -97,6 +97,77 @@ struct ActiveImageClip {
     decode_pending: bool,
 }
 
+/// Full-resolution source retained by load-time warmup so a later activation
+/// can fit/upload without touching disk. This is deliberately separate from
+/// `active_clips`: a warmup borrow must not make a clip look live after the
+/// warmup pass has returned.
+struct WarmupNativeImage {
+    path: String,
+    native: Arc<NativeImage>,
+    bytes: u64,
+}
+
+#[derive(Default)]
+struct WarmupNativeCache {
+    images: AHashMap<ClipId, WarmupNativeImage>,
+    bytes: u64,
+}
+
+impl WarmupNativeCache {
+    fn remove(&mut self, clip_id: &str) {
+        if let Some(cached) = self.images.remove(clip_id) {
+            self.bytes = self.bytes.saturating_sub(cached.bytes);
+        }
+    }
+
+    fn get_for_clip(&mut self, clip: &TimelineClip) -> Option<Arc<NativeImage>> {
+        let stale = self
+            .images
+            .get(clip.id.as_ref())
+            .is_some_and(|cached| cached.path != clip.image_path);
+        if stale {
+            self.remove(clip.id.as_ref());
+        }
+        self.images
+            .get(clip.id.as_ref())
+            .map(|cached| Arc::clone(&cached.native))
+    }
+
+    fn retain(&mut self, clip: &TimelineClip, native: Arc<NativeImage>) -> bool {
+        if self.get_for_clip(clip).is_some() {
+            return true;
+        }
+        let bytes = native.rgba.len() as u64;
+        if self.bytes.saturating_add(bytes) > IMAGE_WARMUP_BUDGET_BYTES {
+            return false;
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.images.insert(
+            clip.id.clone(),
+            WarmupNativeImage {
+                path: clip.image_path.clone(),
+                native,
+                bytes,
+            },
+        );
+        true
+    }
+
+    fn clear(&mut self) {
+        self.images.clear();
+        self.bytes = 0;
+    }
+}
+
+fn release_warmup_active_clips(
+    active_clips: &mut AHashMap<ClipId, ActiveImageClip>,
+    warmed_clip_ids: impl IntoIterator<Item = ClipId>,
+) {
+    for clip_id in warmed_clip_ids {
+        active_clips.remove(clip_id.as_ref());
+    }
+}
+
 /// Static-image renderer implementing the ClipRenderer trait.
 pub struct ImageRenderer {
     /// Shared handle to the GpuDevice owned by ContentPipeline — mirrors
@@ -107,6 +178,7 @@ pub struct ImageRenderer {
     width: u32,
     height: u32,
     active_clips: AHashMap<ClipId, ActiveImageClip>,
+    warmup_native_cache: WarmupNativeCache,
     result_tx: Sender<DecodeResult>,
     result_rx: Receiver<DecodeResult>,
 }
@@ -119,6 +191,7 @@ impl ImageRenderer {
             width: width.max(1),
             height: height.max(1),
             active_clips: AHashMap::new(),
+            warmup_native_cache: WarmupNativeCache::default(),
             result_tx,
             result_rx,
         }
@@ -183,6 +256,10 @@ impl ImageRenderer {
                 result,
             });
         });
+    }
+
+    fn cached_warmup_native(&mut self, clip: &TimelineClip) -> Option<Arc<NativeImage>> {
+        self.warmup_native_cache.get_for_clip(clip)
     }
 
     /// Ensure `clip.texture` is a canvas-sized texture of the given dims,
@@ -265,17 +342,22 @@ impl ClipRenderer for ImageRenderer {
         if clip.image_path.is_empty() {
             return false;
         }
+        let cached_native = self.cached_warmup_native(clip);
         self.active_clips.insert(
             clip.id.clone(),
             ActiveImageClip {
                 path: clip.image_path.clone(),
-                native: None,
+                native: cached_native.clone(),
                 texture: None,
                 has_frame: false,
-                decode_pending: true,
+                decode_pending: cached_native.is_none(),
             },
         );
-        self.spawn_decode_from_disk(clip.id.clone(), clip.image_path.clone());
+        if let Some(native) = cached_native {
+            self.spawn_refit(clip.id.clone(), native);
+        } else {
+            self.spawn_decode_from_disk(clip.id.clone(), clip.image_path.clone());
+        }
         true
     }
 
@@ -285,6 +367,7 @@ impl ClipRenderer for ImageRenderer {
 
     fn release_all(&mut self) {
         self.active_clips.clear();
+        self.warmup_native_cache.clear();
     }
 
     fn is_clip_ready(&self, clip_id: &str) -> bool {
@@ -399,30 +482,45 @@ impl ClipRenderer for ImageRenderer {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let mut used_bytes: u64 = 0;
+        let mut warmed_clip_ids = Vec::new();
         for clip in image_clips {
-            let est = estimate_native_bytes(&clip.image_path).unwrap_or(0);
-            if used_bytes.saturating_add(est) > IMAGE_WARMUP_BUDGET_BYTES {
+            // A live clip owns its texture and decode state. Warmup must not
+            // overwrite or later stop that state if this seam is reused while
+            // a clip is already active.
+            if self.active_clips.contains_key(clip.id.as_ref()) {
+                continue;
+            }
+
+            let cached_native = self.cached_warmup_native(clip);
+            let est = cached_native.as_ref().map_or_else(
+                || estimate_native_bytes(&clip.image_path).unwrap_or(0),
+                |native| native.rgba.len() as u64,
+            );
+            if cached_native.is_none()
+                && self.warmup_native_cache.bytes.saturating_add(est) > IMAGE_WARMUP_BUDGET_BYTES
+            {
                 log::warn!(
                     "[ImageRenderer] image warmup budget exhausted after {} bytes; skipping {}",
-                    used_bytes,
+                    self.warmup_native_cache.bytes,
                     clip.image_path
                 );
                 break;
             }
-            used_bytes = used_bytes.saturating_add(est);
 
-            // Decode synchronously on the content thread during load. Reuses the
-            // production decode path and populates the same cache `start_clip` would.
-            let native = match decode_native(&clip.image_path) {
-                Ok(n) => Arc::new(n),
-                Err(e) => {
-                    log::error!(
-                        "[ImageRenderer] warmup decode failed for {}: {e}",
-                        clip.image_path
-                    );
-                    continue;
-                }
+            // Decode synchronously on the content thread during load, then
+            // retain only the bounded source cache after the live borrow ends.
+            let native = match cached_native {
+                Some(native) => native,
+                None => match decode_native(&clip.image_path) {
+                    Ok(n) => Arc::new(n),
+                    Err(e) => {
+                        log::error!(
+                            "[ImageRenderer] warmup decode failed for {}: {e}",
+                            clip.image_path
+                        );
+                        continue;
+                    }
+                },
             };
             let fitted = match fit_native(&native, self.width, self.height) {
                 Ok(f) => f,
@@ -434,6 +532,14 @@ impl ClipRenderer for ImageRenderer {
                     continue;
                 }
             };
+            if !self.warmup_native_cache.retain(clip, Arc::clone(&native)) {
+                log::warn!(
+                    "[ImageRenderer] image warmup cache budget exhausted after {} bytes; skipping {}",
+                    self.warmup_native_cache.bytes,
+                    clip.image_path
+                );
+                break;
+            }
 
             self.active_clips.insert(
                 clip.id.clone(),
@@ -454,7 +560,12 @@ impl ClipRenderer for ImageRenderer {
                 self.device.upload_texture(tex, &fitted.rgba);
                 clip_state.has_frame = true;
             }
+            warmed_clip_ids.push(clip.id.clone());
         }
+
+        // The source cache is intentional; the active entry is only the
+        // temporary live ownership needed to upload the warmed frame.
+        release_warmup_active_clips(&mut self.active_clips, warmed_clip_ids);
 
         manifold_core::WarmupOutcome::Quiescent
     }
@@ -618,40 +729,39 @@ mod tests {
     }
 
     #[test]
-    fn prewarm_layer_decodes_image_clips() {
-        // Load-time image warmup should decode and cache the clip's source
-        // so the first play is a cache hit instead of a disk decode.
-        let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
-        let mut renderer = ImageRenderer::new(device, 320, 180);
-        let mut layer = Layer::new(
-            "ImageWarmup".to_string(),
-            manifold_core::LayerType::Video,
-            0,
-        );
-        let path = format!(
-            "{}/../../tests/fixtures/gltf/goldens/triangle.png",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        layer.clips.push(TimelineClip::new_image(
-            path,
-            Beats(0.0),
-            Beats(4.0),
-        ));
+    fn warmup_ownership_cleanup_preserves_live_clips_and_source_cache() {
+        // Load-time image warmup retains the bounded full-resolution source
+        // cache, but must not leave a temporary active clip behind.
+        let preexisting =
+            TimelineClip::new_image("preexisting.png".to_string(), Beats(0.0), Beats(4.0));
+        let warmed = TimelineClip::new_image("warmed.png".to_string(), Beats(4.0), Beats(4.0));
+        let mut active_clips = AHashMap::new();
+        for clip in [&preexisting, &warmed] {
+            active_clips.insert(
+                clip.id.clone(),
+                ActiveImageClip {
+                    path: clip.image_path.clone(),
+                    native: None,
+                    texture: None,
+                    has_frame: false,
+                    decode_pending: false,
+                },
+            );
+        }
 
-        let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
-        assert_eq!(outcome, manifold_core::WarmupOutcome::Quiescent);
+        release_warmup_active_clips(&mut active_clips, [warmed.id.clone()]);
+        assert!(active_clips.contains_key(preexisting.id.as_ref()));
+        assert!(!active_clips.contains_key(warmed.id.as_ref()));
 
-        assert_eq!(
-            renderer.active_clips.len(),
-            1,
-            "warmup should create one active image clip"
-        );
-        let clip = renderer.active_clips.values().next().unwrap();
-        assert!(clip.native.is_some(), "native decode should be cached");
-        assert!(clip.has_frame, "fitted texture should be uploaded");
-        assert!(
-            renderer.get_clip_texture(layer.clips[0].id.as_str()).is_some(),
-            "get_clip_texture should return the warmed texture"
-        );
+        let mut cache = WarmupNativeCache::default();
+        let native = Arc::new(solid_native(2, 2));
+        assert!(cache.retain(&warmed, Arc::clone(&native)));
+        assert!(cache.get_for_clip(&warmed).is_some());
+        assert_eq!(cache.images.len(), 1);
+        assert_eq!(cache.bytes, native.rgba.len() as u64);
+
+        cache.clear();
+        assert!(cache.images.is_empty());
+        assert_eq!(cache.bytes, 0);
     }
 }
