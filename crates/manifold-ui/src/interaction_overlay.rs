@@ -695,6 +695,10 @@ impl InteractionOverlay {
 
     /// Resolve feedback from the same geometry and captured payload used by edits.
     pub fn refresh_automation_feedback(&self, pos: Vec2, lanes: &[crate::panels::viewport::AutomationLaneScreen], ui_state: &mut UIState, viewport: &TimelineViewportPanel) {
+        if !self.drag.is_active() && !viewport.tracks_rect().contains(pos) {
+            ui_state.automation_feedback = None;
+            return;
+        }
         let snap = |x| {
             let raw = viewport.pixel_to_beat(x);
             (if self.modifiers.command { raw } else { viewport.snap_to_grid(raw) }).max(Beats::ZERO)
@@ -3709,7 +3713,8 @@ mod p1_4_gesture_integrity_tests {
                 placeholder: false,
             },
         }]);
-        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.timeline_split_ratio = 0.70;
         panel.build(&mut tree, &layout);
         panel
     }
