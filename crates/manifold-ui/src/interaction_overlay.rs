@@ -3935,7 +3935,8 @@ mod p1_4_gesture_integrity_tests {
         let press = dot_pos(&panel, 0);
         overlay.modifiers.shift = true;
         overlay.on_begin_drag(press, &mut host, &mut state, &panel);
-        overlay.on_drag(press + Vec2::new(0.0, -7.0), &mut host, &mut state, &mut panel);
+        let quarter_height = panel.automation_lane_screens(&[])[0].curve_rect().height * 0.25;
+        overlay.on_drag(press + Vec2::new(0.0, -quarter_height), &mut host, &mut state, &mut panel);
         assert!((host.automation_lane_preview[0].1 - 0.5625).abs() < 0.00001);
         overlay.on_end_drag(&mut host);
         let lane = &panel.automation_lane_screens(&[])[0];
