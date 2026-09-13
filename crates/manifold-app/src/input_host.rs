@@ -1624,7 +1624,11 @@ impl TimelineInputHost for AppInputHost<'_> {
             let core_point = AutomationPoint {
                 beat,
                 value,
-                shape: to_core_segment_shape(point.shape),
+                shape: if param.whole_numbers() {
+                    manifold_core::effects::SegmentShape::Hold
+                } else {
+                    to_core_segment_shape(point.shape)
+                },
             };
             let mut command = AddAutomationPointCommand::new(
                 target,
@@ -2193,13 +2197,17 @@ mod automation_clipboard_host_tests {
     fn single_lane_paste_remaps_range_and_rounds_integer_destination() {
         let mut h = Harness::new();
         let target = UiGraphTarget::Effect(h.effect_id());
-        h.select(&[("amount", 2.0)]);
+        h.select(&[("amount", 2.0), ("amount", 6.0)]);
         { let mut host = h.host(); host.copy_selected_automation(); }
         h.selection.selected_automation_point = Some(UiAutomationPointRef { target, param_id: "steps".into(), beat: Beats(4.0) });
         h.selection.selected_automation_points.clear();
         { let mut host = h.host(); host.paste_automation(20.0); }
         assert!(points(&h.project, "steps").contains(&(20.0, 2.0)));
-        assert_eq!(h.selection.selected_automation_points.len(), 1);
+        assert_eq!(h.selection.selected_automation_points.len(), 2);
+        let lane = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
+            .iter().find(|lane| lane.param_id.as_ref() == "steps").unwrap();
+        assert_eq!(lane.value_at(Beats(23.5)), 2.0, "integer destinations hold between pasted points");
+        assert_eq!(lane.value_at(Beats(24.0)), 6.0);
     }
 
     #[test]
