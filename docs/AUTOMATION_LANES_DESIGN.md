@@ -222,6 +222,14 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - **Click on the line** adds a breakpoint (dot); **drag** moves it (snapped
   to the timeline grid); **double-click a dot** deletes it; **Delete** removes
   the selection.
+- On an existing lane, a single click away from the line deselects; double-click
+  inserts. Placeholder lanes and pencil mode retain first-click insertion.
+  Selected dots draw larger and white. A moved point remains selected at its new
+  beat; hiding automation or undo/redo clears beat-addressed selections.
+  Point dragging preserves the grab offset and Shift scales value movement to
+  one quarter. Landing on an occupied beat replaces that breakpoint, with exact
+  lane restoration on undo. Moving past it during preview restores it.
+  Segments remain editable when either endpoint is outside the viewport.
 - **Drag a segment** vertically to move it; **modifier-drag a segment**
   (Alt/Option, Live 11 style) bends it into a curve — this is the
   `Curved(f32)` shape in section 2.

@@ -665,6 +665,7 @@ impl Application {
                     markers: &self.timeline_marker_scratch,
                     landing_flash,
                     automation_lanes: &automation_lanes,
+                    automation_selection: Some(&self.selection),
                     cursor_pos: self.cursor_pos,
                     text_input: &self.text_input,
                     frame_timer: &self.frame_timer,

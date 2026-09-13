@@ -154,6 +154,19 @@ impl Default for UIState {
 }
 
 impl UIState {
+    pub fn clear_automation_selection(&mut self) {
+        self.selected_automation_point = None;
+        self.selected_automation_points.clear();
+    }
+
+    pub fn automation_point_selected(&self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats) -> bool {
+        let matches = |point: &UiAutomationPointRef| {
+            point.target == *target && point.param_id == *param_id && point.beat == beat
+        };
+        self.selected_automation_point.as_ref().is_some_and(matches)
+            || self.selected_automation_points.iter().any(matches)
+    }
+
     pub fn new() -> Self {
         Self {
             selection: TimelineSelection::None,

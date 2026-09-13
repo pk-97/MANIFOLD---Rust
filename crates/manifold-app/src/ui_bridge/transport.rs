@@ -140,6 +140,7 @@ pub(super) fn dispatch_transport(
         // `automation_lane_count` and the lane list on the next frame.
         TransportAction::ToggleAutomationMode => {
             selection.automation_mode_visible = !selection.automation_mode_visible;
+            selection.clear_automation_selection();
             DispatchResult::structural()
         }
 
