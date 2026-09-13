@@ -997,6 +997,14 @@ struct RtTraceDiagnostics {
     float raw_direction[3];
     float raw_min_distance;
     float raw_max_distance;
+    uint slot_count;
+    uint object_count;
+    atomic_uint hit_state;
+    uint hit_stage;
+    uint hit_pixel;
+    uint hit_instance;
+    uint hit_primitive;
+    uint hit_reason;
 };
 
 static bool rt_finite(float x);
@@ -1309,11 +1317,54 @@ struct RtNormalSource {
     // per-slot row (packed into out_n.w at the primary hit) + the bindless
     // address of THIS slot's InstanceTransform (0 = unwired). Declared in
     // this order so the ulong lands 8-aligned at 112 — the Rust mirror
-    // asserts offsets 108/112 and sizeof 120 (the old `_pad2[2]` words,
-    // consumed field-for-field).
+    // asserts offsets 108/112; bounds metadata follows the original 120 bytes.
     uint   object_index;
     ulong  instance_addr;
+    ulong  vertex_end_addr;
+    ulong  instance_end_addr;
+    uint   triangle_count;
+    uint   bounds_pad;
 };
+
+// Diagnostic-only hit guard. Check the row before dereferencing it, then
+// the flat triangle's full position/normal/UV extent before any bindless read.
+// Reasons: 1=slot, 2=object, 3=primitive, 4=vertex layout/extent, 5=instance extent.
+static bool rt_validate_hit(device RtNormalSource* sources, uint iid, uint pid,
+    uint stage, uint2 pix, device RtTraceDiagnostics* d)
+{
+    if (d->enabled == 0u) return true;
+    uint reason = 0u;
+    if (iid >= d->slot_count) reason = 1u;
+    else {
+        device RtNormalSource& src = sources[iid];
+        if (src.object_index >= d->object_count) reason = 2u;
+        else if (pid >= src.triangle_count || pid > (0xffffffffu - 2u) / 3u) reason = 3u;
+        else {
+            ulong stride = ulong(src.vertex_stride);
+            ulong field_end = max(12ul, max(ulong(src.normal_offset) + 12ul, ulong(src.uv_offset) + 8ul));
+            ulong required = (ulong(pid) * 3ul + 2ul) * stride + field_end;
+            if (src.vertex_base_addr == 0ul || field_end > stride ||
+                src.vertex_end_addr < src.vertex_base_addr ||
+                required > src.vertex_end_addr - src.vertex_base_addr) reason = 4u;
+            else if (src.instance_addr != 0ul &&
+                (src.instance_end_addr < src.instance_addr ||
+                 src.instance_end_addr - src.instance_addr < 32ul)) reason = 5u;
+        }
+    }
+    if (reason == 0u) return true;
+    uint expected = 0u;
+    while (!atomic_compare_exchange_weak_explicit(&d->hit_state, &expected, 1u,
+        memory_order_relaxed, memory_order_relaxed)) {
+        if (expected != 0u) return false;
+    }
+    d->hit_stage = stage;
+    d->hit_pixel = pix.y * 65536u + pix.x;
+    d->hit_instance = iid;
+    d->hit_primitive = pid;
+    d->hit_reason = reason;
+    atomic_store_explicit(&d->hit_state, 2u, memory_order_relaxed);
+    return false;
+}
 
 // RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
 // `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
@@ -1610,11 +1661,12 @@ static bool walk_with_alpha_test(
     thread intersection_query<triangle_data, instancing>& q,
     device RtNormalSource* normal_sources,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
-    bool any_hit)
+    bool any_hit, uint stage, uint2 pix, device RtTraceDiagnostics* diagnostics)
 {
     while (q.next()) {
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
+        if (!rt_validate_hit(normal_sources, iid, q.get_candidate_primitive_id(), stage, pix, diagnostics)) continue;
         device RtNormalSource& src = normal_sources[iid];
         bool pass = true;
         if (src.alpha_mask != 0u) {
@@ -1632,7 +1684,9 @@ static bool walk_with_alpha_test(
             if (any_hit) return true;
         }
     }
-    return q.get_committed_intersection_type() != intersection_type::none;
+    if (q.get_committed_intersection_type() == intersection_type::none) return false;
+    return rt_validate_hit(normal_sources, q.get_committed_instance_id(),
+        q.get_committed_primitive_id(), stage, pix, diagnostics);
 }
 
 // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4): visibility rays transmit,
@@ -1669,13 +1723,15 @@ static float3 walk_with_transmission(
     thread intersection_query<triangle_data, instancing>& q,
     device RtNormalSource* normal_sources,
     device GiMaterial* gi_materials,
-    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures)
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    uint stage, uint2 pix, device RtTraceDiagnostics* diagnostics)
 {
     float3 tint = float3(1.0);
     uint transmitted = 0u;
     while (q.next()) {
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
+        if (!rt_validate_hit(normal_sources, iid, q.get_candidate_primitive_id(), stage, pix, diagnostics)) continue;
         device RtNormalSource& src = normal_sources[iid];
         bool pass = true;
         if (src.alpha_mask != 0u) {
@@ -1708,7 +1764,9 @@ static float3 walk_with_transmission(
     // candidate, so a ray that ended on plain opaque geometry falls out of
     // the loop with a committed hit and no visible candidate — without this
     // check it read as fully LIT (the factor-0 control leg caught it).
-    return (q.get_committed_intersection_type() != intersection_type::none) ? float3(0.0) : tint;
+    if (q.get_committed_intersection_type() == intersection_type::none) return tint;
+    return rt_validate_hit(normal_sources, q.get_committed_instance_id(),
+        q.get_committed_primitive_id(), stage, pix, diagnostics) ? float3(0.0) : tint;
 }
 
 // RT-P2/D3 (extended RT-T1-C, BUG-311): mirrors the Rust `AccumulateParams`
@@ -1839,10 +1897,10 @@ static float3 sun_bounce_at_hit(
         // binary scenes use walk_with_alpha_test (pre-TL-B codegen).
         float hit_ndotl = max(dot(hit_n, sdir), 0.0);
         if (HAS_TRANSLUCENCY) {
-            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures);
+            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures, 1u, tid, diagnostics);
             term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
         } else {
-            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, 1u, tid, diagnostics) ? 0.0 : 1.0;
             term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
         }
     }
@@ -2136,7 +2194,7 @@ kernel void trace_shadow_rays(
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
             rt_sanitize_ray(pr, 0u, tid, diagnostics); primary_q.reset(pr, accel, RT_MASK_VISIBLE);
-            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false)) {
+            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false, 0u, tid, diagnostics)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 primary_pid = primary_q.get_committed_primitive_id();
                 primary_bary = primary_q.get_committed_triangle_barycentric_coord();
@@ -2280,10 +2338,10 @@ kernel void trace_shadow_rays(
                     intersection_params transmission_params;
                     transmission_params.force_opacity(forced_opacity::non_opaque);
                     shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
-                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures);
+                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures, 1u, tid, diagnostics);
                 } else {
                     shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
-                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true);
+                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true, 1u, tid, diagnostics);
                     if (!blocked) vis += 1.0;
                 }
             }
@@ -2326,7 +2384,7 @@ kernel void trace_shadow_rays(
             ao_r.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
                 rt_sanitize_ray(ao_r, 2u, tid, diagnostics); ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
-            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true)) ao += 1.0;
+            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true, 2u, tid, diagnostics)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -2419,7 +2477,7 @@ kernel void trace_shadow_rays(
             for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
                 intersection_query<triangle_data, instancing> gi_q;
                 rt_sanitize_ray(gr, 3u, tid, diagnostics); gi_q.reset(gr, accel, RT_MASK_VISIBLE);
-                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false)) {
+                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false, 3u, tid, diagnostics)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
                     float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
@@ -2565,7 +2623,7 @@ kernel void trace_shadow_rays(
                         em_r.direction = l_hat;
                         intersection_query<triangle_data, instancing> em_q;
                         rt_sanitize_ray(em_r, 4u, tid, diagnostics); em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
-                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true);
+                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true, 4u, tid, diagnostics);
                         if (!blocked) {
                             float3 em_factor = float3(gi_materials[tri.object_index].emissive);
                             float2 uv0 = tri.uv0;
@@ -2682,7 +2740,7 @@ kernel void trace_shadow_rays(
             rt_sanitize_ray(rr, 5u, tid, diagnostics); refl_q.reset(rr, accel, RT_MASK_VISIBLE);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
-            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false)) {
+            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false, 5u, tid, diagnostics)) {
                 // Raster-parity reflections (RAYTRACING_DESIGN.md section 9.6): hit
                 // shading now includes the hit surface's own environment
                 // contribution (diffuse irradiance + one-bounce specular), so
@@ -4460,7 +4518,16 @@ struct RtTraceDiagnostics {
     raw_direction: [f32; 3],
     raw_min_distance: f32,
     raw_max_distance: f32,
+    slot_count: u32,
+    object_count: u32,
+    hit_state: u32,
+    hit_stage: u32,
+    hit_pixel: u32,
+    hit_instance: u32,
+    hit_primitive: u32,
+    hit_reason: u32,
 }
+const _: () = assert!(std::mem::size_of::<RtTraceDiagnostics>() == 88);
 
 
 
@@ -5301,13 +5368,20 @@ pub struct RtNormalSource {
     /// 8-byte alignment at offset 112 — an earlier slot would push the
     /// struct past 120 bytes (the MSL mirror declares the same order).
     pub instance_addr: u64,
+    /// Exclusive allocation ends and BLAS primitive count for diagnostic hit guards.
+    pub vertex_end_addr: u64,
+    pub instance_end_addr: u64,
+    pub triangle_count: u32,
+    pub bounds_pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 120);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 144);
 // RT_INSTANCING_DESIGN.md D3: the consumed `_pad2` words become
 // object_index (108) + instance_addr (112) — asserted, not hand-counted.
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 108);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 112);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_end_addr) == 120);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, triangle_count) == 136);
 
 /// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
 /// `generators::mesh_common::InstanceTransform` (32 bytes,
@@ -5622,6 +5696,12 @@ pub fn ensure_normal_sources<'a>(
             // Canonical row: unwired by definition — object-indexed readers
             // must never see an instance fold.
             instance_addr: 0,
+            vertex_end_addr: obj.vertex_buffer.gpu_address().checked_add(obj.vertex_buffer.size)
+                .expect("RT vertex allocation end overflow"),
+            instance_end_addr: obj.instances_buffer.map_or(0, |b| b.gpu_address().checked_add(b.size)
+                .expect("RT instance allocation end overflow")),
+            triangle_count: obj.triangle_count,
+            bounds_pad: 0,
         };
         // D11: canonical row at [0, N).
         unsafe {
@@ -6782,6 +6862,7 @@ impl MetalShadowRayTracer {
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
         let enabled = super::gpu_fault::diagnostics_enabled();
         if enabled {
+            log::info!("[RT-HIT-BOUNDS] enabled; reasons:1=slot,2=object,3=primitive,4=vertex-layout/extent,5=instance-extent; invalid hits rejected; failed-command evidence unavailable");
             log::info!("[RT-DIAG] stages:0=primary,1=shadow/sun,2=AO,3=GI,4=emissive-shadow,5=reflection; invalid rays replaced only in diagnostic mode; records retain first incident per fixed slot");
         }
         let make_record = |enabled: bool| {
@@ -7240,6 +7321,19 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok())
         } else { None };
         let diagnostic_callback = if let Some(slot) = diagnostic_slot {
+            let slot_count: usize = current_objects.iter().map(|o| effective_instance_slots(o) as usize).sum();
+            let row_count = params.slot_row_base as usize + slot_count;
+            assert!(normal_sources.size >= (row_count * std::mem::size_of::<RtNormalSource>()) as u64);
+            assert!(gi_materials.size >= (row_count * std::mem::size_of::<GiMaterial>()) as u64);
+            // Exclusive slot ownership: the previous GPU submission has completed.
+            // Retain the existing first ray incident; reset hit evidence for this trace.
+            let ptr = self.rt_diagnostics.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
+            unsafe {
+                let d = &mut *ptr.cast::<RtTraceDiagnostics>();
+                d.slot_count = u32::try_from(slot_count).expect("RT slot count exceeds u32");
+                d.object_count = u32::try_from(current_objects.len()).expect("RT object count exceeds u32");
+                d.hit_state = 0;
+            }
             let pool = Arc::clone(&self.rt_diagnostics);
             let frame = params.frame_index;
             log::info!("[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={} gi_probe={}",
@@ -7252,6 +7346,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     // relaxed-atomic publication within this completed buffer.
                     let ptr = pool.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
                     let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
+                    if d.hit_state == 2 {
+                        log::error!("[RT-HIT-BOUNDS] frame={frame} slot={slot} stage={} pixel={} instance={} primitive={} reason={} slots={} objects={} invalid_hit_rejected=true", d.hit_stage, d.hit_pixel, d.hit_instance, d.hit_primitive, d.hit_reason, d.slot_count, d.object_count);
+                    } else {
+                        log::info!("[RT-HIT-BOUNDS] frame={frame} slot={slot} record_state={} (0=no invalid hit recorded,1=incomplete)", d.hit_state);
+                    }
                     if d.state == 2 {
                         log::error!("[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true", d.first_stage, d.first_pixel, d.raw_origin, d.raw_direction, d.raw_min_distance, d.raw_max_distance);
                     } else {
@@ -8243,6 +8342,86 @@ mod tests {
         assert!(d.raw_direction[0].is_nan());
         let result = unsafe { out.mapped_ptr().unwrap().cast::<[f32;4]>().read_unaligned() };
         assert_eq!(result, [0.0,1.0,0.0,1.0]);
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn trace_hit_bounds_rejects_invalid_reads() {
+        use super::*;
+        let device = GpuDevice::new();
+        let source = format!("{}\n{}", SHADOW_RAYS_MSL, r#"
+        kernel void hit_bounds_probe(device RtTraceDiagnostics* records [[buffer(0)]],
+            device RtNormalSource* sources [[buffer(1)]],
+            device uint* out [[buffer(2)]], uint2 tid [[thread_position_in_grid]]) {
+            if (tid.y != 0 || tid.x >= 9) return;
+            uint i = tid.x;
+            device RtTraceDiagnostics* d = records + i;
+            device RtNormalSource* src = sources + i;
+            uint iid = i == 1 ? 1u : 0u;
+            uint pid = i == 3 ? 1u : (i == 8 ? 0xffffffffu : 0u);
+            out[i] = rt_validate_hit(src, iid, pid, 3u, tid, d) ? 1u : 0u;
+            // First incident must survive a later, different invalid hit.
+            if (i > 0 && i < 8) rt_validate_hit(src, 99u, 99u, 5u, uint2(99), d);
+        }
+        "#);
+        let opts = MTLCompileOptions::init(MTLCompileOptions::alloc());
+        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
+        let library = device.raw_device()
+            .newLibraryWithSource_options_error(&NSString::from_str(&source), Some(&opts))
+            .expect("hit bounds MSL compile");
+        let pipeline = compile_pipeline(&device, &library, "hit_bounds_probe",
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]));
+        let records = device.create_buffer_shared(9 * std::mem::size_of::<RtTraceDiagnostics>() as u64);
+        let sources = device.create_buffer_shared(9 * std::mem::size_of::<RtNormalSource>() as u64);
+        records.zero_fill();
+        sources.zero_fill();
+        let record_ptr = records.mapped_ptr().unwrap().cast::<RtTraceDiagnostics>();
+        let source_ptr = sources.mapped_ptr().unwrap().cast::<RtNormalSource>();
+        // Fake addresses must never be dereferenced by the guard. The valid
+        // case ends exactly at the last UV byte, exercising inclusive bounds.
+        for i in 0..9 {
+            unsafe {
+                let d = &mut *record_ptr.add(i);
+                d.enabled = u32::from(i != 7);
+                d.slot_count = 1;
+                d.object_count = 1;
+                let src = &mut *source_ptr.add(i);
+                src.vertex_base_addr = 4096;
+                src.vertex_end_addr = 4096 + 2 * 64 + 40;
+                src.vertex_stride = 64;
+                src.normal_offset = 16;
+                src.uv_offset = 32;
+                src.triangle_count = 1;
+                match i {
+                    2 => src.object_index = 1,
+                    4 => src.vertex_end_addr -= 1,
+                    5 => src.normal_offset = 60,
+                    6 => { src.instance_addr = 8192; src.instance_end_addr = 8192 + 31; }
+                    7 => src.vertex_base_addr = 0,
+                    _ => {}
+                }
+            }
+        }
+        let out = device.create_buffer_shared(9 * 4);
+        let mut enc = device.create_encoder("hit bounds regression");
+        enc.dispatch_compute(&pipeline, &[
+            GpuBinding::Buffer { binding: 0, buffer: &records, offset: 0 },
+            GpuBinding::Buffer { binding: 1, buffer: &sources, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &out, offset: 0 },
+        ], [2, 1, 1], "hit bounds regression");
+        enc.try_commit_and_wait_completed().expect("hit bounds dispatch");
+        let expected_reasons = [0, 1, 2, 3, 4, 4, 5, 0, 3];
+        for (i, reason) in expected_reasons.into_iter().enumerate() {
+            let d = unsafe { record_ptr.add(i).read_unaligned() };
+            let accepted = unsafe { out.mapped_ptr().unwrap().cast::<u32>().add(i).read_unaligned() };
+            assert_eq!(accepted, u32::from(reason == 0), "case {i}");
+            assert_eq!(d.hit_reason, reason, "case {i}");
+            assert_eq!(d.hit_state, if reason == 0 { 0 } else { 2 }, "case {i}");
+            if reason != 0 {
+                assert_eq!(d.hit_stage, 3, "case {i}");
+                assert_eq!(d.hit_pixel, i as u32, "case {i}");
+            }
+        }
     }
 
     /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks

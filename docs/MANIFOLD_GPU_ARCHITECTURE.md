@@ -69,8 +69,16 @@ queries. Invalid inputs are recorded and replaced with a finite short ray only
 in this mode. Eight preallocated slots retain their first invalid inputs;
 exclusive ownership lasts through completion readback. Failed commands and slot
 exhaustion log validation as unavailable. Positive infinite maximum distance is
-valid. Geometry logs check flat vertex-buffer extents; indexed hit bounds and
-full resource lifetime correctness remain unverified.
+valid. Diagnostic hit guards check candidate and committed instance IDs before
+table access, then object IDs, primitive IDs, flat position/normal/UV byte
+extents, and wired instance byte extents before hit shading. Invalid hits are
+rejected and reported as `[RT-HIT-BOUNDS]` with stage, pixel, instance,
+primitive, and reason (1=slot, 2=object, 3=primitive, 4=vertex layout/extent,
+5=instance extent). Bounds metadata comes from the current CPU object table.
+The first hit incident is retained per trace; readback waits for the final
+tile's successful completion. A failed trace still has unavailable evidence,
+not a clean bill of health. These checks do not validate driver traversal,
+allocation lifetime, or prove that the table itself was not corrupted.
 Fatal GPU reports embed a bounded session-log tail; the adjacent full session
 is the authoritative timeline. Buffer states and missing GPU timestamps are
 reported as evidence, not inferred causes. Resource metadata does not prove
@@ -85,6 +93,14 @@ emissive sampling remain unchanged. These probes intentionally change GI
 lighting and are for diagnosis, not final exports. A successful probe can
 reflect reduced work or changed shader specialization, not just exclusion of
 a faulty operation. Unknown modes or use without diagnostics fail explicitly.
+
+Native Metal validation complements these application checks:
+`MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1`.
+Capture stderr as well as the session log; Apple's validation output is not
+necessarily routed through the app logger. Xcode GPU capture is already wired
+to the device-wide `Content Frame` scope, including the content queue. Shader
+validation and capture change execution cost and may change crash timing.
+See [Apple's shader validation guide](https://developer.apple.com/documentation/xcode/validating-your-apps-metal-shader-usage).
 
 ## Phase Roadmap
 
