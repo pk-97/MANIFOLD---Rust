@@ -11,7 +11,7 @@ use manifold_foundation::{Beats, ClipId, ParamId, Seconds};
 use std::collections::HashSet;
 
 use crate::anim::{AnimF32, Transient};
-use crate::automation_hit_tester::{self, AutomationHit};
+use crate::automation_hit_tester::{self, AutomationFeedback, AutomationHit, AutomationOperation};
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
 use crate::color;
 use crate::drag::DragController;
@@ -693,6 +693,70 @@ impl InteractionOverlay {
         self.modifiers = modifiers;
     }
 
+    /// Resolve feedback from the same geometry and captured payload used by edits.
+    pub fn refresh_automation_feedback(&self, pos: Vec2, lanes: &[crate::panels::viewport::AutomationLaneScreen], ui_state: &mut UIState, viewport: &TimelineViewportPanel) {
+        let snap = |x| {
+            let raw = viewport.pixel_to_beat(x);
+            (if self.modifiers.command { raw } else { viewport.snap_to_grid(raw) }).max(Beats::ZERO)
+        };
+        let resolved = if let Some(session) = self.drag.session() {
+            // Capture identity and values from the gesture, never from a new hover hit.
+            let locked = match &session.payload {
+                TimelineDrag::AutomationPoint(s) => Some((&s.target, &s.param_id, AutomationOperation::Point, Some(s.last_beat), None, Some(s.last_value), "Move point · Release to commit · Esc cancels")),
+                TimelineDrag::AutomationGroupMove(s) => s.points.iter().find(|p| p.target == s.grab_target && p.param_id == s.grab_param_id && p.original_beat == s.grabbed_original_beat)
+                    .map(|p| (&s.grab_target, &s.grab_param_id, AutomationOperation::Point, Some(p.last_beat), None, Some(p.last_value), "Move selected points · Release to commit · Esc cancels")),
+                TimelineDrag::AutomationSegmentBend(s) => Some((&s.target, &s.param_id, AutomationOperation::Bend, Some(s.left_beat), None, Some(s.left_value), "Bend curve · Release to commit · Esc cancels")),
+                TimelineDrag::AutomationSegmentDrag(s) => Some((&s.target, &s.param_id, AutomationOperation::Segment, Some(s.left_beat), Some(s.right_beat), Some(s.last_left_value), "Move segment · Release to commit · Esc cancels")),
+                TimelineDrag::AutomationDraw(s) => Some((&s.target, &s.param_id, AutomationOperation::Draw, None, None, None, "Draw points · Release to commit · Esc cancels")),
+                TimelineDrag::AutomationLaneResize(s) => Some((&s.target, &s.param_id, AutomationOperation::Resize, None, None, None, "Resize lane · Release to finish")),
+                TimelineDrag::AutomationMarquee => lanes.iter().find(|l| l.strip_rect.contains(session.start))
+                    .map(|l| (&l.target, &l.param_id, AutomationOperation::Marquee, None, None, None, "Select points · Release to finish")),
+                _ => None,
+            };
+            locked.and_then(|(target, param_id, operation, point_beat, end, value, hint)| {
+                let lane = lanes.iter().find(|l| l.target == *target && l.param_id == *param_id)?;
+                let end = end.or_else(|| if operation == AutomationOperation::Bend {
+                    lane.dots.iter().find(|d| Some(d.beat) > point_beat).map(|d| d.beat)
+                } else { None });
+                Some((lane, operation, point_beat, end, point_beat.unwrap_or_else(|| snap(pos.x)), value.unwrap_or_else(|| lane.value_at_y(pos.y)), true, hint))
+            })
+        } else {
+            automation_hit_tester::resolve_feedback(pos, lanes, self.modifiers.alt, ui_state.automation_draw_mode)
+                .map(|(index, operation, point_index)| {
+                    let lane = &lanes[index];
+                    let point = point_index.map(|i| lane.dots[i]);
+                    let end = point_index.and_then(|i| lane.dots.get(i + 1)).map(|p| p.beat)
+                        .filter(|_| matches!(operation, AutomationOperation::Segment | AutomationOperation::Bend));
+                    let hint = match operation {
+                        AutomationOperation::Point => "Drag point · Shift: fine · Cmd: unsnap · Double-click: delete",
+                        AutomationOperation::Segment if lane.whole_numbers => "Drag segment vertically · Stepped values · Click: insert",
+                        AutomationOperation::Segment => "Drag segment vertically · Alt: bend · Click: insert",
+                        AutomationOperation::Bend => "Alt-drag to bend curve · Click: insert",
+                        AutomationOperation::Insert if !lane.dots.is_empty() => "Double-click: add point · Drag: select points · Cmd: unsnap",
+                        AutomationOperation::Insert => "Click: add first point · Drag: select points · Cmd: unsnap",
+                        AutomationOperation::Draw => "Drag to draw points · Cmd: unsnap",
+                        AutomationOperation::Resize => "Drag to resize lane",
+                        AutomationOperation::Header => "Layer arrangement automation · Right-click for lane options",
+                        AutomationOperation::Blocked => "Cannot edit: parameter has no editable range",
+                        AutomationOperation::Marquee => "Drag to select points",
+                    };
+                    let (beat, value) = if operation == AutomationOperation::Point {
+                        let p = point.expect("point resolver supplies dot");
+                        (p.beat, lane.param_min + p.value_norm * (lane.param_max - lane.param_min))
+                    } else { (snap(pos.x), lane.value_at_y(pos.y)) };
+                    (lane, operation, point.map(|p| p.beat), end, beat, value, false, hint)
+                })
+        };
+        ui_state.automation_feedback = resolved.map(|(lane, operation, point_beat, segment_end_beat, beat, value, active, hint)| {
+            let norm = if lane.param_max > lane.param_min { (value - lane.param_min) / (lane.param_max - lane.param_min) } else { 0.0 };
+            AutomationFeedback {
+                target: lane.target.clone(), param_id: lane.param_id.clone(), operation,
+                point_beat, segment_end_beat, beat, value, active, hint,
+                position: Vec2::new(viewport.beat_to_pixel(beat), lane.y_at_norm(norm)),
+            }
+        });
+    }
+
     /// Build the `TrimDrag` payload for a trim begin (P7.4): the grabbed
     /// clip's own pre-trim geometry (the snap-context half, formerly
     /// `begin_trim`) plus every selected clip's pre-trim geometry (the
@@ -927,6 +991,10 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) -> bool {
         let lanes = viewport.automation_lane_screens(&[]);
+        if automation_hit_tester::resolve_feedback(pos, &lanes, self.modifiers.alt, ui_state.automation_draw_mode)
+            .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Header | AutomationOperation::Resize | AutomationOperation::Blocked)) {
+            return true;
+        }
         let Some(hit) = automation_hit_tester::hit_test_automation(pos, &lanes) else {
             return false;
         };
@@ -972,10 +1040,7 @@ impl InteractionOverlay {
                     viewport.snap_to_grid(raw_beat)
                 }
                 .max(Beats::ZERO);
-                let norm = (1.0
-                    - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
-                .clamp(0.0, 1.0);
-                let value = lane.param_min + norm * (lane.param_max - lane.param_min);
+                let value = lane.value_at_y(pos.y);
                 let shape = if lane.whole_numbers {
                     UiSegmentShape::Hold
                 } else {
@@ -1006,6 +1071,10 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) -> bool {
         let lanes = viewport.automation_lane_screens(&[]);
+        if automation_hit_tester::resolve_feedback(press_pos, &lanes, self.modifiers.alt, ui_state.automation_draw_mode)
+            .is_some_and(|(_, op, _)| matches!(op, AutomationOperation::Header | AutomationOperation::Resize | AutomationOperation::Blocked)) {
+            return true;
+        }
         let hit = automation_hit_tester::hit_test_automation(press_pos, &lanes);
         let Some(hit) = hit else {
             return false;
@@ -1101,7 +1170,7 @@ impl InteractionOverlay {
         };
         let grab_lane = &lanes[grab_lane_index];
         let grab_norm = (1.0
-            - (press_pos.y - grab_lane.strip_rect.y) / grab_lane.strip_rect.height.max(f32::EPSILON))
+            - (press_pos.y - grab_lane.curve_rect().y) / grab_lane.curve_rect().height.max(f32::EPSILON))
         .clamp(0.0, 1.0);
 
         let mut points = Vec::with_capacity(ui_state.selected_automation_points.len());
@@ -1220,7 +1289,7 @@ impl InteractionOverlay {
         };
 
         let beat = viewport.snap_to_grid(viewport.pixel_to_beat(pos.x)).max(Beats::ZERO);
-        let norm = (1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON)).clamp(0.0, 1.0);
+        let norm = (1.0 - (pos.y - lane.curve_rect().y) / lane.curve_rect().height.max(f32::EPSILON)).clamp(0.0, 1.0);
         let value = lane.param_min + norm * (lane.param_max - lane.param_min);
 
         let Some(TimelineDrag::AutomationDraw(state)) = self.drag.payload_mut() else {
@@ -1277,7 +1346,7 @@ impl InteractionOverlay {
             };
             self.drag.start(TimelineDrag::AutomationSegmentBend(state), press_pos);
         } else {
-            let grab_norm = (1.0 - (press_pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+            let grab_norm = (1.0 - (press_pos.y - lane.curve_rect().y) / lane.curve_rect().height.max(f32::EPSILON))
                 .clamp(0.0, 1.0);
             let state = AutomationSegmentDragState {
                 target: lane.target.clone(),
@@ -1328,7 +1397,7 @@ impl InteractionOverlay {
         }
         .max(Beats::ZERO);
         let fine = if self.modifiers.shift { 0.25 } else { 1.0 };
-        let delta = (d.grab_y - pos.y) / lane.strip_rect.height.max(f32::EPSILON);
+        let delta = (d.grab_y - pos.y) / lane.curve_rect().height.max(f32::EPSILON);
         let mut to_value = (d.original.1 + delta * fine * (lane.param_max - lane.param_min))
             .clamp(lane.param_min, lane.param_max);
         if lane.whole_numbers {
@@ -1417,7 +1486,7 @@ impl InteractionOverlay {
         else {
             return;
         };
-        let norm = (1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+        let norm = (1.0 - (pos.y - lane.curve_rect().y) / lane.curve_rect().height.max(f32::EPSILON))
             .clamp(0.0, 1.0);
         let mut delta_norm = norm - state.grab_norm;
         if self.modifiers.shift {
@@ -1535,7 +1604,7 @@ impl InteractionOverlay {
         // earliest selected point at or after beat zero.
         let beat_delta = requested_delta.max(-earliest);
         let norm = (1.0
-            - (pos.y - grab_lane.strip_rect.y) / grab_lane.strip_rect.height.max(f32::EPSILON))
+            - (pos.y - grab_lane.curve_rect().y) / grab_lane.curve_rect().height.max(f32::EPSILON))
         .clamp(0.0, 1.0);
         let mut requested_norm_delta = norm - grab_norm;
         if self.modifiers.shift {
@@ -1651,6 +1720,10 @@ impl InteractionOverlay {
 
         // Unity lines 225-245: hover detection
         let hit = self.hit_test_at(pos, viewport);
+        let lanes = viewport.automation_lane_screens(&[]);
+        let previous_feedback = ui_state.automation_feedback.clone();
+        self.refresh_automation_feedback(pos, &lanes, ui_state, viewport);
+        if previous_feedback != ui_state.automation_feedback { host.mark_dirty(); }
         let new_hover_id = hit.as_ref().map(|h| h.clip_id.clone());
 
         if new_hover_id != ui_state.hovered_clip_id {
@@ -1670,7 +1743,7 @@ impl InteractionOverlay {
 
         // Unity lines 248-256: cursor feedback (only when not dragging)
         if !self.drag.is_active() {
-            if viewport.automation_lane_screens(&[]).iter().any(|lane| lane.resize_rect().contains(pos)) {
+            if lanes.iter().any(|lane| lane.resize_rect().contains(pos)) {
                 host.set_cursor(TimelineCursor::ResizeVertical);
                 return;
             }
@@ -1699,6 +1772,7 @@ impl InteractionOverlay {
             }
         }
         ui_state.hovered_clip_id = None;
+        ui_state.automation_feedback = None;
         host.set_cursor(TimelineCursor::Default);
     }
 
@@ -1864,7 +1938,7 @@ impl InteractionOverlay {
             }
             DragMode::AutomationLaneResize => {
                 if let Some(TimelineDrag::AutomationLaneResize(state)) = self.drag.payload() {
-                    let height = (state.start_height + pos.y - state.start_y).clamp(28.0, 240.0);
+                    let height = (state.start_height + pos.y - state.start_y).clamp(64.0, 240.0);
                     ui_state.set_automation_lane_height(state.target.clone(), state.param_id.clone(), height);
                     host.mark_dirty();
                 }
@@ -3181,6 +3255,7 @@ mod p1_4_gesture_integrity_tests {
         committed_batches: Vec<usize>,
         // P7.3 automation-fold pinning (recorded, not no-op'd, so the tests
         // below can assert exactly what a gesture committed).
+        automation_added: Vec<(Beats, f32)>,
         automation_point_moves: Vec<AutomationPointMoveRecord>,
         automation_lane_preview: Vec<(Beats, f32, UiSegmentShape)>,
         automation_lane_exists: bool,
@@ -3213,7 +3288,8 @@ mod p1_4_gesture_integrity_tests {
                 trim_records: Vec::new(),
                 batch_ops: 0,
                 committed_batches: Vec::new(),
-                automation_point_moves: Vec::new(),
+                automation_added: Vec::new(),
+            automation_point_moves: Vec::new(),
                 automation_lane_preview: Vec::new(),
                 automation_lane_exists: true,
                 automation_original_points: None,
@@ -3431,10 +3507,11 @@ mod p1_4_gesture_integrity_tests {
             &mut self,
             _target: &UiGraphTarget,
             _param_id: &ParamId,
-            _beat: Beats,
-            _value: f32,
+            beat: Beats,
+            value: f32,
             _shape: UiSegmentShape,
         ) {
+            self.automation_added.push((beat, value));
         }
         fn set_automation_point_preview(
             &mut self,
@@ -3588,11 +3665,11 @@ mod p1_4_gesture_integrity_tests {
         overlay.on_begin_drag(press, &mut host, &mut state, &panel);
         assert_eq!(overlay.drag_mode(), DragMode::AutomationLaneResize);
         overlay.on_drag(press + Vec2::new(0.0, 72.0), &mut host, &mut state, &mut panel);
-        assert_eq!(state.automation_lane_height(&target, &param), 100.0);
+        assert_eq!(state.automation_lane_height(&target, &param), color::AUTOMATION_LANE_STRIP_HEIGHT + 72.0);
         overlay.on_drag(press + Vec2::new(0.0, 1000.0), &mut host, &mut state, &mut panel);
         assert_eq!(state.automation_lane_height(&target, &param), 240.0);
         overlay.on_drag(press - Vec2::new(0.0, 1000.0), &mut host, &mut state, &mut panel);
-        assert_eq!(state.automation_lane_height(&target, &param), 28.0);
+        assert_eq!(state.automation_lane_height(&target, &param), 64.0);
         overlay.on_end_drag(&mut host);
         assert!(host.automation_point_moves.is_empty());
         assert!(host.automation_lane_preview.is_empty());
@@ -3646,8 +3723,63 @@ mod p1_4_gesture_integrity_tests {
         let dot = lanes[0].dots[dot_index];
         Vec2::new(
             panel.beat_to_pixel(dot.beat),
-            lanes[0].strip_rect.y + lanes[0].strip_rect.height * (1.0 - dot.value_norm),
+            lanes[0].y_at_norm(dot.value_norm),
         )
+    }
+
+    #[test]
+    fn automation_feedback_matches_snapped_insertion_and_protects_chrome() {
+        let panel = build_viewport_with_automation();
+        let lanes = panel.automation_lane_screens(&[]);
+        let lane = &lanes[0];
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let pos = Vec2::new(panel.beat_to_pixel(Beats(12.13)), lane.y_at_norm(0.1));
+        overlay.refresh_automation_feedback(pos, &lanes, &mut state, &panel);
+        let feedback = state.automation_feedback.clone().unwrap();
+        assert_eq!(feedback.operation, AutomationOperation::Insert);
+        assert!(feedback.hint.starts_with("Double-click"));
+        assert_eq!(feedback.beat, panel.snap_to_grid(Beats(12.13)));
+        overlay.handle_automation_click(pos, 1, &mut host, &mut state, &panel);
+        assert!(host.automation_added.is_empty());
+        overlay.handle_automation_click(pos, 2, &mut host, &mut state, &panel);
+        assert_eq!(host.automation_added, vec![(feedback.beat, feedback.value)]);
+        for y in [lane.header_rect().y + 3.0, lane.strip_rect.y_max() - 12.0] {
+            let chrome = Vec2::new(pos.x, y);
+            overlay.refresh_automation_feedback(chrome, &lanes, &mut state, &panel);
+            assert_eq!(state.automation_feedback.as_ref().unwrap().operation, AutomationOperation::Header);
+            overlay.handle_automation_click(chrome, 2, &mut host, &mut state, &panel);
+            overlay.on_begin_drag(chrome, &mut host, &mut state, &panel);
+            assert_eq!(overlay.drag_mode(), DragMode::None);
+        }
+        assert_eq!(host.automation_added.len(), 1);
+    }
+
+    #[test]
+    fn automation_feedback_locks_drag_and_reports_committed_point() {
+        let mut panel = build_viewport_with_automation();
+        let lanes = panel.automation_lane_screens(&[]);
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let press = dot_pos(&panel, 0) + Vec2::new(2.0, 2.0);
+        overlay.refresh_automation_feedback(press, &lanes, &mut state, &panel);
+        assert_eq!(state.automation_feedback.as_ref().unwrap().position, dot_pos(&panel, 0));
+        overlay.on_begin_drag(press, &mut host, &mut state, &panel);
+        overlay.set_modifiers(Modifiers { alt: true, shift: true, ..Modifiers::NONE });
+        let pos = press + Vec2::new(15.0, -70.0);
+        overlay.on_drag(pos, &mut host, &mut state, &mut panel);
+        overlay.refresh_automation_feedback(pos, &lanes, &mut state, &panel);
+        let feedback = state.automation_feedback.clone().unwrap();
+        assert!(feedback.active);
+        assert_eq!(feedback.operation, AutomationOperation::Point);
+        assert_ne!(feedback.position, pos);
+        overlay.on_end_drag(&mut host);
+        let new = host.automation_point_moves[0].3;
+        assert_eq!((feedback.beat, feedback.value), (new.0, new.1));
+        overlay.refresh_automation_feedback(Vec2::new(-100.0, -100.0), &lanes, &mut state, &panel);
+        assert!(state.automation_feedback.is_none());
     }
 
     #[test]
@@ -3700,7 +3832,7 @@ mod p1_4_gesture_integrity_tests {
         let mut state = UIState::new();
         state.automation_draw_mode = true;
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
-        let strip = panel.automation_lane_screens(&[])[0].strip_rect;
+        let strip = panel.automation_lane_screens(&[])[0].curve_rect();
         let press = Vec2::new(strip.x + 10.0, strip.y + strip.height * 0.5);
         overlay.on_begin_drag(press, &mut host, &mut state, &panel);
         overlay.cancel_drag(&mut host);
@@ -3765,7 +3897,7 @@ mod p1_4_gesture_integrity_tests {
         assert!(lane.dots[1].x > lane.strip_rect.x_max());
         let x = lane.strip_rect.x + lane.strip_rect.width * 0.5;
         let t = (x - lane.dots[0].x) / (lane.dots[1].x - lane.dots[0].x);
-        let y = lane.strip_rect.y + lane.strip_rect.height * (1.0 - (0.5 + 0.3 * t));
+        let y = lane.y_at_norm(0.5 + 0.3 * t);
         assert_eq!(automation_hit_tester::hit_test_automation(Vec2::new(x, y), &lanes),
             Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
     }
@@ -3807,7 +3939,7 @@ mod p1_4_gesture_integrity_tests {
         assert!((host.automation_lane_preview[0].1 - 0.5625).abs() < 0.00001);
         overlay.on_end_drag(&mut host);
         let lane = &panel.automation_lane_screens(&[])[0];
-        let empty = Vec2::new(panel.beat_to_pixel(Beats(12.0)), lane.strip_rect.y + 2.0);
+        let empty = Vec2::new(panel.beat_to_pixel(Beats(12.0)), lane.curve_rect().y + 2.0);
         overlay.on_pointer_click(empty, false, false, 1, false, &mut host, &mut state, &panel);
         assert!(state.selected_automation_point.is_none());
     }
@@ -3845,7 +3977,7 @@ mod p1_4_gesture_integrity_tests {
         // corner, so the rect built by dragging to bottom-right spans both
         // dots' differing Y (value_norm 0.5 vs 0.8), not just their X.
         let lanes = panel.automation_lane_screens(&[]);
-        let strip = lanes[0].strip_rect;
+        let strip = lanes[0].curve_rect();
         let press = Vec2::new(strip.x + 2.0, strip.y + 1.0);
         overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
         assert_eq!(overlay.drag_mode(), DragMode::AutomationMarquee);
@@ -4073,7 +4205,7 @@ mod p1_4_gesture_integrity_tests {
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
 
         let lanes = panel.automation_lane_screens(&[]);
-        let strip = lanes[0].strip_rect;
+        let strip = lanes[0].curve_rect();
         let press = Vec2::new(strip.x + 10.0, strip.y + strip.height * 0.5);
 
         overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);

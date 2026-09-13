@@ -911,12 +911,12 @@ pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 // Engaging automation mode grows a content track by one strip per enabled
 // lane — `CoordinateMapper::layer_height` is the single place this height
 // actually applies (never re-derived elsewhere).
-pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 28.0;
+pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 112.0;
 /// Strip background — a subtle recess so the lane reads as its own row
 /// within the taller track, distinct from the routing-form area above it.
 pub const AUTOMATION_STRIP_BG: Color32 = Color32::new(20, 20, 22, 255);
-/// The breakpoint line + dots, Live's exact affordance: red while live.
-pub const AUTOMATION_LINE_COLOR: Color32 = RED_ACTIVE;
+/// Automation accent, distinct from the red playhead and recording state.
+pub const AUTOMATION_LINE_COLOR: Color32 = Color32::new(91, 190, 220, 255);
 /// The breakpoint line + dots when the lane's param is overridden (a live
 /// touch latched it) — grayed instead of red, Live's exact affordance.
 pub const AUTOMATION_LINE_OVERRIDDEN_COLOR: Color32 = Color32::new(120, 120, 126, 255);

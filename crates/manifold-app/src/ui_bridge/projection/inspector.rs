@@ -10,6 +10,7 @@ use manifold_core::types::{BeatDivision, LayerType};
 use manifold_ui::panels::param_card::RowMod;
 use manifold_ui::panels::param_slider_shared::{AudioCardState, AudioRowState};
 use manifold_ui::param_surface::ParamSurface;
+use manifold_ui::view::UiGraphTarget;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
@@ -18,6 +19,21 @@ use super::cards::{
     modifier_surfaces,
 };
 use super::scene::sections_for_doc_ids;
+
+fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
+    let surface_target = match (surface.kind, surface.modifier.is_some()) {
+        (manifold_ui::panels::param_card::ParamCardKind::Effect, false) => UiGraphTarget::Effect(surface.effect_id.clone()),
+        (manifold_ui::panels::param_card::ParamCardKind::Effect, true)
+        | (manifold_ui::panels::param_card::ParamCardKind::Generator, _) => {
+            UiGraphTarget::Generator(layer_id.clone())
+        }
+    };
+    if surface_target == *target {
+        for row in &mut surface.rows {
+            row.modulation.automation_selected = row.id.as_ref() == param_id.as_ref();
+        }
+    }
+}
 
 /// Map the content thread's `LedPreview` across the projection boundary for
 /// the card (LED_STRIPS_DESIGN MVP-P4, D24). The gate is the same on both
@@ -56,6 +72,11 @@ pub fn sync_inspector_data(
     led_preview: Option<&crate::content_state::LedPreview>,
 ) {
     let driver_timing = (ui.driver_bpm.unwrap_or(project.settings.bpm), project.settings.frame_rate);
+    let selected_automation = |layer_id: &manifold_core::LayerId| {
+        if !selection.automation_mode_visible { return None; }
+        selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
+            .or_else(|| selection.chosen_automation_params.get(layer_id).map(|(target, param_id)| (target, param_id)))
+    };
     // Audio Setup modal — refresh its current device + send list while it's
     // open. Resolving the device through the directory once per sync (only while
     // the modal is up) gives each send row its real channel name, grouped or
@@ -1168,6 +1189,9 @@ pub fn sync_inspector_data(
                 .as_ref()
                 .map(|e| effects_to_surfaces(e, OscScope::Layer(lid), automation_latched, driver_timing))
                 .unwrap_or_default();
+            if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
+                for surface in &mut layer_effects { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
+            }
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector
                 .configure_layer_effects(&layer_effects, Some(&layer.layer_id));
@@ -1195,6 +1219,9 @@ pub fn sync_inspector_data(
                     )
                 });
             if let Some(c) = gen_config.as_mut() {
+                if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
+                    mark_selected_automation_row(c, &layer.layer_id, target, param_id);
+                }
                 attach_audio_sends(std::slice::from_mut(c), &project.audio_setup);
             }
             let layer_id = layer.layer_id.clone();
@@ -1233,10 +1260,11 @@ pub fn sync_inspector_data(
                     // entry per registry kind, applicability read off the
                     // SAME def + VM (the UI never reads the graph).
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
-                    Some((
-                        modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing),
-                        picker,
-                    ))
+                    let mut surfaces = modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing);
+                    if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
+                        for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
+                    }
+                    Some((surfaces, picker))
                 })();
                 match modifier_region {
                     Some((surfaces, picker)) => ui.inspector.configure_modifier_cards(

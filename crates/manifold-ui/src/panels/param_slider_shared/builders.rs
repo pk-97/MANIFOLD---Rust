@@ -1538,6 +1538,14 @@ pub(crate) fn build_toggle_trigger_row(
     // one, so mid-tween or bottom-straddling paint never escapes it.
     drawer_reveal: Option<f32>,
 ) -> ToggleTriggerRowIds {
+    if mod_state.automation_selected.get(i).copied().unwrap_or(false) {
+        tree.add_panel(parent, x - 1.0, cy - 1.0, slider_w + 2.0, ROW_HEIGHT + 2.0, UIStyle {
+            border_color: color::AUTOMATION_LINE_COLOR,
+            border_width: 1.0,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        });
+    }
     let toggle_btn_x = x + slider_w - TOGGLE_BTN_W;
     // `is_trigger_gate` rows reserve a fixed slot for the collapsed-row mode
     // badge (D6) just left of the toggle button, regardless of whether the
@@ -1818,6 +1826,14 @@ pub(crate) fn build_param_row(
         info.spec.value_labels.as_deref(),
     );
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
+    if mod_state.automation_selected.get(i).copied().unwrap_or(false) {
+        tree.add_panel(parent, x - 1.0, cy - 1.0, slider_w + 2.0, ROW_HEIGHT + 2.0, UIStyle {
+            border_color: color::AUTOMATION_LINE_COLOR,
+            border_width: 1.0,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        });
+    }
 
     // Modulation-button column x's (computed up front so the mod card, the drawer,
     // and the arm buttons all derive from one set of positions). `row_right` is the

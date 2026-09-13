@@ -209,6 +209,21 @@ target + `param_id`), not indices — same discipline as
 
 ## 7. UI / UX (decided: copy Ableton's model — Peter, 2026-07-02)
 
+Interaction feedback contract (2026-09-13): lane chrome identifies layer-owned
+arrangement automation. Default lanes are 112 px; resizing retains a 64 px
+minimum. Header, plot, and footer geometry is shared by rendering and input;
+chrome consumes clicks without creating points. Automation uses a cyan accent,
+with selected/hovered points and segments highlighted and overridden lanes dimmed.
+Hover feedback identifies the operation before pressing; active feedback remains
+bound to the captured gesture until release or cancellation. Point values and
+insertion previews use the same beat snap, parameter range, and integer rounding
+as editing. Empty populated lanes retain double-click insertion and marquee drag;
+empty placeholder lanes support first-click insertion. Segment clicks insert,
+segment drags move vertically, and Alt-drag bends continuous parameters. Integer
+segments remain stepped. Draw mode takes precedence over point/segment drags.
+The corresponding inspector parameter receives a selection outline. Modifier
+changes and lane geometry changes refresh feedback without requiring mouse motion.
+
 **Placement — automation lives on the layer.** Expanding a layer (the
 existing layer-expand affordance) reveals the advanced layer controls,
 including automation: a param-chooser lane (device/instance dropdown +
@@ -223,7 +238,7 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 **Interaction vocabulary — same shortcuts and controls as Live:**
 
 - **Automation mode toggle** (Live's `A`): show/hide automation across the
-  timeline; lanes draw as the red breakpoint line over the layer.
+  timeline; lanes draw as a cyan breakpoint line beneath the layer.
 - **Click on the line** adds a breakpoint (dot); **drag** moves it (snapped
   to the timeline grid); **double-click a dot** deletes it; **Delete** removes
   the selection.
@@ -240,7 +255,7 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   It expands the owning track and folded parents through the content command
   path. A newly revealed lane opens at 96px; an existing session height is kept.
   Master and group automation editors remain deferred.
-- **Drag the grip at the bottom-left of a lane** to resize it from 28–240px.
+- **Drag the grip at the bottom-left of a lane** to resize it from 64–240px.
   Heights are session-only UI state keyed by the existing target/parameter
   address. Mapper row totals and visible strips use the same resolved heights;
   folding a track preserves its size without reserving hidden space.
@@ -287,8 +302,8 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   re-enable click on the lane header.
 - Global **Back to Arrangement** button in the transport bar, lit red when
   any latch is set; **Automation Arm** toggle next to it.
-- Param cards show a small red "automated" indicator on params with an
-  enabled lane (Live's red dot); the indicator grays when overridden.
+- Param cards show a small cyan "automated" indicator on params with an
+  enabled lane; the indicator grays when overridden.
 
 Headless-PNG self-verification for the visual pass, per the standing UI
 workflow.

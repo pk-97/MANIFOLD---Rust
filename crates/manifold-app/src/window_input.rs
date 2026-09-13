@@ -58,10 +58,23 @@ pub(crate) fn normalize_scroll_delta(delta: MouseScrollDelta) -> (f32, f32) {
     }
 }
 
+pub(crate) fn native_timeline_cursor(cursor: TimelineCursor) -> winit::window::CursorIcon {
+    match cursor {
+        TimelineCursor::Default => winit::window::CursorIcon::Default,
+        TimelineCursor::Crosshair => winit::window::CursorIcon::Crosshair,
+        TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
+        TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
+        TimelineCursor::Move => winit::window::CursorIcon::Move,
+        TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
+    }
+}
+
 impl Application {
     /// Shared modifier state for native window events and live UI gestures.
     pub(crate) fn input_modifiers(&mut self, modifiers: manifold_ui::input::Modifiers) {
         self.modifiers = modifiers;
+        self.overlay.set_modifiers(modifiers);
+        self.needs_rebuild = true;
         self.ws.ui_root.input.set_modifiers(modifiers);
     }
     /// Physical→logical cursor position using `window_id`'s scale factor. The
@@ -100,13 +113,7 @@ impl Application {
         if self.cursor_manager.needs_update()
             && let Some(ws) = self.window_registry.get(&window_id)
         {
-            let icon = match self.cursor_manager.pending_cursor_icon() {
-                TimelineCursor::Default => winit::window::CursorIcon::Default,
-                TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
-                TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
-                TimelineCursor::Move => winit::window::CursorIcon::Move,
-                TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
-            };
+            let icon = native_timeline_cursor(self.cursor_manager.pending_cursor_icon());
             ws.window.set_cursor(icon);
             self.cursor_manager.mark_applied();
         }
@@ -354,6 +361,7 @@ impl Application {
                 // but don't run the timeline InteractionOverlay or background
                 // cursor-shape feedback (split-handle, resize, etc.).
                 self.cursor_manager.set_default();
+                self.selection.automation_feedback = None;
             } else {
                 // Route hover through InteractionOverlay (port of Unity OnPointerMove).
                 // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap

@@ -637,6 +637,25 @@ impl Application {
             .ui_root
             .viewport
             .automation_lane_screens(&self.content_state.automation_latched_params);
+        let had_automation_feedback = self.selection.automation_feedback.is_some();
+        self.overlay.set_modifiers(self.modifiers);
+        if self.ws.ui_root.background_input_blocked() {
+            self.selection.automation_feedback = None;
+        } else {
+            self.overlay.refresh_automation_feedback(self.cursor_pos, &automation_lanes,
+                &mut self.selection, &self.ws.ui_root.viewport);
+        }
+        if had_automation_feedback || self.selection.automation_feedback.is_some() {
+            self.cursor_manager.set(self.selection.automation_feedback.as_ref()
+                .map_or(manifold_ui::cursors::TimelineCursor::Default, |f| f.operation.into()));
+            if self.cursor_manager.needs_update()
+                && let Some(ws) = self.window_registry.get(&window_id)
+            {
+                let icon = crate::window_input::native_timeline_cursor(self.cursor_manager.pending_cursor_icon());
+                ws.window.set_cursor(icon);
+                self.cursor_manager.mark_applied();
+            }
+        }
         let landing_flash = self.overlay.landing_flash();
 
         // ── The seam call: Passes 4a→5 + VQT + overlay dirty-clear, all in

@@ -161,6 +161,7 @@ pub struct ParamModState {
     /// `ContentState::automation_latched_params` — the dot grays instead of
     /// showing red, mirroring the lane-strip / transport BACK button.
     pub automation_overridden: Vec<bool>,
+    pub automation_selected: Vec<bool>,
 }
 
 
@@ -420,6 +421,7 @@ impl ParamModState {
             audio_matrix_open: vec![false; param_count],
             automation_active: vec![false; param_count],
             automation_overridden: vec![false; param_count],
+            automation_selected: vec![false; param_count],
         }
     }
 
@@ -483,6 +485,7 @@ impl ParamModState {
             self.driver_frame_rate[i] = row.driver_frame_rate;
             self.automation_active[i] = row.automation_active;
             self.automation_overridden[i] = row.automation_overridden;
+            self.automation_selected[i] = row.automation_selected;
         }
     }
 

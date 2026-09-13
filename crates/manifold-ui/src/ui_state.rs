@@ -6,6 +6,7 @@
 
 use crate::panels::InspectorTab;
 use crate::view::{SelectionRegion, UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
+use crate::automation_hit_tester::AutomationFeedback;
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId, ParamId};
 use std::collections::{HashMap, HashSet};
 
@@ -180,6 +181,10 @@ pub struct UIState {
     /// context, but cut restores it so Cmd+V can immediately paste the cut
     /// phrase back.
     pub automation_paste_context: Option<(UiGraphTarget, ParamId)>,
+
+    /// Current automation hover/gesture affordance. Runtime-only UI state;
+    /// the overlay owns its lifecycle and clears it on exit/end/cancel.
+    pub automation_feedback: Option<AutomationFeedback>,
 }
 
 impl Default for UIState {
@@ -227,6 +232,7 @@ impl UIState {
             automation_lane_heights: HashMap::new(),
             automation_clipboard: None,
             automation_paste_context: None,
+            automation_feedback: None,
         }
     }
 
@@ -240,7 +246,7 @@ impl UIState {
     pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
         self.automation_lane_heights.insert(
             (target, param_id),
-            height.clamp(28.0, 240.0),
+            height.clamp(64.0, 240.0),
         );
     }
 
