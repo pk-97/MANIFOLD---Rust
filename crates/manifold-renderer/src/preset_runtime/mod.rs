@@ -88,6 +88,7 @@ use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, Open
 
 mod convert_heal;
 mod math_view;
+mod lifecycle;
 
 /// The production chain-topology key, exposed for load-time clip-topology
 /// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective

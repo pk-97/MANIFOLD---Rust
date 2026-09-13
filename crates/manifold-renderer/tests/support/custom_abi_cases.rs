@@ -8,6 +8,20 @@ pub struct CustomAbiCase {
 }
 pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
+        source: "render_mesh_diagram.rs",
+        rust_struct: "DiagramUniforms",
+        shader: "shaders/render_mesh_diagram.wgsl",
+        shader_struct: "U",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "render_mesh_diagram.rs",
+        rust_struct: "HistoryCaptureUniforms",
+        shader: "shaders/history_capture.wgsl",
+        shader_struct: "Capture",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "cylinder_wrap_field.rs",
         rust_struct: "Uniforms",
         shader: "shaders/cylinder_wrap_field.wgsl",
