@@ -2372,7 +2372,7 @@ impl Application {
         let mut consumed = false;
         let data_version_before = self.content_state.data_version;
         if is_primary {
-            // Escape cancels an in-flight timeline clip move/trim before any
+            // Escape cancels an in-flight timeline clip or automation drag before any
             // other Escape handling — a live drag holds uncommitted model
             // mutations (`InteractionOverlay::cancel_drag`, P1.4 D5/B8:
             // "restore and close batch", never commit-then-undo) that must
@@ -2380,10 +2380,25 @@ impl Application {
             if matches!(logical_key, Key::Named(NamedKey::Escape))
                 && matches!(
                     self.overlay.drag_mode(),
-                    DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight
+                    DragMode::Move
+                        | DragMode::TrimLeft
+                        | DragMode::TrimRight
+                        | DragMode::AutomationPoint
+                        | DragMode::AutomationSegmentBend
+                        | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationGroupMove
+                        | DragMode::AutomationDraw
                 )
                 && let Some(content_tx) = self.content_tx.as_ref()
             {
+                let automation_cancel = matches!(
+                    self.overlay.drag_mode(),
+                    DragMode::AutomationPoint
+                        | DragMode::AutomationSegmentBend
+                        | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationGroupMove
+                        | DragMode::AutomationDraw
+                );
                 let mut host = crate::editing_host::AppEditingHost::new(
                     &mut self.local_project,
                     content_tx,
@@ -2397,6 +2412,9 @@ impl Application {
                     &mut self.pre_drag_commands,
                 );
                 self.overlay.cancel_drag(&mut host);
+                if automation_cancel {
+                    self.selection.clear_automation_selection();
+                }
                 return;
             }
 

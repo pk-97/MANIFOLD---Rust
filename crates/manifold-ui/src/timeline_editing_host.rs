@@ -300,14 +300,9 @@ pub trait TimelineEditingHost {
         to_value: f32,
     );
 
-    /// Commit a completed point drag as one undo entry. `old` is the point's
-    /// state BEFORE the drag started (the explicit reverse, captured at grab
-    /// time — the `MoveAutomationPointCommand` drag-commit precedent); `new`
-    /// is its final state. The point is already at `new` in the live project
-    /// (from `set_automation_point_preview` calls during the drag) — this
-    /// only registers the undo entry and mirrors it to the content thread,
-    /// same as `record_move` + `commit_command_batch`'s "already applied"
-    /// comment.
+    /// Commit a completed point drag as one undo entry. Content still owns
+    /// the original lane and captures it when executing the command. Only the
+    /// UI draft and runtime preview have changed before release.
     fn commit_automation_point_move(
         &mut self,
         target: &UiGraphTarget,
@@ -402,6 +397,18 @@ pub trait TimelineEditingHost {
         target: &UiGraphTarget,
         param_id: &ParamId,
         points: &[(Beats, f32, UiSegmentShape)],
+    );
+
+    /// Clear content-owned runtime envelopes before committing or cancelling.
+    fn clear_automation_previews(&mut self);
+
+    /// Restore only the UI draft on cancellation. None removes a newly drawn
+    /// lane. This sends no runtime preview and creates no undo entry.
+    fn restore_automation_lane_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        points: Option<&[(Beats, f32, UiSegmentShape)]>,
     );
 
     /// Commit a finished draw stroke as ONE undo entry — installs

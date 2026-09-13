@@ -243,9 +243,14 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - **Stopped and paused inspection** samples automation at the current playhead
   before modulation, using the same curve sampler as playback. Manual overrides
   remain latched until Back to Arrangement. Stopped seeks neither record nor
-  finalize a pending recording gesture. Envelope drag previews are still UI-local
-  until release; authoritative live gesture preview and recording finalization
-  remain separate unfinished work.
+  finalize a pending recording gesture. Recording finalization remains unfinished.
+- **Live envelope preview** sends point, segment, bend, group and pencil edits to
+  the content thread while dragging. Runtime envelopes sample at the playhead
+  before modulation in playing, paused and stopped states; authoritative lane
+  points stay untouched until the undoable release command. Escape restores the
+  original envelope without adding an undo step. Preview completion restores the
+  previous parameter base before normal sampling resumes; manual override latches
+  and recording gestures retain their existing ownership.
 - **Drag a segment** vertically to move it; **modifier-drag a segment**
   (Alt/Option, Live 11 style) bends it into a curve — this is the
   `Curved(f32)` shape in section 2.
