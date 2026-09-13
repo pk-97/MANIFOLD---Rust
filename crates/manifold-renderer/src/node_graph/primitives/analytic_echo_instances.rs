@@ -320,3 +320,7 @@ mod tests {
         assert_eq!(node.type_id().as_str(), "node.analytic_echo_instances");
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "analytic_echo_instances_gpu_tests.rs"]
+mod gpu_tests;

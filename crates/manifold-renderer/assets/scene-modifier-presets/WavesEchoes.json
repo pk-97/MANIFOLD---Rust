@@ -891,13 +891,13 @@
           },
           {
             "id": 2,
-            "nodeId": "group_source_offset_x",
+            "nodeId": "spatial_echo_stage_group_source_offset_x",
             "typeId": "system.group_input",
             "handle": "sourceOffsetX"
           },
           {
             "id": 3,
-            "nodeId": "group_source_offset_y",
+            "nodeId": "spatial_echo_stage_group_source_offset_y",
             "typeId": "system.group_input",
             "handle": "sourceOffsetY"
           },
@@ -909,7 +909,7 @@
           },
           {
             "id": 5,
-            "nodeId": "group_source_offset_z",
+            "nodeId": "spatial_echo_stage_group_source_offset_z",
             "typeId": "system.group_input",
             "handle": "sourceOffsetZ"
           },
@@ -921,7 +921,7 @@
           },
           {
             "id": 7,
-            "nodeId": "group_output",
+            "nodeId": "spatial_echo_stage_group_output",
             "typeId": "system.group_output",
             "handle": "output"
           }

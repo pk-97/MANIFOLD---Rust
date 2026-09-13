@@ -54,6 +54,7 @@ crate::primitive! {
     summary: "Combines three scalar controls into one Vec3 wire.",
     category: Control,
     role: Control,
+    aliases: ["compose vector", "xyz", "vector components"],
     pure: true,
     boundary_reason: NonGpu,
 }

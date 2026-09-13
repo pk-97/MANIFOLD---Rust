@@ -33,10 +33,6 @@ struct NormalWaveUniforms {
     enabled: f32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-    _pad3: u32,
-    _pad4: u32,
 }
 
 crate::primitive! {
@@ -135,10 +131,6 @@ impl Primitive for NormalWaveMesh {
             enabled,
             dispatch_count: count,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            _pad3: 0,
-            _pad4: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -297,10 +289,6 @@ mod gpu_tests {
             enabled,
             dispatch_count: 3,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            _pad3: 0,
-            _pad4: 0,
         }
     }
 

@@ -97,12 +97,19 @@ fn calibrated_fixture() -> EffectGraphDef {
         .find(|node| node.node_id.as_str() == "group_current")
         .expect("fixture group input")
         .clone();
-    radius_input.id = 6;
+    let radius_id = group
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    radius_input.id = radius_id;
     radius_input.node_id = NodeId::new("group_radius");
     radius_input.handle = Some("radius".into());
     group.nodes.push(radius_input);
     group.wires.push(EffectGraphWire {
-        from_node: 6,
+        from_node: radius_id,
         from_port: "radius".into(),
         to_node: 3,
         to_port: "scale".into(),

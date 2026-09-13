@@ -292,8 +292,15 @@ fn scene_modifier_expand_conformance_control_stage_broadcasts_once() {
         name: "trigger".into(),
         port_type: "Scalar(F32)".into(),
     });
+    let trigger_id = shear_group
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
     shear_group.nodes.push(EffectGraphNode {
-        id: 6,
+        id: trigger_id,
         node_id: NodeId::new("group_trigger"),
         type_id: "system.group_input".into(),
         handle: None,
@@ -307,7 +314,7 @@ fn scene_modifier_expand_conformance_control_stage_broadcasts_once() {
         group: None,
     });
     shear_group.wires.push(EffectGraphWire {
-        from_node: 6,
+        from_node: trigger_id,
         from_port: "trigger".into(),
         to_node: 3,
         to_port: "amplitude".into(),

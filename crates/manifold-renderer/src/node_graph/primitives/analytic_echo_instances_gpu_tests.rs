@@ -1,26 +1,9 @@
 //! Numerical GPU proofs for `node.analytic_echo_instances`.
 
-use super::analytic_echo_instances::{AnalyticEchoInstances, ECHO_CAPACITY};
+use super::{AnalyticEchoInstances, ECHO_CAPACITY, EchoUniforms as Uniforms};
 use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
 use manifold_gpu::GpuBinding;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Uniforms {
-    count: i32,
-    radius: f32,
-    rise: f32,
-    phase: f32,
-    arc: f32,
-    taper: f32,
-    enabled: f32,
-    scene_radius: f32,
-    source_offset_x: f32,
-    source_offset_y: f32,
-    source_offset_z: f32,
-    dispatch_count: u32,
-}
 
 fn zero_instance() -> InstanceTransform {
     InstanceTransform {

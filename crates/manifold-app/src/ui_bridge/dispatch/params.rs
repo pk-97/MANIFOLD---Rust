@@ -60,6 +60,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
                 manifold_core::GraphTarget::Effect(id) => layer.effects.as_ref()
                     .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
+                // Modifier controls resolve to their generator owner above.
+                manifold_core::GraphTarget::SceneModifier { .. } => false,
             });
             let Some(owner) = owner.filter(|layer| !layer.is_group()) else {
                 return DispatchResult::handled();

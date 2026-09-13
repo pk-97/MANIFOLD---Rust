@@ -28,8 +28,6 @@ mod normal_wave_mesh;
 mod mesh_spatial_mask;
 mod mesh_stagger_envelope;
 mod analytic_echo_instances;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod analytic_echo_instances_gpu_tests;
 mod bilateral_blur;
 mod blob_detect_ffi;
 mod blob_overlay_render;

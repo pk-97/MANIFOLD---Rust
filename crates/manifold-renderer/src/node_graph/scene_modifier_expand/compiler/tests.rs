@@ -2,7 +2,7 @@ use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
 use manifold_core::scene_modifier_preset::{
     SceneModifierRecipe, SceneModifierStageDef, SceneStageInput, SceneStageOutput,
-    SceneTargetSelection,
+    SceneStageSource, SceneTargetSelection,
 };
 
 pub(super) fn fixture() -> EffectGraphDef {
@@ -27,12 +27,20 @@ pub(super) fn fixture() -> EffectGraphDef {
         stages: vec![SceneModifierStageDef {
             group: NodeId::new("elastic_stage"),
             scope: SceneStageScope::EachObject,
-            inputs: vec![SceneStageInput {
-                port: "current".into(),
-                source: SceneStageSource::Previous {
-                    endpoint: SceneEndpoint::Vertices,
+            inputs: vec![
+                SceneStageInput {
+                    port: "current".into(),
+                    source: SceneStageSource::Previous {
+                        endpoint: SceneEndpoint::Vertices,
+                    },
                 },
-            }],
+                SceneStageInput {
+                    port: "reference".into(),
+                    source: SceneStageSource::Reference {
+                        endpoint: SceneEndpoint::Vertices,
+                    },
+                },
+            ],
             outputs: vec![SceneStageOutput {
                 port: "vertices".into(),
                 endpoint: SceneEndpoint::Vertices,
@@ -53,12 +61,91 @@ pub(super) fn fixture() -> EffectGraphDef {
     owner
 }
 
+pub(super) fn fusion_fixture() -> EffectGraphDef {
+    let mut owner = fixture();
+    let modifier = owner
+        .scene_modifiers
+        .first_mut()
+        .expect("fixture modifier");
+
+    {
+        let metadata = modifier
+            .graph
+            .preset_metadata
+            .as_mut()
+            .expect("recipe metadata");
+        metadata.params.retain(|param| !param.id.starts_with("mask_"));
+        metadata
+            .bindings
+            .retain(|binding| !binding.id.starts_with("mask_"));
+        let recipe = metadata.scene_modifier.as_mut().expect("fixture recipe");
+        for stage in &mut recipe.stages {
+            stage.inputs.retain(|input| input.port != "reference");
+        }
+    }
+
+    let group = modifier
+        .graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id == NodeId::new("elastic_stage"))
+        .and_then(|node| node.group.as_mut())
+        .expect("fixture stage group");
+    group.interface.inputs.retain(|port| port.name != "reference");
+    let removed_ids: Vec<u32> = group
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                node.node_id.as_str(),
+                "group_reference" | "mask" | "mask_morph"
+            )
+        })
+        .map(|node| node.id)
+        .collect();
+    assert_eq!(removed_ids.len(), 3, "fusion fixture mask topology changed");
+    group.nodes.retain(|node| !removed_ids.contains(&node.id));
+    assert!(group.nodes.iter().all(|node| {
+        !matches!(
+            node.node_id.as_str(),
+            "group_reference" | "mask" | "mask_morph"
+        )
+    }));
+    group.wires.retain(|wire| {
+        !removed_ids.contains(&wire.from_node) && !removed_ids.contains(&wire.to_node)
+    });
+    let shear_z_id = group
+        .nodes
+        .iter()
+        .find(|node| node.node_id == NodeId::new("shear_z"))
+        .expect("fixture cross bend")
+        .id;
+    let output_id = group
+        .nodes
+        .iter()
+        .find(|node| node.node_id == NodeId::new("group_output"))
+        .expect("fixture group output")
+        .id;
+    // The production gather mask recipe may remain unfused; these tests use
+    // the same-topology pointwise mesh path to exercise fusion routing.
+    group
+        .wires
+        .retain(|wire| wire.to_node != output_id || wire.to_port != "vertices");
+    group.wires.push(EffectGraphWire {
+        from_node: shear_z_id,
+        from_port: "out".into(),
+        to_node: output_id,
+        to_port: "vertices".into(),
+    });
+    owner
+}
+
 #[test]
 fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
     use crate::node_graph::parameters::ParamValue;
     let registry = PrimitiveRegistry::with_builtin();
     for fused_mode in [false, true] {
-        let mut owner = fixture();
+        let mut owner = fusion_fixture();
         let original = owner.clone();
         let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
         let mut runtime = crate::preset_runtime::PresetRuntime::from_def_for_render(owner.clone(), &registry, None, fused_mode).unwrap();
@@ -80,9 +167,13 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
             let id = runtime.graph.instance_by_node_id(&target).unwrap();
             assert_eq!(runtime.graph.get_node(id).unwrap().params.get(param.as_str()), Some(&ParamValue::Float(0.27)));
         }
-        assert_eq!(original, fixture(), "loading never mutates the canonical snapshot");
+        assert_eq!(
+            original,
+            fusion_fixture(),
+            "loading never mutates the canonical snapshot"
+        );
     }
-    let graph = fixture().into_graph(&registry).unwrap();
+    let graph = fusion_fixture().into_graph(&registry).unwrap();
     assert!(graph.modifier_buffer_budget().is_some(), "direct host graph loads retain admission metadata too");
 }
 
@@ -213,7 +304,7 @@ fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
 fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
     use crate::node_graph::parameters::ParamValue;
     use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
-    let mut owner = fixture();
+    let mut owner = fusion_fixture();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
     let fused = crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def)
