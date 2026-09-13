@@ -124,6 +124,20 @@ class Guards(unittest.TestCase):
         self.assertTrue(self.shell_call("scripts/land_branch.py lane/test --named-red BUG-x --reason skip"))
         self.assertTrue(self.shell_call("git push origin main", cwd=self.slot))
 
+    def test_archive_push_is_separate_from_landing(self):
+        sha = guard.git(self.slot, "rev-parse", "HEAD").strip()
+        ref = "refs/heads/archive/worktrees/20260913/slot-1"
+        self.assertIsNone(self.shell_call(f"git push origin {sha}:{ref}", cwd=self.slot))
+        for command in (f"git push --force origin {sha}:{ref}",
+                        f"git push origin {sha}:refs/heads/main",
+                        f"git push origin HEAD:{ref}",
+                        f"git push origin :{ref}",
+                        f"git push origin {sha}:{ref} HEAD:main",
+                        f"git push origin {sha}:{ref}/../main",
+                        f"git push origin {'0' * 40}:{ref}"):
+            with self.subTest(command=command):
+                self.assertTrue(self.shell_call(command, cwd=self.slot))
+
     def test_focused_attempt_budget_and_read_only_calls(self):
         command = "cargo test -p manifold-ui mapping"
         self.assertIsNone(self.shell_call(command))
