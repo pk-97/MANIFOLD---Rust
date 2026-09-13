@@ -2,8 +2,8 @@
 //!
 //! This node only presents buffers produced by the authored graph. It does
 //! not contain a copy of any modifier or deformation equation. Geometry,
-//! arrows, axes, the ground grid, and temporal trails share one bounded
-//! instanced line pass.
+//! arrows, axes, the infinite world grid, and temporal trails share one bounded
+//! instanced pass. The grid uses the scene camera without the object transform.
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::camera::Camera;
@@ -18,6 +18,14 @@ const MSAA_SAMPLE_COUNT: u32 = 4;
 const HISTORY_SAMPLES: u32 = 64;
 const TRAIL_RENDER_SAMPLES: u32 = 32;
 const MAX_VERTICES: u32 = 1536;
+const DIAGRAM_BLEND: GpuBlendState = GpuBlendState {
+    src_factor: GpuBlendFactor::SrcAlpha,
+    dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
+    operation: GpuBlendOp::Add,
+    src_alpha_factor: GpuBlendFactor::One,
+    dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
+    alpha_operation: GpuBlendOp::Add,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,7 +33,6 @@ struct DiagramUniforms {
     view_proj: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     viewport: [f32; 4],
-    source_offset: [f32; 4],
     radius: f32,
     line_width: f32,
     geometry_hue: f32,
@@ -42,6 +49,8 @@ struct DiagramUniforms {
     history_capacity: u32,
     history_stride: u32,
     _pad: u32,
+    inv_view_proj: [[f32; 4]; 4],
+    camera_pos_far: [f32; 4],
 }
 
 #[repr(C)]
@@ -73,9 +82,6 @@ crate::primitive! {
         geometry_hue: ScalarF32 optional,
         path_hue: ScalarF32 optional,
         radius: ScalarF32 optional,
-        source_offset_x: ScalarF32 optional,
-        source_offset_y: ScalarF32 optional,
-        source_offset_z: ScalarF32 optional,
     },
     outputs: { color: Texture2D },
     params: [
@@ -89,9 +95,6 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("geometry_hue"), label: "Geometry Hue", ty: ParamType::Float, default: ParamValue::Float(0.52), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("path_hue"), label: "Path Hue", ty: ParamType::Float, default: ParamValue::Float(0.13), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 100.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("source_offset_x"), label: "Source Offset X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("source_offset_y"), label: "Source Offset Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("source_offset_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: SourceHeight,
     composition_notes: "Current, reference, and incoming arrays are authored graph outputs. The transparent overlay uses the real Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories.",
@@ -120,20 +123,12 @@ const CAPTURE_SHADER: &str = include_str!("shaders/history_capture.wgsl");
 impl RenderMeshDiagram {
     /// Startup prewarm hook used by the native generator registry.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
-        let blend = GpuBlendState {
-            src_factor: GpuBlendFactor::SrcAlpha,
-            dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
-            operation: GpuBlendOp::Add,
-            src_alpha_factor: GpuBlendFactor::One,
-            dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
-            alpha_operation: GpuBlendOp::Add,
-        };
         device.create_render_pipeline_msaa(
             SHADER,
             "vs_main",
             "fs_main",
             manifold_gpu::GpuTextureFormat::Rgba16Float,
-            Some(blend),
+            Some(DIAGRAM_BLEND),
             MSAA_SAMPLE_COUNT,
             Self::TYPE_ID,
         );
@@ -208,19 +203,18 @@ impl Primitive for RenderMeshDiagram {
             self.last_vertex_count = vertex_count;
         }
         let toggled = |name: &str| u32::from(ctx.scalar_or_param(name, 1.0) > 0.5);
+        let view_proj = camera.view_proj(out.width as f32 / out.height as f32);
+        let Some(inv_view_proj) = super::render_scene::mat4_inverse(view_proj) else {
+            log::error!("Math View cannot project the world grid: singular scene camera");
+            return;
+        };
         let uniforms = DiagramUniforms {
-            view_proj: camera.view_proj(out.width as f32 / out.height as f32),
+            view_proj,
             model: Self::model_matrix(
                 ctx.inputs.transform("transform").unwrap_or_default(),
                 &camera,
             ),
             viewport: [out.width as f32, out.height as f32, 0.0, 0.0],
-            source_offset: [
-                ctx.scalar_or_param("source_offset_x", 0.0),
-                ctx.scalar_or_param("source_offset_y", 0.0),
-                ctx.scalar_or_param("source_offset_z", 0.0),
-                0.0,
-            ],
             radius: ctx.scalar_or_param("radius", 1.0).max(0.001),
             line_width: ctx.scalar_or_param("line_width", 1.0).clamp(0.5, 4.0),
             geometry_hue: ctx.scalar_or_param("geometry_hue", 0.52).fract().abs(),
@@ -237,24 +231,18 @@ impl Primitive for RenderMeshDiagram {
             history_capacity: HISTORY_SAMPLES,
             history_stride: MAX_VERTICES,
             _pad: 0,
+            inv_view_proj,
+            camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
         };
         let gpu = ctx.gpu_encoder();
         self.ensure_history(gpu.device);
         if self.render_pipeline.is_none() {
-            let blend = GpuBlendState {
-                src_factor: GpuBlendFactor::SrcAlpha,
-                dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
-                operation: GpuBlendOp::Add,
-                src_alpha_factor: GpuBlendFactor::One,
-                dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
-                alpha_operation: GpuBlendOp::Add,
-            };
             self.render_pipeline = Some(gpu.device.create_render_pipeline_msaa(
                 SHADER,
                 "vs_main",
                 "fs_main",
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
-                Some(blend),
+                Some(DIAGRAM_BLEND),
                 MSAA_SAMPLE_COUNT,
                 Self::TYPE_ID,
             ));
@@ -279,7 +267,7 @@ impl Primitive for RenderMeshDiagram {
         }
         let history = self.history.as_ref().expect("history allocated");
         let arrow_count = tri_count;
-        let grid_count = 22;
+        let grid_count = 1;
         let axes_count = 6;
         let trail_count = if uniforms.trails != 0 {
             TRAIL_RENDER_SAMPLES * vertex_count
@@ -402,9 +390,6 @@ mod tests {
             "geometry_hue",
             "path_hue",
             "radius",
-            "source_offset_x",
-            "source_offset_y",
-            "source_offset_z",
         ] {
             assert!(
                 RenderMeshDiagram::INPUTS.iter().any(|p| p.name == name),
@@ -426,3 +411,7 @@ mod tests {
         assert!(node.history_reset && node.last_seconds.is_none());
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "render_mesh_diagram/gpu_tests.rs"]
+mod gpu_tests;

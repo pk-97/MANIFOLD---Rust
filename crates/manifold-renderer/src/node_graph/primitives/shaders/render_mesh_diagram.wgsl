@@ -1,12 +1,13 @@
 struct U {
-    view_proj: mat4x4<f32>, model: mat4x4<f32>, viewport: vec4<f32>, source_offset: vec4<f32>,
+    view_proj: mat4x4<f32>, model: mat4x4<f32>, viewport: vec4<f32>,
     radius: f32, line_width: f32, geometry_hue: f32, path_hue: f32,
     grid: u32, fragments: u32, ghosts: u32, vectors: u32, trails: u32,
     tri_count: u32, vertex_count: u32, history_head: u32, history_len: u32,
     history_capacity: u32, history_stride: u32, _pad: u32,
+    inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32> };
-struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32> };
+struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @location(1) @interpolate(flat) grid: u32 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read> current: array<V>;
 @group(0) @binding(2) var<storage, read> reference: array<V>;
@@ -14,7 +15,7 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32> };
 @group(0) @binding(4) var<storage, read> history: array<vec4<f32>>;
 
 fn hidden() -> O {
-    var o: O; o.p = vec4<f32>(-2.0, -2.0, 0.0, 1.0); o.color = vec4<f32>(0.0); return o;
+    var o: O; o.p = vec4<f32>(-2.0, -2.0, 0.0, 1.0); o.color = vec4<f32>(0.0); o.grid = 0u; return o;
 }
 
 fn hsv(h: f32) -> vec3<f32> {
@@ -23,10 +24,7 @@ fn hsv(h: f32) -> vec3<f32> {
 }
 
 fn clip_point(p: vec3<f32>) -> vec4<f32> { return u.view_proj * u.model * vec4<f32>(p, 1.0); }
-fn calibrated(p: vec3<f32>) -> vec3<f32> { return p - u.source_offset.xyz; }
-
-fn line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
-    let ca = clip_point(a); let cb = clip_point(b);
+fn clip_line(ca: vec4<f32>, cb: vec4<f32>, color: vec4<f32>, vi: u32) -> O {
     if (ca.w <= 0.001 || cb.w <= 0.001) { return hidden(); }
     let aa = ca.xy / ca.w; let bb = cb.xy / cb.w;
     let d = (bb - aa) * u.viewport.xy; let len = length(d);
@@ -38,7 +36,15 @@ fn line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
     if (c == 1u) { p = bb + side; }
     if (c == 2u || c == 4u) { p = bb - side; }
     if (c == 5u) { p = aa - side; }
-    var o: O; o.p = vec4<f32>(p, (ca.z / ca.w + cb.z / cb.w) * 0.5, 1.0); o.color = color; return o;
+    var o: O; o.p = vec4<f32>(p, (ca.z / ca.w + cb.z / cb.w) * 0.5, 1.0); o.color = color; o.grid = 0u; return o;
+}
+
+fn line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
+    return clip_line(clip_point(a), clip_point(b), color, vi);
+}
+
+fn world_line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
+    return clip_line(u.view_proj * vec4<f32>(a, 1.0), u.view_proj * vec4<f32>(b, 1.0), color, vi);
 }
 
 fn sample_position(which: u32, idx: u32) -> vec3<f32> {
@@ -48,13 +54,22 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
 }
 
 @vertex
-fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> O {
+fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
+    // Draw the world grid first, behind the diagram marks. A fullscreen
+    // triangle has no finite mesh boundary and never inherits object pose.
+    if (instance == 0u) {
+        if (u.grid == 0u || vi >= 3u) { return hidden(); }
+        let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
+        let y = f32(vi & 2u) * 2.0 - 1.0;
+        var o: O; o.p = vec4<f32>(x, y, 0.0, 1.0); o.color = vec4<f32>(0.0); o.grid = 1u; return o;
+    }
+    let ii = instance - 1u;
     if (u.vertex_count == 0u) { return hidden(); }
     let tri = u.tri_count;
     let tri_end = tri * 3u;
     let arrow_base = tri_end;
     let grid_base = arrow_base + tri;
-    let axes_base = grid_base + 22u;
+    let axes_base = grid_base;
     let trails_base = axes_base + 6u;
 
     if (ii < tri) {
@@ -89,23 +104,15 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
         if (edge == 2u) { return line(b, head - side * head_size * 0.4, vec4<f32>(hsv(u.path_hue), 0.85), vi % 6u); }
         return hidden();
     }
-    if (ii < axes_base) {
-        if (vi >= 6u) { return hidden(); }
-        let g = ii - grid_base;
-        if (u.grid == 0u) { return hidden(); }
-        let i = f32(g % 11u) / 10.0 * 2.0 - 1.0;
-        if (g < 11u) { return line(calibrated(vec3<f32>(i * u.radius, 0.0, -u.radius)), calibrated(vec3<f32>(i * u.radius, 0.0, u.radius)), vec4<f32>(0.18, 0.35, 0.40, 0.28), vi); }
-        return line(calibrated(vec3<f32>(-u.radius, 0.0, i * u.radius)), calibrated(vec3<f32>(u.radius, 0.0, i * u.radius)), vec4<f32>(0.18, 0.35, 0.40, 0.28), vi);
-    }
     if (ii < trails_base) {
         if (vi >= 6u) { return hidden(); }
         let a = ii - axes_base;
         let pivot = (current[0].position + current[1].position + current[2].position) / 3.0;
         if (a < 3u) {
             if (u.grid == 0u) { return hidden(); }
-            if (a == 0u) { return line(calibrated(vec3<f32>(0.0)), calibrated(vec3<f32>(u.radius * 0.2, 0.0, 0.0)), vec4<f32>(1.0, 0.2, 0.2, 0.9), vi); }
-            if (a == 1u) { return line(calibrated(vec3<f32>(0.0)), calibrated(vec3<f32>(0.0, u.radius * 0.2, 0.0)), vec4<f32>(0.2, 1.0, 0.2, 0.9), vi); }
-            return line(calibrated(vec3<f32>(0.0)), calibrated(vec3<f32>(0.0, 0.0, u.radius * 0.2)), vec4<f32>(0.2, 0.4, 1.0, 0.9), vi);
+            if (a == 0u) { return world_line(vec3<f32>(0.0), vec3<f32>(1.0, 0.0, 0.0), vec4<f32>(1.0, 0.2, 0.2, 0.9), vi); }
+            if (a == 1u) { return world_line(vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec4<f32>(0.2, 1.0, 0.2, 0.9), vi); }
+            return world_line(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), vec4<f32>(0.2, 0.4, 1.0, 0.9), vi);
         }
         if (u.fragments == 0u) { return hidden(); }
         let edge_x = current[1].position - current[0].position;
@@ -134,5 +141,46 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     return line(a, b, vec4<f32>(hsv(u.path_hue), alpha), vi);
 }
 
+fn grid_lines(p: vec2<f32>, footprint: vec2<f32>, spacing: f32) -> f32 {
+    let cell = p / spacing;
+    let distance = abs(fract(cell + vec2<f32>(0.5)) - vec2<f32>(0.5)) * spacing;
+    let pixels = distance / footprint;
+    let coverage = vec2<f32>(1.0) - smoothstep(vec2<f32>(u.line_width * 0.35), vec2<f32>(u.line_width * 0.35 + 1.0), pixels);
+    // Fade each line family independently before subpixel cells alias.
+    let resolved = vec2<f32>(1.0) - smoothstep(vec2<f32>(0.1), vec2<f32>(0.5), footprint / spacing);
+    return max(coverage.x * resolved.x, coverage.y * resolved.y);
+}
+
+fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
+    // Native Metal framebuffer Y runs down; Camera clip-space Y runs up.
+    let ndc = pixel / u.viewport.xy * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
+    let near_h = u.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
+    let far_h = u.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    let near = near_h.xyz / near_h.w;
+    let far = far_h.xyz / far_h.w;
+    let ray = far - near;
+    let denominator = select(-max(abs(ray.y), 0.000001), max(abs(ray.y), 0.000001), ray.y >= 0.0);
+    let t = -near.y / denominator;
+    let world = near + t * ray;
+    let footprint = max(fwidth(world.xz), vec2<f32>(0.000001));
+    // Fixed world-unit graduations at 1, 10 and 100 units remain anchored
+    // during camera/object motion; finer levels fade out with perspective.
+    let fine = grid_lines(world.xz, footprint, 1.0);
+    let major = grid_lines(world.xz, footprint, 10.0);
+    let coarse = grid_lines(world.xz, footprint, 100.0);
+    let alpha = max(fine * 0.28, max(major * 0.40, coarse * 0.45));
+    let distance = length(world - u.camera_pos_far.xyz);
+    let fade_end = u.camera_pos_far.w * 0.9;
+    let fade = 1.0 - smoothstep(fade_end * 0.35, fade_end, distance);
+    let horizon = smoothstep(0.0, 0.04, abs(ray.y) / max(length(ray), 0.000001));
+    let visible = select(0.0, 1.0, t > 0.0 && t < 1.0 && u.grid != 0u);
+    return vec4<f32>(0.18, 0.35, 0.40, alpha * fade * horizon * visible);
+}
+
 @fragment
-fn fs_main(in: O) -> @location(0) vec4<f32> { return in.color; }
+fn fs_main(in: O) -> @location(0) vec4<f32> {
+    // Evaluate derivatives outside divergent control flow, including quads
+    // touched by line primitives, so the grid stays valid at the horizon.
+    let grid = world_grid(in.p.xy);
+    return select(in.color, grid, in.grid != 0u);
+}
