@@ -2233,6 +2233,7 @@ impl Application {
             && let winit::keyboard::Key::Character(c) = &logical_key
             && c.eq_ignore_ascii_case("z")
         {
+            self.selection.clear_automation_selection();
             if let Some(tx) = self.content_tx.as_ref() {
                 if self.modifiers.shift {
                     crate::ui_bridge::redo(tx);
