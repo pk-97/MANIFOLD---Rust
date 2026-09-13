@@ -257,6 +257,17 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - **Cmd-drag** bypasses grid snap for fine placement (Live's convention);
   **Shift-drag** for fine value adjustment.
 - **Marquee-select** multiple dots and drag/delete them together.
+  Group drags move points in time and value, using the grabbed point as the
+  snap anchor and preserving beat spacing. Cmd bypasses snap; Shift scales
+  value movement. A shared boundary clamp keeps the group at or after beat
+  zero and preserves its normalized value shape within parameter ranges.
+  Selected points outside the visible beat range in shown lanes remain part
+  of the move. Each preview
+  rebuilds from the complete original lanes, so crossing another point and
+  moving past it restores that point. Release replaces exact destination
+  collisions atomically per lane, with one undo step for the whole group;
+  Escape restores the original lanes. Clipboard, duplicate and time-stretch
+  operations remain unfinished.
 - **Draw mode** (Live's `B`): pencil freehand/steps following the grid.
 - Grid snapping follows the existing timeline grid settings.
 - Exact keybindings ride MANIFOLD's shortcut system; where a Live default

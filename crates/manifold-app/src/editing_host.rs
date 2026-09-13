@@ -964,32 +964,35 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn commit_automation_group_move(
         &mut self,
-        moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+        moves: Vec<manifold_ui::timeline_editing_host::AutomationPointMove>,
     ) {
-        if moves.is_empty() {
-            return;
+        if moves.is_empty() { return; }
+        // Group by lane before constructing commands: sequential point moves
+        // would overwrite other selected sources when a phrase overlaps itself.
+        type LaneMoves = (GraphTarget, ParamId, Vec<(AutomationPoint, AutomationPoint)>);
+        let mut lanes: Vec<LaneMoves> = Vec::new();
+        for movement in moves {
+            let target = to_graph_target(&movement.target);
+            let convert = |p: (Beats, f32, UiSegmentShape)| AutomationPoint {
+                beat: p.0, value: p.1, shape: to_segment_shape(p.2),
+            };
+            let pair = (convert(movement.old), convert(movement.new));
+            if let Some((_, _, points)) = lanes.iter_mut()
+                .find(|(t, p, _)| *t == target && *p == movement.param_id)
+            {
+                points.push(pair);
+            } else {
+                lanes.push((target, movement.param_id, vec![pair]));
+            }
         }
-        let commands: Vec<Box<dyn Command>> = moves
-            .into_iter()
-            .map(|(target, param_id, beat, old_v, new_v, shape)| {
-                let graph_target = to_graph_target(&target);
-                let shape = to_segment_shape(shape);
-                let old_point = AutomationPoint { beat, value: old_v, shape };
-                let new_point = AutomationPoint { beat, value: new_v, shape };
-                Box::new(MoveAutomationPointCommand::new(
-                    graph_target,
-                    param_id.as_ref(),
-                    old_point,
-                    new_point,
-                )) as Box<dyn Command>
-            })
-            .collect();
-        // Apply the previewed group to content as one undo/redo unit.
+        let commands = lanes.into_iter().map(|(target, param_id, points)| {
+            Box::new(MoveAutomationPointCommand::for_group(target, param_id.as_ref(), points))
+                as Box<dyn Command>
+        }).collect();
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
-                commands,
-                "Move Automation Points".to_string(),
+                commands, "Move Automation Points".to_string(),
             ),
         );
     }
