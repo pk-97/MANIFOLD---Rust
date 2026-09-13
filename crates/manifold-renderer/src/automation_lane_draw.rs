@@ -66,9 +66,7 @@ pub fn emit_automation_lanes(
             );
         }
 
-        // Label, left-anchored inside the strip — the read-only stand-in for
-        // Live's param-chooser dropdown (breakpoint editing / the chooser
-        // itself are a later phase; see docs/AUTOMATION_LANES_DESIGN.md section 7).
+        // Parameter name and the visible grip share the viewport's lane geometry.
         ui.draw_text(
             l.strip_rect.x + 4.0,
             l.strip_rect.y + 2.0,
@@ -76,6 +74,11 @@ pub fn emit_automation_lanes(
             color::AUTOMATION_LABEL_FONT as f32,
             color::AUTOMATION_LABEL_COLOR,
         );
+        let grip = l.resize_rect();
+        let x = grip.x + 4.0;
+        let y = grip.y + grip.height * 0.5;
+        ui.draw_line(x, y - 1.0, x + 24.0, y - 1.0, 1.0, color::AUTOMATION_LABEL_COLOR);
+        ui.draw_line(x, y + 1.0, x + 24.0, y + 1.0, 1.0, color::AUTOMATION_LABEL_COLOR);
     }
 
     ui.pop_immediate_clip();

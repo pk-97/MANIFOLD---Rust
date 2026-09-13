@@ -55,6 +55,7 @@ pub struct CoordinateMapper {
     layer_y_offsets: Vec<f32>,
     layer_heights: Vec<f32>,
     total_content_height: f32,
+    automation_lane_heights: Vec<f32>,
 }
 
 impl Default for CoordinateMapper {
@@ -73,6 +74,7 @@ impl CoordinateMapper {
             layer_y_offsets: Vec::new(),
             layer_heights: Vec::new(),
             total_content_height: 0.0,
+            automation_lane_heights: Vec::new(),
         }
     }
 
@@ -216,7 +218,7 @@ impl CoordinateMapper {
 
         let mut y = 0.0f32;
         for i in 0..count {
-            let height = Self::layer_height(layers, i);
+            let height = self.layer_height_with_overrides(layers, i);
             self.layer_y_offsets[i] = y;
             self.layer_heights[i] = height;
             y += height;
@@ -273,6 +275,27 @@ impl CoordinateMapper {
         // automation mode grows the track, exactly like Ableton.
         TrackHeight::Normal.px()
             + layer.automation_lane_count as f32 * color::AUTOMATION_LANE_STRIP_HEIGHT
+    }
+
+    fn layer_height_with_overrides(&self, layers: &[UiLayer], index: usize) -> f32 {
+        let base = Self::layer_height(layers, index);
+        let Some(layer) = layers.get(index) else { return base };
+        if base <= 0.0 { return base; }
+        if layer.is_collapsed || layer.is_group() || layer.automation_lane_count == 0 {
+            return base;
+        }
+        let default = color::AUTOMATION_LANE_STRIP_HEIGHT;
+        let lane_extra = self.automation_lane_heights.get(index).copied().unwrap_or(0.0);
+        if lane_extra == 0.0 {
+            base
+        } else {
+            TrackHeight::Normal.px() + lane_extra.max(default)
+        }
+    }
+
+    pub fn set_automation_lane_heights(&mut self, heights: &[f32]) {
+        self.automation_lane_heights.clear();
+        self.automation_lane_heights.extend_from_slice(heights);
     }
 
     /// Get the cumulative Y offset for a layer (top of that layer's track row).
@@ -364,6 +387,29 @@ fn find_parent_in_list<'a>(layers: &'a [UiLayer], parent_id: Option<&str>) -> Op
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn automation_heights_move_following_tracks_and_preserve_folded_children() {
+        let mut layers = vec![
+            make_layer("group", LayerType::Group, 0),
+            make_layer("automated", LayerType::Video, 1),
+            make_layer("next", LayerType::Video, 2),
+        ];
+        layers[1].parent_layer_id = Some(layers[0].layer_id.clone());
+        layers[1].automation_lane_count = 2;
+        let mut mapper = CoordinateMapper::new();
+        mapper.set_automation_lane_heights(&[0.0, 128.0, 0.0]);
+        mapper.rebuild_y_layout(&layers);
+        assert_eq!(mapper.get_layer_height(1), color::TRACK_HEIGHT + 128.0);
+        assert_eq!(mapper.get_layer_y_offset(2), color::GROUP_TRACK_HEIGHT + color::TRACK_HEIGHT + 128.0);
+        layers[0].is_collapsed = true;
+        mapper.rebuild_y_layout(&layers);
+        assert_eq!(mapper.get_layer_height(1), 0.0);
+        assert_eq!(mapper.get_layer_y_offset(2), color::GROUP_TRACK_HEIGHT);
+        layers[0].is_collapsed = false;
+        mapper.rebuild_y_layout(&layers);
+        assert_eq!(mapper.get_layer_height(1), color::TRACK_HEIGHT + 128.0);
+    }
+
     use super::*;
     use crate::types::LayerType;
     use manifold_foundation::LayerId;

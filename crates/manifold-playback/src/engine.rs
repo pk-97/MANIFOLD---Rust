@@ -998,6 +998,26 @@ impl PlaybackEngine {
         //    Port of C# line 1122.
         self.update_active_clip_playback_rates();
 
+        // 2a. Sample arrangement automation for scrub/inspector preview.
+        //     Inspection sampling uses the same beat-domain evaluator as
+        //     playback, but cannot record touches or close an in-flight
+        //     gesture merely because a stopped/paused seek moved the beat.
+        //     This must run before modulation so its base write is visible to
+        //     the base→value reset in that pipeline.
+        let automation_dirty = if let Some(project) = &mut self.project {
+            crate::automation::evaluate_all_automation_with_mode(
+                project,
+                Beats(self.current_beat),
+                &mut self.automation_latches,
+                self.automation_armed,
+                &mut self.automation_gestures,
+                crate::automation::AutomationSamplingMode::Inspection,
+            )
+            .0
+        } else {
+            false
+        };
+
         // 2b. Live audio triggers, meter-only (BUG-109 section 7.1 item 2). A clip
         //     trigger never FIRES while stopped — one-shot expiry is
         //     beat-based and the clock is frozen — but a performer tuning a
@@ -1048,10 +1068,10 @@ impl PlaybackEngine {
                 false
             }
         };
-        if dirty {
+        let modulation_dirty = automation_dirty || dirty;
+        if modulation_dirty {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
-        let modulation_dirty = dirty;
         self.modulation_timing_scratch = timing;
         self.pending_trigger_pulses = pulses;
         clip_edges.clear();
@@ -2931,5 +2951,90 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
 
     fn seek(&mut self, time: Seconds) {
         self.seek_to(time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    use manifold_core::layer::Layer;
+    use manifold_core::preset_definition_registry::create_default;
+    use manifold_core::project::Project;
+    use manifold_core::{Beats, PresetTypeId};
+
+    #[test]
+    fn stopped_and_paused_seek_sample_automation_before_modulation() {
+        // The automation test module registers this synthetic manifest for
+        // the playback test binary; using the real engine tick exercises the
+        // non-playing branch and its seek ordering.
+        let test_type = PresetTypeId::new("TestAutomationFx");
+        let mut layer = Layer::new_video("AutomationLayer".into(), 0);
+        let mut fx = create_default(&test_type);
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![
+                AutomationPoint {
+                    beat: Beats(0.0),
+                    value: 0.2,
+                    shape: SegmentShape::Linear,
+                },
+                AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 0.8,
+                    shape: SegmentShape::Linear,
+                },
+            ],
+        }]);
+        layer.effects = Some(vec![fx]);
+        let mut project = Project::default();
+        project.timeline.layers.push(layer);
+
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+
+        // Default tempo is 120 BPM, so one second lands at beat 2.
+        engine.seek_to(Seconds(1.0));
+        let result = engine.tick(TickContext {
+            realtime_now: Seconds(1.0),
+            ..TickContext::default()
+        });
+        let amount = engine
+            .project()
+            .unwrap()
+            .timeline
+            .layers[0]
+            .effects
+            .as_ref()
+            .unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap();
+        assert!((amount.value - 0.5).abs() < 1e-6);
+        assert!(result.modulation_active);
+        assert!(result.compositor_dirty);
+
+        // Paused inspection follows the same path after a second seek.
+        engine.set_state(PlaybackState::Paused);
+        engine.seek_to(Seconds(2.0));
+        let result = engine.tick(TickContext {
+            realtime_now: Seconds(2.0),
+            ..TickContext::default()
+        });
+        let amount = engine
+            .project()
+            .unwrap()
+            .timeline
+            .layers[0]
+            .effects
+            .as_ref()
+            .unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap();
+        assert!((amount.value - 0.8).abs() < 1e-6);
+        assert!(result.modulation_active);
+        assert!(result.compositor_dirty);
     }
 }

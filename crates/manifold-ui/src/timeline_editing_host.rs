@@ -23,6 +23,7 @@ pub enum TimelineCursor {
     Default,
     Move,
     ResizeHorizontal,
+    ResizeVertical,
     Blocked,
 }
 

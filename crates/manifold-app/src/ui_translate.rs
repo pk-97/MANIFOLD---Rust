@@ -355,7 +355,7 @@ fn push_chosen_placeholder_lane(
         effect_id: instance.id.clone(),
         param_id: param_id.clone(),
         target: target.clone(),
-        label: format!("{effect_label}: {param_id}"),
+        label: format!("{effect_label}: {}", p.spec.name),
         points: vec![UiAutomationPoint {
             beat: manifold_core::Beats::ZERO,
             value_norm: norm,
@@ -404,7 +404,7 @@ fn push_instance_automation_lanes(
             effect_id: instance.id.clone(),
             param_id: lane.param_id.clone(),
             target: target.clone(),
-            label: format!("{effect_label}: {}", lane.param_id),
+            label: format!("{effect_label}: {}", p.spec.name),
             points,
             param_min: pmin,
             param_max: pmax,

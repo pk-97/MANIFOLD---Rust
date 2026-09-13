@@ -4,7 +4,7 @@
 
 Dated snapshot: 2026-09-13 at `03c0a4d73b418de3139b58d04f9b2df0209e1ff4`. Review only; no implementation or replacement design approved.
 
-**Implementation follow-up (2026-09-13):** Peter authorized the authoring workstream after this audit. The first implementation slice repairs collision undo, moved-point selection, selection visibility, fine point dragging, accidental empty-space insertion, and viewport-edge segment editing. The audit findings below remain the historical baseline; this slice does not complete lane management, clipboard/time transforms, authoritative preview, or recording lifecycle work.
+**Implementation follow-up (2026-09-13):** Peter authorized the authoring workstream after this audit. The first implementation slice repairs collision undo, moved-point selection, selection visibility, fine point dragging, accidental empty-space insertion, and viewport-edge segment editing. The next authoring slice adds explicit Show Automation, manifest labels, individual lane resizing, and stopped/paused sampling. The audit findings below remain the historical baseline. Searchable device/parameter choosers, master/group editors, clipboard/time transforms, authoritative live drag preview, and recording lifecycle work remain unfinished.
 
 **Conclusion:** retain the automation model and extend the existing editor. The UI is the main obstacle to Corrosion's “separate → hold → burst” sequence, but the backend also has correctness gaps. This needs an automation-authoring workstream with targeted reliability fixes.
 

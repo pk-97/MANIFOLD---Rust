@@ -431,6 +431,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             TimelineCursor::Default => UICursor::Default,
             TimelineCursor::Move => UICursor::Move,
             TimelineCursor::ResizeHorizontal => UICursor::ResizeHorizontal,
+            TimelineCursor::ResizeVertical => UICursor::ResizeVertical,
             TimelineCursor::Blocked => UICursor::Blocked,
         };
         self.cursor_manager.set(ui_cursor);

@@ -794,12 +794,12 @@ impl ParamCardPanel {
             }
             let Some(ids) = slider else { continue };
 
-            // Rest of the row → perform-mapping menu (Perform context only;
-            // Author uses the right-edge mapping drawer instead). Registered on
+            // Rest of the row → parameter menu, including Show Automation.
+            // Author and Perform share this explicit lane-entry action. Registered on
             // both the interactive label and the full-row catcher behind the
             // value cell + gaps, so a right-click anywhere on the row that isn't
             // the track reliably opens the param menu — no narrow-target lottery.
-            if self.context == CardContext::Perform {
+            {
                 let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), self.rows[pi].id.clone()));
                 // Label registration goes through the contract (P3/D14).
                 BitmapSlider::register_label_mapping(ids, &menu, intents);

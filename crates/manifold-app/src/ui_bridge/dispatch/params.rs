@@ -31,6 +31,56 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     match action {
+        ParamsAction::ShowAutomation(gpt, param_id) => {
+            let Some(target) = resolve_graph_target(
+                gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+            ) else {
+                return DispatchResult::handled();
+            };
+            let Some(instance) = ctx.project.preset_instance(&target) else {
+                return DispatchResult::handled();
+            };
+            if !instance.params.contains(param_id.as_ref()) {
+                return DispatchResult::handled();
+            }
+            // Resolve the owning layer from the stable target, including a
+            // scene card bound to a different layer than the active inspector.
+            let owner = ctx.project.timeline.layers.iter().find(|layer| match &target {
+                manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
+                manifold_core::GraphTarget::Effect(id) => layer.effects.as_ref()
+                    .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
+            });
+            let Some(owner) = owner.filter(|layer| !layer.is_group()) else {
+                return DispatchResult::handled();
+            };
+            let owner_id = owner.layer_id.clone();
+            let mut expand = Vec::new();
+            let mut next = Some(owner_id.clone());
+            while let Some(id) = next {
+                let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(&id) else { break; };
+                if layer.is_collapsed { expand.push(id); }
+                next = layer.parent_layer_id.clone();
+            }
+            let ui_target = crate::editing_host::to_ui_graph_target(&target);
+            if !ctx.selection.automation_lane_heights.contains_key(&(ui_target.clone(), param_id.clone())) {
+                ctx.selection.set_automation_lane_height(ui_target.clone(), param_id.clone(), 96.0);
+            }
+            ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
+            ctx.selection.automation_mode_visible = true;
+            ctx.selection.clear_automation_selection();
+            if !expand.is_empty() {
+                // Expand uses the existing non-undoable view-state command
+                // convention; the authoritative project remains content-owned.
+                ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
+                    for id in expand {
+                        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&id) {
+                            layer.is_collapsed = false;
+                        }
+                    }
+                })));
+            }
+            DispatchResult::structural()
+        }
         // ── Macros panel collapse ─────────────────────────────────
         ParamsAction::MacrosCollapseToggle => {
             ctx.ui.inspector.macros_panel_mut().toggle_collapsed();

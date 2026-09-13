@@ -1109,7 +1109,7 @@ fn param_steps_scene() -> SceneData {
 /// one video layer, one long clip starting at the timeline origin so a
 /// `--script` run's `Step`-driven clock walks straight into (and stays well
 /// inside) its active-clip window, carrying one Bloom effect with
-/// `arm_envelope` applied to its only param (`amount`, default 0.50,
+/// `arm_envelope` applied to its only param (`amount`, fixture base 0.50,
 /// range 0..5 — see `assets/effect-presets/Bloom.json`). Default envelope
 /// target (`target_normalized = 1.0` ⇒ pulls toward 5.00) and decay
 /// (`DEFAULT_ENVELOPE_DECAY_BEATS` = 1 beat) make the base (0.50) and the
@@ -1127,6 +1127,8 @@ fn envelope_modulation_scene() -> SceneData {
         .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(64.0), Seconds::ZERO));
 
     let mut bloom = effect("Bloom");
+    // Pin the envelope probe's base; preset defaults can change independently.
+    bloom.set_base_param_from_automation("amount", 0.5);
     arm_envelope(&mut bloom);
     glow.effects = Some(vec![bloom]);
 

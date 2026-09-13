@@ -145,6 +145,10 @@ pub struct UIState {
     /// Never serialized — pure view state, same tier as
     /// `automation_mode_visible`.
     pub chosen_automation_params: HashMap<LayerId, (UiGraphTarget, ParamId)>,
+
+    /// Session-only lane strip heights, keyed by the lane address. Values are
+    /// clamped by `set_automation_lane_height` and never serialized.
+    pub automation_lane_heights: HashMap<(UiGraphTarget, ParamId), f32>,
 }
 
 impl Default for UIState {
@@ -188,7 +192,22 @@ impl UIState {
             selected_automation_points: Vec::new(),
             automation_draw_mode: false,
             chosen_automation_params: HashMap::new(),
+            automation_lane_heights: HashMap::new(),
         }
+    }
+
+    pub fn automation_lane_height(&self, target: &UiGraphTarget, param_id: &ParamId) -> f32 {
+        self.automation_lane_heights
+            .get(&(target.clone(), param_id.clone()))
+            .copied()
+            .unwrap_or(crate::color::AUTOMATION_LANE_STRIP_HEIGHT)
+    }
+
+    pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
+        self.automation_lane_heights.insert(
+            (target, param_id),
+            height.clamp(28.0, 240.0),
+        );
     }
 
     /// Touch-to-select (section 7 addendum): record `target`/`param_id` as the

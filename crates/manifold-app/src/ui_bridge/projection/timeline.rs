@@ -27,11 +27,19 @@ pub fn sync_project_data(
         // `automation_lane_count` from `selection.automation_mode_visible` — the
         // one flag that grows a track when lanes are visible
         // (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
-        ui.viewport.rebuild_mapper_layout(&crate::ui_translate::layers_to_ui_for_layout(
+        let layout_layers = crate::ui_translate::layers_to_ui_for_layout(
             &project.timeline.layers,
             selection.automation_mode_visible,
             &selection.chosen_automation_params,
-        ));
+        );
+        let lane_heights: Vec<Vec<f32>> = project.timeline.layers.iter().map(|layer| {
+            if !selection.automation_mode_visible || layer.is_collapsed || layer.is_group() { return Vec::new(); }
+            crate::ui_translate::layer_automation_lanes_to_ui(
+                layer, selection.chosen_automation_params.get(&layer.layer_id),
+            ).iter().map(|lane| selection.automation_lane_height(&lane.target, &lane.param_id)).collect()
+        }).collect();
+        ui.viewport.set_automation_lane_layout(&lane_heights);
+        ui.viewport.rebuild_mapper_layout(&layout_layers);
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
         // `LayerInfo` no longer carries them; the header panel queries the
@@ -388,6 +396,7 @@ pub fn sync_clip_positions(
         ui.viewport.set_markers(ui_markers);
     }
 }
+
 
 /// Beat-anchored beat→file-seconds breakpoints for an audio clip's waveform.
 ///
