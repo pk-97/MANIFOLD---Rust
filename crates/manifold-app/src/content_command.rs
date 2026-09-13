@@ -33,6 +33,9 @@ pub enum ContentCommand {
     SetProject,
     /// Mark editing service as clean (saved) without clearing undo history.
     MarkClean,
+    /// Flush recording and return the authoritative project/version for saving.
+    PrepareProjectSave(std::sync::mpsc::Sender<Option<(Project, u64)>>),
+    MarkCleanAt(u64),
 
     // ── Project lifecycle ──────────────────────────────────────────
     LoadProject(Box<Project>),

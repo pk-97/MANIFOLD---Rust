@@ -5,10 +5,9 @@
 //! save per edit burst: after firing, the timer stays disarmed until a new
 //! edit (data_version change while dirty) re-arms it.
 //!
-//! Zero-hitch: serialization happens on a background thread from the UI's
-//! retained `Arc<Project>` snapshot (`Application::last_snapshot_arc` — the
-//! snapshot channel that already exists). The UI thread only clones an Arc
-//! pointer and a handful of scalars. Everything routes through the existing
+//! The UI asynchronously requests a content-owned snapshot after pending
+//! recording takes reach the undo service. Serialization runs on a background
+//! thread; the UI never waits for the snapshot. Everything routes through the existing
 //! `manifold_io::saver::save_project(…, is_auto = true)`, which gives the
 //! `history/` journal entry and auto-save pruning for free (D4). No new save
 //! path.
@@ -33,6 +32,8 @@ pub(crate) const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(60);
 
 /// Debounce + in-flight bookkeeping for the background autosave.
 /// Pure state machine — time is injected so tests don't sleep.
+type PendingSaveSnapshot = (PathBuf, Receiver<Option<(Project, u64)>>);
+
 pub(crate) struct AutosaveState {
     /// `data_version` of the most recent edit observed while dirty.
     last_edit_version: u64,
@@ -46,6 +47,7 @@ pub(crate) struct AutosaveState {
     /// True after a failure has been surfaced; suppresses repeat dialogs
     /// until a save succeeds again (repeat failures still log).
     failure_notified: bool,
+    pending_snapshot: Option<PendingSaveSnapshot>,
 }
 
 impl AutosaveState {
@@ -56,7 +58,17 @@ impl AutosaveState {
             saved_version: 0,
             in_flight: None,
             failure_notified: false,
+            pending_snapshot: None,
         }
+    }
+
+    /// Invalidate outstanding snapshots even when reloading the same path.
+    /// An already running writer retains its captured old destination.
+    pub(crate) fn project_changed(&mut self) {
+        self.pending_snapshot = None;
+        self.last_edit_at = None;
+        self.last_edit_version = 0;
+        self.saved_version = 0;
     }
 
     /// Record the latest content state. An edit is a `data_version` change
@@ -82,9 +94,9 @@ impl AutosaveState {
 
     /// Mark the armed edit as covered and adopt the worker's completion
     /// channel. Call exactly when the background save is spawned.
-    pub(crate) fn begin(&mut self, rx: Receiver<Result<(), String>>) {
-        self.saved_version = self.last_edit_version;
-        self.last_edit_at = None;
+    pub(crate) fn begin(&mut self, rx: Receiver<Result<(), String>>, version: u64) {
+        self.saved_version = version;
+        if self.last_edit_version == version { self.last_edit_at = None; }
         self.in_flight = Some(rx);
     }
 
@@ -205,6 +217,19 @@ impl Application {
             }
         }
 
+        let prepared = if let Some((path, rx)) = self.autosave.pending_snapshot.take() {
+            match rx.try_recv() {
+                Ok(Some((project, version))) if self.current_project_path.as_ref() == Some(&path) => {
+                    Some((path, Arc::new(project), version))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.autosave.pending_snapshot = Some((path, rx));
+                    return;
+                }
+                _ => { log::warn!("Autosave snapshot unavailable or project changed"); return; }
+            }
+        } else { None };
+
         let now = Instant::now();
         self.autosave.observe(
             self.content_state.data_version,
@@ -212,7 +237,7 @@ impl Application {
             now,
         );
 
-        if !self
+        if prepared.is_none() && !self
             .autosave
             .should_fire(self.content_state.editing_is_dirty, now, AUTOSAVE_DEBOUNCE)
         {
@@ -230,8 +255,10 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return;
         };
-        // No snapshot received yet (content thread still warming up).
-        let Some(snapshot) = self.last_snapshot_arc.clone() else {
+        let (path, snapshot, version) = if let Some(prepared) = prepared { prepared } else {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.send_content_cmd(crate::content_command::ContentCommand::PrepareProjectSave(tx));
+            self.autosave.pending_snapshot = Some((path, rx));
             return;
         };
 
@@ -251,7 +278,7 @@ impl Application {
         match spawn_autosave(snapshot, path, stamp) {
             Ok(rx) => {
                 log::info!("[Autosave] Debounce elapsed — saving in background");
-                self.autosave.begin(rx);
+                self.autosave.begin(rx, version);
             }
             Err(e) => log::error!("[Autosave] {e}"),
         }
@@ -313,7 +340,7 @@ mod tests {
         s.observe(1, true, start);
         assert!(s.should_fire(true, start + DEBOUNCE, DEBOUNCE));
         let (tx, rx) = std::sync::mpsc::channel();
-        s.begin(rx);
+        s.begin(rx, 1);
         // Worker finishes successfully; completion drained.
         tx.send(Ok(())).unwrap();
         assert_eq!(s.poll_completion(), Some(Ok(())));
@@ -346,7 +373,7 @@ mod tests {
         let start = t0();
         s.observe(1, true, start);
         let (tx, rx) = std::sync::mpsc::channel();
-        s.begin(rx);
+        s.begin(rx, 1);
         s.observe(2, true, start + Duration::from_secs(1));
         assert!(
             !s.should_fire(true, start + DEBOUNCE * 2, DEBOUNCE),
@@ -355,6 +382,24 @@ mod tests {
         tx.send(Ok(())).unwrap();
         assert_eq!(s.poll_completion(), Some(Ok(())));
         assert!(s.should_fire(true, start + DEBOUNCE * 2, DEBOUNCE));
+    }
+
+    #[test]
+    fn older_snapshot_does_not_disarm_a_newer_edit() {
+        let mut s = AutosaveState::new();
+        let start = t0();
+        s.observe(1, true, start);
+        s.observe(2, true, start + DEBOUNCE);
+        let (tx, rx) = std::sync::mpsc::channel();
+        s.begin(rx, 1);
+        tx.send(Ok(())).unwrap();
+        assert_eq!(s.poll_completion(), Some(Ok(())));
+        assert!(s.should_fire(true, start + DEBOUNCE * 2, DEBOUNCE));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        s.pending_snapshot = Some((PathBuf::from("same-path"), rx));
+        s.project_changed();
+        assert!(s.pending_snapshot.is_none());
+        assert!(!s.should_fire(true, start + DEBOUNCE * 3, DEBOUNCE));
     }
 
     #[test]

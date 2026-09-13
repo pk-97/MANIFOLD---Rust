@@ -132,6 +132,8 @@ pub type AutomationLanePreviews = AHashMap<(GraphTarget, ParamId), AutomationLan
 pub enum AutomationSamplingMode {
     Playback,
     Inspection,
+    /// Arrangement-only export: never record, latch, or consume live touches.
+    Export,
 }
 
 /// Sample every enabled automation lane at `current_beat` and write the
@@ -172,8 +174,8 @@ pub fn evaluate_all_automation_with_mode(
     gestures: &mut AutomationGestures,
     mode: AutomationSamplingMode,
 ) -> (bool, Vec<Box<dyn Command>>) {
-    if mode == AutomationSamplingMode::Inspection {
-        return evaluate_all_automation_inspection(project, current_beat, latches, gestures);
+    if mode != AutomationSamplingMode::Playback {
+        return evaluate_all_automation_inspection(project, current_beat, latches, gestures, mode == AutomationSamplingMode::Export);
     }
 
     let mut any_wrote = false;
@@ -289,22 +291,23 @@ fn evaluate_all_automation_inspection(
     current_beat: Beats,
     latches: &mut AutomationLatches,
     gestures: &AutomationGestures,
+    export: bool,
 ) -> (bool, Vec<Box<dyn Command>>) {
     let mut any_wrote = false;
 
     for fx in project.settings.master_effects.iter_mut() {
-        any_wrote |= evaluate_instance_automation_inspection(fx, current_beat, latches, gestures);
+        any_wrote |= evaluate_instance_automation_inspection(fx, current_beat, latches, gestures, export);
     }
     for layer in project.timeline.layers.iter_mut() {
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
                 any_wrote |=
-                    evaluate_instance_automation_inspection(fx, current_beat, latches, gestures);
+                    evaluate_instance_automation_inspection(fx, current_beat, latches, gestures, export);
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
             any_wrote |=
-                evaluate_instance_automation_inspection(gp, current_beat, latches, gestures);
+                evaluate_instance_automation_inspection(gp, current_beat, latches, gestures, export);
         }
     }
 
@@ -321,6 +324,7 @@ fn evaluate_instance_automation_inspection(
     current_beat: Beats,
     latches: &mut AutomationLatches,
     gestures: &AutomationGestures,
+    export: bool,
 ) -> bool {
     if !fx.enabled {
         return false;
@@ -336,7 +340,7 @@ fn evaluate_instance_automation_inspection(
         let Some(param) = fx.params.get(lane.param_id.as_ref()) else {
             continue;
         };
-        if param.touched {
+        if !export && param.touched {
             // Inspection treats a touch as the same manual override as an
             // unarmed playback tick. This preserves the hand's value while
             // the playhead is parked or being scrubbed, even when Arm is on.
@@ -347,8 +351,8 @@ fn evaluate_instance_automation_inspection(
             latches.insert((fx_id.clone(), param_id), ());
             continue;
         }
-        if contains_automation_key(latches, fx_id, &lane.param_id)
-            || contains_automation_key(gestures, fx_id, &lane.param_id)
+        if !export && (contains_automation_key(latches, fx_id, &lane.param_id)
+            || contains_automation_key(gestures, fx_id, &lane.param_id))
         {
             continue;
         }
@@ -504,6 +508,9 @@ fn evaluate_instance_automation(
         // in the Back-to-Arrangement sense, it's authoring new automation.
         latches.remove(&(fx_id.clone(), param_id.clone()));
 
+        let shape = if fx.params.get(param_id.as_ref()).is_some_and(|p| p.whole_numbers()) {
+            SegmentShape::Hold
+        } else { SegmentShape::Linear };
         let key = (fx_id.clone(), param_id.clone());
         let gesture = gestures.entry(key).or_insert_with(|| {
             let (pre_points, existed) = fx
@@ -524,11 +531,12 @@ fn evaluate_instance_automation(
         // Punch-over: drop any already-recorded points at/after this beat —
         // a loop or backward scrub re-passing the same range overwrites it —
         // then append the new sample.
+        gesture.punch_in_beat = gesture.punch_in_beat.min(current_beat);
         gesture.recorded.retain(|p| p.beat.0 < current_beat.0);
         gesture.recorded.push(AutomationPoint {
             beat: current_beat,
             value: applied_base,
-            shape: SegmentShape::Linear,
+            shape,
         });
         gesture.last_touch_beat = current_beat;
         any_wrote = true;
@@ -539,7 +547,7 @@ fn evaluate_instance_automation(
 /// Close every gesture that has gone `GESTURE_INACTIVITY_BEATS` without a
 /// new touch: join the recorded segment onto the pre-gesture curve (old
 /// points before punch-in + the recorded segment + old points after the
-/// last touch, so the untouched tail is byte-identical to before — "the old
+/// last touch, with restricted shapes preserving the sampled tails — "the old
 /// curve resumes exactly", section 5) and return one `CommitRecordedGestureCommand`
 /// per closed gesture for the caller to run through `EditingService`.
 fn close_expired_gestures(
@@ -559,20 +567,7 @@ fn close_expired_gestures(
         };
         let (_, param_id) = key;
 
-        let mut new_points: Vec<AutomationPoint> = gesture
-            .pre_gesture_points
-            .iter()
-            .filter(|p| p.beat.0 < gesture.punch_in_beat.0)
-            .copied()
-            .collect();
-        new_points.extend(gesture.recorded.iter().copied());
-        new_points.extend(
-            gesture
-                .pre_gesture_points
-                .iter()
-                .filter(|p| p.beat.0 > gesture.last_touch_beat.0)
-                .copied(),
-        );
+        let new_points = punch_recorded_points(&gesture.pre_gesture_points, &gesture.recorded);
 
         let old_points = gesture.pre_gesture_existed.then_some(gesture.pre_gesture_points);
         commits.push(Box::new(CommitRecordedGestureCommand::new(
@@ -583,6 +578,43 @@ fn close_expired_gestures(
         )) as Box<dyn Command>);
     }
     commits
+}
+
+
+/// Close every take at an explicit transport/save boundary, using the same
+/// command and punch join as inactivity expiry. Draining is idempotent.
+pub fn finish_all_gestures(gestures: &mut AutomationGestures) -> Vec<Box<dyn Command>> {
+    close_expired_gestures(gestures, Beats(f64::INFINITY))
+}
+
+/// Replace the recorded closed interval while keeping the old curve outside it.
+/// Adjacent representable beats encode the two discontinuities without duplicate
+/// point identities. Restricted curve shapes preserve interpolation on both tails.
+fn punch_recorded_points(original: &[AutomationPoint], recorded: &[AutomationPoint]) -> Vec<AutomationPoint> {
+    let (Some(first), Some(last)) = (recorded.first(), recorded.last()) else { return original.to_vec(); };
+    if original.is_empty() { return recorded.to_vec(); }
+    let old = AutomationLane { param_id: "punch".into(), enabled: true, points: original.to_vec() };
+    let before = Beats(first.beat.0.next_down());
+    let after = Beats(last.beat.0.next_up());
+    let mut points: Vec<_> = original.iter().filter(|p| p.beat < before).copied().collect();
+    if first.beat > Beats::ZERO {
+        if let Some(left) = points.last_mut()
+            && let Some(right) = original.iter().find(|p| p.beat > left.beat)
+        {
+            let t = ((before.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
+            left.shape = left.shape.subrange(0.0, t);
+        }
+        points.push(AutomationPoint { beat: before, value: old.value_at(before), shape: SegmentShape::Hold });
+    }
+    points.extend_from_slice(recorded);
+    let shape = original.iter().enumerate().rfind(|(_, p)| p.beat <= after)
+        .and_then(|(i, left)| original.get(i + 1).map(|right| {
+            let t = ((after.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
+            left.shape.subrange(t, 1.0)
+        })).unwrap_or(SegmentShape::Hold);
+    points.push(AutomationPoint { beat: after, value: old.value_at(after), shape });
+    points.extend(original.iter().filter(|p| p.beat > after).copied());
+    points
 }
 
 // =====================================================================
@@ -1153,6 +1185,86 @@ mod tests {
         assert_eq!(lane.points.len(), 2, "undo restores the exact pre-gesture point set");
         assert!((lane.points[0].value - 0.2).abs() < 1e-6);
         assert!((lane.points[1].value - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn recording_punch_preserves_dense_samples_outside_take() {
+        for shape in [SegmentShape::Linear, SegmentShape::Hold, SegmentShape::Curved(0.7), SegmentShape::Curved(-0.8)] {
+            let original = AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.0, shape },
+                AutomationPoint { beat: Beats(8.0), value: 1.0, shape: SegmentShape::Linear },
+            ] };
+            for (start, end) in [(2.0, 2.0), (2.0, 5.0), (0.0, 3.0), (9.0, 10.0)] {
+                let mut recorded = vec![AutomationPoint { beat: Beats(start), value: 0.9, shape: SegmentShape::Linear }];
+                if end != start { recorded.push(AutomationPoint { beat: Beats(end), value: 0.3, shape: SegmentShape::Linear }); }
+                let changed = AutomationLane { points: punch_recorded_points(&original.points, &recorded), ..original.clone() };
+                assert!(changed.points.windows(2).all(|w| w[0].beat < w[1].beat));
+                assert_eq!(changed.value_at(Beats(start)), 0.9);
+                for i in 0..1100 {
+                    let beat = Beats(i as f64 / 100.0);
+                    if beat.0 >= start && beat.0 <= end { continue; }
+                    assert!((changed.value_at(beat) - original.value_at(beat)).abs() < 2e-6,
+                        "outside punch changed at {beat:?}, {shape:?}, {start}..{end}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recording_backward_pass_replaces_future_take_and_preserves_outside() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
+        let mut project = project_with(layer);
+        let original = project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].clone();
+        let mut latches = AutomationLatches::default();
+        let mut gestures = AutomationGestures::default();
+        for (beat, value) in [(3.0, 0.9), (3.5, 0.8), (1.0, 0.7), (2.0, 0.6)] {
+            project.timeline.layers[0].effects.as_mut().unwrap()[0].set_base_param("amount", value);
+            let (_, commits) = evaluate_all_automation(&mut project, Beats(beat), &mut latches, true, &mut gestures);
+            assert!(commits.is_empty());
+        }
+        let mut commits = finish_all_gestures(&mut gestures);
+        assert_eq!(commits.len(), 1);
+        commits[0].execute(&mut project);
+        let lane = &project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0];
+        assert!(lane.points.windows(2).all(|p| p[0].beat < p[1].beat));
+        assert_eq!(lane.value_at(Beats(1.0)), 0.7);
+        assert_eq!(lane.value_at(Beats(2.0)), 0.6);
+        for beat in [0.5, 2.5, 3.0, 3.5, 4.0] {
+            assert!((lane.value_at(Beats(beat)) - original.value_at(Beats(beat))).abs() < 1e-6);
+        }
+        commits[0].undo(&mut project);
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].points, original.points);
+    }
+
+    #[test]
+    fn recording_flush_and_export_preserve_live_ownership() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+        let mut gestures = AutomationGestures::default();
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].set_base_param("amount", 0.9);
+        let _ = evaluate_all_automation(&mut project, Beats(2.0), &mut latches, true, &mut gestures);
+        let mut commands = finish_all_gestures(&mut gestures);
+        assert_eq!(commands.len(), 1);
+        assert!(finish_all_gestures(&mut gestures).is_empty());
+        let original = project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].points.clone();
+        commands[0].execute(&mut project);
+        let lane = &project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0];
+        assert!((lane.value_at(Beats(1.0)) - 0.35).abs() < 1e-6);
+        assert_eq!(lane.value_at(Beats(2.0)), 0.9);
+        commands[0].undo(&mut project);
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].points, original);
+        let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+        fx.set_base_param("amount", 0.95);
+        latches.insert((fx.id.clone(), "amount".into()), ());
+        let (_, commits) = evaluate_all_automation_with_mode(&mut project, Beats(2.0), &mut latches, true, &mut gestures, AutomationSamplingMode::Export);
+        let p = project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap();
+        assert!((p.value - 0.5).abs() < 1e-6);
+        assert!(p.touched);
+        assert_eq!(latches.len(), 1);
+        assert!(gestures.is_empty() && commits.is_empty());
     }
 
     #[test]

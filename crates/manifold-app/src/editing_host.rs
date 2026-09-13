@@ -58,6 +58,7 @@ fn to_segment_shape(shape: UiSegmentShape) -> SegmentShape {
         UiSegmentShape::Linear => SegmentShape::Linear,
         UiSegmentShape::Hold => SegmentShape::Hold,
         UiSegmentShape::Curved(bend) => SegmentShape::Curved(bend),
+        UiSegmentShape::CurvedRange { bend, start, end } => SegmentShape::CurvedRange { bend, start, end },
     }
 }
 
@@ -70,6 +71,7 @@ fn from_segment_shape(shape: SegmentShape) -> UiSegmentShape {
         SegmentShape::Linear => UiSegmentShape::Linear,
         SegmentShape::Hold => UiSegmentShape::Hold,
         SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
+        SegmentShape::CurvedRange { bend, start, end } => UiSegmentShape::CurvedRange { bend, start, end },
     }
 }
 

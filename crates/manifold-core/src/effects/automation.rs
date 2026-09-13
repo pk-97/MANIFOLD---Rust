@@ -61,6 +61,35 @@ pub enum SegmentShape {
     /// concave (slow start), positive bends convex (fast start), `0` is
     /// linear. Values outside `-1..1` are clamped at evaluation time.
     Curved(f32),
+    /// A power curve clipped to a subrange of its original segment.
+    CurvedRange { bend: f32, start: f32, end: f32 },
+}
+
+impl SegmentShape {
+    pub fn sample(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::Hold => 0.0,
+            Self::Curved(bend) => segment_bend(t, bend),
+            Self::CurvedRange { bend, start, end } => {
+                let lo = segment_bend(start, bend);
+                let hi = segment_bend(end, bend);
+                let denom = hi - lo;
+                if denom.abs() <= f32::EPSILON { t } else { (segment_bend(start + t * (end - start), bend) - lo) / denom }
+            }
+        }
+    }
+
+    pub fn subrange(self, start: f32, end: f32) -> Self {
+        match self {
+            Self::Linear | Self::Hold => self,
+            Self::Curved(bend) => Self::CurvedRange { bend, start, end },
+            Self::CurvedRange { bend, start: a, end: b } => Self::CurvedRange {
+                bend, start: a + start * (b - a), end: a + end * (b - a)
+            },
+        }
+    }
 }
 
 impl AutomationLane {
@@ -107,14 +136,7 @@ impl AutomationLane {
                     return a.value;
                 }
                 let t = ((beat.0 - a.beat.0) as f32 / span).clamp(0.0, 1.0);
-                match a.shape {
-                    SegmentShape::Hold => a.value,
-                    SegmentShape::Linear => a.value + (b.value - a.value) * t,
-                    SegmentShape::Curved(bend) => {
-                        let shaped = segment_bend(t, bend);
-                        a.value + (b.value - a.value) * shaped
-                    }
-                }
+                a.value + (b.value - a.value) * a.shape.sample(t)
             }
         }
     }
@@ -349,6 +371,20 @@ mod tests {
             ],
         };
         assert!((lane.value_at(Beats(6.0)) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn curved_range_subranges_compose_and_serialize() {
+        let shape = SegmentShape::Curved(-0.7);
+        let nested = shape.subrange(0.2, 0.8).subrange(0.25, 0.75);
+        let direct = shape.subrange(0.35, 0.65);
+        for i in 0..=100 {
+            let t = i as f32 / 100.0;
+            assert!((nested.sample(t) - direct.sample(t)).abs() < 1e-5);
+        }
+        let json = serde_json::to_string(&nested).unwrap();
+        let decoded: SegmentShape = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, nested);
     }
 
 }
