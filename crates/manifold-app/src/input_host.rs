@@ -209,12 +209,14 @@ impl TimelineInputHost for AppInputHost<'_> {
                 } else if !selected.is_empty() {
                     self.effect_clipboard.copy_all(&selected);
                 }
+                if !selected.is_empty() {
+                    self.ui_root.scene_modifier_clipboard = None;
+                }
                 return !selected.is_empty();
             }
             return false;
         }
-        // A modifier scope owns Cmd+C even when its stack is empty. This keeps
-        // an inspector-focused copy from falling through to clip copy.
+        // Selected modifiers own Cmd+C within their generator scope.
         if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
             && !self.ui_root.inspector.has_effect_selection()
             && self.ui_root.inspector.has_modifier_selection()
@@ -255,6 +257,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                 self.effect_clipboard.copy_single(&selected[0]);
             } else if !selected.is_empty() {
                 self.effect_clipboard.copy_all(&selected);
+            }
+            if !selected.is_empty() {
+                self.ui_root.scene_modifier_clipboard = None;
             }
         }
 
@@ -2301,6 +2306,28 @@ mod automation_clipboard_host_tests {
             other => panic!("expected scene modifier paste, got {:?}", std::mem::discriminant(&other)),
         }
         assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
+
+        // Copying an ordinary effect afterwards must supersede this modifier
+        // clipboard, including when the destination has no selected cards.
+        let effect = h.project.settings.master_effects[0].clone();
+        let surface = manifold_ui::param_surface::ParamSurface {
+            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+            title: "ClipboardTest".into(), collapsed: false, enabled: true,
+            effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
+            has_graph_mod: false, layer_id: None, modifier: None,
+            rows: Vec::new(), string_params: Vec::new(), audio: Default::default(),
+            relight: Default::default(),
+        };
+        h.project.timeline.find_layer_by_id_mut(&destination_id).unwrap().1.effects = Some(vec![effect]);
+        h.active_layer = Some(destination_id.clone());
+        h.ui_root.inspector.configure_layer_effects(&[surface], Some(&destination_id));
+        assert!(h.ui_root.inspector.select_all_effects());
+        assert!(h.host().handle_effect_copy());
+        assert!(h.ui_root.scene_modifier_clipboard.is_none());
+        h.ui_root.inspector.clear_effect_selection(&mut h.ui_root.tree);
+        assert!(h.host().handle_effect_paste());
+        assert!(matches!(h.rx.try_recv().unwrap(), ContentCommand::Execute(_)));
+        assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 2);
     }
 
     #[test]
