@@ -31,6 +31,7 @@ import sys
 import time
 import uuid
 import tempfile
+import hashlib
 from pathlib import Path
 
 def _main_checkout():
@@ -541,10 +542,13 @@ def main():
     ret.add_argument("slot")
     ret.add_argument("--include", action="append", default=[],
                      help="explicitly preserve an otherwise unknown untracked path")
+    rem = sub.add_parser("remove", help="remove a clean backed-up inactive checkout")
+    rem.add_argument("slot", help="slot name or exact registered worktree path")
+    rem.add_argument("--recovery", type=Path, help="local recovery archive with blobs and ignored-files.json")
     sub.add_parser("scrub")
     args = parser.parse_args()
     {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
-     "retire": cmd_retire, "scrub": cmd_scrub}[args.cmd](args)
+     "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub}[args.cmd](args)
 
 
 
@@ -556,6 +560,51 @@ def _safe_rel(path, wt):
     if wt.resolve() not in (resolved, *resolved.parents):
         sys.exit(f"REFUSED: path escapes slot: {path}")
     return p
+
+
+def cmd_remove(args):
+    wt = Path(args.slot) if Path(args.slot).is_absolute() else POOL / args.slot
+    registered = {Path(line[9:]) for line in git(REPO, "worktree", "list", "--porcelain").stdout.splitlines()
+                  if line.startswith("worktree ")}
+    if wt not in registered or wt.resolve() == REPO.resolve() or wt.is_symlink():
+        sys.exit("REFUSED: not an eligible registered worktree")
+    if lease_blocks(wt)[0] or slot_has_live_session(wt):
+        sys.exit("REFUSED: worktree is active")
+    if git(wt, "status", "--porcelain").stdout:
+        sys.exit("REFUSED: retire dirty work before removing its checkout")
+    branch = git(wt, "branch", "--show-current").stdout.strip()
+    if not is_landed(wt) and not (branch and remote_contains_head(wt, branch)):
+        sys.exit("REFUSED: HEAD has no verified remote backup")
+
+    def digest(path):
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+
+    records = {}
+    if args.recovery:
+        records = {(item["slot"], item["path"]): item["sha256"] for item in
+                   json.loads((args.recovery / "ignored-files.json").read_text())}
+    ignored = git(wt, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").stdout.split("\0")
+    for name in filter(None, ignored):
+        parts = Path(name).parts
+        if "target" in parts or "__pycache__" in parts or name.endswith(".DS_Store") or name == LEASE_NAME:
+            continue
+        source = wt / name
+        if source.is_symlink():
+            sys.exit(f"REFUSED: preserve ignored symlink explicitly: {name}")
+        sha = digest(source)
+        main_copy = REPO / name
+        if main_copy.is_file() and digest(main_copy) == sha:
+            continue
+        if (args.recovery and records.get((wt.name, name)) == sha
+                and (args.recovery / "blobs" / sha).is_file()
+                and digest(args.recovery / "blobs" / sha) == sha):
+            continue
+        sys.exit(f"REFUSED: unique ignored file lacks verified recovery copy: {name}")
+    if slot_has_live_session(wt) or git(wt, "status", "--porcelain").stdout:
+        sys.exit("REFUSED: checkout became active or dirty during inspection")
+    git(REPO, "worktree", "remove", str(wt))
+    print(f"REMOVED {wt}; branch history preserved")
 
 
 def cmd_retire(args):

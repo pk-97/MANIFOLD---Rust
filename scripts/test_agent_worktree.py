@@ -367,6 +367,27 @@ TESTS = [
 ]
 
 
+def test_remove_requires_ignored_asset_backup(repo):
+    wt = add_slot(repo, "slot-0", "lane/remove")
+    asset = wt / ".claude/unique.txt"
+    asset.parent.mkdir(exist_ok=True)
+    asset.write_text("unique local asset\n")
+    args = SimpleNamespace(slot="slot-0", recovery=None)
+    with patch.object(aw, "slot_has_live_session", return_value=False):
+        try:
+            aw.cmd_remove(args)
+            check("unique ignored asset blocks removal", False)
+        except SystemExit:
+            check("unique ignored asset blocks removal", wt.exists())
+        (repo / ".claude/unique.txt").write_bytes(asset.read_bytes())
+        aw.cmd_remove(args)
+    check("verified duplicate checkout removed", not wt.exists())
+    check("removed checkout branch retained", bool(sh(repo, "git", "rev-parse", "lane/remove")))
+
+
+TESTS.append(test_remove_requires_ignored_asset_backup)
+
+
 def main():
     for fn in TESTS:
         with tempfile.TemporaryDirectory() as tmp:  # one clean pool per test

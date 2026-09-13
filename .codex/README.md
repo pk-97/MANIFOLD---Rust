@@ -24,6 +24,9 @@ SHA before clearing the checkout and cache; unknown untracked files need explici
 `--include PATH`. Preserve unique ignored assets separately. Active processes and
 unavailable process inspection block retirement. Acquire and release scrub
 inactive caches toward a 40 GiB pool budget; live work remains protected.
+`remove SLOT` removes a clean backed-up checkout only after checking that its
+ignored files have identical copies in main or in a supplied `--recovery` archive.
+It preserves branch refs and refuses active checkouts and unprotected assets.
 
 The guard permits a non-forced archival push only as
 `git push origin <full-commit-SHA>:refs/heads/archive/worktrees/<name>`.
