@@ -36,6 +36,17 @@ pub struct RegionSplitResult {
     pub split_count: usize,
 }
 
+/// One automation breakpoint move in a grouped gesture. The host turns the
+/// complete list into one undoable command, including beat changes and any
+/// collisions at destination beats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomationPointMove {
+    pub target: UiGraphTarget,
+    pub param_id: ParamId,
+    pub old: (Beats, f32, UiSegmentShape),
+    pub new: (Beats, f32, UiSegmentShape),
+}
+
 /// Lightweight clip reference returned by `find_clip_by_id`.
 /// Avoids passing mutable project references through the trait.
 pub struct ClipRef {
@@ -364,14 +375,14 @@ pub trait TimelineEditingHost {
 
     // ── Automation lane editing — marquee group move (P4 Unit B) ─────
 
-    /// Commit a marquee group-move as ONE undo entry. Each tuple is
-    /// `(target, param_id, beat, old_value, new_value, shape)` — beat/shape
-    /// unchanged by this gesture. Already applied live (per-point, via
-    /// repeated `set_automation_point_preview` calls with `from_beat ==
-    /// to_beat`) — this only registers the batched undo entry.
+    /// Commit a marquee group-move as ONE undo entry. The complete move list
+    /// includes each selected point's old/new beat and value plus its shape;
+    /// the host uses it to remove all selected sources and destination
+    /// collisions atomically before inserting the moved points. Already
+    /// applied live through whole-lane previews.
     fn commit_automation_group_move(
         &mut self,
-        moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+        moves: Vec<AutomationPointMove>,
     );
 
     // ── Automation lane editing — draw/pencil mode (P4 Unit B, section 7's

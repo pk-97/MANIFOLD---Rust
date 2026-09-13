@@ -1622,6 +1622,65 @@ mod scene_card_convergence_tests {
         }
 
         #[test]
+        fn automation_phrase_move_batches_lanes_and_undo_restores_collisions() {
+            use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+            use manifold_core::Beats;
+            use manifold_ui::timeline_editing_host::AutomationPointMove;
+            use manifold_ui::view::{UiGraphTarget, UiSegmentShape};
+
+            let original = vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(4.0), value: 0.5, shape: SegmentShape::Hold },
+                AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
+            ];
+            let mut project = Project::default();
+            let mut targets = Vec::new();
+            for _ in 0..2 {
+                let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+                fx.init_defaults();
+                targets.push(UiGraphTarget::Effect(fx.id.clone()));
+                fx.automation_lanes = Some(vec![AutomationLane {
+                    param_id: "amount".into(), enabled: false, points: original.clone(),
+                }]);
+                project.settings.master_effects.push(fx);
+            }
+            let before = serde_json::to_value(&project).unwrap();
+            let mut rig = ClipRig::new(project.clone());
+            let mut moves = Vec::new();
+            // Interleave lanes so grouping cannot rely on adjacent entries.
+            for (beat, value, shape) in [(Beats(0.0), 0.2, UiSegmentShape::Linear), (Beats(4.0), 0.5, UiSegmentShape::Hold)] {
+                for target in &targets {
+                    moves.push(AutomationPointMove {
+                        target: target.clone(), param_id: "amount".into(),
+                        old: (beat, value, shape), new: (beat + Beats(4.0), value, shape),
+                    });
+                }
+            }
+            rig.host().commit_automation_group_move(moves);
+            let mut commands = rig.drain();
+            assert_eq!(commands.len(), 1);
+            let ContentCommand::ExecuteBatch(commands, description) = commands.remove(0)
+                else { panic!("one batch must contain the whole phrase move"); };
+            assert_eq!(commands.len(), 2, "one atomic command per lane");
+            let mut service = EditingService::new();
+            service.execute_batch(commands, description, &mut project);
+            for fx in &project.settings.master_effects {
+                let lane = &fx.automation_lanes.as_ref().unwrap()[0];
+                assert!(!lane.enabled);
+                assert_eq!(lane.points, vec![
+                    AutomationPoint { beat: Beats(4.0), ..original[0] },
+                    AutomationPoint { beat: Beats(8.0), ..original[1] },
+                ]);
+            }
+            let after = serde_json::to_value(&project).unwrap();
+            assert!(service.undo(&mut project));
+            assert_eq!(serde_json::to_value(&project).unwrap(), before);
+            assert!(!service.undo(&mut project), "one undo restores every affected lane");
+            assert!(service.redo(&mut project));
+            assert_eq!(serde_json::to_value(&project).unwrap(), after);
+        }
+
+        #[test]
         fn automation_live_preview_keeps_content_lane_for_collision_undo() {
             use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
             use manifold_core::{Beats, GraphTarget, Seconds};
