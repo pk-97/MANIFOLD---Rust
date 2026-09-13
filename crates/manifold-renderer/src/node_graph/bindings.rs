@@ -47,6 +47,12 @@ pub struct NodeInputs<'a> {
     ///
     /// [`Executor`]: crate::node_graph::execution::Executor
     generations: &'a [u64],
+    /// Per-physical-slot content-availability flags, indexed by `Slot.0`,
+    /// owned by the [`Executor`](crate::node_graph::execution::Executor).
+    /// `true` = the producing node declared its output pending this frame
+    /// (async upload in flight — the bytes are allocation, not content).
+    /// Empty on test-constructed inputs: absent entries read as ready.
+    pending: &'a [bool],
 }
 
 impl<'a> NodeInputs<'a> {
@@ -55,7 +61,16 @@ impl<'a> NodeInputs<'a> {
         backend: &'a dyn Backend,
         generations: &'a [u64],
     ) -> Self {
-        Self { bindings, backend, generations }
+        Self { bindings, backend, generations, pending: &[] }
+    }
+
+    /// Executor-only: thread the content-availability flags through.
+    /// Separate from [`Self::new`] so the many test constructions keep
+    /// their three-argument shape (same pattern as
+    /// [`EffectNodeContext::with_errors`](crate::node_graph::EffectNodeContext::with_errors)).
+    pub(crate) fn with_pending(mut self, pending: &'a [bool]) -> Self {
+        self.pending = pending;
+        self
     }
 
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — write generation of the
@@ -237,6 +252,15 @@ impl<'a> NodeInputs<'a> {
     /// unlike [`Self::slot_generation`].
     pub fn slot_generation_of(&self, slot: Slot) -> Option<u64> {
         self.generations.get(slot.0 as usize).copied()
+    }
+
+    /// Content availability of an already-resolved [`Slot`]: `false`
+    /// when the producing node declared its output pending
+    /// ([`EffectNodeContext::mark_outputs_pending`](crate::node_graph::EffectNodeContext::mark_outputs_pending))
+    /// — the slot's bytes are allocation, not content, and must be
+    /// treated as absent. Slots never declared pending read as ready.
+    pub fn slot_content_ready(&self, slot: Slot) -> bool {
+        !self.pending.get(slot.0 as usize).copied().unwrap_or(false)
     }
 
     /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name

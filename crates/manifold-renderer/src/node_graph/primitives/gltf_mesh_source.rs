@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::sync::mpsc;
+use std::sync::OnceLock;
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::decode_cache::cached_load_gltf_mesh;
@@ -28,6 +29,11 @@ use crate::node_graph::primitive::Primitive;
 /// `normalize_mesh` GPU atom (which would need a same-frame GPU->CPU bounds
 /// readback, forbidden by DECOMPOSING section 7).
 pub const GLTF_FIT_MODES: &[&str] = &["none", "unit_box"];
+
+fn source_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MANIFOLD_RT_SOURCE_TRACE").as_deref() == Ok("1"))
+}
 
 /// Apply the `fit`/`recenter` transform to a freshly parsed vertex set,
 /// D7's parse-time extension. Runs on the background parse thread (not
@@ -262,6 +268,18 @@ crate::primitive! {
         pending_load: Option<mpsc::Receiver<Result<Vec<MeshVertex>, String>>> = None,
         // Whether `staging` currently reflects `cached_verts`.
         uploaded: bool = false,
+        // Content availability, distinct from `uploaded` (staging is CPU-
+        // side) and from the copy gate below: `true` only when the output
+        // buffer provably holds `cached_verts` — i.e. the frame that
+        // encoded the staging→dst copy has been submitted (observed at
+        // the next run()'s top), so any accel build enqueued from now on
+        // is GPU-ordered after the copy on the single in-order queue.
+        // Drives `mark_outputs_pending`; render_scene excludes the object
+        // while this is false (the Corrosion warmup hang class).
+        published: bool = false,
+        // A staging→dst copy was encoded by a previous run() and its
+        // frame's command buffer has not yet been observed submitted.
+        copy_in_flight: bool = false,
         // Bumped every time a background parse lands (step 3) — a cheap
         // content-generation counter, distinct from `last_key`: `last_key`
         // updates the instant a new selection is requested, before the
@@ -273,6 +291,8 @@ crate::primitive! {
         // ran for. Sentinel values guarantee the first real copy runs.
         last_copied_content_version: u64 = u64::MAX,
         last_copied_dst_identity: usize = 0,
+        trace_pending_logged: bool = false,
+        trace_pending_destination: (usize, u64) = (0, 0),
     },
 }
 
@@ -338,11 +358,22 @@ impl Primitive for GltfMeshSource {
             translate_z,
         );
         if key != self.last_key && self.pending_load.is_none() {
-            self.last_key = key;
+            if source_trace_enabled() {
+                log::info!(
+                    "[RT-SOURCE] request frame={} path={} mesh={} primitive={} material={} fit={} recenter={} translate=({:.3},{:.3},{:.3}) previous_content_version={}",
+                    ctx.time.frame_count, path, mesh_index, primitive_index, material_index, fit_idx, recenter,
+                    translate_x, translate_y, translate_z, self.content_version
+                );
+            }
+            self.last_key = key.clone();
+            self.trace_pending_logged = false;
+            self.trace_pending_destination = (0, 0);
             self.cached_verts.clear();
             self.staging = None;
             self.staging_len_bytes = 0;
             self.uploaded = false;
+            self.published = false;
+            self.copy_in_flight = false;
             if !path.is_empty() {
                 // material_index takes precedence: when set, it selects
                 // every primitive of that material across the scene
@@ -386,12 +417,31 @@ impl Primitive for GltfMeshSource {
             let rx = self.pending_load.take().unwrap();
             match rx.try_recv() {
                 Ok(Ok(verts)) => {
-                    self.cached_verts = verts;
-                    self.uploaded = false;
-                    self.content_version = self.content_version.wrapping_add(1);
+                    if key != self.last_key {
+                        // Params changed while this parse was in flight —
+                        // the result answers a stale request. Drop it; the
+                        // key mismatch re-triggers a fresh parse next frame.
+                        log::info!(
+                            "node.gltf_mesh_source: dropping stale load result for {} (params changed mid-load)",
+                            self.last_key.0
+                        );
+                    } else {
+                        if source_trace_enabled() {
+                            log::info!(
+                                "[RT-SOURCE] load-complete frame={} path={} actual_vertices={} content_version={}",
+                                ctx.time.frame_count, self.last_key.0, verts.len(), self.content_version.wrapping_add(1)
+                            );
+                        }
+                        self.cached_verts = verts;
+                        self.uploaded = false;
+                        self.content_version = self.content_version.wrapping_add(1);
+                    }
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_mesh_source: {e}");
+                    if source_trace_enabled() {
+                        log::warn!("[RT-SOURCE] load-failed frame={} path={} error={e}", ctx.time.frame_count, self.last_key.0);
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // Still in flight — put the receiver back.
@@ -399,6 +449,9 @@ impl Primitive for GltfMeshSource {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     log::error!("node.gltf_mesh_source: background load channel disconnected");
+                    if source_trace_enabled() {
+                        log::warn!("[RT-SOURCE] load-failed frame={} path={} error=channel-disconnected", ctx.time.frame_count, self.last_key.0);
+                    }
                 }
             }
         }
@@ -409,10 +462,38 @@ impl Primitive for GltfMeshSource {
         };
         let capacity = dst.size / std::mem::size_of::<MeshVertex>() as u64;
 
+        // A copy encoded by a previous run() rode that frame's command
+        // buffer, which the executor submits before this frame's — so on
+        // the single in-order queue the bytes are GPU-visible to any accel
+        // build enqueued from this frame onward. Flip to published only
+        // when that copy carried the CURRENT content into THIS buffer.
+        if self.copy_in_flight {
+            self.copy_in_flight = false;
+            self.published = self.uploaded
+                && self.last_copied_content_version == self.content_version
+                && self.last_copied_dst_identity == dst.identity_key();
+        }
+
+        if source_trace_enabled() && self.pending_load.is_some() {
+            let pending_destination = (dst.identity_key(), dst.size);
+            if !self.trace_pending_logged || self.trace_pending_destination != pending_destination {
+                log::info!(
+                    "[RT-SOURCE] pending frame={} path={} destination_identity={} destination_size={} declared_capacity={} cached_vertices={}",
+                    ctx.time.frame_count, self.last_key.0, pending_destination.0, pending_destination.1, capacity, self.cached_verts.len()
+                );
+                self.trace_pending_logged = true;
+                self.trace_pending_destination = pending_destination;
+            }
+        }
+
         if self.cached_verts.is_empty() {
             // Nothing parsed yet (or the path is empty / failed) — leave
             // the pre-bound buffer's existing contents; downstream nodes
-            // see whatever they last saw (or zeros on first run).
+            // see whatever they last saw (or zeros on first run). The
+            // buffer is allocation, not content: declare it pending so
+            // consumers (render_scene) treat the mesh as absent instead
+            // of building/tracing a full-capacity garbage BLAS.
+            ctx.mark_outputs_pending();
             return;
         }
 
@@ -430,12 +511,19 @@ impl Primitive for GltfMeshSource {
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;
             let device = ctx.gpu_encoder().device;
             let staging = device.create_buffer_shared(len_bytes.max(1));
+            let staging_identity = staging.identity_key();
             unsafe {
                 staging.write(0, bytemuck::cast_slice(bytes));
             }
             self.staging = Some(staging);
             self.staging_len_bytes = len_bytes;
             self.uploaded = true;
+            if source_trace_enabled() {
+                log::info!(
+                    "[RT-SOURCE] staging-ready frame={} path={} bytes={} staging_identity={} content_version={}",
+                    ctx.time.frame_count, self.last_key.0, len_bytes, staging_identity, self.content_version
+                );
+            }
         }
 
         // 6. Copy staging → dst, gated (RENDER_SCENE_PERF_OPTIMIZATION
@@ -455,13 +543,38 @@ impl Primitive for GltfMeshSource {
             } else {
                 let copy_size = self.staging_len_bytes.min(dst.size);
                 if copy_size > 0 {
-                    ctx.gpu_encoder()
-                        .native_enc
-                        .copy_buffer_to_buffer(staging, dst, copy_size);
+                    if source_trace_enabled() {
+                        let frame_count = ctx.time.frame_count;
+                        let encoder = ctx.gpu_encoder();
+                        let command_buffer_identity = encoder.native_enc.raw_cmd_buf() as *const _ as usize;
+                        encoder
+                            .native_enc
+                            .copy_buffer_to_buffer(staging, dst, copy_size);
+                        encoder.native_enc.add_completed_handler_with_status("RT source copy");
+                        log::info!(
+                            "[RT-SOURCE] copy-encoded frame={} path={} bytes={} destination_identity={} destination_size={} content_version={} queue=same-render-encoder command_buffer_identity={:#x} completion=status-handler",
+                            frame_count, self.last_key.0, copy_size, dst_identity, dst.size,
+                            self.content_version, command_buffer_identity
+                        );
+                    } else {
+                        ctx.gpu_encoder()
+                            .native_enc
+                            .copy_buffer_to_buffer(staging, dst, copy_size);
+                    }
                 }
                 self.last_copied_content_version = self.content_version;
                 self.last_copied_dst_identity = dst_identity;
+                // The copy lands with this frame's command buffer; the
+                // buffer becomes observable content at the NEXT run()'s
+                // top-of-frame flip, once that buffer has been submitted.
+                self.copy_in_flight = true;
+                self.published = false;
             }
+        }
+        if !self.published {
+            // Content is still on its way to the GPU (or hasn't been
+            // requested yet) — the output bytes are not consumable.
+            ctx.mark_outputs_pending();
         }
     }
 }
