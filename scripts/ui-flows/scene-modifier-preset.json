@@ -699,18 +699,21 @@
           "name": "param_card.drag_handle.Scene Fog"
         }
       },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Copy",
+          "type": "Button"
+        }
+      },
       "gesture": {
         "Click": {
           "modifiers": {}
         }
-      }
-    }
-  },
-  {
-    "Key": {
-      "key": "C",
-      "modifiers": {
-        "command": true
       }
     }
   },
@@ -746,10 +749,40 @@
     }
   },
   {
-    "Key": {
-      "key": "V",
-      "modifiers": {
-        "command": true
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "cc0_mushroom",
+          "type": "Label",
+          "nth": 0
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "cc0_mushroom",
+          "type": "Label",
+          "nth": 0
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Paste Modifiers",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
