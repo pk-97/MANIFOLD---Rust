@@ -1542,7 +1542,7 @@ pub(crate) fn build_toggle_trigger_row(
         tree.add_panel(parent, x - 1.0, cy - 1.0, slider_w + 2.0, ROW_HEIGHT + 2.0, UIStyle {
             border_color: color::AUTOMATION_LINE_COLOR,
             border_width: 1.0,
-            corner_radius: 2.0,
+            corner_radius: color::SMALL_RADIUS,
             ..UIStyle::default()
         });
     }
@@ -1830,7 +1830,7 @@ pub(crate) fn build_param_row(
         tree.add_panel(parent, x - 1.0, cy - 1.0, slider_w + 2.0, ROW_HEIGHT + 2.0, UIStyle {
             border_color: color::AUTOMATION_LINE_COLOR,
             border_width: 1.0,
-            corner_radius: 2.0,
+            corner_radius: color::SMALL_RADIUS,
             ..UIStyle::default()
         });
     }
