@@ -17,6 +17,8 @@ import tempfile
 import time
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent / "agent-worktree.py"
 
@@ -138,7 +140,8 @@ def test_unlanded_duplicate_is_reclaimable(repo):
     sh(wt, "git", "commit", "-qm", "unlanded shared work")
     twin = aw.POOL / "slot-6"
     sh(repo, "git", "worktree", "add", "-q", "--detach", str(twin), "origin/main")
-    sh(twin, "git", "checkout", "-B", "lane/dup", "lane/dup")  # the -B clobber
+    sh(twin, "git", "symbolic-ref", "HEAD", "refs/heads/lane/dup")  # duplicate holder fixture
+    sh(twin, "git", "read-tree", "-m", "-u", "lane/dup")
     write_lease(twin, age_h=aw.LEASE_TTL_HOURS + 1)
     cat, reason, _ = aw.slot_state(twin)
     check("clean duplicate of an unlanded branch -> RECLAIM",
@@ -233,9 +236,124 @@ def test_acquire_allows_the_slot_that_already_holds_it(repo):
     check("re-acquiring into the same slot is allowed", ok, locals().get("detail", ""))
 
 
+def test_retire_preserves_real_dirty_tree(repo):
+    wt = add_slot(repo, "slot-0", "lane/retirement")
+    head = sh(wt, "git", "rev-parse", "HEAD")
+    (wt / "f.txt").write_text("important modified source\n")
+    (wt / "new file.txt").write_text("new source\n")
+    handoff = b"Original handoff with exact details\n"
+    (wt / "WORKTREE_HANDOFF.md").write_bytes(handoff)
+    with patch.object(aw, "slot_has_live_session", return_value=False):
+        aw.cmd_retire(SimpleNamespace(slot="slot-0", include=["new file.txt"]))
+    ref = sh(repo, "git", "for-each-ref", "--format=%(refname)", "refs/heads/archive/worktrees")
+    sha = sh(repo, "git", "rev-parse", ref)
+    check("archive preserves modified source", sh(repo, "git", "show", ref + ":f.txt") == "important modified source")
+    check("archive preserves exact handoff", sh(repo, "git", "show", ref + ":WORKTREE_HANDOFF.md") + "\n" == handoff.decode())
+    check("archive preserves explicitly included path with space", sh(repo, "git", "show", ref + ":new file.txt") == "new source")
+    check("original branch retained", sh(repo, "git", "rev-parse", "lane/retirement") == head)
+    check("retirement ends clean", not sh(wt, "git", "status", "--porcelain"))
+    check("retirement detaches to main", sh(wt, "git", "rev-parse", "HEAD") == sh(repo, "git", "rev-parse", "origin/main"))
+    check("remote archive SHA matches", sh(repo, "git", "ls-remote", "origin", ref).split()[0] == sha)
+
+
+def test_retire_refusals_and_failed_push(repo):
+    wt = add_slot(repo, "slot-0", "lane/retire-failure")
+    (wt / "f.txt").write_text("preserve me\n")
+    (wt / "unknown.txt").write_text("not reviewed\n")
+    args = SimpleNamespace(slot="slot-0", include=[])
+    with patch.object(aw, "slot_has_live_session", return_value=False):
+        try:
+            aw.cmd_retire(args)
+            check("unknown file blocks retirement", False)
+        except SystemExit:
+            check("unknown file blocks retirement", True)
+        args.include = ["../escape"]
+        try:
+            aw.cmd_retire(args)
+            check("include path traversal refused", False)
+        except SystemExit:
+            check("include path traversal refused", True)
+        args.include = ["unknown.txt"]
+        sh(repo, "git", "remote", "set-url", "--push", "origin", str(repo / "missing-remote"))
+        before = sh(wt, "git", "status", "--porcelain")
+        try:
+            aw.cmd_retire(args)
+            check("push failure stops retirement", False)
+        except SystemExit:
+            check("push failure stops retirement", True)
+        check("failed push retains dirty tree", sh(wt, "git", "status", "--porcelain") == before and (wt / "f.txt").read_text() == "preserve me\n")
+        check("failed push retains local archive", bool(sh(repo, "git", "for-each-ref", "--format=%(refname)", "refs/heads/archive/worktrees")))
+    with patch.object(aw, "slot_has_live_session", return_value=True):
+        try:
+            aw.cmd_retire(args)
+            check("live process blocks retirement", False)
+        except SystemExit:
+            check("live process blocks retirement", True)
+
+
+def test_fixture_pruning_and_process_failure(repo):
+    (repo / ".gitignore").write_text("*.manifold\n.claude/*\n")
+    fixture = repo / "tests/fixtures/nested/keep.manifold"
+    fixture.parent.mkdir(parents=True); fixture.write_text("fixture")
+    hidden = repo / ".claude/worktrees-quarantine-slot-2/tests/fixtures/leak.manifold"
+    hidden.parent.mkdir(parents=True); hidden.write_text("do not copy")
+    wt = add_slot(repo, "slot-0", "lane/fixtures")
+    aw.copy_missing_fixtures(wt)
+    check("nested fixture copied", (wt / "tests/fixtures/nested/keep.manifold").exists())
+    check("quarantine fixture excluded", not (wt / hidden.relative_to(repo)).exists())
+    with patch.object(aw.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")):
+        check("process scan error fails closed", aw.slot_has_live_session(wt))
+    try:
+        aw.refuse_if_branch_ref_exists("lane/fixtures", wt, aw.branch_holders())
+        check("existing branch cannot be reset", False)
+    except SystemExit:
+        check("existing branch cannot be reset", True)
+
+
 # ---------------------------------------------------------------------- main
 
+def test_retire_remote_mismatch_and_concurrent_edit(repo):
+    wt = add_slot(repo, "slot-0", "lane/race")
+    args = SimpleNamespace(slot="slot-0", include=[])
+    original_git = aw.git
+    for mode in ("mismatch", "edit"):
+        (wt / "f.txt").write_text("original dirty source\n")
+        def controlled_git(cwd, *args, **kwargs):
+            result = original_git(cwd, *args, **kwargs)
+            if args and args[0] == "ls-remote":
+                if mode == "mismatch":
+                    result.stdout = "0" * 40 + "\t" + args[-1] + "\n"
+                else:
+                    (wt / "f.txt").write_text("new concurrent edit\n")
+            return result
+        with patch.object(aw, "git", side_effect=controlled_git), patch.object(aw, "slot_has_live_session", return_value=False):
+            try:
+                aw.cmd_retire(args)
+                check(mode + " blocks retirement", False)
+            except SystemExit:
+                check(mode + " blocks retirement", True)
+        expected = "new concurrent edit\n" if mode == "edit" else "original dirty source\n"
+        check(mode + " retains source", (wt / "f.txt").read_text() == expected)
+
+
+def test_retire_deleted_and_literal_paths(repo):
+    wt = add_slot(repo, "slot-0", "lane/rename")
+    (wt / "f.txt").rename(wt / "renamed file.txt")
+    (wt / "[literal].txt").write_text("literal filename\n")
+    with patch.object(aw, "slot_has_live_session", return_value=False):
+        aw.cmd_retire(SimpleNamespace(slot="slot-0", include=["renamed file.txt", "[literal].txt"]))
+    ref = sh(repo, "git", "for-each-ref", "--format=%(refname)", "refs/heads/archive/worktrees")
+    listing = sh(repo, "git", "ls-tree", "--name-only", ref).splitlines()
+    check("archive preserves rename and literal path", "f.txt" not in listing and "renamed file.txt" in listing and "[literal].txt" in listing)
+    check("renamed retirement ends clean", not sh(wt, "git", "status", "--porcelain"))
+
+
 TESTS = [
+    test_retire_remote_mismatch_and_concurrent_edit,
+    test_retire_deleted_and_literal_paths,
+    test_retire_preserves_real_dirty_tree,
+    test_retire_refusals_and_failed_push,
+    test_fixture_pruning_and_process_failure,
     test_clean_landed_no_lease_is_idle,
     test_clean_landed_stale_lease_is_reclaimable,
     test_clean_landed_live_lease_is_in_use,

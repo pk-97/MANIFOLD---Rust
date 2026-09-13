@@ -100,6 +100,9 @@ def main():
     anc = subprocess.run(["git", "merge-base", "--is-ancestor", a.branch, "origin/main"],
                          cwd=str(MAIN)).returncode == 0
     if anc:
+        if wt.resolve().parent == (MAIN / ".claude/worktrees").resolve():
+            step("release landed slot", [sys.executable, str(MAIN / "scripts/agent-worktree.py"),
+                                         "release", wt.name], MAIN)
         r = step("delete branch", ["git", "branch", "-d", a.branch], MAIN, check=False)
         if r.returncode != 0:
             # The common cause: the acquiring worktree still has the branch

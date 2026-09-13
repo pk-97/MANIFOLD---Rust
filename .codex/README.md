@@ -17,6 +17,21 @@ Run `python3 -B .codex/hooks/test_guard.py` after changes.
 
 ## Workflow tools
 
+Worktrees are reusable checkouts, not permanent storage for paused work. Run
+`scripts/agent-worktree.py release SLOT` after landing, or `retire SLOT` after
+reviewing unfinished work for archival. Retirement verifies the pushed archive
+SHA before clearing the checkout and cache; unknown untracked files need explicit
+`--include PATH`. Preserve unique ignored assets separately. Active processes and
+unavailable process inspection block retirement. Acquire and release scrub
+inactive caches toward a 40 GiB pool budget; live work remains protected.
+
+The guard permits a non-forced archival push only as
+`git push origin <full-commit-SHA>:refs/heads/archive/worktrees/<name>`.
+This backs up unfinished work without claiming a passed app gate or changing
+main. Check destination visibility before publishing new material; archive
+branches in a public repository are public too. Normal app delivery still uses
+`land_branch.py`.
+
 - `python3 -B scripts/codex_prepare.py --repo "$PWD" --path crates/manifold-ui/src/param_surface.rs --task 'Fix the gesture' --findings 'Describe observed evidence' --acceptance 'Name the required behaviour'` emits a worker brief with relevant source, architectural rules and runnable checks. Repeat `--path` for the owned files; new files are allowed. The lead supplies the diagnosis and passes the brief to the worker.
 - `python3 -B scripts/codex_checks.py --repo "$PWD" --base origin/main` selects worker checks from committed changes plus tracked and untracked work. `--path` overrides discovery; `--json` emits argv arrays. It reuses the landing gate's package/GPU selectors and UI-flow mappings. It never runs checks, caches passes or replaces the landing gate's reverse-dependency expansion.
 - `python3 -B scripts/codex_usage.py --since 2026-09-10 --until 2026-09-11 --repo "$PWD" --json` reports local per-model/task/effort token usage and repeated commands. Completed `CommandExecution` transcript items account for nested `functions.exec` calls without interpreting JavaScript. Older sessions without completion items use direct-call attempts; `command_coverage` distinguishes the sources. Bounds are inclusive start, exclusive end. Counts are not subscription billing, successful-task counts or proof of wasted work.
