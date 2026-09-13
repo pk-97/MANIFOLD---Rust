@@ -188,6 +188,7 @@ pub struct RowMod {
     /// That lane is currently overridden (latched) — the dot grays instead
     /// of showing red.
     pub automation_overridden: bool,
+    pub automation_selected: bool,
 }
 
 impl Default for RowMod {
@@ -212,6 +213,7 @@ impl Default for RowMod {
             driver_frame_rate: None,
             automation_active: false,
             automation_overridden: false,
+            automation_selected: false,
         }
     }
 }

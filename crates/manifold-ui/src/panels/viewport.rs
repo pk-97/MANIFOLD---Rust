@@ -957,6 +957,8 @@ impl TimelineViewportPanel {
                     .iter()
                     .any(|(eid, pid)| *eid == lane.effect_id && *pid == lane.param_id);
 
+                let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
+
                 // Sample the curve at a fixed screen-space step across the
                 // visible range — smooth enough for a breakpoint line, cheap
                 // enough per frame (mirrors the graph canvas wire's bezier
@@ -967,7 +969,7 @@ impl TimelineViewportPanel {
                 while x <= tx1 {
                     let beat = self.pixel_to_beat(x);
                     let norm = lane.value_at_norm(beat);
-                    let y = strip_rect.y + strip_rect.height * (1.0 - norm);
+                    let y = graph.y + graph.height * (1.0 - norm);
                     polyline.push((x, y));
                     x += STEP_PX;
                 }
@@ -992,7 +994,7 @@ impl TimelineViewportPanel {
                         .iter()
                         .map(|p| {
                             let x = self.beat_to_pixel(p.beat);
-                            let y = strip_rect.y + strip_rect.height * (1.0 - p.value_norm);
+                            let y = graph.y + graph.height * (1.0 - p.value_norm);
                             model::AutomationDotScreen {
                                 x,
                                 y,

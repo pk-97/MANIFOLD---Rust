@@ -933,6 +933,14 @@ impl Application {
             self.split_was_hovered = false;
         }
 
+        // The operation comes from the same resolver as automation input.
+        if !self.ws.ui_root.background_input_blocked()
+            && let Some(feedback) = &self.selection.automation_feedback
+        {
+            self.cursor_manager.set(feedback.operation.into());
+            return;
+        }
+
         // Priority 4: Clip trim handle hover
         let tracks_rect = self.ws.ui_root.viewport.tracks_rect();
         if tracks_rect.contains(self.cursor_pos)

@@ -20,6 +20,7 @@ use std::collections::HashSet;
 /// Matches Unity Cursors.cs static methods: SetDefault, SetMove, SetResizeHorizontal, SetBlocked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineCursor {
+    Crosshair,
     Default,
     Move,
     ResizeHorizontal,

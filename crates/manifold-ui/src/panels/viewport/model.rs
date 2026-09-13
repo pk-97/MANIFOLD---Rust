@@ -275,6 +275,35 @@ pub struct AutomationLaneScreen {
 }
 
 impl AutomationLaneScreen {
+    /// Chrome and graph share one geometry contract with input and rendering.
+    pub fn header_rect(&self) -> Rect {
+        Rect::new(self.strip_rect.x, self.strip_rect.y, self.strip_rect.width,
+            if self.strip_rect.height >= 64.0 { 22.0 } else { 0.0 })
+    }
+
+    pub fn curve_rect(&self) -> Rect {
+        Self::curve_rect_for(self.strip_rect)
+    }
+
+    pub fn curve_rect_for(strip: Rect) -> Rect {
+        let header = if strip.height >= 64.0 { 22.0 } else { 0.0 };
+        let padding = if header > 0.0 { 8.0 } else { 0.0 };
+        Rect::new(strip.x, strip.y + header + padding,
+            strip.width, (strip.height - header - padding - if header > 0.0 { 24.0 } else { 0.0 }).max(1.0))
+    }
+
+    pub fn y_at_norm(&self, norm: f32) -> f32 {
+        let rect = self.curve_rect();
+        rect.y + rect.height * (1.0 - norm.clamp(0.0, 1.0))
+    }
+
+    pub fn value_at_y(&self, y: f32) -> f32 {
+        let rect = self.curve_rect();
+        let norm = (1.0 - (y - rect.y) / rect.height).clamp(0.0, 1.0);
+        let value = self.param_min + norm * (self.param_max - self.param_min);
+        if self.whole_numbers { value.round().clamp(self.param_min, self.param_max) } else { value }
+    }
+
     /// Bottom resize handle: only the first 120 px of the strip is reserved.
     pub fn resize_rect(&self) -> Rect {
         Rect::new(self.strip_rect.x, self.strip_rect.y + self.strip_rect.height - 5.0, self.strip_rect.width.min(120.0), 5.0)

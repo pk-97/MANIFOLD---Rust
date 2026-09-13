@@ -454,6 +454,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn set_cursor(&mut self, cursor: TimelineCursor) {
         let ui_cursor = match cursor {
             TimelineCursor::Default => UICursor::Default,
+            TimelineCursor::Crosshair => UICursor::Crosshair,
             TimelineCursor::Move => UICursor::Move,
             TimelineCursor::ResizeHorizontal => UICursor::ResizeHorizontal,
             TimelineCursor::ResizeVertical => UICursor::ResizeVertical,

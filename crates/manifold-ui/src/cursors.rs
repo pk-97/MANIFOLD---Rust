@@ -16,6 +16,7 @@
 /// Maps 1:1 to Unity's Cursors static methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineCursor {
+    Crosshair,
     /// Standard arrow. Unity: `Cursors.SetDefault()`
     Default,
     /// ↔ horizontal resize. Unity: `Cursors.SetResizeHorizontal()`
@@ -94,11 +95,25 @@ impl TimelineCursor {
     /// Used by app.rs to call `window.set_cursor(winit::window::CursorIcon::*)`.
     pub fn to_winit_cursor_icon(self) -> &'static str {
         match self {
+            TimelineCursor::Crosshair => "Crosshair",
             TimelineCursor::Default => "Default",
             TimelineCursor::ResizeHorizontal => "ColResize",
             TimelineCursor::ResizeVertical => "RowResize",
             TimelineCursor::Move => "Move",
             TimelineCursor::Blocked => "NotAllowed",
+        }
+    }
+}
+
+impl From<crate::automation_hit_tester::AutomationOperation> for TimelineCursor {
+    fn from(operation: crate::automation_hit_tester::AutomationOperation) -> Self {
+        use crate::automation_hit_tester::AutomationOperation as Op;
+        match operation {
+            Op::Point => Self::Move,
+            Op::Segment | Op::Bend | Op::Resize => Self::ResizeVertical,
+            Op::Insert | Op::Draw | Op::Marquee => Self::Crosshair,
+            Op::Blocked => Self::Blocked,
+            Op::Header => Self::Default,
         }
     }
 }
