@@ -193,23 +193,45 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_copy(&mut self) -> bool {
-        if !self.ui_root.inspector.has_effect_selection() {
+        // An effect selection takes precedence on a scene layer: the modifier
+        // scope is also present while the generator card is displayed.
+        if self.ui_root.inspector.has_effect_selection() {
+            let tab = self.ui_root.inspector.last_effect_tab();
+            let indices = self.ui_root.inspector.get_selected_effect_indices();
+            let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
+            if let Some(effects) = effects {
+                let selected: Vec<_> = indices
+                    .iter()
+                    .filter_map(|&i| effects.get(i).cloned())
+                    .collect();
+                if selected.len() == 1 {
+                    self.effect_clipboard.copy_single(&selected[0]);
+                } else if !selected.is_empty() {
+                    self.effect_clipboard.copy_all(&selected);
+                }
+                return !selected.is_empty();
+            }
             return false;
         }
-        let tab = self.ui_root.inspector.last_effect_tab();
-        let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
-        if let Some(effects) = effects {
-            let selected: Vec<_> = indices
-                .iter()
-                .filter_map(|&i| effects.get(i).cloned())
-                .collect();
-            if selected.len() == 1 {
-                self.effect_clipboard.copy_single(&selected[0]);
-            } else if !selected.is_empty() {
-                self.effect_clipboard.copy_all(&selected);
+        // A modifier scope owns Cmd+C even when its stack is empty. This keeps
+        // an inspector-focused copy from falling through to clip copy.
+        if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
+            && !self.ui_root.inspector.has_effect_selection()
+            && self.ui_root.inspector.has_modifier_selection()
+        {
+            let selected = self.ui_root.inspector.selected_modifier_ids();
+            match crate::scene_modifier_transfer::ModifierClipboard::capture(
+                self.project,
+                &layer,
+                &selected,
+            ) {
+                Ok(clipboard) => self.ui_root.scene_modifier_clipboard = Some(clipboard),
+                Err(reason) => ContentCommand::send(
+                    self.content_tx,
+                    ContentCommand::GraphEditRejected(reason),
+                ),
             }
-            return !selected.is_empty();
+            return true;
         }
         false
     }
@@ -258,6 +280,28 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_paste(&mut self) -> bool {
+        // Paste remains in the scene-modifier context, including an empty
+        // destination stack. The content thread owns the actual mutation.
+        if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
+            && !self.ui_root.inspector.has_effect_selection()
+            && (self.ui_root.inspector.has_modifier_selection()
+                || self.ui_root.scene_modifier_clipboard.is_some())
+        {
+            if let Some(clipboard) = self.ui_root.scene_modifier_clipboard.clone() {
+                ContentCommand::send(
+                    self.content_tx,
+                    ContentCommand::SceneModifier(
+                        crate::scene_modifier_edit::SceneModifierAction::Paste(
+                            layer,
+                            clipboard,
+                        ),
+                    ),
+                );
+                *self.needs_structural_sync = true;
+                *self.needs_rebuild = true;
+            }
+            return true;
+        }
         if !self.effect_clipboard.has_content() {
             return false;
         }
@@ -2078,7 +2122,8 @@ mod automation_clipboard_host_tests {
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::{AutomationLane, PresetInstance};
     use manifold_core::params::{Param, ParamManifest};
-    use manifold_core::{EffectId, PresetTypeId};
+    use manifold_core::{EffectId, GraphTarget, LayerId, PresetTypeId};
+    use manifold_core::layer::Layer;
     use manifold_editing::service::EditingService;
     use manifold_ui::view::UiAutomationPointRef;
 
@@ -2185,6 +2230,77 @@ mod automation_clipboard_host_tests {
         project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
             .iter().find(|l| l.param_id.as_ref() == param).unwrap().points.iter()
             .map(|p| (p.beat.0, p.value)).collect()
+    }
+
+    #[test]
+    fn modifier_paste_dispatches_from_clipboard_into_empty_modifier_stack() {
+        let mut h = Harness::new();
+        let mut layer = Layer::new_generator("WaveGrid".into(), PresetTypeId::new("WaveGrid"), 0);
+        let layer_id = LayerId::new("modifier-shortcut-layer");
+        layer.layer_id = layer_id.clone();
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
+            .expect("WaveGrid fixture")
+            .clone();
+        layer.gen_params_or_init().graph = Some(graph);
+        layer.gen_params_or_init().refresh_manifest_from_graph();
+        h.project.timeline.layers.push(layer);
+        let mut add = crate::scene_modifier_edit::build_action(
+            &h.project,
+            crate::scene_modifier_edit::SceneModifierAction::Add(
+                layer_id.clone(),
+                "SceneFog".into(),
+            ),
+        )
+        .expect("scene modifier add");
+        add.execute(&mut h.project);
+        let mut destination = Layer::new_generator(
+            "WaveGrid Destination".into(),
+            PresetTypeId::new("WaveGrid"),
+            0,
+        );
+        let destination_id = LayerId::new("modifier-shortcut-destination");
+        destination.layer_id = destination_id.clone();
+        let destination_graph = manifold_renderer::node_graph::bundled_preset_def(
+            &PresetTypeId::new("WaveGrid"),
+        )
+        .expect("WaveGrid destination fixture")
+        .clone();
+        destination.gen_params_or_init().graph = Some(destination_graph);
+        destination.gen_params_or_init().refresh_manifest_from_graph();
+        h.project.timeline.layers.push(destination);
+        let source_graph = h
+            .project
+            .graph_target_owner(&GraphTarget::Generator(layer_id.clone()))
+            .and_then(|owner| owner.graph.as_ref())
+            .expect("source graph");
+        let modifier_id = source_graph.scene_modifiers[0].id.clone();
+        h.ui_root.scene_modifier_clipboard = Some(
+            crate::scene_modifier_transfer::ModifierClipboard::capture(
+                &h.project,
+                &layer_id,
+                std::slice::from_ref(&modifier_id),
+            )
+            .expect("modifier clipboard capture"),
+        );
+        h.ui_root
+            .inspector
+            .configure_modifier_cards(&[], Some(&destination_id), true, Vec::new());
+        let before = serde_json::to_vec(&h.project).expect("project serializes");
+        {
+            let mut host = h.host();
+            assert!(host.handle_effect_paste());
+        }
+        let command = h.rx.try_recv().expect("paste must reach content thread");
+        match command {
+            ContentCommand::SceneModifier(
+                crate::scene_modifier_edit::SceneModifierAction::Paste(destination, clipboard),
+            ) => {
+                assert_eq!(destination, destination_id);
+                assert_eq!(clipboard.count(), 1);
+            }
+            other => panic!("expected scene modifier paste, got {:?}", std::mem::discriminant(&other)),
+        }
+        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
     }
 
     #[test]

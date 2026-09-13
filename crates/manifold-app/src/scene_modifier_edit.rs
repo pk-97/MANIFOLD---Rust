@@ -19,6 +19,7 @@ pub(crate) enum SceneModifierAction {
     Move(LayerId, NodeId, usize),
     Reorder(LayerId, Vec<NodeId>),
     Duplicate(LayerId, Vec<NodeId>),
+    Paste(LayerId, crate::scene_modifier_transfer::ModifierClipboard),
     RemoveMany(LayerId, Vec<NodeId>),
     Retarget(LayerId, NodeId, SceneTargetSelection),
     Toggle(LayerId, NodeId),
@@ -35,6 +36,7 @@ pub(crate) fn build_action(
         | SceneModifierAction::Move(layer, ..)
         | SceneModifierAction::Reorder(layer, _)
         | SceneModifierAction::Duplicate(layer, _)
+        | SceneModifierAction::Paste(layer, _)
         | SceneModifierAction::RemoveMany(layer, _)
         | SceneModifierAction::Retarget(layer, ..)
         | SceneModifierAction::Toggle(layer, _)
@@ -46,6 +48,7 @@ pub(crate) fn build_action(
     let graph = crate::graph_target::resolve(project, &target)
         .ok_or("Generator graph is no longer available")?;
     match action {
+        SceneModifierAction::Paste(layer, clipboard) => crate::scene_modifier_transfer::build_paste(project, layer, clipboard),
         SceneModifierAction::Add(_, preset) => {
             let recipe = manifold_renderer::node_graph::bundled_preset_def(
                 &PresetTypeId::from_string(preset),

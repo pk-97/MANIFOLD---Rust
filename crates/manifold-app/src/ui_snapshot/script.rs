@@ -629,6 +629,15 @@ impl Runner {
     fn record_executed_commands(&mut self, data: &mut SceneData) -> bool {
         let mut changed = false;
         while let Ok(cmd) = self._content_rx.try_recv() {
+            let cmd = match cmd {
+                ContentCommand::ChangeGeneratorType { layer_id, new_type } => {
+                    match crate::generator_change::build_change(&data.project, layer_id, new_type) {
+                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
+                other => other,
+            };
             match cmd {
                 ContentCommand::SceneModifier(action) => {
                     let error = match crate::scene_modifier_edit::build_action(&data.project, action) {

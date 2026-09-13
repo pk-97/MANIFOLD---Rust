@@ -682,5 +682,177 @@
       "check": "Exists"
     }
   },
+  "Snapshot",
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_card.drag_handle.Scene Fog"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_card.drag_handle.Scene Fog"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Copy",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "cc0_mushroom",
+          "type": "Label",
+          "nth": 0
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "cc0_mushroom",
+          "type": "Label",
+          "nth": 0
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Paste Modifiers",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.remove"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
   "Snapshot"
 ]

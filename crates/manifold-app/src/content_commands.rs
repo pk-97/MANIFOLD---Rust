@@ -771,6 +771,21 @@ impl ContentThread {
 
             // ── Editing ────────────────────────────────────────────
             ContentCommand::GraphEditRejected(message) => self.report_graph_edit_rejection(message),
+            ContentCommand::ChangeGeneratorType { layer_id, new_type } => {
+                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::generator_change::build_change(project, layer_id.clone(), new_type.clone()));
+                match result {
+                    Ok(command) => {
+                        self.handle_command(ContentCommand::Execute(command));
+                        if self.engine.project().and_then(|project| project.graph_target_owner(
+                            &manifold_core::GraphTarget::Generator(layer_id.clone())))
+                            .is_some_and(|host| host.generator_type() == &new_type) {
+                            self.handle_command(ContentCommand::GeneratorTypeChanged { layer_id, new_type });
+                        }
+                    }
+                    Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
             ContentCommand::SceneModifier(action) => {
                 let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
                     .and_then(|project| crate::scene_modifier_edit::build_action(project, action));

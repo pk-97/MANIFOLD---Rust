@@ -1284,11 +1284,20 @@ impl UIRoot {
                     modifier_id: id.clone(),
                 };
                 let mut items = vec![
+                    DropdownItem::new("Copy").with_action(PanelAction::Project(
+                        ProjectAction::SceneModifiersCopy(layer.clone(), selected.clone()))),
+                ];
+                if self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0) {
+                    items.push(DropdownItem::new("Paste").with_action(PanelAction::Project(
+                        ProjectAction::SceneModifiersPaste(layer.clone()))));
+                }
+                items.push(
                     DropdownItem::new("Duplicate").with_action(PanelAction::Project(
                         ProjectAction::SceneModifiersDuplicate(layer.clone(), selected.clone()))),
-                    DropdownItem::new("Remove").with_action(PanelAction::Project(
+                );
+                items.push(DropdownItem::new("Remove").with_action(PanelAction::Project(
                         ProjectAction::SceneModifiersRemove(layer.clone(), selected))).with_separator(),
-                ];
+                );
                 items.extend(preset_menu_items(self.inspector.modifier_has_graph_mod(layer, id),
                     |kind| ParamsAction::PresetAction(target.clone(), kind)));
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
@@ -1303,6 +1312,13 @@ impl UIRoot {
                 // target, so the dispatch runs one path for effects + generators.
                 let mut items = Vec::new();
                 if matches!(gpt, GraphParamTarget::Generator) {
+                    if let Some(layer) = self.inspector.modifier_scope_id().cloned()
+                        && self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0)
+                    {
+                        items.push(DropdownItem::new("Paste Modifiers").with_action(
+                            PanelAction::Project(ProjectAction::SceneModifiersPaste(layer)),
+                        ));
+                    }
                     items.push(
                         DropdownItem::new("Copy Generator")
                             .with_action(PanelAction::Params(ParamsAction::CopyGenerator)),

@@ -17,7 +17,7 @@ pub(super) fn dispatch_project(
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     _content_state: &crate::content_state::ContentState,
-    _ui: &mut UIRoot,
+    ui: &mut UIRoot,
     _selection: &mut SelectionState,
     _active_layer: &mut Option<LayerId>,
     _user_prefs: &mut UserPrefs,
@@ -250,34 +250,10 @@ pub(super) fn dispatch_project(
                 // The action carries the chosen preset id directly (registry
                 // entries AND project-embedded presets), so no index lookup.
                 if new_type != old_type {
-                    let old_params: Vec<f32> = layer
-                        .gen_params()
-                        .map(|gp| gp.params.iter().map(|s| s.value).collect())
-                        .unwrap_or_default();
-                    let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
-                    let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
-                    let layer_id = layer.layer_id.clone();
-                    let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                        layer_id.clone(),
-                        old_type,
-                        new_type.clone(),
-                        old_params,
-                        old_drivers,
-                        old_envelopes,
-                    );
-                    {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                    }
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::GeneratorTypeChanged {
-                            layer_id,
-                            new_type: new_type.clone(),
-                        },
-                    );
+                    ContentCommand::send(content_tx, ContentCommand::ChangeGeneratorType {
+                        layer_id: layer.layer_id.clone(),
+                        new_type,
+                    });
                 }
             }
             DispatchResult::structural()
@@ -416,6 +392,34 @@ pub(super) fn dispatch_project(
                     ),
                 ),
             );
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifiersCopy(layer, selected) => {
+            match crate::scene_modifier_transfer::ModifierClipboard::capture(
+                project,
+                layer,
+                selected,
+            ) {
+                Ok(clipboard) => ui.scene_modifier_clipboard = Some(clipboard),
+                Err(reason) => ContentCommand::send(
+                    content_tx,
+                    ContentCommand::GraphEditRejected(reason),
+                ),
+            }
+            DispatchResult::handled()
+        }
+        ProjectAction::SceneModifiersPaste(layer) => {
+            if let Some(clipboard) = ui.scene_modifier_clipboard.clone() {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::SceneModifier(
+                        crate::scene_modifier_edit::SceneModifierAction::Paste(
+                            layer.clone(),
+                            clipboard,
+                        ),
+                    ),
+                );
+            }
             DispatchResult::handled()
         }
         ProjectAction::SceneModifiersRemove(layer, selected) => {
@@ -944,9 +948,8 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
         // D7 "New 3D Scene" empty-state action: assign the bundled Scene
-        // Starter preset via the SAME `ChangeGeneratorTypeCommand` the
-        // browser-popup generator picker's `SetGenType` dispatches (section 1 VERIFY
-        // marker, resolved).
+        // Starter preset through the existing empty-state command. The browser
+        // picker uses content-owned replacement to preserve applied modifiers.
         ProjectAction::SceneSetupNewScene(layer_id) => {
             let new_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());
             if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) {
@@ -1953,6 +1956,9 @@ mod tests {
                 }
                 crate::scene_modifier_edit::SceneModifierAction::Add(..) => {
                     panic!("instance action routed as preset add")
+                }
+                crate::scene_modifier_edit::SceneModifierAction::Paste(..) => {
+                    panic!("instance action routed as paste")
                 }
                 crate::scene_modifier_edit::SceneModifierAction::Preparation(..)
                 | crate::scene_modifier_edit::SceneModifierAction::Retarget(..) => {
