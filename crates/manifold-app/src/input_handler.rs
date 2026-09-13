@@ -160,6 +160,10 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_copy() {
                 return true;
             }
+            if host.has_automation_selection() {
+                host.copy_selected_automation();
+                return true;
+            }
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.copy_clips(&ids);
@@ -170,6 +174,10 @@ impl InputHandler {
         // ── Cut: Cmd+X (context-sensitive) (Unity line 302) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "x") && m.is_command_only() {
             if self.inspector_has_focus && host.handle_effect_cut() {
+                return true;
+            }
+            if host.has_automation_selection() {
+                host.cut_selected_automation();
                 return true;
             }
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
@@ -185,6 +193,11 @@ impl InputHandler {
         // changeCount before falling through to the existing clip paste.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "v") && m.is_command_only() {
             if self.inspector_has_focus && host.handle_effect_paste() {
+                return true;
+            }
+            if host.has_automation_paste_target() {
+                let target_beat = host.insert_cursor_beat().unwrap_or(host.current_beat());
+                host.paste_automation(target_beat);
                 return true;
             }
             let target_beat = host.insert_cursor_beat().unwrap_or(host.current_beat());
@@ -206,6 +219,10 @@ impl InputHandler {
         // ── Duplicate: Cmd+D (Unity line 316) ──
         // Context-sensitive: clips take priority; layers if no clips selected.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "d") && m.is_command_only() {
+            if host.has_automation_selection() {
+                host.duplicate_selected_automation();
+                return true;
+            }
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.duplicate_clips(&ids);
@@ -506,6 +523,12 @@ mod b14_keyboard_layer_tests {
         paste_pasteboard_files_calls: Vec<(Vec<std::path::PathBuf>, f32)>,
         paste_clips_calls: Vec<(f32, i32)>,
         automation_mode_visible_toggles: u32,
+        automation_selection: bool,
+        automation_copy_calls: u32,
+        automation_cut_calls: u32,
+        automation_paste_target: bool,
+        automation_paste_calls: Vec<f32>,
+        automation_duplicate_calls: u32,
     }
 
     impl TimelineInputHost for MockHost {
@@ -670,6 +693,24 @@ mod b14_keyboard_layer_tests {
         }
         fn toggle_automation_mode_visible(&mut self) {
             self.automation_mode_visible_toggles += 1;
+        }
+        fn has_automation_selection(&self) -> bool {
+            self.automation_selection
+        }
+        fn copy_selected_automation(&mut self) {
+            self.automation_copy_calls += 1;
+        }
+        fn cut_selected_automation(&mut self) {
+            self.automation_cut_calls += 1;
+        }
+        fn has_automation_paste_target(&self) -> bool {
+            self.automation_paste_target
+        }
+        fn paste_automation(&mut self, target_beat: f32) {
+            self.automation_paste_calls.push(target_beat);
+        }
+        fn duplicate_selected_automation(&mut self) {
+            self.automation_duplicate_calls += 1;
         }
     }
 
@@ -896,5 +937,35 @@ mod b14_keyboard_layer_tests {
         assert!(consumed);
         assert!(host.paste_pasteboard_files_calls.is_empty());
         assert_eq!(host.paste_clips_calls.len(), 1);
+    }
+
+    #[test]
+    fn automation_copy_cut_and_duplicate_precede_clip_selection() {
+        let (mut handler, mut host) = selected_host();
+        host.automation_selection = true;
+        let cmd = Modifiers { command: true, ..Modifiers::NONE };
+
+        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("c")), cmd, &mut host);
+        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("x")), cmd, &mut host);
+        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("d")), cmd, &mut host);
+
+        assert_eq!(host.automation_copy_calls, 1);
+        assert_eq!(host.automation_cut_calls, 1);
+        assert_eq!(host.automation_duplicate_calls, 1);
+        assert!(host.paste_clips_calls.is_empty());
+    }
+
+    #[test]
+    fn automation_paste_precedes_finder_and_clip_paste_only_with_target() {
+        let (mut handler, mut host) = selected_host();
+        host.automation_paste_target = true;
+        host.pasteboard_files_val = vec![std::path::PathBuf::from("/tmp/song.wav")];
+        host.pasteboard_change_count_val = 9;
+        let cmd = Modifiers { command: true, ..Modifiers::NONE };
+
+        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("v")), cmd, &mut host);
+        assert_eq!(host.automation_paste_calls, vec![0.0]);
+        assert!(host.paste_pasteboard_files_calls.is_empty());
+        assert!(host.paste_clips_calls.is_empty());
     }
 }

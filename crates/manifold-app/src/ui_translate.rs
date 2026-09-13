@@ -419,6 +419,7 @@ fn segment_shape_to_ui(s: SegmentShape) -> UiSegmentShape {
         SegmentShape::Linear => UiSegmentShape::Linear,
         SegmentShape::Hold => UiSegmentShape::Hold,
         SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
+        SegmentShape::CurvedRange { bend, start, end } => UiSegmentShape::CurvedRange { bend, start, end },
     }
 }
 

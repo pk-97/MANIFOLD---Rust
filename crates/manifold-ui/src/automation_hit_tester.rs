@@ -12,7 +12,6 @@
 use crate::hit_targets::{HitTargetEntry, HitTargets};
 use crate::node::{Rect, Vec2};
 use crate::panels::viewport::AutomationLaneScreen;
-use crate::view::automation_segment_bend;
 
 /// Grab radius for an existing breakpoint dot, in screen pixels. A click
 /// within this radius of a dot's center grabs/selects/deletes that dot
@@ -62,16 +61,7 @@ fn segment_screen_y(
         return None;
     }
     let t = (x - left.x) / span;
-    let norm = match left.shape {
-        crate::view::UiSegmentShape::Hold => left.value_norm,
-        crate::view::UiSegmentShape::Linear => {
-            left.value_norm + (right.value_norm - left.value_norm) * t
-        }
-        crate::view::UiSegmentShape::Curved(bend) => {
-            let shaped = automation_segment_bend(t, bend);
-            left.value_norm + (right.value_norm - left.value_norm) * shaped
-        }
-    };
+    let norm = left.value_norm + (right.value_norm - left.value_norm) * left.shape.sample(t);
     Some(lane.strip_rect.y + lane.strip_rect.height * (1.0 - norm))
 }
 
@@ -396,7 +386,7 @@ mod tests {
         // straight midpoint; this point is inside the viewport even though
         // both breakpoint endpoints are outside it.
         let t = (50.0 + 20.0) / 140.0;
-        let shaped = automation_segment_bend(t, -0.5);
+        let shaped = UiSegmentShape::Curved(-0.5).sample(t);
         let y = 100.0 * (1.0 - (1.0 - shaped));
         assert_eq!(hit_test_automation(Vec2::new(50.0, y), &lanes),
             Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));

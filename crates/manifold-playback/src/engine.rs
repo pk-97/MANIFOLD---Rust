@@ -253,6 +253,8 @@ pub struct PlaybackEngine {
     /// In-flight recording gestures (section 5). Runtime-only, owned by the
     /// playback side alongside `automation_latches`/`automation_armed`.
     automation_gestures: crate::automation::AutomationGestures,
+    finished_automation: Vec<Box<dyn manifold_editing::command::Command>>,
+    export_param_values: Vec<(GraphTarget, manifold_core::effects::ParamId, f32, f32, bool)>,
     /// Runtime-only draft curves supplied by the automation editor. These
     /// never mutate the project's authoritative automation lanes.
     automation_previews: crate::automation::AutomationLanePreviews,
@@ -350,6 +352,8 @@ impl PlaybackEngine {
             automation_latches: crate::automation::AutomationLatches::default(),
             automation_armed: false,
             automation_gestures: crate::automation::AutomationGestures::default(),
+            finished_automation: Vec::new(),
+            export_param_values: Vec::new(),
             automation_previews: crate::automation::AutomationLanePreviews::default(),
             timeline_query_frame: u64::MAX, // sentinel: never matches a real frame
             became_ready_list: Vec::with_capacity(8),
@@ -522,6 +526,11 @@ impl PlaybackEngine {
         // A project boundary invalidates every runtime-only preview. Restore
         // any preview-owned bases on the old project before it is replaced.
         self.clear_automation_previews();
+        self.automation_gestures.clear();
+        self.finished_automation.clear();
+        self.automation_latches.clear();
+        self.automation_armed = false;
+        self.export_param_values.clear();
         // BUG-256: a project swap is a hard boundary for ALL runtime state
         // keyed by project-local identity. Renderers cache by `LayerId` /
         // `ClipId` and gate rebuilds on serialized per-project version
@@ -588,6 +597,9 @@ impl PlaybackEngine {
     // ─── Transport ───
 
     pub fn set_state(&mut self, state: PlaybackState) {
+        if self.current_state == PlaybackState::Playing && state != PlaybackState::Playing {
+            self.queue_finished_automation();
+        }
         self.current_state = state;
     }
 
@@ -608,6 +620,7 @@ impl PlaybackEngine {
     }
 
     pub fn stop(&mut self) {
+        self.queue_finished_automation();
         self.current_state = PlaybackState::Stopped;
         self.stop_all_clips();
         // Clear live clip manager
@@ -638,6 +651,7 @@ impl PlaybackEngine {
         if self.current_state != PlaybackState::Playing {
             return;
         }
+        self.queue_finished_automation();
         self.current_state = PlaybackState::Paused;
         // Pause only seekable clips (generators render procedurally each frame)
         self.pause_active_clips();
@@ -681,6 +695,33 @@ impl PlaybackEngine {
     }
 
     pub fn set_export_mode(&mut self, value: bool) {
+        if value == self.is_export_mode { return; }
+        if value {
+            self.queue_finished_automation();
+            self.clear_automation_previews();
+            self.export_param_values.clear();
+            if let Some(project) = &self.project {
+                let saved = &mut self.export_param_values;
+                let mut capture = |target: GraphTarget, fx: &manifold_core::effects::PresetInstance| {
+                    for p in fx.params.iter() {
+                        saved.push((target.clone(), p.id().to_owned().into(), p.base, p.value, p.touched));
+                    }
+                };
+                for fx in &project.settings.master_effects { capture(GraphTarget::Effect(fx.id.clone()), fx); }
+                for layer in &project.timeline.layers {
+                    if let Some(effects) = &layer.effects {
+                        for fx in effects { capture(GraphTarget::Effect(fx.id.clone()), fx); }
+                    }
+                    if let Some(fx) = layer.gen_params() { capture(GraphTarget::Generator(layer.layer_id.clone()), fx); }
+                }
+            }
+        } else if let Some(project) = &mut self.project {
+            for (target, id, base, value, touched) in self.export_param_values.drain(..) {
+                if let Some(fx) = project.preset_instance_mut(&target)
+                    && let Some(p) = fx.params.get_mut(id.as_ref())
+                { p.base = base; p.value = value; p.touched = touched; }
+            }
+        }
         self.is_export_mode = value;
     }
 
@@ -712,6 +753,7 @@ impl PlaybackEngine {
     }
 
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
+        self.queue_finished_automation();
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
         self.sync_project_bpm_from_current_beat();
@@ -902,14 +944,16 @@ impl PlaybackEngine {
         //     carries one `CommitRecordedGestureCommand` per gesture that
         //     closed this tick, for the content thread to run through
         //     `EditingService` right after this tick returns.
-        let (automation_dirty, pending_gesture_commits) = if let Some(project) = &mut self.project
+        let (automation_dirty, mut pending_gesture_commits) = if let Some(project) = &mut self.project
         {
-            crate::automation::evaluate_all_automation(
+            crate::automation::evaluate_all_automation_with_mode(
                 project,
                 Beats(self.current_beat),
                 &mut self.automation_latches,
                 self.automation_armed,
                 &mut self.automation_gestures,
+                if self.is_export_mode { crate::automation::AutomationSamplingMode::Export }
+                else { crate::automation::AutomationSamplingMode::Playback },
             )
         } else {
             (false, Vec::new())
@@ -925,6 +969,12 @@ impl PlaybackEngine {
         } else {
             false
         };
+
+        if !self.finished_automation.is_empty() {
+            let mut boundary_commits = self.take_finished_automation();
+            boundary_commits.append(&mut pending_gesture_commits);
+            pending_gesture_commits = boundary_commits;
+        }
 
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
@@ -1142,7 +1192,7 @@ impl PlaybackEngine {
             prewarm_candidates: None,
             // Recording only runs during tick_playing (section 5's "armed + playing
             // + touched") — stopped/paused never opens or closes a gesture.
-            pending_gesture_commits: Vec::new(),
+            pending_gesture_commits: self.take_finished_automation(),
         }
     }
 
@@ -1837,11 +1887,39 @@ impl PlaybackEngine {
         self.mark_compositor_dirty_now();
     }
 
+    /// Capture any last unsampled touch and close pending takes before a
+    /// transport or persistence boundary. The content thread executes these
+    /// commands through EditingService; no lane mutation occurs here.
+    pub fn finish_automation_recording(&mut self) -> Vec<Box<dyn manifold_editing::command::Command>> {
+        let mut commands = self.take_finished_automation();
+        if self.is_playing() && self.automation_armed && !self.is_export_mode
+            && let Some(project) = &mut self.project
+        {
+            let (_, expired) = crate::automation::evaluate_all_automation(
+                project, Beats(self.current_beat), &mut self.automation_latches,
+                true, &mut self.automation_gestures,
+            );
+            commands.extend(expired);
+        }
+        commands.extend(crate::automation::finish_all_gestures(&mut self.automation_gestures));
+        commands
+    }
+
+    pub fn take_finished_automation(&mut self) -> Vec<Box<dyn manifold_editing::command::Command>> {
+        std::mem::take(&mut self.finished_automation)
+    }
+
+    fn queue_finished_automation(&mut self) {
+        let commands = self.finish_automation_recording();
+        self.finished_automation = commands;
+    }
+
     /// Toggle the global Automation Arm (section 5). Runtime-only, not a project
     /// mutation — no undo entry (`ContentCommand::AutomationSetArmed` is
     /// handled directly on the content thread, same shape as
     /// `automation_back_to_arrangement`).
     pub fn set_automation_armed(&mut self, armed: bool) {
+        if self.automation_armed && !armed { self.queue_finished_automation(); }
         self.automation_armed = armed;
     }
 
@@ -3311,6 +3389,77 @@ mod tests {
             .unwrap();
         assert!((amount.base - 0.42).abs() < 1e-6);
         assert!((amount.value - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn recording_boundaries_capture_last_touch_and_commit_once() {
+        for boundary in 0..4 {
+            let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
+            let id = fx.id.clone();
+            let original = vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Linear },
+            ];
+            fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: original.clone() }]);
+            let mut project = Project::default();
+            project.settings.master_effects.push(fx);
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project);
+            engine.set_state(PlaybackState::Playing);
+            engine.set_time(Seconds(1.0));
+            engine.set_automation_armed(true);
+            engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.9);
+            // No tick between the final input and the boundary: the last touch
+            // must still reach the take at beat 2, before stop/seek resets time.
+            match boundary {
+                0 => engine.stop(),
+                1 => engine.pause(),
+                2 => engine.set_automation_armed(false),
+                _ => { engine.seek_to(Seconds(3.0)); }
+            }
+            let mut commands = engine.take_finished_automation();
+            assert_eq!(commands.len(), 1, "boundary {boundary}");
+            assert!(engine.finish_automation_recording().is_empty());
+            commands[0].execute(engine.project_mut().unwrap());
+            let lane = &engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0];
+            assert_eq!(lane.value_at(Beats(2.0)), 0.9);
+            assert!((lane.value_at(Beats(1.0)) - 0.35).abs() < 1e-6);
+            commands[0].undo(engine.project_mut().unwrap());
+            assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, original);
+            engine.initialize(Project::default());
+            assert!(!engine.automation_armed());
+            assert!(engine.automation_latches.is_empty() && engine.automation_gestures.is_empty());
+        }
+    }
+
+    #[test]
+    fn recording_export_samples_arrangement_and_restores_manual_base() {
+        let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
+        let id = fx.id.clone();
+        fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
+            AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+            AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Linear },
+        ] }]);
+        let mut project = Project::default();
+        project.settings.master_effects.push(fx);
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.42);
+        let _ = engine.tick(TickContext::default());
+        assert_eq!(engine.automation_latches.len(), 1);
+        engine.set_automation_armed(true);
+        engine.set_export_mode(true);
+        engine.set_state(PlaybackState::Playing);
+        engine.set_time(Seconds(1.0));
+        let tick = engine.tick(TickContext::default());
+        assert!(tick.pending_gesture_commits.is_empty());
+        assert!((engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount") - 0.5).abs() < 1e-6);
+        engine.stop();
+        engine.set_export_mode(false);
+        assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount"), 0.42);
+        assert!(engine.automation_armed());
+        assert_eq!(engine.automation_latches.len(), 1);
+        assert!(engine.finish_automation_recording().is_empty());
     }
 
     #[test]
