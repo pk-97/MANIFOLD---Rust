@@ -220,8 +220,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.move_down",
-          "nth": 0
+          "name": "param_card.drag_handle.Scene Fog"
         }
       }
     }
@@ -230,13 +229,36 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.move_down",
-          "nth": 0
+          "name": "param_card.drag_handle.Scene Fog"
         }
       },
       "gesture": {
-        "Click": {
-          "modifiers": {}
+        "Drag": {
+          "to": {
+            "Query": {
+              "name": "param_card.drag_handle.Elastic Sculpture"
+            }
+          },
+          "steps": 10
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Scene Fog"
+        }
+      },
+      "check": {
+        "Above": {
+          "text": "Elastic Sculpture"
         }
       }
     }
@@ -280,6 +302,28 @@
       },
       "check": {
         "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Elastic Sculpture"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Scene Fog"
+        }
+      },
+      "check": {
+        "Count": 0
       }
     }
   },

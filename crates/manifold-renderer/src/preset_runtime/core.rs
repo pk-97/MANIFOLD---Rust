@@ -436,57 +436,6 @@ pub struct FrameContextInputs {
 }
 
 impl PresetRuntime {
-    /// Check the same prepared-array plan used by native allocation, without
-    /// creating GPU resources. Structural admission calls this before publishing
-    /// an edited owner so an oversized stack cannot replace a working scene.
-    pub fn prepared_modifier_buffer_usage(
-        &self,
-        canvas: (u32, u32),
-    ) -> Result<
-        Option<crate::node_graph::scene_modifier_expand::ModifierBufferUsage>,
-        crate::node_graph::PreAllocationError,
-    > {
-        let Some(budget) = self.graph.modifier_buffer_budget() else {
-            return Ok(None);
-        };
-        let allocation = crate::node_graph::resource_allocation::plan_array_allocations(
-            &self.graph,
-            &self.plan,
-            canvas,
-            &AHashMap::default(),
-        )?;
-        budget
-            .account(&allocation)
-            .map(Some)
-            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
-    }
-
-    /// Account and admit a prepared-array candidate against a captured GPU
-    /// memory snapshot. The snapshot belongs to the caller's admission
-    /// boundary; this method does no device query and performs no allocation.
-    pub fn prepared_modifier_buffer_usage_with_snapshot(
-        &self,
-        canvas: (u32, u32),
-        snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
-    ) -> Result<
-        Option<crate::node_graph::scene_modifier_expand::ModifierBufferUsage>,
-        crate::node_graph::PreAllocationError,
-    > {
-        let Some(budget) = self.graph.modifier_buffer_budget() else {
-            return Ok(None);
-        };
-        let allocation = crate::node_graph::resource_allocation::plan_array_allocations(
-            &self.graph,
-            &self.plan,
-            canvas,
-            &AHashMap::default(),
-        )?;
-        budget
-            .check_with_snapshot(&allocation, snapshot)
-            .map(Some)
-            .map_err(crate::node_graph::PreAllocationError::ModifierAdmission)
-    }
-
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
     /// pre-group texture fans out into both the group's effects in
@@ -1922,100 +1871,6 @@ impl PresetRuntime {
         self.executor = executor;
     }
 
-    pub(crate) fn is_modifier_trigger_param(&self, param: &str) -> bool {
-        self.modifier_events.as_ref().is_some_and(|events| events.is_modifier_param(param))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn note_modifier_audio_event(&mut self, param: &str) -> bool {
-        self.modifier_events.as_mut().is_some_and(|events| events.note_audio(param))
-    }
-
-    pub(crate) fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
-        self.modifier_events.as_mut().is_some_and(|events| events.note_audio_key(param_key))
-    }
-
-    pub(crate) fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
-        if let Some(events) = &mut self.modifier_events {
-            events.note_clip(|param| host.is_none_or(|host| host.clip_edge_enabled_matching(|candidate| candidate == param)));
-        }
-    }
-
-    fn consume_trigger_markers(&mut self) {
-        self.pending_trigger_baseline = None;
-        if let Some(events) = &mut self.modifier_events { events.consume_pending(); }
-    }
-
-    /// Called by the event owner before incrementing its clip/audio counter.
-    /// Multiple events before an evaluation preserve the earliest baseline.
-    pub fn note_trigger_event(&mut self, previous_count: u32) {
-        self.pending_trigger_baseline.get_or_insert(previous_count);
-    }
-
-    pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
-        self.pending_trigger_baseline = prior.pending_trigger_baseline;
-    }
-
-    pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
-        self.carry_pending_trigger_from(prior);
-        if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events) {
-            current.carry_from(previous);
-        }
-        if let (Some(current), Some(previous)) = (&self.modifier_control_state, &prior.modifier_control_state) {
-            current.harvest_from(previous, &mut self.graph, &mut prior.graph, &mut self.state_store, &mut prior.state_store);
-        }
-    }
-
-    /// Update the `system.generator_input` node's per-frame context. No-op on
-    /// an effect-chain runtime.
-    pub fn set_frame_context(&mut self, fc: FrameContextInputs) {
-        if let Some(events) = &self.modifier_events { events.write_context(&mut self.graph); }
-        let FrameContextInputs {
-            time,
-            beat,
-            aspect,
-            trigger_count,
-            anim_progress,
-            output_width,
-            output_height,
-        } = fc;
-        let PresetIo::Generate {
-            generator_input_id, ..
-        } = self.io
-        else {
-            return;
-        };
-        let id = generator_input_id;
-        let _ = self.graph.set_param(id, "time", ParamValue::Float(time));
-        let _ = self.graph.set_param(id, "beat", ParamValue::Float(beat));
-        let _ = self.graph.set_param(id, "aspect", ParamValue::Float(aspect));
-        let _ = self
-            .graph
-            .set_param(id, "trigger_count", ParamValue::Float(trigger_count));
-        let baseline = self.pending_trigger_baseline.map_or(trigger_count, |count| count as f32);
-        let _ = self.graph.set_param(id, "trigger_baseline", ParamValue::Float(baseline));
-        let _ = self
-            .graph
-            .set_param(id, "anim_progress", ParamValue::Float(anim_progress));
-        let _ = self
-            .graph
-            .set_param(id, "output_width", ParamValue::Float(output_width));
-        let _ = self
-            .graph
-            .set_param(id, "output_height", ParamValue::Float(output_height));
-    }
-
-    /// Push the host's slider values through the preset's bindings to the
-    /// matching inner-node params (generator path). Each binding reads its value
-    /// from the id-keyed `params` manifest by `source_id`; an empty manifest
-    /// leaves every binding at its declared default. No per-frame allocation —
-    /// the manifest is borrowed directly, no float-bus wrapping.
-    pub fn apply_param_values(&mut self, params: &ParamManifest) {
-        if let Some(seg) = self.effect_nodes.first_mut() {
-            seg.bound.apply(&mut self.graph, params);
-        }
-    }
-
     /// Any node in this graph with background file IO still in flight
     /// (`EffectNode::io_pending` — the IoBridge decode-thread sources).
     /// Headless convergence loops (`render-import`, conformance tests) call
@@ -2035,18 +1890,6 @@ impl PresetRuntime {
     /// until this returns `false` for every generator layer.
     pub fn warmup_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.warmup_pending())
-    }
-
-    /// Explicit local preview targets. Per-object copies remain distinct so
-    /// the editor can request an object rather than silently selecting one.
-    pub fn modifier_node_copies(
-        &self,
-        modifier: &NodeId,
-        local: &manifold_core::scene_modifier_preset::SceneNodeRef,
-    ) -> Option<&[crate::node_graph::scene_modifier_expand::SceneModifierNodeCopy]> {
-        self.modifier_preview_routes.iter()
-            .find(|route| &route.modifier_id == modifier && &route.local == local)
-            .map(|route| route.copies.as_slice())
     }
 
     /// Push a value/position editor edit's inner-node values into the running

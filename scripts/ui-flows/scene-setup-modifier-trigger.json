@@ -70,8 +70,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "under_text": "Flow",
-          "text": "T"
+          "name_suffix": "\"flow\"].trigger_btn"
         }
       },
       "check": {
@@ -116,8 +115,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "under_text": "Flow",
-          "text": "T"
+          "name_suffix": "\"flow\"].trigger_btn"
         }
       },
       "gesture": {
@@ -156,8 +154,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "under_text": "Zoom Pulse",
-          "text": "\ue000"
+          "name_suffix": "\"zoom_pulse_amp\"].driver_btn"
         }
       }
     }
@@ -166,8 +163,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "under_text": "Zoom Pulse",
-          "text": "\ue000"
+          "name_suffix": "\"zoom_pulse_amp\"].driver_btn"
         }
       },
       "gesture": {

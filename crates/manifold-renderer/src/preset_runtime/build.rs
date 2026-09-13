@@ -4,39 +4,6 @@
 
 use super::*;
 
-/// Map a [`crate::node_graph::PreAllocationError`] into [`JsonGeneratorLoadError`].
-fn generator_error_from_prealloc(
-    e: crate::node_graph::PreAllocationError,
-) -> JsonGeneratorLoadError {
-    use crate::node_graph::PreAllocationError as P;
-    match e {
-        P::ModifierAdmission(error) => JsonGeneratorLoadError::SceneModifier(error),
-        P::ModifierMemoryUnavailable => JsonGeneratorLoadError::SceneModifier(
-            crate::node_graph::scene_modifier_expand::SceneModifierExpandError::CapacityExceeded {
-                path: "modifierBufferBudget".into(),
-                detail: "the GPU did not expose current allocated size and working-set capacity".into(),
-            },
-        ),
-        P::UnsizedArrayOutput { node_type, port, .. } => {
-            JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port }
-        }
-        P::UnsizedTexture3DOutput { node_type, port, .. } => {
-            JsonGeneratorLoadError::UnsizedTexture3DOutput { node_type, port }
-        }
-        P::UnboundArrayResource {
-            producer_handle,
-            producer_node_type,
-            producer_port,
-            cause,
-        } => JsonGeneratorLoadError::UnboundArrayResource {
-            producer_handle,
-            producer_node_type,
-            producer_port,
-            cause,
-        },
-    }
-}
-
 /// Topology hash — captures only the layout-affecting fields of
 /// `effects` + `groups`. Per-frame param values, drivers,
 /// envelopes, AND continuous wet/dry values are EXCLUDED so live
@@ -324,62 +291,10 @@ impl PresetRuntime {
         Self::from_def_for_render(doc, registry, manifest, false)
     }
 
-    /// Shared structural entry for watched, standalone and fused generators.
-    pub(crate) fn from_def_for_render(
-        doc: EffectGraphDef,
-        registry: &PrimitiveRegistry,
-        manifest: Option<&ParamManifest>,
-        render_fused: bool,
-    ) -> Result<Self, JsonGeneratorLoadError> {
-        use manifold_core::effect_graph_def::BindingTarget;
-        use crate::node_graph::scene_modifier_expand::{
-            PreparedGraphValueWrites, PreparedModifierBufferBudget, prepare_scene_modifiers,
-        };
-        let (render_def, authoring) = if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc) {
-            let prepared = prepare_scene_modifiers(&doc, registry)?;
-            // The generator resolver drops Composite bindings. Keep provenance
-            // in the same order before installing the resolved binding list.
-            let sources = prepared.def.preset_metadata.as_ref()
-                .map(|metadata| metadata.bindings.iter().zip(prepared.binding_sources)
-                    .filter_map(|(binding, source)| matches!(binding.target, BindingTarget::Node { .. }).then_some(source))
-                    .collect::<Vec<_>>()).unwrap_or_default();
-            let guards = crate::node_graph::scene_modifier_expand::PreparedModifierParameterGuards::prepare(&doc)?;
-            (prepared.def, Some((doc, prepared.routes, sources, guards, prepared.event_routes)))
-        } else { (doc, None) };
-        let fused = if render_fused {
-            crate::node_graph::freeze::install::fused_generator_view_for(&render_def)
-        } else { None };
-        let render_def = match &fused {
-            Some(view) => (*view.def).clone(),
-            None => render_def,
-        };
-        let mut runtime = Self::from_render_def(render_def, registry, manifest)?;
-        if let Some(view) = &fused {
-            runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
-        }
-        if let Some((canonical, routes, sources, guards, event_routes)) = authoring {
-            crate::node_graph::scene_modifier_expand::validate_modifier_runtime(&canonical, &runtime.graph)?;
-            let empty_members = ahash::AHashMap::default();
-            let members = fused.as_ref().map_or(&empty_members, |view| &view.node_retarget);
-            let budget = PreparedModifierBufferBudget::prepare(&canonical, &routes, &runtime.graph, members)?;
-            runtime.graph.set_modifier_buffer_budget(budget);
-            guards.install(&mut runtime.graph)?;
-            runtime.modifier_events = Some(crate::node_graph::scene_modifier_expand::PreparedModifierEvents::prepare(
-                &canonical, &event_routes, &runtime.graph,
-            )?);
-            runtime.modifier_control_state = Some(crate::node_graph::scene_modifier_expand::PreparedModifierControlState::prepare_with_fusion(
-                &canonical, &routes, &runtime.graph, members,
-            )?);
-            let segment = &mut runtime.effect_nodes[0];
-            let writes = PreparedGraphValueWrites::prepare(&canonical, &routes, &runtime.graph, &segment.bound.fused_retarget)?;
-            segment.bound.install_prepared_routes(writes, sources)?;
-            segment.group_preview_map = manifold_core::flatten::group_output_producer_map(&canonical);
-            runtime.modifier_preview_routes = routes;
-        }
-        Ok(runtime)
-    }
-
-    fn from_render_def(
+    /// Compile a generator runtime from an already prepared render definition.
+    /// The caller owns scene-modifier expansion; this method performs the
+    /// common graph validation, binding setup, and resource preparation.
+    pub(super) fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
@@ -810,7 +725,7 @@ impl PresetRuntime {
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
         crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
-            .map_err(generator_error_from_prealloc)?;
+            .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
         Ok(self)

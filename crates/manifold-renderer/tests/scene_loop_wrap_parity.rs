@@ -376,10 +376,10 @@ fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
         tint: None,
     }));
     def.nodes
-        .retain(|n| !matches!(n.id, 4 | 5 | 6));
+        .retain(|n| !matches!(n.id, 4..=6));
     def.nodes.push(scene_group);
     def.wires.retain(|w| {
-        !matches!(w.from_node, 4 | 5 | 6) && !matches!(w.to_node, 4 | 5 | 6)
+        !matches!(w.from_node, 4..=6) && !matches!(w.to_node, 4..=6)
     });
     def.wires.push(wire(2, "out", 6, "instances"));
     def.wires.push(wire(6, "object", 7, "object_0"));

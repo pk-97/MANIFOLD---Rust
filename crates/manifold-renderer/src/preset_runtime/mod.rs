@@ -114,6 +114,7 @@ use core::GRAPH_FORMAT;
 
 mod instrumentation;
 mod modifier_preview;
+mod modifier_runtime;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
