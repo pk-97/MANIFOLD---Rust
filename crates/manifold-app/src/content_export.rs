@@ -197,7 +197,9 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] Starting export: {:?}", config);
 
+        self.commit_automation_recording(true);
         // 1. Save playback state for restore
+        let saved_state = self.engine.current_state();
         let was_playing = self.engine.is_playing();
         let saved_beat = self.engine.current_beat();
 
@@ -293,7 +295,7 @@ impl ContentThread {
         }
 
         // Restore playback state (once, after all sections).
-        self.engine.set_export_mode(false);
+
         if cur_w != base_config.width || cur_h != base_config.height {
             let render_scale = self
                 .engine
@@ -305,9 +307,9 @@ impl ContentThread {
         self.engine.stop();
         let restore_time = self.engine.beat_to_timeline_time(saved_beat);
         self.engine.seek_to(restore_time);
-        if was_playing {
-            self.engine.play();
-        }
+        if was_playing { self.engine.play(); }
+        else { self.engine.set_state(saved_state); }
+        self.engine.set_export_mode(false);
     }
 
     /// Run one export pass for a single (possibly section) range — the original

@@ -16,7 +16,12 @@ use manifold_ui::panels::viewport::AutomationLaneScreen;
 /// lines + dots + labels on top. Scissored to `tracks` so a lane scrolled
 /// under the header column never draws over the layer controls (mirrors
 /// `clip_draw::emit_clip_names`'s tracks-rect clip).
-pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen], tracks: Rect) {
+pub fn emit_automation_lanes(
+    ui: &mut UIRenderer,
+    lanes: &[AutomationLaneScreen],
+    tracks: Rect,
+    selection: Option<&manifold_ui::UIState>,
+) {
     if lanes.is_empty() {
         return;
     }
@@ -45,21 +50,23 @@ pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen]
             ui.draw_line(x0, y0, x1, y1, color::AUTOMATION_LINE_THICKNESS, line_color);
         }
 
-        let d = color::AUTOMATION_DOT_RADIUS * 2.0;
         for dot in &l.dots {
+            let selected = selection.is_some_and(|state| {
+                state.automation_point_selected(&l.target, &l.param_id, dot.beat)
+            });
+            let radius = color::AUTOMATION_DOT_RADIUS + if selected { 1.5 } else { 0.0 };
+            let d = radius * 2.0;
             ui.draw_rounded_rect(
                 dot.x - d * 0.5,
                 dot.y - d * 0.5,
                 d,
                 d,
-                line_color,
-                color::AUTOMATION_DOT_RADIUS,
+                if selected { color::TEXT_WHITE_C32 } else { line_color },
+                radius,
             );
         }
 
-        // Label, left-anchored inside the strip — the read-only stand-in for
-        // Live's param-chooser dropdown (breakpoint editing / the chooser
-        // itself are a later phase; see docs/AUTOMATION_LANES_DESIGN.md section 7).
+        // Parameter name and the visible grip share the viewport's lane geometry.
         ui.draw_text(
             l.strip_rect.x + 4.0,
             l.strip_rect.y + 2.0,
@@ -67,6 +74,11 @@ pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen]
             color::AUTOMATION_LABEL_FONT as f32,
             color::AUTOMATION_LABEL_COLOR,
         );
+        let grip = l.resize_rect();
+        let x = grip.x + 4.0;
+        let y = grip.y + grip.height * 0.5;
+        ui.draw_line(x, y - 1.0, x + 24.0, y - 1.0, 1.0, color::AUTOMATION_LABEL_COLOR);
+        ui.draw_line(x, y + 1.0, x + 24.0, y + 1.0, 1.0, color::AUTOMATION_LABEL_COLOR);
     }
 
     ui.pop_immediate_clip();

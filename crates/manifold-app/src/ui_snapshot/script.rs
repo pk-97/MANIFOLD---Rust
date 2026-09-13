@@ -1401,6 +1401,7 @@ impl Runner {
                 markers: &[],
                 landing_flash: None,
                 automation_lanes: &automation_lanes,
+                automation_selection: Some(&data.selection),
                 cursor_pos: manifold_ui::node::Vec2::ZERO,
                 text_input: &text_input,
                 frame_timer: &frame_timer,

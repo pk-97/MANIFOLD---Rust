@@ -23,6 +23,7 @@ pub enum TimelineCursor {
     Default,
     Move,
     ResizeHorizontal,
+    ResizeVertical,
     Blocked,
 }
 
@@ -33,6 +34,17 @@ pub struct RegionSplitResult {
     pub interior_clip_ids: Vec<ClipId>,
     /// Number of split commands generated (stored in the host's command batch).
     pub split_count: usize,
+}
+
+/// One automation breakpoint move in a grouped gesture. The host turns the
+/// complete list into one undoable command, including beat changes and any
+/// collisions at destination beats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomationPointMove {
+    pub target: UiGraphTarget,
+    pub param_id: ParamId,
+    pub old: (Beats, f32, UiSegmentShape),
+    pub new: (Beats, f32, UiSegmentShape),
 }
 
 /// Lightweight clip reference returned by `find_clip_by_id`.
@@ -299,14 +311,9 @@ pub trait TimelineEditingHost {
         to_value: f32,
     );
 
-    /// Commit a completed point drag as one undo entry. `old` is the point's
-    /// state BEFORE the drag started (the explicit reverse, captured at grab
-    /// time — the `MoveAutomationPointCommand` drag-commit precedent); `new`
-    /// is its final state. The point is already at `new` in the live project
-    /// (from `set_automation_point_preview` calls during the drag) — this
-    /// only registers the undo entry and mirrors it to the content thread,
-    /// same as `record_move` + `commit_command_batch`'s "already applied"
-    /// comment.
+    /// Commit a completed point drag as one undo entry. Content still owns
+    /// the original lane and captures it when executing the command. Only the
+    /// UI draft and runtime preview have changed before release.
     fn commit_automation_point_move(
         &mut self,
         target: &UiGraphTarget,
@@ -368,14 +375,14 @@ pub trait TimelineEditingHost {
 
     // ── Automation lane editing — marquee group move (P4 Unit B) ─────
 
-    /// Commit a marquee group-move as ONE undo entry. Each tuple is
-    /// `(target, param_id, beat, old_value, new_value, shape)` — beat/shape
-    /// unchanged by this gesture. Already applied live (per-point, via
-    /// repeated `set_automation_point_preview` calls with `from_beat ==
-    /// to_beat`) — this only registers the batched undo entry.
+    /// Commit a marquee group-move as ONE undo entry. The complete move list
+    /// includes each selected point's old/new beat and value plus its shape;
+    /// the host uses it to remove all selected sources and destination
+    /// collisions atomically before inserting the moved points. Already
+    /// applied live through whole-lane previews.
     fn commit_automation_group_move(
         &mut self,
-        moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+        moves: Vec<AutomationPointMove>,
     );
 
     // ── Automation lane editing — draw/pencil mode (P4 Unit B, section 7's
@@ -396,11 +403,23 @@ pub trait TimelineEditingHost {
     /// Live-preview an in-progress draw stroke: overwrites the WHOLE lane's
     /// point list, bypassing undo (creates the lane, enabled, if it doesn't
     /// exist yet — same as a click-add's implicit lane creation).
-    fn set_automation_draw_preview(
+    fn set_automation_lane_preview(
         &mut self,
         target: &UiGraphTarget,
         param_id: &ParamId,
-        points: Vec<(Beats, f32, UiSegmentShape)>,
+        points: &[(Beats, f32, UiSegmentShape)],
+    );
+
+    /// Clear content-owned runtime envelopes before committing or cancelling.
+    fn clear_automation_previews(&mut self);
+
+    /// Restore only the UI draft on cancellation. None removes a newly drawn
+    /// lane. This sends no runtime preview and creates no undo entry.
+    fn restore_automation_lane_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        points: Option<&[(Beats, f32, UiSegmentShape)]>,
     );
 
     /// Commit a finished draw stroke as ONE undo entry — installs

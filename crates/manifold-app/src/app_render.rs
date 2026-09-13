@@ -703,6 +703,7 @@ impl Application {
                 M::Scene => actions.push(P::Root(RootAction::OpenSceneSetup)),
                 M::ImportVideo => self.import_video_clip(),
                 M::Undo => {
+                    self.selection.clear_automation_selection();
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::undo(tx);
                     }
@@ -717,6 +718,7 @@ impl Application {
                     // generic label first and then get immediately replaced.
                 }
                 M::Redo => {
+                    self.selection.clear_automation_selection();
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::redo(tx);
                     }

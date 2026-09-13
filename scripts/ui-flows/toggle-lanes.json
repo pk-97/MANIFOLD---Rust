@@ -2,7 +2,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: Amount" } },
       "check": "Exists"
     }
   },
@@ -15,7 +15,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: Amount" } },
       "check": { "Count": 0 }
     }
   },
@@ -28,7 +28,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: Amount" } },
       "check": "Exists"
     }
   }

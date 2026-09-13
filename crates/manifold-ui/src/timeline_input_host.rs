@@ -309,4 +309,26 @@ pub trait TimelineInputHost {
     /// (`PanelAction::ToggleAutomationMode`). Unlike `toggle_automation_draw_mode`,
     /// not gated on current visibility — `A` must work from either state.
     fn toggle_automation_mode_visible(&mut self);
+
+    /// Whether automation breakpoints are the active timeline selection.
+    fn has_automation_selection(&self) -> bool;
+
+    /// Copy the selected automation breakpoints into the UI clipboard.
+    fn copy_selected_automation(&mut self);
+
+    /// Copy and remove the selected automation breakpoints as one undoable cut.
+    fn cut_selected_automation(&mut self);
+
+    /// Whether Cmd+V should target the automation clipboard in the current
+    /// timeline context. This guard prevents a stale automation clipboard from
+    /// stealing clip/effect/Finder paste after the user changes context.
+    fn has_automation_paste_target(&self) -> bool;
+
+    /// Paste automation at `target_beat`, preserving relative timing and
+    /// selecting the inserted breakpoints.
+    fn paste_automation(&mut self, target_beat: f32);
+
+    /// Duplicate the selected automation phrase after its end plus one grid
+    /// interval, as one undoable operation.
+    fn duplicate_selected_automation(&mut self);
 }

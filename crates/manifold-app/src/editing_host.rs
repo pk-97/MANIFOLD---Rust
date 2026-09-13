@@ -64,6 +64,7 @@ fn to_segment_shape(shape: UiSegmentShape) -> SegmentShape {
         UiSegmentShape::Linear => SegmentShape::Linear,
         UiSegmentShape::Hold => SegmentShape::Hold,
         UiSegmentShape::Curved(bend) => SegmentShape::Curved(bend),
+        UiSegmentShape::CurvedRange { bend, start, end } => SegmentShape::CurvedRange { bend, start, end },
     }
 }
 
@@ -76,6 +77,7 @@ fn from_segment_shape(shape: SegmentShape) -> UiSegmentShape {
         SegmentShape::Linear => UiSegmentShape::Linear,
         SegmentShape::Hold => UiSegmentShape::Hold,
         SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
+        SegmentShape::CurvedRange { bend, start, end } => UiSegmentShape::CurvedRange { bend, start, end },
     }
 }
 
@@ -118,6 +120,23 @@ pub struct AppEditingHost<'a> {
 }
 
 impl<'a> AppEditingHost<'a> {
+    /// Send the edited envelope once per input event, leaving the content
+    /// project's authoritative points available to the undoable commit.
+    fn send_automation_preview(&self, target: &GraphTarget, param_id: &str) {
+        let Some(lane) = self.project.preset_instance(target)
+            .and_then(|inst| inst.automation_lanes.as_ref())
+            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == param_id))
+        else { return; };
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::PreviewAutomationLane {
+                target: target.clone(),
+                param_id: lane.param_id.clone(),
+                points: lane.points.clone(),
+            },
+        );
+    }
+
     pub fn new(
         project: &'a mut manifold_core::project::Project,
         content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
@@ -437,6 +456,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             TimelineCursor::Default => UICursor::Default,
             TimelineCursor::Move => UICursor::Move,
             TimelineCursor::ResizeHorizontal => UICursor::ResizeHorizontal,
+            TimelineCursor::ResizeVertical => UICursor::ResizeVertical,
             TimelineCursor::Blocked => UICursor::Blocked,
         };
         self.cursor_manager.set(ui_cursor);
@@ -815,6 +835,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
+        self.send_automation_preview(&target, param_id);
     }
 
     fn commit_automation_point_move(
@@ -835,9 +856,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             value: new.1,
             shape: to_segment_shape(new.2),
         };
-        // Already applied live by `set_automation_point_preview` during the
-        // drag — this only registers the undo entry, mirroring
-        // `record_move`'s "commands already applied" comment.
+        // The UI already displays the draft, but content still owns the original
+        // lane. Execute captures that complete lane for collision-safe undo.
         let cmd = MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
         crate::content_command::ContentCommand::send(
             self.content_tx,
@@ -885,6 +905,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         {
             p.shape = SegmentShape::Curved(bend);
         }
+        self.send_automation_preview(&target, param_id);
     }
 
     fn set_automation_segment_drag_preview(
@@ -909,6 +930,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 p.value = right_value;
             }
         }
+        self.send_automation_preview(&target, param_id);
     }
 
     fn commit_automation_segment_drag(
@@ -931,11 +953,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 new_point,
             )) as Box<dyn Command>
         };
-        // Already applied live by `set_automation_segment_drag_preview` during
-        // the drag — this only registers the undo entry. `ExecuteBatch`
-        // wraps both moves in a `CompositeCommand` on the content thread so
-        // they land as ONE undo/redo unit (existing infra — see
-        // `EditingService::execute_batch`).
+        // Apply both moves to the authoritative lane as one undo/redo unit.
+        // Runtime previews never replace the source these commands snapshot.
         let commands = vec![
             make(left.0, left.1, left.2, left.3),
             make(right.0, right.1, right.2, right.3),
@@ -953,35 +972,35 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn commit_automation_group_move(
         &mut self,
-        moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+        moves: Vec<manifold_ui::timeline_editing_host::AutomationPointMove>,
     ) {
-        if moves.is_empty() {
-            return;
+        if moves.is_empty() { return; }
+        // Group by lane before constructing commands: sequential point moves
+        // would overwrite other selected sources when a phrase overlaps itself.
+        type LaneMoves = (GraphTarget, ParamId, Vec<(AutomationPoint, AutomationPoint)>);
+        let mut lanes: Vec<LaneMoves> = Vec::new();
+        for movement in moves {
+            let target = to_graph_target(&movement.target);
+            let convert = |p: (Beats, f32, UiSegmentShape)| AutomationPoint {
+                beat: p.0, value: p.1, shape: to_segment_shape(p.2),
+            };
+            let pair = (convert(movement.old), convert(movement.new));
+            if let Some((_, _, points)) = lanes.iter_mut()
+                .find(|(t, p, _)| *t == target && *p == movement.param_id)
+            {
+                points.push(pair);
+            } else {
+                lanes.push((target, movement.param_id, vec![pair]));
+            }
         }
-        let commands: Vec<Box<dyn Command>> = moves
-            .into_iter()
-            .map(|(target, param_id, beat, old_v, new_v, shape)| {
-                let graph_target = to_graph_target(&target);
-                let shape = to_segment_shape(shape);
-                let old_point = AutomationPoint { beat, value: old_v, shape };
-                let new_point = AutomationPoint { beat, value: new_v, shape };
-                Box::new(MoveAutomationPointCommand::new(
-                    graph_target,
-                    param_id.as_ref(),
-                    old_point,
-                    new_point,
-                )) as Box<dyn Command>
-            })
-            .collect();
-        // Already applied live (per-point, via repeated
-        // `set_automation_point_preview` calls) — `ExecuteBatch` batches all
-        // of them into ONE undo/redo unit (same existing infra as the
-        // segment-drag commit above).
+        let commands = lanes.into_iter().map(|(target, param_id, points)| {
+            Box::new(MoveAutomationPointCommand::for_group(target, param_id.as_ref(), points))
+                as Box<dyn Command>
+        }).collect();
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
-                commands,
-                "Move Automation Points".to_string(),
+                commands, "Move Automation Points".to_string(),
             ),
         );
     }
@@ -1006,26 +1025,54 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         )
     }
 
-    fn set_automation_draw_preview(
+    fn set_automation_lane_preview(
         &mut self,
         target: &UiGraphTarget,
         param_id: &ParamId,
-        points: Vec<(Beats, f32, UiSegmentShape)>,
+        points: &[(Beats, f32, UiSegmentShape)],
+    ) {
+        self.restore_automation_lane_preview(target, param_id, Some(points));
+        self.send_automation_preview(&to_graph_target(target), param_id.as_ref());
+    }
+
+    fn clear_automation_previews(&mut self) {
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::ClearAutomationPreviews,
+        );
+    }
+
+    fn restore_automation_lane_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        points: Option<&[(Beats, f32, UiSegmentShape)]>,
     ) {
         let target = to_graph_target(target);
+        let Some(points) = points else {
+            if let Some(inst) = self.project.preset_instance_mut(&target)
+                && let Some(lanes) = inst.automation_lanes.as_mut()
+            {
+                lanes.retain(|lane| lane.param_id != *param_id);
+                if lanes.is_empty() { inst.automation_lanes = None; }
+            }
+            return;
+        };
         let param_id_str = param_id.as_ref();
-        let converted: Vec<AutomationPoint> = points
-            .into_iter()
-            .map(|(beat, value, shape)| AutomationPoint { beat, value, shape: to_segment_shape(shape) })
-            .collect();
         if let Some(inst) = self.project.preset_instance_mut(&target) {
             let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
+            let converted = || points.iter().map(|&(beat, value, shape)| {
+                AutomationPoint { beat, value, shape: to_segment_shape(shape) }
+            });
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id_str) {
-                Some(lane) => lane.points = converted,
+                Some(lane) => {
+                    lane.points.clear();
+                    lane.points.extend(converted());
+                }
                 None => lanes.push(manifold_core::effects::AutomationLane {
                     param_id: param_id.clone(),
                     enabled: true,
-                    points: converted,
+                    points: converted().collect(),
                 }),
             }
         }
@@ -1049,10 +1096,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         let new_converted = convert(new_points);
         let old_converted = old_points.map(convert);
-        // Already applied live by `set_automation_draw_preview` during the
-        // stroke — this only registers the undo entry, reusing the SAME
-        // command section 5's Automation Arm recording commits with
-        // (`CommitRecordedGestureCommand`).
+        // Install the draft on content using the same undoable lane replacement
+        // as recording; the runtime preview left the original lane untouched.
         let cmd = CommitRecordedGestureCommand::new(graph_target, param_id_str, new_converted, old_converted);
         crate::content_command::ContentCommand::send(
             self.content_tx,

@@ -1845,6 +1845,7 @@ mod overlay_fidelity_proof {
             markers: &[],
             landing_flash: None,
             automation_lanes: &[],
+            automation_selection: None,
             cursor_pos: manifold_ui::node::Vec2::ZERO,
             text_input,
             frame_timer,

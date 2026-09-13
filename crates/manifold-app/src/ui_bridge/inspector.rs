@@ -491,6 +491,49 @@ mod scene_card_convergence_tests {
             layer.gen_params().expect("generator instance materialized")
         }
 
+        #[test]
+        fn show_automation_selects_bound_parameter_without_editing_project() {
+            let (mut project, layer_a, layer_b) = two_scene_layer_project();
+            let mut h = Harness::new(Some(layer_b));
+            let pid = materialized_param(&mut h, &mut project, &layer_a);
+            project.timeline.find_layer_by_id_mut(&layer_a).unwrap().1.is_collapsed = false;
+            let before = serde_json::to_value(&project).unwrap();
+            h.dispatch(&PanelAction::Params(ParamsAction::ShowAutomation(
+                manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone()), pid.clone(),
+            )), &mut project);
+            assert!(h.selection.automation_mode_visible);
+            assert_eq!(h.selection.chosen_automation_params.get(&layer_a), Some(&(
+                manifold_ui::view::UiGraphTarget::Generator(layer_a), pid,
+            )));
+            assert_eq!(serde_json::to_value(&project).unwrap(), before);
+            assert!(h.drain().is_empty(), "revealing an expanded lane must not emit a project edit");
+            assert!(h.scrub.active.is_none(), "choosing must not begin a parameter touch");
+        }
+
+        #[test]
+        fn show_automation_expands_through_content_without_creating_an_envelope() {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            project.timeline.find_layer_by_id_mut(&layer_id).unwrap().1.is_collapsed = true;
+            let before = gen_inst(&project, &layer_id).get_base_param(pid.as_ref());
+            h.dispatch(&PanelAction::Params(ParamsAction::ShowAutomation(
+                manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()), pid.clone(),
+            )), &mut project);
+            assert!(project.timeline.find_layer_by_id(&layer_id).unwrap().1.is_collapsed);
+            let commands = h.drain();
+            assert_eq!(commands.len(), 1);
+            for command in commands {
+                match command {
+                    ContentCommand::MutateProject(apply) => apply(&mut project),
+                    _ => panic!("show automation must only send a view-state expansion"),
+                }
+            }
+            assert!(!project.timeline.find_layer_by_id(&layer_id).unwrap().1.is_collapsed);
+            assert_eq!(gen_inst(&project, &layer_id).get_base_param(pid.as_ref()), before);
+            assert!(gen_inst(&project, &layer_id).automation_lanes.is_none());
+        }
+
         fn with_send(project: &mut Project) -> manifold_core::AudioSendId {
             let send = manifold_core::audio_setup::AudioSend::new("Kick");
             let id = send.id.clone();
@@ -1576,6 +1619,133 @@ mod scene_card_convergence_tests {
             fn drain(&self) -> Vec<ContentCommand> {
                 self.rx.try_iter().collect()
             }
+        }
+
+        #[test]
+        fn automation_phrase_move_batches_lanes_and_undo_restores_collisions() {
+            use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+            use manifold_core::Beats;
+            use manifold_ui::timeline_editing_host::AutomationPointMove;
+            use manifold_ui::view::{UiGraphTarget, UiSegmentShape};
+
+            let original = vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(4.0), value: 0.5, shape: SegmentShape::Hold },
+                AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
+            ];
+            let mut project = Project::default();
+            let mut targets = Vec::new();
+            for _ in 0..2 {
+                let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+                fx.init_defaults();
+                targets.push(UiGraphTarget::Effect(fx.id.clone()));
+                fx.automation_lanes = Some(vec![AutomationLane {
+                    param_id: "amount".into(), enabled: false, points: original.clone(),
+                }]);
+                project.settings.master_effects.push(fx);
+            }
+            let before = serde_json::to_value(&project).unwrap();
+            let mut rig = ClipRig::new(project.clone());
+            let mut moves = Vec::new();
+            // Interleave lanes so grouping cannot rely on adjacent entries.
+            for (beat, value, shape) in [(Beats(0.0), 0.2, UiSegmentShape::Linear), (Beats(4.0), 0.5, UiSegmentShape::Hold)] {
+                for target in &targets {
+                    moves.push(AutomationPointMove {
+                        target: target.clone(), param_id: "amount".into(),
+                        old: (beat, value, shape), new: (beat + Beats(4.0), value, shape),
+                    });
+                }
+            }
+            rig.host().commit_automation_group_move(moves);
+            let mut commands = rig.drain();
+            assert_eq!(commands.len(), 1);
+            let ContentCommand::ExecuteBatch(commands, description) = commands.remove(0)
+                else { panic!("one batch must contain the whole phrase move"); };
+            assert_eq!(commands.len(), 2, "one atomic command per lane");
+            let mut service = EditingService::new();
+            service.execute_batch(commands, description, &mut project);
+            for fx in &project.settings.master_effects {
+                let lane = &fx.automation_lanes.as_ref().unwrap()[0];
+                assert!(!lane.enabled);
+                assert_eq!(lane.points, vec![
+                    AutomationPoint { beat: Beats(4.0), ..original[0] },
+                    AutomationPoint { beat: Beats(8.0), ..original[1] },
+                ]);
+            }
+            let after = serde_json::to_value(&project).unwrap();
+            assert!(service.undo(&mut project));
+            assert_eq!(serde_json::to_value(&project).unwrap(), before);
+            assert!(!service.undo(&mut project), "one undo restores every affected lane");
+            assert!(service.redo(&mut project));
+            assert_eq!(serde_json::to_value(&project).unwrap(), after);
+        }
+
+        #[test]
+        fn automation_live_preview_keeps_content_lane_for_collision_undo() {
+            use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+            use manifold_core::{Beats, GraphTarget, Seconds};
+            use manifold_playback::engine::{PlaybackEngine, TickContext};
+            use manifold_ui::view::{UiGraphTarget, UiSegmentShape};
+
+            let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+            fx.init_defaults();
+            let target = GraphTarget::Effect(fx.id.clone());
+            let ui_target = UiGraphTarget::Effect(fx.id.clone());
+            let pid = manifold_core::effects::ParamId::from("amount");
+            let original = vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Hold },
+            ];
+            fx.automation_lanes = Some(vec![AutomationLane {
+                param_id: pid.clone(), enabled: true, points: original.clone(),
+            }]);
+            let mut project = Project::default();
+            project.settings.master_effects = vec![fx];
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project.clone());
+            engine.seek_to(Seconds(2.0));
+            let mut rig = ClipRig::new(project);
+            let preview = [(Beats(4.0), 0.35, UiSegmentShape::Linear)];
+            rig.host().set_automation_lane_preview(&ui_target, &pid, &preview);
+            let mut commands = rig.drain();
+            assert_eq!(commands.len(), 1);
+            let ContentCommand::PreviewAutomationLane { target: t, param_id, points } = commands.remove(0)
+                else { panic!("preview must use the runtime command"); };
+            engine.set_automation_lane_preview(t, param_id, points);
+            let tick = engine.tick(TickContext::default());
+            assert!(tick.compositor_dirty);
+            let inst = engine.project().unwrap().preset_instance(&target).unwrap();
+            assert!((inst.params.get("amount").unwrap().value - 0.35).abs() < 1e-6);
+            assert_eq!(inst.automation_lanes.as_ref().unwrap()[0].points, original);
+
+            rig.host().clear_automation_previews();
+            rig.host().commit_automation_point_move(
+                &ui_target, &pid,
+                (Beats(0.0), 0.2, UiSegmentShape::Linear), preview[0],
+            );
+            let mut service = EditingService::new();
+            let mut commits = 0;
+            for command in rig.drain() {
+                match command {
+                    ContentCommand::ClearAutomationPreviews => engine.clear_automation_previews(),
+                    ContentCommand::Execute(command) => {
+                        service.execute(command, engine.project_mut().unwrap());
+                        commits += 1;
+                    }
+                    _ => panic!("unexpected preview completion command"),
+                }
+            }
+            assert_eq!(commits, 1);
+            let committed = engine.project().unwrap().preset_instance(&target).unwrap()
+                .automation_lanes.as_ref().unwrap()[0].points.clone();
+            assert_eq!(committed.len(), 1);
+            assert_eq!(committed[0].value, 0.35);
+            assert!(service.undo(engine.project_mut().unwrap()));
+            assert_eq!(engine.project().unwrap().preset_instance(&target).unwrap()
+                .automation_lanes.as_ref().unwrap()[0].points, original);
+            assert!(service.redo(engine.project_mut().unwrap()));
+            assert_eq!(engine.project().unwrap().preset_instance(&target).unwrap()
+                .automation_lanes.as_ref().unwrap()[0].points, committed);
         }
 
         /// One video layer + one clip [4..8] created through the REAL host

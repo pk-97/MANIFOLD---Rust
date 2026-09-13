@@ -6,7 +6,7 @@ A visual DAW and live performance instrument. Rust is authoritative; do not cons
 
 Be concise. Lead with the outcome; explain what a change means for the instrument. No routine action logs, mandatory planning ceremony, or documentation of every edit. Act within the agreed scope. State failures and unverified behaviour plainly.
 
-The lead task owns design, diagnosis, review, and landing regardless of model. Use native Luna subagents (`gpt-5.6-luna`, low effort) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Use parallel Luna lanes for independent scopes; handle tiny fixes directly. The lead leaves the lane’s files alone until it returns. Stop repeated failures and return evidence to the lead.
+The lead task owns design, diagnosis, review, and landing regardless of model. Use native Luna subagents (`gpt-5.6-luna`, medium effort; high for difficult work) for independent mechanical work with a decided fix shape. Each brief names the scope, established findings, reuse target, acceptance criteria, and exact checks. Workers do not delegate or land. Use parallel Luna lanes for independent scopes; handle tiny fixes directly. The lead leaves the lane’s files alone until it returns. Stop repeated failures and return evidence to the lead.
 
 Prepare nontrivial worker briefs with `scripts/codex_prepare.py` and pass its output to the worker. Use `scripts/codex_checks.py` for diff-based worker check selection; unmapped scopes need the lead's judgement. These tools supply context and commands, not permission or a replacement for the landing gate.
 
@@ -47,6 +47,8 @@ for necessary checks with a concrete reason, never to evade its attempt budget.
 Start diagnosis with the relevant seam. Runtime claims need logs/reproduction; visual claims need an observed render. Use bounded probes when static evidence is insufficient. A green compile does not establish behaviour.
 
 Keep main runnable. App changes use the existing slot ring (`scripts/agent-worktree.py`), with one owner per workstream and a verified base tip. Read `.claude/GIT_TREE_DISCIPLINE.md` for slot, build-lock, and merge mechanics; do not modify it. Preserve unrelated work. Commit exact paths only; no blanket staging, force-push, or destructive history rewrites.
+
+Finish the worktree lifecycle before ending a workstream: release landed slots; retire inactive unfinished slots with `scripts/agent-worktree.py retire SLOT` after reviewing the archive contents and destination. Retirement preserves source and handoff notes on a verified remote archive branch before clearing the checkout and cache. Unknown untracked files require explicit inclusion. An archive is unverified work, never an app landing. Do not leave a handoff note as the only preservation step. Acquire and release scrub inactive caches; never reclaim a live checkout or delete unique ignored assets. This retirement policy supersedes the older rule that unlanded branches must occupy a slot indefinitely.
 
 Run focused clippy and tests for changed Rust crates. Use `scripts/gpu_proofs_gate.py` for GPU-path changes; GPU proofs use cargo test, not nextest. Use `scripts/landing_gate.py` before landing app changes; broad nightly checks belong to `scripts/trunk_health.py`. Documentation/config-only changes need appropriate syntax, reference, and diff checks, not an app build. Avoid repeating passed checks without new evidence.
 

@@ -25,12 +25,22 @@ pub enum ContentCommand {
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
+    /// Runtime envelope preview; never installs points into the project.
+    PreviewAutomationLane {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        points: Vec<manifold_core::effects::AutomationPoint>,
+    },
+    ClearAutomationPreviews,
     Undo,
     Redo,
     /// Reset editing service (clear undo, clipboard) after project load.
     SetProject,
     /// Mark editing service as clean (saved) without clearing undo history.
     MarkClean,
+    /// Flush recording and return the authoritative project/version for saving.
+    PrepareProjectSave(std::sync::mpsc::Sender<Option<(Project, u64)>>),
+    MarkCleanAt(u64),
 
     // ── Project lifecycle ──────────────────────────────────────────
     LoadProject(Box<Project>),

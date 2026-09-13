@@ -5,7 +5,7 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use crate::panels::InspectorTab;
-use crate::view::{SelectionRegion, UiAutomationPointRef, UiGraphTarget};
+use crate::view::{SelectionRegion, UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId, ParamId};
 use std::collections::{HashMap, HashSet};
 
@@ -23,6 +23,27 @@ use std::collections::{HashMap, HashSet};
 /// between them (a command side effect touched the version, not the
 /// selection). Cheap — no allocation beyond the existing `HashSet` clone.
 type SelectionIdentity = (Option<LayerId>, Option<ClipId>, HashSet<LayerId>);
+
+/// UI-owned automation clipboard. It deliberately contains no core types so
+/// copying remains a view operation; the app host converts these points back
+/// to `AutomationPoint`s when a paste command is built.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomationClipboardPoint {
+    pub target: UiGraphTarget,
+    pub param_id: ParamId,
+    pub beat_offset: Beats,
+    pub value_norm: f32,
+    pub value: f32,
+    pub source_min: f32,
+    pub source_max: f32,
+    pub shape: UiSegmentShape,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomationClipboard {
+    pub points: Vec<AutomationClipboardPoint>,
+    pub span: Beats,
+}
 
 #[derive(Debug, Clone, Default)]
 pub enum TimelineSelection {
@@ -145,6 +166,20 @@ pub struct UIState {
     /// Never serialized — pure view state, same tier as
     /// `automation_mode_visible`.
     pub chosen_automation_params: HashMap<LayerId, (UiGraphTarget, ParamId)>,
+
+    /// Session-only lane strip heights, keyed by the lane address. Values are
+    /// clamped by `set_automation_lane_height` and never serialized.
+    pub automation_lane_heights: HashMap<(UiGraphTarget, ParamId), f32>,
+
+    /// Session clipboard for automation breakpoints. Kept in UI state so it
+    /// survives project switches and never becomes authoritative project data.
+    pub automation_clipboard: Option<AutomationClipboard>,
+
+    /// Explicit destination lane for a copied or cut automation phrase. This
+    /// is cleared with automation selection when the user changes timeline
+    /// context, but cut restores it so Cmd+V can immediately paste the cut
+    /// phrase back.
+    pub automation_paste_context: Option<(UiGraphTarget, ParamId)>,
 }
 
 impl Default for UIState {
@@ -154,6 +189,20 @@ impl Default for UIState {
 }
 
 impl UIState {
+    pub fn clear_automation_selection(&mut self) {
+        self.selected_automation_point = None;
+        self.selected_automation_points.clear();
+        self.automation_paste_context = None;
+    }
+
+    pub fn automation_point_selected(&self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats) -> bool {
+        let matches = |point: &UiAutomationPointRef| {
+            point.target == *target && point.param_id == *param_id && point.beat == beat
+        };
+        self.selected_automation_point.as_ref().is_some_and(matches)
+            || self.selected_automation_points.iter().any(matches)
+    }
+
     pub fn new() -> Self {
         Self {
             selection: TimelineSelection::None,
@@ -175,7 +224,24 @@ impl UIState {
             selected_automation_points: Vec::new(),
             automation_draw_mode: false,
             chosen_automation_params: HashMap::new(),
+            automation_lane_heights: HashMap::new(),
+            automation_clipboard: None,
+            automation_paste_context: None,
         }
+    }
+
+    pub fn automation_lane_height(&self, target: &UiGraphTarget, param_id: &ParamId) -> f32 {
+        self.automation_lane_heights
+            .get(&(target.clone(), param_id.clone()))
+            .copied()
+            .unwrap_or(crate::color::AUTOMATION_LANE_STRIP_HEIGHT)
+    }
+
+    pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
+        self.automation_lane_heights.insert(
+            (target, param_id),
+            height.clamp(28.0, 240.0),
+        );
     }
 
     /// Touch-to-select (section 7 addendum): record `target`/`param_id` as the
@@ -253,6 +319,7 @@ impl UIState {
     /// Select a single clip (clears previous selection and region). Called on normal click.
     /// Unity UIState.cs SelectClip (lines 167-178).
     pub fn select_clip(&mut self, clip_id: ClipId, layer_id: LayerId) {
+        self.clear_automation_selection();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
         self.clear_layer_selection();
@@ -278,6 +345,7 @@ impl UIState {
     /// band that used to render alongside the per-clip highlight is gone
     /// (begins the S1 fix; per-clip highlight for the set is unchanged).
     pub fn toggle_clip_selection(&mut self, clip_id: ClipId, layer_id: LayerId) {
+        self.clear_automation_selection();
         self.clear_layer_selection();
         // Start from the current clip set (empty if the current selection is a
         // region or nothing — a cmd-click while a region is active starts a
@@ -313,6 +381,7 @@ impl UIState {
     /// Clear all selection (clips, layers, markers, region, and insert cursor).
     /// Unity UIState.cs ClearSelection (lines 211-222).
     pub fn clear_selection(&mut self) {
+        self.clear_automation_selection();
         self.selection = TimelineSelection::None;
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
@@ -330,6 +399,7 @@ impl UIState {
     /// primary + anchor. Replaces the old "clear then insert into
     /// `selected_clip_ids`" pattern those sites open-coded.
     pub fn select_clips(&mut self, ids: Vec<ClipId>) {
+        self.clear_automation_selection();
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
         self.selected_marker_ids.clear();
@@ -410,6 +480,7 @@ impl UIState {
         primary: ClipId,
         primary_layer_id: LayerId,
     ) {
+        self.clear_automation_selection();
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
         self.selected_marker_ids.clear();
@@ -458,6 +529,7 @@ impl UIState {
         end_layer: i32,
         layers: &[crate::view::UiLayer],
     ) {
+        self.clear_automation_selection();
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
@@ -517,6 +589,7 @@ impl UIState {
         }
         self.insert_cursor_beat = Some(beat);
         self.insert_cursor_layer_id = Some(layer_id);
+        self.clear_automation_selection();
         self.selection = TimelineSelection::None; // cursor replaces clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
@@ -552,6 +625,7 @@ impl UIState {
     /// Select a single layer (clears previous clip, layer, and region selection).
     /// Unity UIState.cs SelectLayer (lines 247-259).
     pub fn select_layer(&mut self, layer_id: LayerId) {
+        self.clear_automation_selection();
         self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
@@ -566,6 +640,7 @@ impl UIState {
     /// Toggle a layer in/out of the selection set. Called on Cmd+Click.
     /// Unity UIState.cs ToggleLayerSelection (lines 264-291).
     pub fn toggle_layer_selection(&mut self, layer_id: LayerId) {
+        self.clear_automation_selection();
         self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
@@ -591,6 +666,7 @@ impl UIState {
         target_layer_id: &str,
         layers: &[crate::view::UiLayer],
     ) {
+        self.clear_automation_selection();
         self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;

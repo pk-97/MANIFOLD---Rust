@@ -157,6 +157,19 @@ def check_shell(event, command, cwd, shell_guard):
             if not any(a in {"--abort", "--continue"} for a in args):
                 return "Land through scripts/land_branch.py so the existing validation gate runs before merge/push."
         if sub == "push":
+            # Archival backup is not an app landing. Keep this narrow: one
+            # explicit commit to the archive namespace, without force/options.
+            if len(args) == 2 and args[0] == "origin":
+                source, sep, destination = args[1].partition(":")
+                if (sep and re.fullmatch(r"[0-9a-f]{40}", source)
+                        and destination.startswith("refs/heads/archive/worktrees/")):
+                    try:
+                        git(target, "check-ref-format", destination)
+                        git(target, "cat-file", "-e", source + "^{commit}")
+                    except (subprocess.SubprocessError, OSError):
+                        pass
+                    else:
+                        continue
             if Path(target).resolve() != ROOT or args not in (["origin", "main"],):
                 return "Raw push is limited to origin main for documentation/Codex-only commits; app delivery uses land_branch.py."
             changed = git(ROOT, "diff", "--name-only", "origin/main..HEAD").splitlines()

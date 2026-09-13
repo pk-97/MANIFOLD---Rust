@@ -13,6 +13,30 @@ use crate::content_state::ContentState;
 use crate::content_thread::ContentThread;
 use crossbeam_channel::{Receiver, Sender};
 
+fn commit_recording(
+    engine: &mut manifold_playback::engine::PlaybackEngine,
+    editing: &mut manifold_editing::service::EditingService,
+    finish_active: bool,
+) {
+    let commands = if finish_active { engine.finish_automation_recording() }
+        else { engine.take_finished_automation() };
+    if !commands.is_empty() {
+        if let Some(project) = engine.project_mut() {
+            for command in commands { editing.execute(command, project); }
+        }
+        engine.mark_compositor_dirty_now();
+    }
+}
+
+fn prepare_project_save(
+    engine: &mut manifold_playback::engine::PlaybackEngine,
+    editing: &mut manifold_editing::service::EditingService,
+) -> Option<(manifold_core::project::Project, u64)> {
+    engine.clear_automation_previews();
+    commit_recording(engine, editing, true);
+    engine.project().map(|p| (p.clone(), editing.data_version()))
+}
+
 /// Look up the existing Ableton mapping for a target (for undo snapshot).
 /// The three host variants route through the shared
 /// [`Project::ableton_param_mappings`] locate; `MacroSlot` keeps its own arm
@@ -542,6 +566,11 @@ impl ContentThread {
         self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
     }
 
+    /// Apply finished recording takes through the same undo service as edits.
+    pub(crate) fn commit_automation_recording(&mut self, finish_active: bool) {
+        commit_recording(&mut self.engine, &mut self.editing_service, finish_active);
+    }
+
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
         match cmd {
@@ -750,7 +779,14 @@ impl ContentThread {
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
+            ContentCommand::PreviewAutomationLane { target, param_id, points } => {
+                self.engine.set_automation_lane_preview(target, param_id, points);
+            }
+            ContentCommand::ClearAutomationPreviews => {
+                self.engine.clear_automation_previews();
+            }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
+                self.engine.clear_automation_previews();
                 let cmd = crate::scene_modifier_edit::with_admission_device(
                     cmd,
                     self.modifier_budget_device(),
@@ -774,6 +810,7 @@ impl ContentThread {
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
                 let budget_device = self.modifier_budget_device();
+                self.engine.clear_automation_previews();
                 if let Some(p) = self.engine.project_mut() {
                     let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
                     self.editing_service.execute(
@@ -789,6 +826,8 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Undo => {
+                self.commit_automation_recording(true);
+                self.engine.clear_automation_previews();
                 // Capture pre-undo settings so we can detect resolution/FPS changes.
                 // Port of Unity WorkspaceController.OnUndoRedo() which calls
                 // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
@@ -848,6 +887,8 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Redo => {
+                self.commit_automation_recording(true);
+                self.engine.clear_automation_previews();
                 // Same pre/post settings detection as Undo.
                 let pre = self.engine.project().map(|p| {
                     (
@@ -906,12 +947,20 @@ impl ContentThread {
             ContentCommand::SetProject => {
                 self.editing_service.set_project();
             }
+            ContentCommand::PrepareProjectSave(result_tx) => {
+                let snapshot = prepare_project_save(&mut self.engine, &mut self.editing_service);
+                if result_tx.send(snapshot).is_err() { log::warn!("Save snapshot receiver disconnected"); }
+            }
+            ContentCommand::MarkCleanAt(version) => {
+                if self.editing_service.data_version() == version { self.editing_service.mark_clean(); }
+            }
             ContentCommand::MarkClean => {
                 self.editing_service.mark_clean();
             }
 
             // ── Project lifecycle ──────────────────────────────────
             ContentCommand::LoadProject(project) => {
+                self.commit_automation_recording(true);
                 if let Some(ref mut alp) = self.audio_layer_playback {
                     alp.reset();
                 }
@@ -1565,6 +1614,46 @@ impl ContentThread {
                 self.profiler = None;
             }
         }
+        self.commit_automation_recording(false);
         false
+    }
+}
+
+#[cfg(test)]
+mod recording_save_tests {
+    use super::*;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::effect_graph_def::ParamSpecDef;
+
+    #[test]
+    fn recording_save_snapshot_contains_final_touch_and_stays_undoable() {
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("SaveTest"));
+        fx.params = ParamManifest::from_params(vec![Param::bundled(ParamSpecDef {
+            id: "amount".into(), min: 0.0, max: 1.0, ..Default::default()
+        })]);
+        let id = fx.id.clone();
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(fx);
+        let mut engine = manifold_playback::engine::PlaybackEngine::new(Vec::new());
+        let mut editing = manifold_editing::service::EditingService::new();
+        engine.initialize(project);
+        engine.set_state(manifold_core::types::PlaybackState::Playing);
+        engine.set_time(Seconds(1.0));
+        engine.set_automation_armed(true);
+        engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7);
+        let (snapshot, version) = prepare_project_save(&mut engine, &mut editing).unwrap();
+        assert_eq!(version, editing.data_version());
+        assert!(version > 0);
+        let saved = serde_json::to_string(&snapshot).unwrap();
+        let reloaded: manifold_core::project::Project = serde_json::from_str(&saved).unwrap();
+        let lane = &reloaded.find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0];
+        assert_eq!(lane.value_at(Beats(2.0)), 0.7);
+        let (_, repeated_version) = prepare_project_save(&mut engine, &mut editing).unwrap();
+        assert_eq!(version, repeated_version, "saving twice must not create a second take");
+        assert!(editing.undo(engine.project_mut().unwrap()));
+        assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().is_none_or(Vec::is_empty));
+        assert!(editing.redo(engine.project_mut().unwrap()));
+        assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, lane.points);
     }
 }

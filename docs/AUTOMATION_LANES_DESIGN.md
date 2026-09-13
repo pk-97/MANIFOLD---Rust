@@ -85,6 +85,7 @@ pub enum SegmentShape {
     Linear,
     Hold,                            // step — required for enum/int-backed params
     Curved(f32),                     // -1..1 bend, Ableton-style segment drag
+    CurvedRange { bend, start, end }, // exact clipped power-curve subrange
 }
 ```
 
@@ -104,7 +105,8 @@ pub enum SegmentShape {
 **Curve evaluation** (pure function, `manifold-core`):
 binary-search the segment containing `beat`; before the first point → first
 point's value (Ableton behavior); after the last → last value; `Curved(c)`
-uses the standard power-curve bend. Deterministic, allocation-free.
+uses the standard power-curve bend. `CurvedRange` preserves clipped and nested
+power-curve subranges. Deterministic, allocation-free.
 
 ## 3. Runtime sampling
 
@@ -117,9 +119,10 @@ disabled instances, resolve via `resolve_param_in`, write via
 `set_base_param`. No per-frame allocations: reuse the two-pass
 resolve-then-write pattern with a scratch `Vec`.
 
-Sampling runs whenever the transport is playing (and during offline export at
-exported-frame beats — automation is a pure function of beat, so export is
-deterministic by construction). When stopped, lanes don't write; params hold.
+Sampling runs whenever the transport is playing and during offline export at
+exported-frame beats. Export uses arrangement sampling without consuming live
+touches, latches, or recording gestures. When stopped, lanes sample for
+inspection while manual overrides remain latched.
 
 **`base` becomes derived state for automated params.** The per-frame
 `set_base_param` bypasses undo and the editing service entirely (same as
@@ -175,6 +178,8 @@ latching an override.
   being passed — i.e. punch-over, Ableton overwrite behavior. On gesture end,
   the recorded segment joins the existing curve with boundary points at the
   punch-in/out beats (so the old curve resumes exactly — Live's behavior).
+  Exact representable-beat guards preserve dense samples outside the take;
+  curved boundaries use `CurvedRange`.
 - If no lane exists for the touched param, arm creates one (this is how lanes
   are born from performance; drawing in the UI is the other way).
 - **Undo:** per-frame writes during recording bypass undo; on gesture end the
@@ -222,12 +227,54 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - **Click on the line** adds a breakpoint (dot); **drag** moves it (snapped
   to the timeline grid); **double-click a dot** deletes it; **Delete** removes
   the selection.
+- On an existing lane, a single click away from the line deselects; double-click
+  inserts. Placeholder lanes and pencil mode retain first-click insertion.
+  Selected dots draw larger and white. A moved point remains selected at its new
+  beat; hiding automation or undo/redo clears beat-addressed selections.
+  Point dragging preserves the grab offset and Shift scales value movement to
+  one quarter. Landing on an occupied beat replaces that breakpoint, with exact
+  lane restoration on undo. Moving past it during preview restores it.
+  Segments remain editable when either endpoint is outside the viewport.
+- **Show Automation** in an effect/generator parameter's context menu reveals
+  its lane without touching the parameter, arming recording, or creating points.
+  It expands the owning track and folded parents through the content command
+  path. A newly revealed lane opens at 96px; an existing session height is kept.
+  Master and group automation editors remain deferred.
+- **Drag the grip at the bottom-left of a lane** to resize it from 28–240px.
+  Heights are session-only UI state keyed by the existing target/parameter
+  address. Mapper row totals and visible strips use the same resolved heights;
+  folding a track preserves its size without reserving hidden space.
+  Lane labels use manifest parameter names.
+- **Stopped and paused inspection** samples automation at the current playhead
+  before modulation, using the same curve sampler as playback. Manual overrides
+  remain latched until Back to Arrangement. Stopped seeks neither record nor
+  finalize a pending recording gesture during inspection. Lifecycle owners flush
+  recording on stop, pause, disarm, seek, save, and export.
+- **Live envelope preview** sends point, segment, bend, group and pencil edits to
+  the content thread while dragging. Runtime envelopes sample at the playhead
+  before modulation in playing, paused and stopped states; authoritative lane
+  points stay untouched until the undoable release command. Escape restores the
+  original envelope without adding an undo step. Preview completion restores the
+  previous parameter base before normal sampling resumes; manual override latches
+  and recording gestures retain their existing ownership.
 - **Drag a segment** vertically to move it; **modifier-drag a segment**
   (Alt/Option, Live 11 style) bends it into a curve — this is the
   `Curved(f32)` shape in section 2.
 - **Cmd-drag** bypasses grid snap for fine placement (Live's convention);
   **Shift-drag** for fine value adjustment.
 - **Marquee-select** multiple dots and drag/delete them together.
+  Group drags move points in time and value, using the grabbed point as the
+  snap anchor and preserving beat spacing. Cmd bypasses snap; Shift scales
+  value movement. A shared boundary clamp keeps the group at or after beat
+  zero and preserves its normalized value shape within parameter ranges.
+  Selected points outside the visible beat range in shown lanes remain part
+  of the move. Each preview
+  rebuilds from the complete original lanes, so crossing another point and
+  moving past it restores that point. Release replaces exact destination
+  collisions atomically per lane, with one undo step for the whole group;
+  Escape restores the original lanes. Clipboard cut/copy/paste and duplication
+  are undoable; time-stretch and
+  simplification remain unfinished.
 - **Draw mode** (Live's `B`): pencil freehand/steps following the grid.
 - Grid snapping follows the existing timeline grid settings.
 - Exact keybindings ride MANIFOLD's shortcut system; where a Live default
@@ -387,7 +434,7 @@ reviewable arc; P3/P4 independent after.
    `param_id`; clip-relative envelopes out of scope.
 4. **Drivers/audio-mods stay exclusive** (M4L-LFO semantics). No
    base-relative driver mode in v1.
-5. Lanes store param-range values; beat-indexed; `Linear | Hold | Curved`.
+5. Lanes store param-range values; beat-indexed; `Linear | Hold | Curved | CurvedRange`.
 6. Recording = Automation Arm, gesture punch-over, one undo entry per
    gesture, records the smoothed/applied value.
 7. Per-frame sampling bypasses undo and never bumps `DataVersion`.

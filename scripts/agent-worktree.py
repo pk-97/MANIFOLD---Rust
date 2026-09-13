@@ -1,95 +1,24 @@
 #!/usr/bin/env python3
-"""Worktree ring for agent execution — fixed slot pool, structurally capped.
+"""Reusable worktree ring with verified archival and bounded inactive caches.
 
-The pool is a ring of at most MAX_SLOTS worktrees named slot-0..slot-N.
-`acquire` reuses the warmest idle slot (checkout -B keeps its cargo target
-warm); it creates a new slot only while the ring is below capacity, and
-NEVER beyond it — with all slots genuinely busy it exits loudly instead.
-Storage blowout is therefore impossible by construction: no code path in
-this script (the only sanctioned way to get a worktree; the Bash hook
-denies raw `git worktree add`) can grow the pool past MAX_SLOTS.
+Commands: list; acquire TASK NEW_BRANCH; release SLOT; retire SLOT [--include FILE]; scrub.
+Acquire reuses clean landed slots, or clean inactive branches whose exact HEAD
+is freshly confirmed on origin. It never resets an existing branch name.
+Process inspection failures protect the checkout. The ring remains capped at ten.
 
-History: 2026-07-15, 19 per-task worktrees × 15-60 GB targets = 455 GB.
-Root cause: the fixture copier used to copy untracked-but-not-ignored
-files, so every worktree read as permanently dirty, reuse never fired,
-and each acquire minted a fresh dir. Fixtures are now copied only if
-gitignored (they never dirty `git status`), and the cap bounds whatever
-bug comes next.
+Retire preserves reviewed tracked changes and handoff notes on a unique remote
+archive/worktrees branch, verifies its SHA, then clears the checkout and cache.
+Unknown untracked paths require explicit inclusion. Staged changes and merges
+must be resolved first. Failed uploads preserve source and a local archive.
+Unique ignored assets remain local: preserve these before removing a checkout.
+Public remotes expose archive contents. Archives are not verified app landings.
 
-Usage:
-  scripts/agent-worktree.py list
-  scripts/agent-worktree.py acquire <task-label> <branch> [--tip REF] [--owner TEXT]
-  scripts/agent-worktree.py release <slot>
-  scripts/agent-worktree.py scrub
+Acquire and release scrub inactive caches toward 40 GiB, with 25 GiB per idle
+slot. Active caches are protected; these are cleanup budgets, not build limits.
+Successful landings release their slot. Fixture copying prunes hidden and target
+subtrees so old quarantine fixtures cannot multiply across the pool.
 
-`acquire` prints the slot path plus the step-0 base-verification line
-(`git log --oneline -1`). The CALLER must confirm that line matches the
-intended tip before doing any work — the script verifies mechanics, not
-intent. <task-label> is recorded in the lease for `list`; it does NOT
-name the directory (slots are anonymous — that anonymity is the fix:
-per-task names are what let the old pool grow one dir per task).
-
-Every slot lands in exactly one category (`slot_state`), and only the first two
-are ever handed out automatically:
-
-  IDLE      clean, landed, no lease.
-  RECLAIM   finished work the ring can take back by itself: clean AND landed
-            with only a stale/dead lease in the way, OR clean and a duplicate
-            of a branch another slot already holds (a `checkout -B` artifact —
-            the workstream keeps its seat, this copy is spare).
-  IN-USE    a live lease or a live session. Wait; never reclaim.
-  HUMAN     uncommitted changes, or the SOLE holder of unlanded commits.
-            Never automatic, whatever the lease says.
-
-The never-destroy-work checks run FIRST, so no amount of dead-holder or
-expired-lease evidence can reach a slot holding work that exists nowhere else.
-(WORKTREE_HANDOFF.md counts as dirt — a stopped session's unfinished work is a
-busy signal, see GIT_TREE_DISCIPLINE.md §3b.)
-
-Reclaim lives inside `acquire`'s pool-full path rather than in its own verb:
-the only moment anyone cares that a finished slot is still held is the moment
-the ring is empty, so checking there is free and needs no operator. `release`
-stays the manual path — and now reports what the slot IS afterwards, because a
-dirty tree or unlanded branch pins a slot with no lease at all.
-
-`acquire` REFUSES a branch already checked out in another slot. `git checkout -B`
-overrides git's one-worktree-per-branch rule (plain `checkout` refuses) and
-resets the branch ref under the other worktree: 2026-07-29, four slots on
-lane/wr-p2-replay, one slot's commits stranded in its reflog.
-
-On acquire, a slot whose target/ exceeds TARGET_CAP_GB is wiped before
-handoff (stale artifacts of dead branches otherwise accumulate without
-bound) — an occasional cold build in exchange for a hard per-slot disk
-ceiling. Worst-case pool size: MAX_SLOTS × TARGET_CAP_GB plus checkouts,
-roughly 270 GB (cap raised 6→10 on 2026-07-17, Peter's call — slots are
-created on demand, so the pool only reaches this if 10 concurrent
-workstreams actually happen).
-
-Release is an optimization, not a safety mechanism: a forgotten lease expires
-after LEASE_TTL_HOURS, or sooner if its `holder_pid` is provably gone. Nothing
-can be made to release on session end — a killed session fires no hook, and
-that is the population that leaks — so the lease records a pid to probe
-instead of trusting anyone to clean up.
-
-`scrub` is the end-of-session counterpart to acquire's lazy cap: acquire
-only wipes the ONE slot it hands out, so a finished wave leaves every
-other slot's warm target on disk until some future acquire happens to
-pick it (2026-07-29: ten idle landed slots, 201 GB, SessionStart alarm).
-Only a live lease or a live session shields a slot; anything else loses
-its target/, including pinned slots — dirty trees and sole holders of
-unlanded commits (2026-09-04: those two categories held 140 of 177 GB,
-because killed sessions never fire SessionEnd and nothing else ever
-touched them). The pin lives in the checkout and the git object store;
-target/ is cargo's cache alone, so wiping it reclaims the disk without
-touching the work — a resumed lane pays one cold build, nothing more.
-For idle slots: wipe any target/ over TARGET_CAP_GB, then, while the
-pool exceeds SCRUB_TO_GB, wipe the least-recently-built targets so the
-warmest caches survive. A SessionEnd hook runs it automatically
-(.claude/hooks/session-end-worktree-scrub.py); by hand it is always safe.
-
-Acquire also drops a `.metadata_never_index` marker at the pool root so
-Spotlight never indexes the slot target/ dirs (BUG-297 machine-lockup
-relief — see ensure_spotlight_exclusion).
+Confirm the printed acquired HEAD before editing. Never bypass the slot cap.
 """
 
 import argparse
@@ -100,6 +29,9 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
+import tempfile
+import hashlib
 from pathlib import Path
 
 def _main_checkout():
@@ -126,7 +58,7 @@ DEAD_HOLDER_GRACE_H = 0.5  # a dead holder pid only shortens the TTL to this, ne
                            # would hand a slot away seconds after someone took it.
 MAX_SLOTS = 10         # hard structural cap — there is no override flag
 TARGET_CAP_GB = 25     # per-slot target/ ceiling, enforced at acquire
-SCRUB_TO_GB = 150      # scrub trims the pool under this — below the sentinel's
+SCRUB_TO_GB = 40      # scrub trims the pool under this — below the sentinel's
                        # 200 GB alarm so a scrubbed pool never alarms
 SLOT_PREFIX = "slot-"
 
@@ -144,6 +76,16 @@ def is_landed(wt):
     head = git(wt, "rev-parse", "HEAD").stdout.strip()
     return git(REPO, "merge-base", "--is-ancestor", head, "origin/main",
                check=False).returncode == 0
+
+
+def remote_contains_head(wt, branch):
+    head = git(wt, "rev-parse", "HEAD", check=False)
+    remote = subprocess.run(["git", "-C", str(REPO), "ls-remote", "origin",
+                             f"refs/heads/{branch}"], capture_output=True, text=True, timeout=10)
+    if head.returncode or remote.returncode != 0:
+        return False
+    fields = remote.stdout.split()
+    return bool(fields) and fields[0] == head.stdout.strip()
 
 
 def lease_info(wt):
@@ -289,12 +231,14 @@ def copy_missing_fixtures(wt):
     forever, which is exactly the bug that poisoned the old pool. Only adds;
     never overwrites."""
     candidates = []
-    for src_dir in REPO.rglob("tests/fixtures"):
-        rel_parts = src_dir.relative_to(REPO).parts
-        if rel_parts[:2] == (".claude", "worktrees") or "target" in rel_parts:
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "target"]
+        parts = Path(root).relative_to(REPO).parts
+        if not any(parts[i:i + 2] == ("tests", "fixtures") for i in range(len(parts) - 1)):
             continue
-        for src in src_dir.rglob("*"):
-            if src.is_file() and not (wt / src.relative_to(REPO)).exists():
+        for name in files:
+            src = Path(root) / name
+            if not (wt / src.relative_to(REPO)).exists():
                 candidates.append(src)
     if not candidates:
         return 0
@@ -364,26 +308,19 @@ def ensure_spotlight_exclusion():
 
 
 def slot_has_live_session(wt):
-    """True if any claude/shell process has its cwd inside this slot.
-
-    The ring's idle test (clean + landed + lease-free) can't see a session
-    that inherited its worktree outside the ring — reusing such a slot
-    branch-switches a live session (BUG-luo2: the lead's own slot-6 was
-    handed to a lane mid-session 2026-07-25). Best-effort: any error = not
-    live (fail open; the lease remains the primary mechanism)."""
     try:
-        ps = subprocess.run(["ps", "-axo", "pid=,comm="],
-                            capture_output=True, text=True, timeout=10)
-        pids = [ln.split(None, 1)[0] for ln in ps.stdout.splitlines()
-                if any(k in ln for k in ("claude", "zsh", "bash", "tmux"))]
-        for pid in pids:
-            lsof = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"],
-                                  capture_output=True, text=True, timeout=5)
-            for line in lsof.stdout.splitlines():
-                if line.startswith("n") and str(wt) in line[1:]:
+        out = subprocess.run(["lsof", "-n", "-P", "-a", "-d", "cwd", "-Fpn"],
+                             capture_output=True, text=True, timeout=20)
+        if out.returncode != 0 or not out.stdout:
+            return True
+        root = wt.resolve()
+        for line in out.stdout.splitlines():
+            if line.startswith("n"):
+                cwd = Path(line[1:]).resolve()
+                if cwd == root or root in cwd.parents:
                     return True
-    except Exception:
-        pass
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        return True
     return False
 
 
@@ -432,8 +369,15 @@ def refuse_if_branch_held_elsewhere(branch, chosen, holders):
             )
 
 
+def refuse_if_branch_ref_exists(branch, chosen, holders):
+    if git(REPO, "show-ref", "--verify", f"refs/heads/{branch}", check=False).returncode != 0:
+        return
+    sys.exit(f"REFUSED: branch {branch} already exists; choose a new branch name")
+
+
 def cmd_acquire(args):
     ensure_spotlight_exclusion()
+    cmd_scrub(args)
     git(REPO, "fetch", "origin", "main")
     tip = args.tip or "origin/main"
     slots = pool_slots()
@@ -441,6 +385,12 @@ def cmd_acquire(args):
 
     states = {wt: slot_state(wt, holders) for wt in slots}
     free = [wt for wt in slots if states[wt][0] in (IDLE, RECLAIMABLE)]
+    # A clean sole-holder branch may be reused only after its remote backup is verified.
+    for wt in slots:
+        if states[wt][0] == NEEDS_HUMAN and not git(wt, "status", "--porcelain").stdout.strip() and not lease_blocks(wt)[0] and not slot_has_live_session(wt):
+            branch = git(wt, "branch", "--show-current").stdout.strip()
+            if branch and remote_contains_head(wt, branch):
+                free.append(wt)
     live = [wt for wt in free if slot_has_live_session(wt)]
     if live:
         free = [wt for wt in free if wt not in live]
@@ -457,11 +407,13 @@ def cmd_acquire(args):
         if states[wt][0] == RECLAIMABLE:
             print(f"RECLAIM {wt.name}: {states[wt][1]}")
         refuse_if_branch_held_elsewhere(args.branch, wt, holders)
+        refuse_if_branch_ref_exists(args.branch, wt, holders)
         enforce_target_cap(wt)
         git(wt, "checkout", "-B", args.branch, tip)
         print(f"REUSED {wt.name} ({target_bytes(wt) / 2**30:.1f}G warm target)")
     elif len(slots) < MAX_SLOTS:
         refuse_if_branch_held_elsewhere(args.branch, None, holders)
+        refuse_if_branch_ref_exists(args.branch, None, holders)
         # Fill the lowest free index so slot names stay dense.
         taken = {wt.name for wt in slots}
         idx = next(i for i in range(MAX_SLOTS)
@@ -553,8 +505,9 @@ def cmd_release(args):
     "nothing to do" left an operator staring at a slot that stayed unusable
     (Peter, 2026-07-30). Always report what the slot is after the drop."""
     wt = POOL / args.slot
-    if not wt.is_dir():
-        sys.exit(f"no slot at {wt}")
+    slots = pool_slots()
+    if wt not in slots or wt.is_symlink():
+        sys.exit(f"REFUSED: invalid slot: {args.slot}")
     lease = wt / LEASE_NAME
     if lease.exists():
         lease.unlink()
@@ -563,6 +516,7 @@ def cmd_release(args):
         print(f"no lease on {wt}")
     cat, reason, remedy = slot_state(wt)
     print(f"{cat}: {reason}")
+    cmd_scrub(args)
     if cat not in (IDLE, RECLAIMABLE):
         print(f"  -> still pinned. {remedy}")
 
@@ -584,10 +538,150 @@ def main():
                           "the calling process)")
     rel = sub.add_parser("release")
     rel.add_argument("slot", help="slot name printed by acquire (e.g. slot-2)")
+    ret = sub.add_parser("retire")
+    ret.add_argument("slot")
+    ret.add_argument("--include", action="append", default=[],
+                     help="explicitly preserve an otherwise unknown untracked path")
+    rem = sub.add_parser("remove", help="remove a clean backed-up inactive checkout")
+    rem.add_argument("slot", help="slot name or exact registered worktree path")
+    rem.add_argument("--recovery", type=Path, help="local recovery archive with blobs and ignored-files.json")
     sub.add_parser("scrub")
     args = parser.parse_args()
     {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
-     "scrub": cmd_scrub}[args.cmd](args)
+     "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub}[args.cmd](args)
+
+
+
+def _safe_rel(path, wt):
+    p = Path(path)
+    if p.is_absolute() or ".." in p.parts:
+        sys.exit(f"REFUSED: path escapes slot: {path}")
+    resolved = (wt / p).resolve()
+    if wt.resolve() not in (resolved, *resolved.parents):
+        sys.exit(f"REFUSED: path escapes slot: {path}")
+    return p
+
+
+def cmd_remove(args):
+    wt = Path(args.slot) if Path(args.slot).is_absolute() else POOL / args.slot
+    registered = {Path(line[9:]) for line in git(REPO, "worktree", "list", "--porcelain").stdout.splitlines()
+                  if line.startswith("worktree ")}
+    if wt not in registered or wt.resolve() == REPO.resolve() or wt.is_symlink():
+        sys.exit("REFUSED: not an eligible registered worktree")
+    if lease_blocks(wt)[0] or slot_has_live_session(wt):
+        sys.exit("REFUSED: worktree is active")
+    if git(wt, "status", "--porcelain").stdout:
+        sys.exit("REFUSED: retire dirty work before removing its checkout")
+    branch = git(wt, "branch", "--show-current").stdout.strip()
+    if not is_landed(wt) and not (branch and remote_contains_head(wt, branch)):
+        sys.exit("REFUSED: HEAD has no verified remote backup")
+
+    def digest(path):
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+
+    records = {}
+    if args.recovery:
+        records = {(item["slot"], item["path"]): item["sha256"] for item in
+                   json.loads((args.recovery / "ignored-files.json").read_text())}
+    ignored = git(wt, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").stdout.split("\0")
+    for name in filter(None, ignored):
+        parts = Path(name).parts
+        if "target" in parts or "__pycache__" in parts or name.endswith(".DS_Store") or name == LEASE_NAME:
+            continue
+        source = wt / name
+        if source.is_symlink():
+            sys.exit(f"REFUSED: preserve ignored symlink explicitly: {name}")
+        sha = digest(source)
+        main_copy = REPO / name
+        if main_copy.is_file() and digest(main_copy) == sha:
+            continue
+        if (args.recovery and records.get((wt.name, name)) == sha
+                and (args.recovery / "blobs" / sha).is_file()
+                and digest(args.recovery / "blobs" / sha) == sha):
+            continue
+        sys.exit(f"REFUSED: unique ignored file lacks verified recovery copy: {name}")
+    if slot_has_live_session(wt) or git(wt, "status", "--porcelain").stdout:
+        sys.exit("REFUSED: checkout became active or dirty during inspection")
+    git(REPO, "worktree", "remove", str(wt))
+    print(f"REMOVED {wt}; branch history preserved")
+
+
+def cmd_retire(args):
+    wt = POOL / args.slot
+    if wt not in pool_slots() or wt.is_symlink():
+        sys.exit(f"REFUSED: invalid slot: {args.slot}")
+    blocked, why = lease_blocks(wt)
+    if blocked or slot_has_live_session(wt):
+        sys.exit(f"REFUSED: {wt.name} is active ({why if blocked else 'live session'})")
+    branch = git(wt, "branch", "--show-current").stdout.strip()
+    head = git(wt, "rev-parse", "HEAD").stdout.strip()
+    if not branch:
+        sys.exit("REFUSED: slot is detached")
+    if git(wt, "rev-parse", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+        sys.exit("REFUSED: unfinished merge")
+    if git(wt, "diff", "--cached", "--name-only").stdout:
+        sys.exit("REFUSED: staged changes; finish the staged commit before retirement")
+
+    def names(*args):
+        return [p for p in git(wt, *args, "-z").stdout.split("\0") if p]
+
+    tracked = names("diff", "--no-renames", "--name-only", "HEAD")
+    unknown = names("ls-files", "--others", "--exclude-standard")
+    includes = {str(_safe_rel(p, wt)) for p in (args.include or [])}
+    bad = set(unknown) - includes - {"WORKTREE_HANDOFF.md"}
+    if bad:
+        sys.exit("REFUSED: unknown untracked paths: " + ", ".join(sorted(bad)) + "; use --include PATH")
+    if includes - set(unknown):
+        sys.exit("REFUSED: --include must name exact non-ignored untracked files")
+    paths = sorted(set(tracked) | set(unknown))
+    for path in paths:
+        _safe_rel(path, wt)
+    archive = f"archive/worktrees/{time.strftime('%Y-%m-%d')}/{wt.name}-{branch.replace('/', '-')}-{uuid.uuid4().hex[:12]}"
+    with tempfile.TemporaryDirectory(prefix="manifold-retire-") as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"), GIT_LITERAL_PATHSPECS="1")
+
+        def indexed(*args):
+            return subprocess.run(["git", "-C", str(wt), *args], env=env,
+                                  capture_output=True, text=True, check=True).stdout.strip()
+
+        def snapshot_tree():
+            indexed("read-tree", head)
+            if paths:
+                indexed("add", "--", *paths)
+            return indexed("write-tree")
+
+        tree = snapshot_tree()
+        message = f"Archive unfinished work from {wt.name}\n\nOriginal branch: {branch}\nOriginal HEAD: {head}\nUnverified archival snapshot; not an app landing.\n"
+        commit = subprocess.run(["git", "-C", str(wt), "commit-tree", tree, "-p", head],
+                                input=message, capture_output=True, text=True, check=True).stdout.strip()
+        git(REPO, "update-ref", f"refs/heads/{archive}", commit, "0" * 40)
+        # Retain the local archive even when the network fails.
+        git(REPO, "push", "origin", f"{commit}:refs/heads/{archive}")
+        remote = git(REPO, "ls-remote", "--heads", "origin", f"refs/heads/{archive}").stdout.split()
+        if remote != [commit, f"refs/heads/{archive}"]:
+            sys.exit("REFUSED: archive SHA verification failed; source and local archive retained")
+        if (git(wt, "rev-parse", "HEAD").stdout.strip() != head
+                or git(wt, "diff", "--cached", "--name-only").stdout
+                or names("diff", "--no-renames", "--name-only", "HEAD") != tracked
+                or names("ls-files", "--others", "--exclude-standard") != unknown
+                or snapshot_tree() != tree
+                or slot_has_live_session(wt)):
+            sys.exit("REFUSED: checkout changed during archival; source retained")
+        # Adopt the verified snapshot index without rewriting the original branch.
+        # The worktree already matches this tree byte-for-byte.
+        git(wt, "read-tree", commit)
+        git(wt, "checkout", "--detach", commit)
+        if git(wt, "status", "--porcelain").stdout:
+            sys.exit("REFUSED: archive checkout is not clean; preserved for inspection")
+        git(wt, "checkout", "--detach", "origin/main")
+        (wt / LEASE_NAME).unlink(missing_ok=True)
+        target = wt / "target"
+        if target.is_symlink():
+            sys.exit("REFUSED: target is a symlink; archive is safe, cache untouched")
+        if target.exists():
+            shutil.rmtree(target)
+        print(f"RETIRED {wt.name}: {branch} preserved as {archive} at {commit}")
 
 
 if __name__ == "__main__":

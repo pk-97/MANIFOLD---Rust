@@ -174,6 +174,7 @@ pub fn render_ui_to_png(
             markers: &[],
             landing_flash: None,
             automation_lanes: &automation_lanes,
+            automation_selection: Some(selection),
             cursor_pos: manifold_ui::node::Vec2::ZERO,
             text_input: &text_input,
             frame_timer: &frame_timer,

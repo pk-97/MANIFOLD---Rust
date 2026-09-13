@@ -209,6 +209,30 @@ pub enum UiSegmentShape {
     Linear,
     Hold,
     Curved(f32),
+    CurvedRange { bend: f32, start: f32, end: f32 },
+}
+
+impl UiSegmentShape {
+    pub fn sample(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::Hold => 0.0,
+            Self::Curved(bend) => automation_segment_bend(t, bend),
+            Self::CurvedRange { bend, start, end } => {
+                let lo = automation_segment_bend(start, bend);
+                let hi = automation_segment_bend(end, bend);
+                if (hi - lo).abs() <= f32::EPSILON { t } else { (automation_segment_bend(start + t * (end - start), bend) - lo) / (hi - lo) }
+            }
+        }
+    }
+    pub fn subrange(self, start: f32, end: f32) -> Self {
+        match self {
+            Self::Linear | Self::Hold => self,
+            Self::Curved(bend) => Self::CurvedRange { bend, start, end },
+            Self::CurvedRange { bend, start: a, end: b } => Self::CurvedRange { bend, start: a + start * (b - a), end: a + end * (b - a) },
+        }
+    }
 }
 
 /// UI-local mirror of `manifold_core::effects::AutomationPoint`. `value_norm`
@@ -234,7 +258,7 @@ pub struct UiAutomationPoint {
 /// `manifold_core::GraphTarget` — both variants wrap the identical
 /// `EffectId`/`LayerId` types re-exported from `manifold-foundation`, so the
 /// conversion is a plain clone, never a lookup).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UiGraphTarget {
     Effect(EffectId),
     Generator(LayerId),
@@ -354,14 +378,7 @@ impl UiAutomationLane {
                     return a.value_norm;
                 }
                 let t = ((beat.0 - a.beat.0) as f32 / span).clamp(0.0, 1.0);
-                match a.shape {
-                    UiSegmentShape::Hold => a.value_norm,
-                    UiSegmentShape::Linear => a.value_norm + (b.value_norm - a.value_norm) * t,
-                    UiSegmentShape::Curved(bend) => {
-                        let shaped = automation_segment_bend(t, bend);
-                        a.value_norm + (b.value_norm - a.value_norm) * shaped
-                    }
-                }
+                a.value_norm + (b.value_norm - a.value_norm) * a.shape.sample(t)
             }
         }
     }

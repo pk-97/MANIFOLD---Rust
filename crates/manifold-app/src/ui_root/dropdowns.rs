@@ -1164,6 +1164,13 @@ impl UIRoot {
             }
             PanelAction::Params(ParamsAction::ParamLabelRightClick(gpt, param_id)) => {
                 let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
+                if self.inspector.last_effect_tab().is_layer_scope()
+                    || matches!(gpt, GraphParamTarget::GeneratorOf(_))
+                {
+                    items.push(DropdownItem::new("Show Automation").with_action(
+                        PanelAction::Params(ParamsAction::ShowAutomation(gpt.clone(), param_id.clone())),
+                    ).with_separator());
+                }
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
                         let slot = &self.macro_labels[i];

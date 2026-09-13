@@ -130,17 +130,38 @@ impl Application {
     }
 
     /// Save. Delegates to ProjectIOService.save_project.
+    /// Save only a content-owned snapshot after queued edits and recording have
+    /// reached the undo service. Never silently serialize a stale UI replica.
+    fn prepare_recording_save(&mut self) -> Option<u64> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send_content_cmd(ContentCommand::PrepareProjectSave(tx));
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(Some((project, version))) => {
+                self.local_project = project;
+                self.needs_structural_sync = true;
+                Some(version)
+            }
+            result => {
+                log::error!("Cannot obtain authoritative save snapshot: {result:?}");
+                crate::alerts::error("Save Failed", "The content engine did not finish preparing the project. Your work has not been saved; please try again.");
+                None
+            }
+        }
+    }
+
     pub(crate) fn save_project(&mut self) {
+        if self.current_project_path.is_none() { self.save_project_as(); return; }
+        let Some(save_version) = self.prepare_recording_save() else { return; };
         let current_time = self.content_state.current_time;
         let current_path = self.current_project_path.clone();
-        // Save the local project snapshot (best effort — authoritative is on content thread)
+        // Stamp UI layout onto the authoritative snapshot.
         self.local_project.saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
         crate::project_io::snapshot_and_prune_embedded_presets(&mut self.local_project);
         if let Some(path) = current_path.as_deref() {
             match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
                 Ok(()) => {
-                    self.send_content_cmd(ContentCommand::MarkClean);
+                    self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                     log::info!("[ProjectIO] Saved to {}", path.display());
                     // The save pushed the previous state into history/ —
                     // keep the Revert to Snapshot menu current.
@@ -167,17 +188,22 @@ impl Application {
 
     /// Save As. Delegates to ProjectIOService.save_project_as.
     pub(crate) fn save_project_as(&mut self) {
+        let Some(save_version) = self.prepare_recording_save() else { return; };
         self.send_content_cmd(ContentCommand::PauseRendering);
         let current_time = self.content_state.current_time;
         self.local_project.saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
-        let action = self.project_io.save_project_as(
+        let mut action = self.project_io.save_project_as(
             &mut self.local_project,
             current_time.as_f32(),
             &mut EditingService::new(), // placeholder — mark clean via content thread
             &mut self.user_prefs,
         );
         self.send_content_cmd(ContentCommand::ResumeRendering);
+        if action.mark_clean {
+            self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
+            action.mark_clean = false;
+        }
         self.apply_project_io_action(action);
     }
 
@@ -189,6 +215,7 @@ impl Application {
     /// (synchronous): P4 defers the background-thread split until a large-media
     /// collect shows copy cost worth offloading.
     pub(crate) fn collect_all_and_save(&mut self) {
+        let Some(save_version) = self.prepare_recording_save() else { return; };
         let current_time = self.content_state.current_time;
         let Some(current_path) = self.current_project_path.clone() else {
             // Untitled: no folder to collect into. Save As first (creates the
@@ -203,7 +230,7 @@ impl Application {
 
         match manifold_io::collect::collect_all_and_save(&mut self.local_project, &current_path) {
             Ok(report) => {
-                self.send_content_cmd(ContentCommand::MarkClean);
+                self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                 log::info!(
                     "[ProjectIO] Collect All and Save: {} copied, {} bytes, {} re-pointed, {} missing",
                     report.copied,
@@ -911,6 +938,7 @@ impl Application {
     pub(crate) fn apply_project_io_action(&mut self, action: ProjectIOAction) {
         // Apply loaded project (replaces host.PrepareForProjectSwitch + ApplyProject + OnProjectOpened)
         if let Some(project) = action.apply_project {
+            self.autosave.project_changed();
             let t_total = std::time::Instant::now();
 
             // PrepareForProjectSwitch — audio-layer playback resets on the content

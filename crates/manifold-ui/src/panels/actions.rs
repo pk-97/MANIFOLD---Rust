@@ -500,6 +500,8 @@ pub enum ParamsAction {
     // P-I / D4).
     MacroLabelRename(usize),     // macro_index — opens inline rename input
     ParamLabelRightClick(GraphParamTarget, ParamId),
+    /// Reveal this parameter's arrangement lane without touching its value.
+    ShowAutomation(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu
     /// Open the Add-Effect browser. Carries the invocation context the
     /// button rendered from — tab plus the inspected layer's id

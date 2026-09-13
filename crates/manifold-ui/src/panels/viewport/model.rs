@@ -274,6 +274,13 @@ pub struct AutomationLaneScreen {
     pub whole_numbers: bool,
 }
 
+impl AutomationLaneScreen {
+    /// Bottom resize handle: only the first 120 px of the strip is reserved.
+    pub fn resize_rect(&self) -> Rect {
+        Rect::new(self.strip_rect.x, self.strip_rect.y + self.strip_rect.height - 5.0, self.strip_rect.width.min(120.0), 5.0)
+    }
+}
+
 /// One breakpoint's screen position plus the model data needed to identify
 /// and edit it — the point-level counterpart to [`AutomationLaneScreen`]'s
 /// lane-level target/range fields. `beat`/`value_norm`/`shape` are copied

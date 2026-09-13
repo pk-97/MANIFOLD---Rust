@@ -861,6 +861,7 @@ impl Application {
                 | DragMode::AutomationSegmentDrag
                 | DragMode::AutomationMarquee
                 | DragMode::AutomationGroupMove
+                | DragMode::AutomationLaneResize
                 | DragMode::AutomationDraw => return,
                 DragMode::None => {}
             }
